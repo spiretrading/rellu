@@ -373,7 +373,7 @@ package-lock.json
 
 # Generated project outputs
 .qt/
-Application/*/gesso
+Application/gesso
 Config/Gesso/gesso
 Config/Gesso/gesso.exe.manifest
 Config/Tests/gesso_tester

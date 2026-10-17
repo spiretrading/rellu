@@ -16,7 +16,7 @@ function(is_build_output output result)
 endfunction()
 
 set(outputs "@clean_outputs@")
-set(application_directory "@APPLICATION_INSTALL_DIRECTORY@/$<CONFIG>")
+set(application_directory "@APPLICATION_INSTALL_DIRECTORY@")
 set(test_directory "@TEST_INSTALL_DIRECTORY@/$<CONFIG>")
 list(APPEND outputs
   "${application_directory}/$<TARGET_FILE_NAME:gesso>"
