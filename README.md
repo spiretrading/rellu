@@ -1,4 +1,4 @@
-# gesso
+# rellu
 A cross-platform application for designing and prototyping user interfaces,
 written in C++.
 

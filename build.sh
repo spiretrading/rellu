@@ -88,7 +88,7 @@ clean_build() {
     generated_files begin || return 1
     cmake -DBUILD_DIRECTORY:PATH="$ROOT" \
       -P "$DIRECTORY/Config/native_clean.cmake" || clean_error=1
-    local scripts=("$ROOT"/CMakeFiles/gesso_clean_outputs_*.cmake)
+    local scripts=("$ROOT"/CMakeFiles/rellu_clean_outputs_*.cmake)
     if [[ "$clean_error" == "0" && -f "${scripts[0]}" ]]; then
       for script in "${scripts[@]}"; do
         cmake -P "$script" || clean_error=1

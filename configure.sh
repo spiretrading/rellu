@@ -14,7 +14,7 @@ main() {
   create_forwarding_scripts
   parse_args "$@"
   setup_dependencies || return 1
-  if [[ "${GESSO_SKIP_CMAKE:-}" == "1" ]]; then
+  if [[ "${RELLU_SKIP_CMAKE:-}" == "1" ]]; then
     return 0
   fi
   check_hashes || return 1
@@ -120,10 +120,10 @@ setup_dependencies() {
     echo "Error: $ROOT/Dependencies exists and is not a symbolic link."
     return 1
   fi
-  if [[ "${GESSO_SETUP_DIRECTORY:-}" != "$DEPENDENCIES" ]]; then
+  if [[ "${RELLU_SETUP_DIRECTORY:-}" != "$DEPENDENCIES" ]]; then
     cmake -DDEPENDENCIES_DIRECTORY:PATH="$DEPENDENCIES" \
       -P "$DIRECTORY/Config/configure_dependencies.cmake" || return 1
-    export GESSO_SETUP_DIRECTORY="$DEPENDENCIES"
+    export RELLU_SETUP_DIRECTORY="$DEPENDENCIES"
   fi
   if [[ ! "$ROOT/Dependencies" -ef "$DEPENDENCIES" ]]; then
     if [[ -L "$ROOT/Dependencies" ]]; then
@@ -142,7 +142,7 @@ md5hash() {
 }
 
 check_hashes() {
-  local scripts=(CMakeFiles/gesso_clean_*.cmake)
+  local scripts=(CMakeFiles/rellu_clean_*.cmake)
   if [[ ! -f "${scripts[0]}" ]]; then
     RUN_CMAKE=1
   fi

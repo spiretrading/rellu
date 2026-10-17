@@ -1,8 +1,8 @@
-#ifndef GESSO_CANVAS_HPP
-#define GESSO_CANVAS_HPP
+#ifndef RELLU_CANVAS_HPP
+#define RELLU_CANVAS_HPP
 #include <QRhiWidget>
 
-namespace Gesso {
+namespace Rellu {
 
   /** Renders the design surface using the GPU. */
   class Canvas : public QRhiWidget {

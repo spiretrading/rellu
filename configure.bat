@@ -5,7 +5,7 @@ SET "DIRECTORY=%~dp0"
 CALL :CreateForwardingScripts
 CALL :ParseArgs %* || EXIT /B 1
 CALL :SetupDependencies || EXIT /B 1
-IF "!GESSO_SKIP_CMAKE!"=="1" EXIT /B 0
+IF "!RELLU_SKIP_CMAKE!"=="1" EXIT /B 0
 CALL :CheckHashes || EXIT /B 1
 IF "!RUN_CMAKE!"=="1" (
   CALL :GeneratedFiles begin || EXIT /B 1
@@ -117,10 +117,10 @@ IF /I NOT "!DEPENDENCIES!"=="!ROOT!\Dependencies" (
 IF NOT EXIST "!DEPENDENCIES!" (
   MD "!DEPENDENCIES!" || EXIT /B 1
 )
-IF /I NOT "!GESSO_SETUP_DIRECTORY!"=="!DEPENDENCIES!" (
+IF /I NOT "!RELLU_SETUP_DIRECTORY!"=="!DEPENDENCIES!" (
   cmake -DDEPENDENCIES_DIRECTORY:PATH="!DEPENDENCIES!" ^
     -P "!DIRECTORY!Config\configure_dependencies.cmake" || EXIT /B 1
-  SET "GESSO_SETUP_DIRECTORY=!DEPENDENCIES!"
+  SET "RELLU_SETUP_DIRECTORY=!DEPENDENCIES!"
 )
 IF /I NOT "!DEPENDENCIES!"=="!ROOT!\Dependencies" (
   IF DEFINED DEPENDENCIES_ATTRIBUTES (
@@ -133,7 +133,7 @@ EXIT /B 0
 :CheckHashes
 SET "RUN_CMAKE="
 SET "HASH_FILES="
-IF NOT EXIST "CMakeFiles\gesso_clean_*.cmake" SET "RUN_CMAKE=1"
+IF NOT EXIST "CMakeFiles\rellu_clean_*.cmake" SET "RUN_CMAKE=1"
 IF NOT EXIST CMakeCache.txt (
   SET "RUN_CMAKE=1"
 ) ELSE (

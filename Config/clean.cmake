@@ -19,8 +19,8 @@ set(outputs "@clean_outputs@")
 set(application_directory "@APPLICATION_INSTALL_DIRECTORY@")
 set(test_directory "@TEST_INSTALL_DIRECTORY@/$<CONFIG>")
 list(APPEND outputs
-  "${application_directory}/$<TARGET_FILE_NAME:gesso>"
-  "${test_directory}/$<TARGET_FILE_NAME:gesso_tester>")
+  "${application_directory}/$<TARGET_FILE_NAME:rellu>"
+  "${test_directory}/$<TARGET_FILE_NAME:rellu_tester>")
 list(REMOVE_DUPLICATES outputs)
 foreach(output IN LISTS outputs)
   if(NOT EXISTS "${output}" AND NOT IS_SYMLINK "${output}")

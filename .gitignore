@@ -373,8 +373,8 @@ package-lock.json
 
 # Generated project outputs
 .qt/
-Application/gesso
-Config/Gesso/gesso
-Config/Gesso/gesso.exe.manifest
-Config/Tests/gesso_tester
-Tests/*/gesso_tester
+Application/rellu
+Config/Rellu/rellu
+Config/Rellu/rellu.exe.manifest
+Config/Tests/rellu_tester
+Tests/*/rellu_tester

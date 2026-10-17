@@ -5,7 +5,7 @@ FOR /F "delims==" %%V IN ('SET DEPENDENCIES[ 2^>NUL') DO (
 )
 SET "NEXT_DEPENDENCY_INDEX=0"
 SET "ROOT=%cd%"
-SET "CACHE_DIRECTORY=!ROOT!\cache_files\gesso"
+SET "CACHE_DIRECTORY=!ROOT!\cache_files\rellu"
 IF NOT EXIST "!CACHE_DIRECTORY!" (
   MD "!CACHE_DIRECTORY!" || EXIT /B 1
 )
@@ -118,11 +118,11 @@ IF EXIST "!BUILD_MARKER!" (
   DEL /F /Q "!BUILD_MARKER!"
   IF EXIST "!BUILD_MARKER!" EXIT /B 1
 )
-IF EXIST "!FOLDER!\.gesso_extract_complete" (
-  SET /P CACHED_HASH=<"!FOLDER!\.gesso_extract_complete"
+IF EXIST "!FOLDER!\.rellu_extract_complete" (
+  SET /P CACHED_HASH=<"!FOLDER!\.rellu_extract_complete"
   IF "!CACHED_HASH!"=="!EXPECTED_HASH!" GOTO BuildDependency
-  DEL /F /Q "!FOLDER!\.gesso_extract_complete"
-  IF EXIST "!FOLDER!\.gesso_extract_complete" EXIT /B 1
+  DEL /F /Q "!FOLDER!\.rellu_extract_complete"
+  IF EXIST "!FOLDER!\.rellu_extract_complete" EXIT /B 1
 )
 IF NOT EXIST "!ARCHIVE!" (
   curl -fsL -o "!ARCHIVE!" "!URL!" || (
@@ -148,7 +148,7 @@ IF NOT EXIST "!FOLDER!" (
 )
 cmake -DARCHIVE:FILEPATH="!ARCHIVE!" -DDESTINATION:PATH="!FOLDER!" ^
   -DSTRIP_COMPONENTS=1 -P "%~dp0Config\extract.cmake" || EXIT /B 1
-(ECHO !EXPECTED_HASH!) >"!FOLDER!\.gesso_extract_complete" || EXIT /B 1
+(ECHO !EXPECTED_HASH!) >"!FOLDER!\.rellu_extract_complete" || EXIT /B 1
 :BuildDependency
 IF DEFINED BUILD_LABEL (
   PUSHD "!FOLDER!" || EXIT /B 1

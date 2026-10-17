@@ -16,7 +16,7 @@ sha256() {
 
 main() {
   resolve_paths
-  CACHE_DIRECTORY="$ROOT/cache_files/gesso"
+  CACHE_DIRECTORY="$ROOT/cache_files/rellu"
   mkdir -p "$CACHE_DIRECTORY" || return 1
   add_dependency "doctest-2.4.12" \
     "https://github.com/doctest/doctest/archive/refs/tags/v2.4.12.zip" \
@@ -91,9 +91,9 @@ download_and_extract() {
     return 0
   fi
   rm -f "$build_marker" || return 1
-  if [[ ! -f "$folder/.gesso_extract_complete" ]] ||
-      [[ "$(< "$folder/.gesso_extract_complete")" != "$expected_hash" ]]; then
-    rm -f "$folder/.gesso_extract_complete" || return 1
+  if [[ ! -f "$folder/.rellu_extract_complete" ]] ||
+      [[ "$(< "$folder/.rellu_extract_complete")" != "$expected_hash" ]]; then
+    rm -f "$folder/.rellu_extract_complete" || return 1
     if [[ ! -f "$archive" ]]; then
       curl -fsSL -o "$archive" "$url" || {
         rm -f "$archive"
@@ -115,7 +115,7 @@ download_and_extract() {
     else
       tar -xf "$archive" --strip-components=1 -C "$folder" || return 1
     fi
-    echo "$expected_hash" > "$folder/.gesso_extract_complete" || return 1
+    echo "$expected_hash" > "$folder/.rellu_extract_complete" || return 1
   fi
   if [[ -n "$build_func" ]]; then
     pushd "$folder" > /dev/null || return 1

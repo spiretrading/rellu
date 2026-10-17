@@ -2,14 +2,14 @@ cmake_minimum_required(VERSION 3.28)
 file(REAL_PATH "${CMAKE_CURRENT_LIST_DIR}/.." source_directory)
 file(REAL_PATH "${DEPENDENCIES_DIRECTORY}" dependencies_directory)
 set(cache_file
-  "${dependencies_directory}/cache_files/gesso/configure_complete")
+  "${dependencies_directory}/cache_files/rellu/configure_complete")
 
 function(fingerprint result)
   file(GLOB inputs
     "${source_directory}/setup.*"
     "${source_directory}/Config/extract.cmake"
-    "${dependencies_directory}/*/.gesso_*_complete"
-    "${dependencies_directory}/cache_files/gesso/*.build_complete")
+    "${dependencies_directory}/*/.rellu_*_complete"
+    "${dependencies_directory}/cache_files/rellu/*.build_complete")
   list(APPEND inputs "${CMAKE_CURRENT_FUNCTION_LIST_FILE}")
   list(SORT inputs)
   set(contents)

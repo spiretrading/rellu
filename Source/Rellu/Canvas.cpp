@@ -1,7 +1,7 @@
 #include <rhi/qrhi.h>
-#include "Gesso/Canvas.hpp"
+#include "Rellu/Canvas.hpp"
 
-using namespace Gesso;
+using namespace Rellu;
 
 Canvas::Canvas(QWidget* parent)
   : QRhiWidget(parent) {}

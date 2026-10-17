@@ -63,8 +63,8 @@ CALL :GeneratedFiles begin || EXIT /B 1
 cmake -DBUILD_DIRECTORY:PATH="!ROOT!" ^
   -P "!DIRECTORY!Config\native_clean.cmake" || SET "CLEAN_ERROR=1"
 IF !CLEAN_ERROR! EQU 0 IF EXIST ^
-    "!ROOT!\CMakeFiles\gesso_clean_outputs_*.cmake" (
-  FOR %%F IN ("!ROOT!\CMakeFiles\gesso_clean_outputs_*.cmake") DO (
+    "!ROOT!\CMakeFiles\rellu_clean_outputs_*.cmake" (
+  FOR %%F IN ("!ROOT!\CMakeFiles\rellu_clean_outputs_*.cmake") DO (
     cmake -P "%%F" || SET "CLEAN_ERROR=1"
   )
 )

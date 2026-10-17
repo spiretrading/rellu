@@ -1,14 +1,14 @@
 #include <QApplication>
 #include <QMainWindow>
-#include "Gesso/Canvas.hpp"
+#include "Rellu/Canvas.hpp"
 
-using namespace Gesso;
+using namespace Rellu;
 
 int main(int argc, char** argv) {
   auto application = QApplication(argc, argv);
-  application.setApplicationName("Gesso");
+  application.setApplicationName("Rellu");
   auto window = QMainWindow();
-  window.setWindowTitle("Gesso");
+  window.setWindowTitle("Rellu");
   window.setCentralWidget(new Canvas());
   window.resize(1280, 800);
   window.show();

@@ -1,0 +1,7 @@
+file(GLOB_RECURSE header_files ${RELLU_INCLUDE_PATH}/Rellu/*.hpp)
+file(GLOB_RECURSE source_files ${RELLU_SOURCE_PATH}/Rellu/*.cpp)
+qt_add_executable(rellu WIN32 ${header_files} ${source_files})
+source_group("Header Files" FILES ${header_files})
+target_compile_definitions(rellu PRIVATE QT_NO_KEYWORDS)
+target_link_libraries(rellu PRIVATE Qt6::GuiPrivate Qt6::Widgets)
+install(TARGETS rellu DESTINATION "${APPLICATION_INSTALL_DIRECTORY}")
