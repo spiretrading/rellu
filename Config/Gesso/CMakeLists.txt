@@ -1,0 +1,7 @@
+file(GLOB_RECURSE header_files ${GESSO_INCLUDE_PATH}/Gesso/*.hpp)
+file(GLOB_RECURSE source_files ${GESSO_SOURCE_PATH}/Gesso/*.cpp)
+qt_add_executable(gesso WIN32 ${header_files} ${source_files})
+source_group("Header Files" FILES ${header_files})
+target_compile_definitions(gesso PRIVATE QT_NO_KEYWORDS)
+target_link_libraries(gesso PRIVATE Qt6::GuiPrivate Qt6::Widgets)
+install(TARGETS gesso DESTINATION "${APPLICATION_INSTALL_DIRECTORY}/$<CONFIG>")
