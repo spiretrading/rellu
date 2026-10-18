@@ -1,0 +1,6 @@
+file(GLOB source_files ${RELLU_SOURCE_PATH}/IoTests/*.cpp)
+add_executable(IoTests ${source_files})
+target_link_libraries(IoTests PRIVATE RelluIo)
+rellu_link_dependencies(IoTests PRIVATE DOCTEST)
+add_custom_command(TARGET IoTests POST_BUILD COMMAND IoTests)
+rellu_install_target(IoTests "${TEST_INSTALL_DIRECTORY}/$<CONFIG>")
