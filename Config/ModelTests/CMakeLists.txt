@@ -1,0 +1,6 @@
+file(GLOB_RECURSE source_files ${RELLU_SOURCE_PATH}/ModelTests/*.cpp)
+add_executable(ModelTests ${source_files})
+target_include_directories(ModelTests SYSTEM PRIVATE ${DOCTEST_INCLUDE_PATH})
+target_link_libraries(ModelTests PRIVATE RelluModel)
+add_custom_command(TARGET ModelTests POST_BUILD COMMAND ModelTests)
+rellu_install_target(ModelTests "${TEST_INSTALL_DIRECTORY}/$<CONFIG>")
