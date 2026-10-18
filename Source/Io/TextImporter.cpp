@@ -196,27 +196,8 @@ namespace {
 
   void read_overrides(XdObject& style, const TextStyle& covering,
       StoredRun& run) {
-    if(auto font_json = style.get_object("font"_L1)) {
-      auto font = covering.m_font;
-      auto family = font_json->get_string("family"_L1);
-      auto font_style = font_json->get_string("style"_L1);
-      auto name = font_json->get_string("postscriptName"_L1);
-      if(family) {
-        font.m_family = to_std_string(*family);
-      }
-      if(font_style) {
-        font.m_style = to_std_string(*font_style);
-      }
-      if(name) {
-        font.m_postscript_name = to_std_string(*name);
-      } else if(font.m_family != covering.m_font.m_family ||
-          font.m_style != covering.m_font.m_style) {
-        font.m_postscript_name.clear();
-      }
-      font.m_size = font_json->get_number("size"_L1, font.m_size);
-      if(font != covering.m_font) {
-        run.m_font = std::move(font);
-      }
+    if(auto font = style.get_object("font"_L1)) {
+      font->consume_all();
     }
     if(auto fill = style.get_object("fill"_L1)) {
       if(auto color = read_solid_color(*fill)) {

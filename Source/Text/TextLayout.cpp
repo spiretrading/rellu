@@ -9,6 +9,8 @@
 using namespace Rellu;
 
 namespace {
+  constexpr auto TAB_INTERVAL = 4.0;
+
   struct Span {
     std::size_t m_start;
     std::size_t m_end;
@@ -132,19 +134,12 @@ namespace {
 
   double place(const std::u16string& content, std::size_t start,
       std::size_t end, const TextStyle& style, const Font& font, Color color,
-      Point pen, const FontLibrary& library, TextLayout* layout) {
+      Point pen, double origin, const FontLibrary& library,
+      TextLayout* layout) {
     auto resolution = library.resolve(font);
     if(!resolution.m_typeface || start >= end) {
       return 0;
     }
-    auto display = std::u16string();
-    display.reserve(end - start);
-    for(auto i = start; i != end; ++i) {
-      if(!is_line_separator(content[i])) {
-        display.push_back(content[i] == u'\t' ? u' ' : content[i]);
-      }
-    }
-    display = apply_transform(display, style.m_transform);
     auto& metrics = resolution.m_typeface->get_metrics();
     auto size = font.m_size;
     auto baseline = pen.m_y;
@@ -157,24 +152,39 @@ namespace {
     }
     auto spacing = style.m_letter_spacing * font.m_size / 1000;
     auto x = pen.m_x;
-    for(auto& item : itemize(display, resolution.m_typeface, library)) {
-      auto glyphs =
-        item.m_typeface->shape(display, item.m_start, item.m_length);
-      for(auto i = std::size_t(0); i != glyphs.size(); ++i) {
-        auto& glyph = glyphs[i];
-        if(layout &&
-            !item.m_typeface->get_outline(glyph.m_index).is_empty()) {
-          layout->m_glyphs.push_back(PlacedGlyph(item.m_typeface,
-            glyph.m_index, Point(x + glyph.m_offset.m_x * size,
-              baseline + glyph.m_offset.m_y * size), size, color));
-        }
-        x += glyph.m_advance * size;
-        if(i + 1 == glyphs.size() ||
-            glyphs[i + 1].m_cluster != glyph.m_cluster) {
-          x += spacing;
+    auto display = std::u16string();
+    auto flush = [&] {
+      display = apply_transform(display, style.m_transform);
+      for(auto& item : itemize(display, resolution.m_typeface, library)) {
+        auto glyphs =
+          item.m_typeface->shape(display, item.m_start, item.m_length);
+        for(auto i = std::size_t(0); i != glyphs.size(); ++i) {
+          auto& glyph = glyphs[i];
+          if(layout &&
+              !item.m_typeface->get_outline(glyph.m_index).is_empty()) {
+            layout->m_glyphs.push_back(PlacedGlyph(item.m_typeface,
+              glyph.m_index, Point(x + glyph.m_offset.m_x * size,
+                baseline + glyph.m_offset.m_y * size), size, color));
+          }
+          x += glyph.m_advance * size;
+          if(i + 1 == glyphs.size() ||
+              glyphs[i + 1].m_cluster != glyph.m_cluster) {
+            x += spacing;
+          }
         }
       }
+      display.clear();
+    };
+    for(auto i = start; i != end; ++i) {
+      if(content[i] == u'\t') {
+        flush();
+        auto interval = TAB_INTERVAL * font.m_size;
+        x = origin + (std::floor((x - origin) / interval) + 1) * interval;
+      } else if(!is_line_separator(content[i])) {
+        display.push_back(content[i]);
+      }
     }
+    flush();
     if(layout && x > pen.m_x) {
       if(style.m_is_underlined) {
         layout->m_decorations.push_back(TextDecoration(Rect(pen.m_x,
@@ -192,7 +202,7 @@ namespace {
 
   double place(const std::u16string& content, const Segment& segment,
       std::size_t end, const std::vector<Span>& spans, Point pen,
-      const FontLibrary& library, TextLayout* layout) {
+      double origin, const FontLibrary& library, TextLayout* layout) {
     auto x = pen.m_x;
     for(auto& span : spans) {
       auto from = std::max(segment.m_start, span.m_start);
@@ -202,7 +212,7 @@ namespace {
         auto& font = segment.m_font ? *segment.m_font : style.m_font;
         auto color = segment.m_color ? *segment.m_color : style.m_color;
         x += place(content, from, to, style, font, color, Point(x, pen.m_y),
-          library, layout);
+          origin, library, layout);
       }
     }
     return x - pen.m_x;
@@ -213,8 +223,8 @@ namespace {
       const FontLibrary& library, TextLayout* layout) {
     auto x = pen.m_x;
     for(auto& segment : line.m_segments) {
-      x += place(content, segment, end, spans, Point(x, pen.m_y), library,
-        layout);
+      x += place(content, segment, end, spans, Point(x, pen.m_y), pen.m_x,
+        library, layout);
     }
     return x - pen.m_x;
   }
@@ -233,10 +243,14 @@ namespace {
     if(line.m_segments.empty()) {
       return 0;
     }
+    auto start = line.m_segments.front().m_start;
     auto end = line.m_segments.back().m_end;
-    while(end > line.m_segments.front().m_start &&
-        is_line_separator(content[end - 1])) {
-      --end;
+    if(line.m_is_paragraph_end) {
+      while(end > start && is_line_separator(content[end - 1])) {
+        --end;
+      }
+    } else {
+      end = trim_end(content, start, end);
     }
     return place(content, line, end, spans, Point(0, 0), library, nullptr);
   }

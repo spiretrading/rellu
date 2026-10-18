@@ -11,6 +11,7 @@
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Geometry/Rect.hpp"
+#include "Rellu/Geometry/Stroke.hpp"
 
 namespace Rellu {
 
@@ -59,6 +60,26 @@ namespace Rellu {
   /** The ways a region can be painted. */
   using Paint = std::variant<SolidPaint, GradientPaint, ImagePaint>;
 
+  /**
+   * The line a stroke follows, letting a FillCommand drawing the stroke's
+   * region draw it as Adobe XD does: as a hairline when the stroke is at
+   * most a pixel wide, and otherwise antialiased the way XD treats the
+   * outline it strokes the line into.
+   */
+  struct StrokeLine {
+
+    /**
+     * The non-null line, in the same coordinates as the FillCommand's path.
+     */
+    std::shared_ptr<const Path> m_path;
+
+    /** The width of the stroke. */
+    double m_width;
+
+    /** The shape ending the line's open subpaths. */
+    StrokeCap m_cap;
+  };
+
   /** Fills the region enclosed by a path under the path's fill rule. */
   struct FillCommand {
 
@@ -80,6 +101,12 @@ namespace Rellu {
      * rotates or skews clips to the bounds of the mapped rect.
      */
     std::optional<Rect> m_clip;
+
+    /**
+     * The line the path's region strokes, or <code>std::nullopt</code> if
+     * the region is not a stroke drawn along a line.
+     */
+    std::optional<StrokeLine> m_stroke;
   };
 
   /** A shadow cast by the content of a layer. */

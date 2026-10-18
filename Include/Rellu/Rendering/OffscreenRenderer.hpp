@@ -58,7 +58,22 @@ namespace Rellu {
       QRhi& get_rhi();
 
       /**
-       * Renders a frame and reads it back.
+       * Returns the largest width and height of a frame rendered at once,
+       * larger frames being rendered in regions no larger, by default half
+       * the QRhi's texture size limit.
+       */
+      int get_tile_size() const;
+
+      /**
+       * Sets the largest width and height of a frame rendered at once.
+       * @param size The tile size, positive and at most the QRhi's texture
+       *        size limit.
+       */
+      void set_tile_size(int size);
+
+      /**
+       * Renders a frame and reads it back. A frame larger than the tile size
+       * requires a Renderer that records regions.
        * @param size The size of the frame in pixels.
        * @param scale The number of pixels per logical unit.
        * @return The frame as an RGBA image with premultiplied alpha whose
@@ -72,6 +87,7 @@ namespace Rellu {
       RenderBackend m_backend;
       std::unique_ptr<QOffscreenSurface> m_surface;
       std::unique_ptr<QRhi> m_rhi;
+      int m_tile_size;
       std::unique_ptr<QRhiTexture> m_texture;
       std::unique_ptr<QRhiRenderBuffer> m_depth_stencil;
       std::unique_ptr<QRhiRenderPassDescriptor> m_descriptor;

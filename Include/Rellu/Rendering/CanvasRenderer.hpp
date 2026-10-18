@@ -90,11 +90,29 @@ namespace Rellu {
       void render(QRhiCommandBuffer& buffer, QRhiRenderTarget& target,
         double scale) override;
 
+      /**
+       * Records a region of a frame into a texture, drawing each pixel of the
+       * region the same as recording the whole frame does.
+       * @param buffer The command buffer to record into, without an active
+       *        render pass.
+       * @param texture The RGBA8 texture receiving the region at its top left
+       *        as rendered, at least as large as the region.
+       * @param scale The number of pixels per logical unit.
+       * @param size The size of the frame in pixels.
+       * @param region The region of the frame to record.
+       * @throws std::invalid_argument A drawing is set, or the view scaled
+       *         by the <i>scale</i> does not scale both axes alike without
+       *         rotating.
+       */
+      void render(QRhiCommandBuffer& buffer, QRhiTexture& texture,
+        double scale, QSize size, const QRect& region) override;
+
     private:
       PathRenderer m_paths;
       TileCache m_tiles;
       std::shared_ptr<const DrawList> m_list;
       std::shared_ptr<const Drawing> m_drawing;
+      std::unique_ptr<Drawing> m_list_drawing;
       DrawSequence m_commands;
       Matrix m_view;
       QColor m_background;

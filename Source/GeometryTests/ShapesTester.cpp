@@ -60,10 +60,15 @@ namespace {
 
 TEST_SUITE("Shapes") {
   TEST_CASE("clamp_corner_radii") {
-    REQUIRE(clamp_corner_radii(CornerRadii(5, 1, -2, 3), Size(4, 10)) ==
-      CornerRadii(2, 1, 0, 2));
+    auto scaled = clamp_corner_radii(CornerRadii(5, 1, -2, 3), Size(4, 10));
+    REQUIRE(scaled.m_top_left == doctest::Approx(10.0 / 3));
+    REQUIRE(scaled.m_top_right == doctest::Approx(2.0 / 3));
+    REQUIRE(scaled.m_bottom_right == 0);
+    REQUIRE(scaled.m_bottom_left == doctest::Approx(2));
     REQUIRE(clamp_corner_radii(CornerRadii(3, 3, 0, 0), Size(80, 3)) ==
-      CornerRadii(1.5, 1.5, 0, 0));
+      CornerRadii(3, 3, 0, 0));
+    REQUIRE(clamp_corner_radii(CornerRadii(2, 2, 2, 2), Size(80, 3)) ==
+      CornerRadii(1.5, 1.5, 1.5, 1.5));
     REQUIRE(clamp_corner_radii(CornerRadii(1, 2, 3, 4), Size(10, 10)) ==
       CornerRadii(1, 2, 3, 4));
     REQUIRE(clamp_corner_radii(CornerRadii(1, 2, 3, 4), Size(-1, 10)) ==
@@ -86,7 +91,8 @@ TEST_SUITE("Shapes") {
     auto bounds = Rect(0, 0, 100, 50);
     auto path = make_rectangle(bounds, CornerRadii(10, 20, 0, 5));
     auto expected = Path();
-    expected.move_to(Point(0, 10));
+    expected.move_to(Point(0, 45));
+    expected.line_to(Point(0, 10));
     expected.cubic_to(
       Point(0, 10 - 10 * KAPPA), Point(10 - 10 * KAPPA, 0), Point(10, 0));
     expected.line_to(Point(80, 0));
@@ -98,6 +104,9 @@ TEST_SUITE("Shapes") {
       Point(0, 45));
     expected.close();
     REQUIRE(is_near(path, expected));
+    for(auto& segment : path.get_segments()) {
+      REQUIRE(segment.m_is_arc == (segment.m_type == SegmentType::CUBIC));
+    }
     REQUIRE(is_near(get_bounds(path), bounds));
     REQUIRE(!contains(path, Point(1, 1)));
     REQUIRE(contains(path, Point(5, 5)));
@@ -110,14 +119,15 @@ TEST_SUITE("Shapes") {
     auto path = make_rectangle(bounds, CornerRadii(5, 5, 5, 5));
     REQUIRE(is_near(path, make_rectangle(bounds, CornerRadii(2, 2, 2, 2))));
     REQUIRE(get_types(path) == std::vector{SegmentType::MOVE,
+      SegmentType::LINE, SegmentType::CUBIC, SegmentType::LINE,
       SegmentType::CUBIC, SegmentType::LINE, SegmentType::CUBIC,
-      SegmentType::CUBIC, SegmentType::LINE, SegmentType::CUBIC,
-      SegmentType::CLOSE});
+      SegmentType::LINE, SegmentType::CUBIC, SegmentType::CLOSE});
     REQUIRE(is_near(get_bounds(path), bounds));
     auto circle = make_rectangle(Rect(0, 0, 10, 10), CornerRadii(5, 5, 5, 5));
     REQUIRE(get_types(circle) == std::vector{SegmentType::MOVE,
       SegmentType::CUBIC, SegmentType::CUBIC, SegmentType::CUBIC,
       SegmentType::CUBIC, SegmentType::CLOSE});
+    REQUIRE(circle.get_segments()[0].m_points[0] == Point(0, 5));
     REQUIRE(is_near(get_bounds(circle), Rect(0, 0, 10, 10)));
   }
 
@@ -128,6 +138,9 @@ TEST_SUITE("Shapes") {
       SegmentType::CUBIC, SegmentType::CUBIC, SegmentType::CUBIC,
       SegmentType::CUBIC, SegmentType::CLOSE});
     REQUIRE(segments[0].m_points[0] == Point(15, 20));
+    for(auto i = std::size_t(1); i != 5; ++i) {
+      REQUIRE(segments[i].m_is_arc);
+    }
     REQUIRE(segments[1].m_points[2] == Point(10, 23));
     REQUIRE(segments[2].m_points[2] == Point(5, 20));
     REQUIRE(segments[3].m_points[2] == Point(10, 17));
@@ -204,8 +217,25 @@ TEST_SUITE("Shapes") {
   TEST_CASE("rounded_polygon") {
     auto square =
       std::vector{Point(0, 0), Point(10, 0), Point(10, 10), Point(0, 10)};
-    REQUIRE(is_near(make_polygon(square, 2),
-      make_rectangle(Rect(0, 0, 10, 10), CornerRadii(2, 2, 2, 2))));
+    auto handle = 2 * KAPPA;
+    auto expected = Path();
+    expected.move_to(Point(0, 2));
+    expected.cubic_to(Point(0, 2 - handle), Point(2 - handle, 0), Point(2, 0));
+    expected.line_to(Point(8, 0));
+    expected.cubic_to(
+      Point(8 + handle, 0), Point(10, 2 - handle), Point(10, 2));
+    expected.line_to(Point(10, 8));
+    expected.cubic_to(
+      Point(10, 8 + handle), Point(8 + handle, 10), Point(8, 10));
+    expected.line_to(Point(2, 10));
+    expected.cubic_to(
+      Point(2 - handle, 10), Point(0, 8 + handle), Point(0, 8));
+    expected.close();
+    auto polygon = make_polygon(square, 2);
+    REQUIRE(is_near(polygon, expected));
+    for(auto& segment : polygon.get_segments()) {
+      REQUIRE(!segment.m_is_arc);
+    }
     auto bounds = Rect(0, 0, 10, 5);
     auto triangle = make_polygon(3, bounds, 1);
     REQUIRE(bounds.contains(get_bounds(triangle)));

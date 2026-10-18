@@ -7,8 +7,6 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto KAPPA = 4 * (std::numbers::sqrt2 - 1) / 3;
-
   struct Corner {
     Point m_start;
     Point m_first;
@@ -16,17 +14,6 @@ namespace {
     Point m_end;
     bool m_is_rounded;
   };
-
-  Corner make_rectangle_corner(
-      Point vertex, Point incoming, Point outgoing, double radius) {
-    if(radius <= 0) {
-      return Corner(vertex, vertex, vertex, vertex, false);
-    }
-    auto start = vertex - incoming * radius;
-    auto end = vertex + outgoing * radius;
-    return Corner(start, start + incoming * (KAPPA * radius),
-      end - outgoing * (KAPPA * radius), end, true);
-  }
 
   Corner make_corner(Point previous, Point vertex, Point next, double radius) {
     auto before = previous - vertex;
@@ -77,11 +64,31 @@ namespace {
 }
 
 CornerRadii Rellu::clamp_corner_radii(const CornerRadii& radii, Size size) {
-  auto limit = std::max(0.0, std::min(size.m_width, size.m_height) / 2);
-  return CornerRadii(std::clamp(radii.m_top_left, 0.0, limit),
-    std::clamp(radii.m_top_right, 0.0, limit),
-    std::clamp(radii.m_bottom_right, 0.0, limit),
-    std::clamp(radii.m_bottom_left, 0.0, limit));
+  if(!(size.m_width > 0) || !(size.m_height > 0)) {
+    return CornerRadii(0, 0, 0, 0);
+  }
+  auto clamp = [] (double radius) {
+    if(!std::isfinite(radius)) {
+      return 0.0;
+    }
+    return std::max(0.0, radius);
+  };
+  auto top_left = clamp(radii.m_top_left);
+  auto top_right = clamp(radii.m_top_right);
+  auto bottom_right = clamp(radii.m_bottom_right);
+  auto bottom_left = clamp(radii.m_bottom_left);
+  auto scale = 1.0;
+  auto fit = [&] (double first, double second, double length) {
+    if(first + second > length) {
+      scale = std::min(scale, length / (first + second));
+    }
+  };
+  fit(top_left, top_right, size.m_width);
+  fit(top_right, bottom_right, size.m_height);
+  fit(bottom_right, bottom_left, size.m_width);
+  fit(bottom_left, top_left, size.m_height);
+  return CornerRadii(scale * top_left, scale * top_right,
+    scale * bottom_right, scale * bottom_left);
 }
 
 Path Rellu::make_rectangle(const Rect& bounds) {
@@ -89,19 +96,49 @@ Path Rellu::make_rectangle(const Rect& bounds) {
 }
 
 Path Rellu::make_rectangle(const Rect& bounds, const CornerRadii& radii) {
-  auto effective_radii = clamp_corner_radii(radii, bounds.get_size());
-  auto right = Point(1, 0);
-  auto down = Point(0, 1);
-  auto corners = std::vector<Corner>();
-  corners.push_back(make_rectangle_corner(
-    bounds.get_top_left(), -down, right, effective_radii.m_top_left));
-  corners.push_back(make_rectangle_corner(Point(bounds.get_right(),
-    bounds.get_top()), right, down, effective_radii.m_top_right));
-  corners.push_back(make_rectangle_corner(bounds.get_bottom_right(), down,
-    -right, effective_radii.m_bottom_right));
-  corners.push_back(make_rectangle_corner(Point(bounds.get_left(),
-    bounds.get_bottom()), -right, -down, effective_radii.m_bottom_left));
-  return make_path(corners);
+  auto left = bounds.get_left();
+  auto top = bounds.get_top();
+  auto right = bounds.get_right();
+  auto bottom = bounds.get_bottom();
+  auto path = Path();
+  auto effective = clamp_corner_radii(radii, bounds.get_size());
+  if(effective.m_top_left <= 0 && effective.m_top_right <= 0 &&
+      effective.m_bottom_right <= 0 && effective.m_bottom_left <= 0) {
+    path.move_to(Point(left, top));
+    path.line_to(Point(right, top));
+    path.line_to(Point(right, bottom));
+    path.line_to(Point(left, bottom));
+    path.close();
+    return path;
+  }
+  auto half = bounds.m_width / 2;
+  auto is_circle = bounds.m_width == bounds.m_height &&
+    effective == CornerRadii(half, half, half, half);
+  auto add_side = [&] (Point end) {
+    if(!is_circle) {
+      path.line_to(end);
+    }
+  };
+  auto add_corner = [&] (double radius, Point corner, Point end) {
+    if(radius > 0) {
+      path.arc_to(corner, end);
+    }
+  };
+  path.move_to(Point(left, bottom - effective.m_bottom_left));
+  add_side(Point(left, top + effective.m_top_left));
+  add_corner(effective.m_top_left, Point(left, top),
+    Point(left + effective.m_top_left, top));
+  add_side(Point(right - effective.m_top_right, top));
+  add_corner(effective.m_top_right, Point(right, top),
+    Point(right, top + effective.m_top_right));
+  add_side(Point(right, bottom - effective.m_bottom_right));
+  add_corner(effective.m_bottom_right, Point(right, bottom),
+    Point(right - effective.m_bottom_right, bottom));
+  add_side(Point(left + effective.m_bottom_left, bottom));
+  add_corner(effective.m_bottom_left, Point(left, bottom),
+    Point(left, bottom - effective.m_bottom_left));
+  path.close();
+  return path;
 }
 
 Path Rellu::make_ellipse(Point center, double x_radius, double y_radius) {
@@ -109,10 +146,10 @@ Path Rellu::make_ellipse(Point center, double x_radius, double y_radius) {
   auto y = Point(0, y_radius);
   auto path = Path();
   path.move_to(center + x);
-  path.cubic_to(center + x + KAPPA * y, center + KAPPA * x + y, center + y);
-  path.cubic_to(center - KAPPA * x + y, center - x + KAPPA * y, center - x);
-  path.cubic_to(center - x - KAPPA * y, center - KAPPA * x - y, center - y);
-  path.cubic_to(center + KAPPA * x - y, center + x - KAPPA * y, center + x);
+  path.arc_to(center + x + y, center + y);
+  path.arc_to(center - x + y, center - x);
+  path.arc_to(center - x - y, center - y);
+  path.arc_to(center + x - y, center + x);
   path.close();
   return path;
 }

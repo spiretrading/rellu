@@ -280,6 +280,16 @@ void Path::cubic_to(Point first, Point second, Point end) {
   m_current = end;
 }
 
+void Path::arc_to(Point corner, Point end) {
+  open();
+  auto segment = make_segment(SegmentType::CUBIC,
+    m_current + ARC_CONTROL * (corner - m_current),
+    end + ARC_CONTROL * (corner - end), end);
+  segment.m_is_arc = true;
+  m_segments.push_back(segment);
+  m_current = end;
+}
+
 void Path::close() {
   if(!m_is_open) {
     return;
@@ -297,19 +307,32 @@ void Path::open() {
 
 Path Rellu::transform(const Path& path, const Matrix& matrix) {
   auto result = Path(path.get_fill_rule());
+  auto start = Point();
+  auto current = Point();
   for(auto& segment : path.get_segments()) {
     auto& points = segment.m_points;
     if(segment.m_type == SegmentType::MOVE) {
       result.move_to(matrix.map(points[0]));
+      start = points[0];
+      current = start;
     } else if(segment.m_type == SegmentType::LINE) {
       result.line_to(matrix.map(points[0]));
+      current = points[0];
     } else if(segment.m_type == SegmentType::QUADRATIC) {
       result.quadratic_to(matrix.map(points[0]), matrix.map(points[1]));
+      current = points[1];
     } else if(segment.m_type == SegmentType::CUBIC) {
-      result.cubic_to(matrix.map(points[0]), matrix.map(points[1]),
-        matrix.map(points[2]));
+      if(segment.m_is_arc) {
+        result.arc_to(matrix.map(current + (points[0] - current) /
+          ARC_CONTROL), matrix.map(points[2]));
+      } else {
+        result.cubic_to(matrix.map(points[0]), matrix.map(points[1]),
+          matrix.map(points[2]));
+      }
+      current = points[2];
     } else {
       result.close();
+      current = start;
     }
   }
   return result;

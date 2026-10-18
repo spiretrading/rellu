@@ -11,6 +11,7 @@
 #include <utility>
 #include <variant>
 #include "Rellu/Rendering/StripRasterizer.hpp"
+#include "Supersampler.hpp"
 
 using namespace Rellu;
 
@@ -23,6 +24,7 @@ namespace {
   constexpr auto MAXIMUM_SUBDIVISIONS = 1 << 16;
   constexpr auto CHUNK_SIZE = 64;
   constexpr auto INSERTION_SORT_LIMIT = 32;
+  constexpr auto MINIMUM_SPAN_WIDTH = 16;
 
   struct Line {
     float m_x0;
@@ -148,9 +150,16 @@ namespace {
       void rasterize(const Path& path, const Matrix& transform,
         const std::optional<Rect>& clip, const std::array<qfloat16, 4>& color,
         float paint, const Matrix& view, QSize size, int first_band,
-        int end_band, Output& output);
+        int end_band, bool is_clip, Output& output);
+      void rasterize(const Path& path, const std::optional<StrokeLine>& stroke,
+        const Matrix& transform, const std::optional<Rect>& clip,
+        const std::array<qfloat16, 4>& color, float paint, const Matrix& view,
+        QSize size, int first_band, int end_band, bool is_clip,
+        Output& output);
 
     private:
+      Supersampler m_supersampler;
+      std::vector<Supersampler::Line> m_traced;
       QSize m_size;
       Box m_box;
       int m_first_band;
@@ -189,12 +198,28 @@ namespace {
       void accumulate(const Line& line, int x, int y, int columns);
       void add_strip(int band, int rows, int first_tile, int end_tile,
         const std::uint64_t* first, const std::uint64_t* last);
+      std::optional<QRect> get_pixel_clip() const;
+      void supersample(const Path& path, const Matrix& matrix, bool is_clip);
+      void draw_hairline(const StrokeLine& stroke, const Matrix& matrix,
+        double coverage);
+      void add_coverage(int scale);
+      void add_texels(int x, int y, int width, int rows,
+        const std::uint32_t* texels);
   };
 
   void PathRasterizer::rasterize(const Path& path, const Matrix& transform,
       const std::optional<Rect>& clip, const std::array<qfloat16, 4>& color,
       float paint, const Matrix& view, QSize size, int first_band,
-      int end_band, Output& output) {
+      int end_band, bool is_clip, Output& output) {
+    rasterize(path, std::nullopt, transform, clip, color, paint, view, size,
+      first_band, end_band, is_clip, output);
+  }
+
+  void PathRasterizer::rasterize(const Path& path,
+      const std::optional<StrokeLine>& stroke, const Matrix& transform,
+      const std::optional<Rect>& clip, const std::array<qfloat16, 4>& color,
+      float paint, const Matrix& view, QSize size, int first_band,
+      int end_band, bool is_clip, Output& output) {
     auto& segments = path.get_segments();
     if(segments.empty() || color[3] == qfloat16(0)) {
       return;
@@ -225,6 +250,12 @@ namespace {
         right = std::max(right, point.m_x);
       }
     }
+    if(stroke) {
+      top -= 1;
+      bottom += 1;
+      left -= 1;
+      right += 1;
+    }
     if(!(bottom > box.m_top) || !(top < box.m_bottom) ||
         !(right > box.m_left) || !(left < box.m_right)) {
       return;
@@ -244,10 +275,36 @@ namespace {
     m_color = color;
     m_paint = paint;
     m_output = &output;
+    auto antialiasing = Antialiasing::EXACT;
+    if(stroke) {
+      auto coverage = 1.0;
+      if(Supersampler::is_hairline(stroke->m_width, matrix, coverage)) {
+        draw_hairline(*stroke, matrix, coverage);
+        return;
+      }
+      antialiasing = Supersampler::get_antialiasing(
+        path, *stroke->m_path, stroke->m_width, matrix);
+    } else {
+      antialiasing = Supersampler::get_antialiasing(path, matrix);
+    }
+    if(antialiasing == Antialiasing::SUPERSAMPLED) {
+      supersample(path, matrix, is_clip);
+      return;
+    }
     m_lines.clear();
     m_left.assign(m_band_count * STRIP_HEIGHT, 0);
     m_start = Point(0, 0);
     m_current = m_start;
+    if(antialiasing == Antialiasing::ANALYTIC) {
+      m_supersampler.trace(path, matrix, m_traced);
+      for(auto& line : m_traced) {
+        add_line(line.m_start, line.m_end);
+      }
+      add_entries();
+      sort_entries();
+      sweep();
+      return;
+    }
     for(auto& segment : segments) {
       auto& points = segment.m_points;
       if(segment.m_type == SegmentType::MOVE) {
@@ -746,6 +803,123 @@ namespace {
         static_cast<float>(offset + column), 0, m_paint));
     }
   }
+
+  std::optional<QRect> PathRasterizer::get_pixel_clip() const {
+    auto top = std::max(static_cast<int>(std::floor(m_box.m_top)),
+      m_first_band * STRIP_HEIGHT);
+    auto bottom = std::min(static_cast<int>(std::ceil(m_box.m_bottom)),
+      (m_first_band + m_band_count) * STRIP_HEIGHT);
+    auto left = static_cast<int>(std::floor(m_box.m_left));
+    auto right = static_cast<int>(std::ceil(m_box.m_right));
+    if(top >= bottom || left >= right) {
+      return std::nullopt;
+    }
+    return QRect(QPoint(left, top), QPoint(right - 1, bottom - 1));
+  }
+
+  void PathRasterizer::supersample(
+      const Path& path, const Matrix& matrix, bool is_clip) {
+    if(auto clip = get_pixel_clip()) {
+      m_supersampler.rasterize(path, matrix, *clip, is_clip);
+      add_coverage(256);
+    }
+  }
+
+  void PathRasterizer::draw_hairline(
+      const StrokeLine& stroke, const Matrix& matrix, double coverage) {
+    if(auto clip = get_pixel_clip()) {
+      m_supersampler.rasterize_hairline(
+        *stroke.m_path, matrix, stroke.m_cap, *clip);
+      add_coverage(static_cast<int>(coverage * 256));
+    }
+  }
+
+  void PathRasterizer::add_coverage(int scale) {
+    auto& bounds = m_supersampler.get_bounds();
+    if(bounds.isEmpty()) {
+      return;
+    }
+    auto& coverage = m_supersampler.get_coverage();
+    auto overlap = [] (double low, double high, int pixel) {
+      return std::clamp(
+        std::min(high, pixel + 1.0) - std::max(low, 1.0 * pixel), 0.0, 1.0);
+    };
+    auto width = bounds.width();
+    auto texels = std::vector<std::uint32_t>(width);
+    for(auto band = bounds.top() / STRIP_HEIGHT;
+        band <= bounds.bottom() / STRIP_HEIGHT; ++band) {
+      auto y = band * STRIP_HEIGHT;
+      auto rows = std::min(STRIP_HEIGHT, m_size.height() - y);
+      std::fill(texels.begin(), texels.end(), 0);
+      for(auto row = 0; row != rows; ++row) {
+        auto pixel_y = y + row;
+        if(pixel_y < bounds.top() || pixel_y > bounds.bottom()) {
+          continue;
+        }
+        auto vertical = overlap(m_box.m_top, m_box.m_bottom, pixel_y);
+        auto line = coverage.data() +
+          static_cast<std::size_t>(pixel_y - bounds.top()) * width;
+        for(auto column = 0; column != width; ++column) {
+          auto value = static_cast<int>(line[column]);
+          if(scale < 256) {
+            value = (value * scale) >> 8;
+          }
+          auto factor = vertical *
+            overlap(m_box.m_left, m_box.m_right, bounds.left() + column);
+          if(factor < 1) {
+            value = static_cast<int>(value * factor + 0.5);
+          }
+          texels[column] |= static_cast<std::uint32_t>(value) << (8 * row);
+        }
+      }
+      add_texels(bounds.left(), y, width, rows, texels.data());
+    }
+  }
+
+  void PathRasterizer::add_texels(
+      int x, int y, int width, int rows, const std::uint32_t* texels) {
+    auto full = rows == STRIP_HEIGHT ? 0xFFFFFFFFu : (1u << (8 * rows)) - 1;
+    auto& strips = m_output->m_strips;
+    auto& output = m_output->m_texels;
+    auto emit = [&] (int first, int last) {
+      for(auto column = first; column < last; column += STRIP_ATLAS_WIDTH) {
+        auto count = std::min(STRIP_ATLAS_WIDTH, last - column);
+        auto offset = output.size();
+        output.insert(output.end(), texels + column, texels + column + count);
+        strips.push_back(Strip(static_cast<float>(x + column),
+          static_cast<float>(y), static_cast<float>(count),
+          static_cast<float>(rows), m_color, static_cast<float>(offset), 0,
+          m_paint));
+      }
+    };
+    auto column = 0;
+    while(column != width) {
+      if(texels[column] == 0) {
+        ++column;
+        continue;
+      }
+      auto start = column;
+      while(column != width && texels[column] != 0) {
+        if(texels[column] != full) {
+          ++column;
+          continue;
+        }
+        auto end = column;
+        while(end != width && texels[end] == full) {
+          ++end;
+        }
+        if(end - column >= MINIMUM_SPAN_WIDTH) {
+          emit(start, column);
+          strips.push_back(Strip(static_cast<float>(x + column),
+            static_cast<float>(y), static_cast<float>(end - column),
+            static_cast<float>(rows), m_color, -1, 0, m_paint));
+          start = end;
+        }
+        column = end;
+      }
+      emit(start, column);
+    }
+  }
 }
 
 struct StripRasterizer::Chunk {
@@ -840,20 +1014,20 @@ void StripRasterizer::rasterize(const DrawSequence& commands,
         if(m_restrictions[i]) {
           bands = std::pair(first_band, end_band);
         }
-        rasterizer.rasterize(*fill->m_path, fill->m_transform, fill->m_clip,
-          to_premultiplied(fill->m_paint), m_slots[i], view, size,
-          bands.first, bands.second, output);
+        rasterizer.rasterize(*fill->m_path, fill->m_stroke, fill->m_transform,
+          fill->m_clip, to_premultiplied(fill->m_paint), m_slots[i], view,
+          size, bands.first, bands.second, false, output);
       } else if(auto layer = std::get_if<BeginLayerCommand>(&command)) {
         if(layer->m_mask) {
           rasterizer.rasterize(*layer->m_mask->m_path,
             layer->m_mask->m_transform, layer->m_clip,
             to_premultiplied(Color(1, 1, 1, layer->m_opacity)), m_slots[i],
-            view, size, 0, std::numeric_limits<int>::max(), output);
+            view, size, 0, std::numeric_limits<int>::max(), true, output);
         }
       } else if(auto blur = std::get_if<BackdropBlurCommand>(&command)) {
         rasterizer.rasterize(*blur->m_path, blur->m_transform, blur->m_clip,
           to_premultiplied(Color(1, 1, 1, 1)), m_slots[i], view, size, 0,
-          std::numeric_limits<int>::max(), output);
+          std::numeric_limits<int>::max(), true, output);
       }
     }
     auto column = 0;

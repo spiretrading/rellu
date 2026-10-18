@@ -1,12 +1,20 @@
 #ifndef RELLU_GEOMETRY_PATH_HPP
 #define RELLU_GEOMETRY_PATH_HPP
 #include <array>
+#include <numbers>
 #include <vector>
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
 
 namespace Rellu {
+
+  /**
+   * The fraction of the distance from either end of a quarter of an ellipse
+   * to the corner where its end tangents meet at which the control points of
+   * the cubic Bezier curve approximating it lie.
+   */
+  inline constexpr auto ARC_CONTROL = 4 * (std::numbers::sqrt2 - 1) / 3;
 
   /** Lists the rules deciding which regions a path's outline fills. */
   enum class FillRule : unsigned char {
@@ -54,6 +62,12 @@ namespace Rellu {
 
     /** The segment's points, as given by its type; unused points are zero. */
     std::array<Point, 3> m_points;
+
+    /**
+     * Whether a CUBIC segment approximates a quarter of an ellipse, which
+     * renderers may draw as the exact arc instead.
+     */
+    bool m_is_arc = false;
 
     bool operator ==(const Segment&) const = default;
   };
@@ -115,6 +129,15 @@ namespace Rellu {
        * @param end The end of the curve.
        */
       void cubic_to(Point first, Point second, Point end);
+
+      /**
+       * Adds a quarter of an ellipse as the cubic Bezier curve approximating
+       * it, marked as an arc, starting a new subpath at the current point if
+       * none is open.
+       * @param corner The point where the tangents at the arc's ends meet.
+       * @param end The end of the arc.
+       */
+      void arc_to(Point corner, Point end);
 
       /** Closes the open subpath, doing nothing if no subpath is open. */
       void close();

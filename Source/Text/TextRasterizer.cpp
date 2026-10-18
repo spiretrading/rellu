@@ -21,6 +21,7 @@ namespace {
   constexpr auto LUMINANCE_BITS = 3;
   constexpr auto LUMINANCE_LEVELS = 1 << LUMINANCE_BITS;
   constexpr auto CONTRAST = 128.0f / 255.0f;
+  constexpr auto MAXIMUM_RASTERIZED_SIZE = 256.0;
 
   using OpacityTable = std::array<double, 17>;
 
@@ -245,6 +246,16 @@ bool TextRasterizer::is_supported(const Matrix& transform) {
   return static_cast<bool>(invert(transform));
 }
 
+bool TextRasterizer::is_outlined(
+    const PlacedGlyph& glyph, const Matrix& transform) {
+  auto size = glyph.m_size * glyph.m_size;
+  auto limit = MAXIMUM_RASTERIZED_SIZE * MAXIMUM_RASTERIZED_SIZE;
+  return size * (transform.m_a * transform.m_a +
+    transform.m_b * transform.m_b) > limit ||
+    size * (transform.m_c * transform.m_c +
+      transform.m_d * transform.m_d) > limit;
+}
+
 std::vector<TextRaster> TextRasterizer::rasterize(
     const TextLayout& layout, const Matrix& transform) const {
   auto rasters = std::vector<TextRaster>();
@@ -268,6 +279,9 @@ std::vector<TextRaster> TextRasterizer::rasterize(
   };
   auto lock = std::lock_guard(m_backend->m_mutex);
   for(auto& glyph : layout.m_glyphs) {
+    if(is_outlined(glyph, transform)) {
+      continue;
+    }
     auto origin = transform.map(glyph.m_origin);
     auto x = std::floor(origin.m_x * SUBPIXELS + 0.5) / SUBPIXELS;
     if(is_vertical) {

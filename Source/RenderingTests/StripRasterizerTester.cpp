@@ -6,6 +6,7 @@
 #include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Geometry/Shapes.hpp"
+#include "Rellu/Geometry/Stroke.hpp"
 #include "Rellu/Rendering/StripRasterizer.hpp"
 
 using namespace Rellu;
@@ -141,10 +142,10 @@ TEST_SUITE("StripRasterizer") {
   }
 
   TEST_CASE("fill_rules") {
-    auto size = QSize(12, 12);
+    auto size = QSize(96, 96);
     for(auto rule : {FillRule::NON_ZERO, FillRule::EVEN_ODD}) {
       auto path = Path(rule);
-      for(auto& rectangle : {Rect(1, 1, 6, 6), Rect(4.5, 4.5, 6, 6)}) {
+      for(auto& rectangle : {Rect(8, 8, 48, 48), Rect(36.5, 36, 48, 48)}) {
         path.move_to(rectangle.get_top_left());
         path.line_to(Point(rectangle.get_right(), rectangle.get_top()));
         path.line_to(rectangle.get_bottom_right());
@@ -153,10 +154,9 @@ TEST_SUITE("StripRasterizer") {
       }
       auto coverage = get_coverage(rasterize(path, size), size);
       REQUIRE(get_maximum_error(coverage, size, [&] (int x, int y) {
-        auto first = x >= 1 && x < 7 && y >= 1 && y < 7 ? 1.0 : 0.0;
-        auto second = std::max(0.0, std::min(x + 1.0, 10.5) -
-          std::max(double(x), 4.5)) * std::max(0.0,
-            std::min(y + 1.0, 10.5) - std::max(double(y), 4.5));
+        auto first = x >= 8 && x < 56 && y >= 8 && y < 56 ? 1.0 : 0.0;
+        auto second = std::max(0.0, std::min(x + 1.0, 84.5) -
+          std::max(double(x), 36.5)) * (y >= 36 && y < 84 ? 1.0 : 0.0);
         if(rule == FillRule::NON_ZERO) {
           return std::min(1.0, first + second);
         }
@@ -226,6 +226,77 @@ TEST_SUITE("StripRasterizer") {
     }) == 0);
     REQUIRE(rasterize(make_rectangle(Rect(0, 0, 4, 4)), size, Matrix(),
       Rect(6, 6, 2, 2)).m_strips.empty());
+  }
+
+  TEST_CASE("supersampling") {
+    auto size = QSize(8, 8);
+    auto coverage =
+      get_coverage(rasterize(make_circle(Point(4, 4), 4), size), size);
+    auto values = std::vector<int>();
+    for(auto value : coverage) {
+      values.push_back(static_cast<int>(std::lround(255 * value)));
+    }
+    REQUIRE(values == std::vector{
+        0,  80, 191, 239, 255, 191,  64,   0,
+       80, 255, 255, 255, 255, 255, 255,  64,
+      192, 255, 255, 255, 255, 255, 255, 192,
+      255, 255, 255, 255, 255, 255, 255, 239,
+      255, 255, 255, 255, 255, 255, 255, 240,
+      192, 255, 255, 255, 255, 255, 255, 192,
+       80, 255, 255, 255, 255, 255, 255,  64,
+        0,  80, 192, 240, 255, 192,  64,   0});
+  }
+
+  TEST_CASE("analytic_snapping") {
+    auto size = QSize(64, 16);
+    auto trapezoid = Path();
+    trapezoid.move_to(Point(2, 1.4));
+    trapezoid.line_to(Point(60, 1.4));
+    trapezoid.line_to(Point(62, 12));
+    trapezoid.line_to(Point(0, 12));
+    trapezoid.close();
+    auto coverage = get_coverage(rasterize(trapezoid, size), size);
+    REQUIRE(std::abs(coverage[64 + 30] - 0.5) < 0.5 / 255);
+    REQUIRE(coverage[2 * 64 + 30] == 1);
+    auto rectangle = get_coverage(
+      rasterize(make_rectangle(Rect(2, 1.4, 58, 10)), size), size);
+    REQUIRE(std::abs(rectangle[64 + 30] - 0.6) < 0.5 / 255);
+  }
+
+  TEST_CASE("hairline") {
+    auto size = QSize(16, 16);
+    auto draw = [&] (Point start, Point end, double width) {
+      auto line = make_line(start, end);
+      auto list = DrawList();
+      auto fill = FillCommand(share(outline_stroke(line, StrokeGeometry(width,
+        StrokeAlignment::CENTER, StrokeCap::BUTT, StrokeJoin::MITER, 4, {}, 0),
+        0.01)), Matrix(), SolidPaint(make_color(0, 0, 0)));
+      fill.m_stroke = StrokeLine(share(line), width, StrokeCap::BUTT);
+      list.push_back(fill);
+      auto scene = StripScene();
+      auto rasterizer = StripRasterizer();
+      rasterizer.rasterize(list, Matrix(), size, scene);
+      return get_coverage(scene, size);
+    };
+    auto horizontal = draw(Point(1, 2.5), Point(15, 2.5), 1);
+    for(auto x = 2; x != 14; ++x) {
+      REQUIRE(horizontal[16 + x] == 0);
+      REQUIRE(horizontal[2 * 16 + x] == 1);
+      REQUIRE(horizontal[3 * 16 + x] == 0);
+    }
+    auto thin = draw(Point(1, 2.5), Point(15, 2.5), 0.5);
+    REQUIRE(std::lround(255 * thin[2 * 16 + 8]) == 127);
+    auto diagonal = draw(Point(1, 1.25), Point(13, 7.25), 1);
+    for(auto x = 3; x != 11; ++x) {
+      auto sum = 0.0;
+      for(auto y = 0; y != 16; ++y) {
+        sum += diagonal[y * 16 + x];
+      }
+      REQUIRE(std::abs(sum - 1) < 2.0 / 255);
+    }
+    auto thick = draw(Point(1, 2.5), Point(15, 2.5), 3);
+    REQUIRE(thick[16 + 8] == 1);
+    REQUIRE(thick[3 * 16 + 8] == 1);
   }
 
   TEST_CASE("view") {

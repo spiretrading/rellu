@@ -1,3 +1,4 @@
+#include <stdexcept>
 #include <utility>
 #include "Rellu/Rendering/CanvasRenderer.hpp"
 
@@ -24,6 +25,7 @@ const std::shared_ptr<const DrawList>& CanvasRenderer::get_draw_list() const {
 void CanvasRenderer::set_draw_list(std::shared_ptr<const DrawList> list) {
   m_list = std::move(list);
   m_drawing = nullptr;
+  m_list_drawing = nullptr;
   m_tiles.clear();
   m_is_prepared = false;
 }
@@ -35,6 +37,7 @@ const std::shared_ptr<const Drawing>& CanvasRenderer::get_drawing() const {
 void CanvasRenderer::set_drawing(std::shared_ptr<const Drawing> drawing) {
   m_drawing = std::move(drawing);
   m_list = nullptr;
+  m_list_drawing = nullptr;
   m_tiles.clear();
   m_is_prepared = false;
 }
@@ -117,4 +120,44 @@ void CanvasRenderer::render(
     m_scale = scale;
   }
   m_paths.render(buffer, target, m_background, batch);
+}
+
+void CanvasRenderer::render(QRhiCommandBuffer& buffer, QRhiTexture& texture,
+    double scale, QSize size, const QRect& region) {
+  auto view = make_scale(scale, scale) * m_view;
+  if(m_drawing || !is_tileable(view)) {
+    throw std::invalid_argument("Only draw lists record regions.");
+  }
+  if(!m_list_drawing) {
+    m_list_drawing = std::make_unique<Drawing>();
+    if(m_list) {
+      m_list_drawing->set_lists({m_list});
+    }
+  }
+  auto bounds = Rect((region.x() - view.m_tx) / view.m_a,
+    (region.y() - view.m_ty) / view.m_a, region.width() / view.m_a,
+    region.height() / view.m_a);
+  auto area = m_list_drawing->query(
+    inflate(bounds, 1 / view.m_a), view.m_a, m_commands);
+  auto extent = (to_pixels(DrawRegion(area, 1), view) &
+    QRect(QPoint(0, 0), size)) | region;
+  auto batch = m_rhi->nextResourceUpdateBatch();
+  m_paths.prepare(*batch, m_commands, view, size, extent);
+  m_paths.render(buffer, m_background, batch);
+  m_is_prepared = false;
+  m_is_complete = true;
+  auto& source = m_paths.get_region_texture();
+  auto origin = region.topLeft() - extent.topLeft();
+  auto destination = QPoint(0, 0);
+  if(m_rhi->isYUpInFramebuffer()) {
+    origin.setY(source.pixelSize().height() - origin.y() - region.height());
+    destination.setY(texture.pixelSize().height() - region.height());
+  }
+  auto description = QRhiTextureCopyDescription();
+  description.setPixelSize(region.size());
+  description.setSourceTopLeft(origin);
+  description.setDestinationTopLeft(destination);
+  auto copies = m_rhi->nextResourceUpdateBatch();
+  copies->copyTexture(&texture, &source, description);
+  buffer.resourceUpdate(copies);
 }

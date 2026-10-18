@@ -129,6 +129,7 @@ namespace Rellu {
         std::shared_ptr<const Node> m_record;
         std::shared_ptr<const Path> m_path;
         std::shared_ptr<const Path> m_stroke;
+        std::shared_ptr<const Path> m_layered;
         double m_tolerance;
         std::uint64_t m_generation;
       };

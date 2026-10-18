@@ -59,6 +59,16 @@ TEST_SUITE("TextRasterizer") {
     REQUIRE(!TextRasterizer::is_supported(make_scale(0, 1)));
   }
 
+  TEST_CASE("outlined_glyphs") {
+    auto layout = make_layout(u"H", Color(0, 0, 0, 1));
+    auto& glyph = layout.m_glyphs.front();
+    REQUIRE(!TextRasterizer::is_outlined(glyph, make_scale(16, 16)));
+    REQUIRE(TextRasterizer::is_outlined(glyph, make_scale(17, 17)));
+    REQUIRE(TextRasterizer::is_outlined(glyph, make_scale(1, 17)));
+    REQUIRE(get_default_text_rasterizer().rasterize(
+      layout, make_scale(17, 17)).empty());
+  }
+
   TEST_CASE("rasterize") {
     auto rasterizer = TextRasterizer();
     auto layout = make_layout(u"Hi", Color(0, 0, 0, 1));

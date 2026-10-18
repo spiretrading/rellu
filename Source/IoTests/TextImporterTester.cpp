@@ -155,8 +155,7 @@ TEST_SUITE("TextImporter") {
     REQUIRE(paragraphs[0].m_lines[0].m_runs == std::vector<StoredRun>({
       StoredRun(0, 6, Point(0, 11), std::nullopt, std::nullopt)}));
     REQUIRE(paragraphs[1].m_lines[0].m_runs == std::vector<StoredRun>({
-      StoredRun(7, 8, Point(5, 25), Font("Helvetica", "Regular", "Helvetica",
-      12), std::nullopt)}));
+      StoredRun(7, 8, Point(5, 25), std::nullopt, std::nullopt)}));
   }
 
   TEST_CASE("character_style_link") {

@@ -1,5 +1,8 @@
 #ifndef RELLU_RENDERING_RENDERER_HPP
 #define RELLU_RENDERING_RENDERER_HPP
+#include <stdexcept>
+#include <QRect>
+#include <QSize>
 #include <rhi/qrhi.h>
 
 namespace Rellu {
@@ -36,6 +39,21 @@ namespace Rellu {
       virtual void render(
         QRhiCommandBuffer& buffer, QRhiRenderTarget& target, double scale) = 0;
 
+      /**
+       * Records a region of a frame into a texture, drawing each pixel of the
+       * region the same as recording the whole frame does.
+       * @param buffer The command buffer to record into, without an active
+       *        render pass.
+       * @param texture The RGBA8 texture receiving the region at its top left
+       *        as rendered, at least as large as the region.
+       * @param scale The number of pixels per logical unit.
+       * @param size The size of the frame in pixels.
+       * @param region The region of the frame to record.
+       * @throws std::invalid_argument The Renderer does not record regions.
+       */
+      virtual void render(QRhiCommandBuffer& buffer, QRhiTexture& texture,
+        double scale, QSize size, const QRect& region);
+
     protected:
 
       /** Constructs a Renderer. */
@@ -45,6 +63,11 @@ namespace Rellu {
       Renderer(const Renderer&) = delete;
       Renderer& operator =(const Renderer&) = delete;
   };
+
+  inline void Renderer::render(QRhiCommandBuffer& buffer, QRhiTexture& texture,
+      double scale, QSize size, const QRect& region) {
+    throw std::invalid_argument("The renderer does not record regions.");
+  }
 }
 
 #endif

@@ -77,6 +77,19 @@ void SceneBuilder::add_text(
             std::move(path)), *inverse, SolidPaint(color), clip));
         }
       }
+      auto outlined = TextLayout();
+      for(auto& glyph : outline.m_layout.m_glyphs) {
+        if(TextRasterizer::is_outlined(glyph, transform)) {
+          outlined.m_glyphs.push_back(glyph);
+        }
+      }
+      for(auto& fill : Rellu::outline(outlined)) {
+        auto color = fill.m_color;
+        color.m_alpha *= placement.m_opacity;
+        list.push_back(FillCommand(std::make_shared<const Path>(
+          std::move(fill.m_path)), placement.m_transform, SolidPaint(color),
+          clip));
+      }
       return;
     }
   }

@@ -30,8 +30,10 @@ namespace Rellu {
   };
 
   /**
-   * Returns the corner radii Adobe XD renders for a rectangle, limiting each
-   * radius to the range [0, half the rectangle's shorter side].
+   * Returns the corner radii Adobe XD renders for a rectangle: negative
+   * radii become zero and, where the radii at the ends of a side add up to
+   * more than its length, every radius is scaled down by the same factor so
+   * that they fit.
    * @param radii The requested corner radii.
    * @param size The size of the rectangle.
    * @return The effective corner radii.
@@ -47,7 +49,10 @@ namespace Rellu {
 
   /**
    * Makes a closed rectangle with rounded corners, running clockwise on
-   * screen from its top left corner.
+   * screen. Without rounding it starts from its top left corner; otherwise,
+   * as Adobe XD orders it, it starts where its left side meets its bottom
+   * left corner and draws a line along every side, even one of zero length,
+   * unless it is a circle.
    * @param bounds The rectangle.
    * @param radii The requested corner radii, clamped by clamp_corner_radii.
    */

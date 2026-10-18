@@ -696,7 +696,7 @@ namespace {
         auto region = get_bounds(operation.m_first, operation.m_count).adjusted(
           -margin, -margin, margin, margin) &
           QRect(target.m_origin, target.get_extent());
-        if(m_region && index == 0) {
+        if(index == 0) {
           region &= QRect(QPoint(0, 0), m_size);
         }
         if(region.isEmpty()) {

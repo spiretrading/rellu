@@ -1,4 +1,6 @@
 #include <cmath>
+#include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include "GlyphRenderer.hpp"
@@ -12,12 +14,79 @@ using namespace Rellu::Details;
 
 #ifdef _WIN32
 namespace {
+  constexpr auto SYMMETRIC_SMOOTHING = std::uint16_t(0x0008);
+  constexpr auto MAXIMUM_HINTED_SIZE = 20.0;
+
   template<typename T>
   void release(T*& object) {
     if(object) {
       object->Release();
       object = nullptr;
     }
+  }
+
+  std::uint16_t read_uint16(const std::uint8_t* data) {
+    return static_cast<std::uint16_t>((data[0] << 8) | data[1]);
+  }
+
+  template<typename F>
+  auto read_table(IDWriteFontFace& face, UINT32 tag, F f) {
+    auto data = static_cast<const void*>(nullptr);
+    auto size = UINT32(0);
+    auto context = static_cast<void*>(nullptr);
+    auto exists = BOOL(FALSE);
+    if(FAILED(face.TryGetFontTable(tag, &data, &size, &context, &exists)) ||
+        !exists) {
+      return f(static_cast<const std::uint8_t*>(nullptr), UINT32(0));
+    }
+    auto result = f(static_cast<const std::uint8_t*>(data), size);
+    face.ReleaseFontTable(context);
+    return result;
+  }
+
+  std::optional<std::uint16_t> get_gasp_behavior(
+      IDWriteFontFace& face, double size) {
+    auto ppem = static_cast<int>(std::floor(size + 0.5));
+    return read_table(face, DWRITE_MAKE_OPENTYPE_TAG('g', 'a', 's', 'p'),
+      [&] (const std::uint8_t* data, UINT32 length) {
+        auto behavior = std::optional<std::uint16_t>();
+        if(length < 4 || read_uint16(data) != 1) {
+          return behavior;
+        }
+        auto count = read_uint16(data + 2);
+        if(length < 4 + 4 * UINT32(count)) {
+          return behavior;
+        }
+        for(auto i = 0; i != count; ++i) {
+          if(ppem <= read_uint16(data + 4 + 4 * i)) {
+            behavior = read_uint16(data + 6 + 4 * i);
+            break;
+          }
+        }
+        return behavior;
+      });
+  }
+
+  bool is_hinted(IDWriteFontFace& face) {
+    return read_table(face, DWRITE_MAKE_OPENTYPE_TAG('m', 'a', 'x', 'p'),
+      [] (const std::uint8_t* data, UINT32 length) {
+        return length >= 28 && read_uint16(data) == 1 &&
+          read_uint16(data + 26) != 0;
+      });
+  }
+
+  DWRITE_RENDERING_MODE get_rendering_mode(
+      IDWriteFontFace& face, double size) {
+    if(auto behavior = get_gasp_behavior(face, size)) {
+      if(*behavior & SYMMETRIC_SMOOTHING) {
+        return DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC;
+      }
+      return DWRITE_RENDERING_MODE_NATURAL;
+    }
+    if(size <= MAXIMUM_HINTED_SIZE && is_hinted(face)) {
+      return DWRITE_RENDERING_MODE_NATURAL;
+    }
+    return DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC;
   }
 
   class DirectWriteRenderer : public GlyphRenderer {
@@ -55,28 +124,10 @@ namespace {
           static_cast<FLOAT>(transform.m_d), 0, 0);
         auto is_linear = transform.m_a != 1 || transform.m_b != 0 ||
           transform.m_c != 0 || transform.m_d != 1;
-        auto mode = DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC;
-        auto grid = DWRITE_GRID_FIT_MODE_DEFAULT;
-        auto recommended = static_cast<IDWriteFontFace2*>(nullptr);
-        if(SUCCEEDED(face->QueryInterface(IID_PPV_ARGS(&recommended)))) {
-          auto recommended_mode = DWRITE_RENDERING_MODE_DEFAULT;
-          auto recommended_grid = DWRITE_GRID_FIT_MODE_DEFAULT;
-          if(SUCCEEDED(recommended->GetRecommendedRenderingMode(
-              static_cast<FLOAT>(size), 96, 96, nullptr, FALSE,
-              DWRITE_OUTLINE_THRESHOLD_ANTIALIASED,
-              DWRITE_MEASURING_MODE_NATURAL, nullptr, &recommended_mode,
-              &recommended_grid)) &&
-              recommended_mode == DWRITE_RENDERING_MODE_NATURAL &&
-              recommended_grid == DWRITE_GRID_FIT_MODE_DISABLED) {
-            mode = recommended_mode;
-            grid = recommended_grid;
-          }
-          recommended->Release();
-        }
         auto analysis = static_cast<IDWriteGlyphRunAnalysis*>(nullptr);
         if(FAILED(m_factory->CreateGlyphRunAnalysis(&run,
-            is_linear ? &matrix : nullptr, mode,
-            DWRITE_MEASURING_MODE_NATURAL, grid,
+            is_linear ? &matrix : nullptr, get_rendering_mode(*face, size),
+            DWRITE_MEASURING_MODE_NATURAL, DWRITE_GRID_FIT_MODE_ENABLED,
             DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
             static_cast<FLOAT>(transform.m_tx),
             static_cast<FLOAT>(transform.m_ty), &analysis)) || !analysis) {

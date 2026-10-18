@@ -2,6 +2,7 @@
 #include <cmath>
 #include <limits>
 #include <variant>
+#include "Rellu/Geometry/BooleanOperation.hpp"
 #include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Geometry/Stroke.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
@@ -31,6 +32,52 @@ namespace {
   bool is_drawn(const std::optional<Stroke>& stroke) {
     return stroke && stroke->m_is_enabled && stroke->m_width > 0 &&
       stroke->m_color.m_alpha > 0;
+  }
+
+  bool is_opaque(const Fill& fill) {
+    if(auto solid = std::get_if<SolidFill>(&fill)) {
+      return solid->m_color.m_alpha >= 1;
+    } else if(auto gradient = std::get_if<GradientFill>(&fill)) {
+      return !gradient->m_stops.empty() && std::all_of(
+        gradient->m_stops.begin(), gradient->m_stops.end(),
+        [] (const auto& stop) {
+          return stop.m_color.m_alpha >= 1;
+        });
+    }
+    return false;
+  }
+
+  bool is_closed(const Path& path) {
+    auto is_open = false;
+    for(auto& segment : path.get_segments()) {
+      if(segment.m_type == SegmentType::MOVE) {
+        if(is_open) {
+          return false;
+        }
+        is_open = true;
+      } else if(segment.m_type == SegmentType::CLOSE) {
+        is_open = false;
+      }
+    }
+    return !is_open;
+  }
+
+  bool is_open(const Path& path) {
+    return std::none_of(path.get_segments().begin(), path.get_segments().end(),
+      [] (const auto& segment) {
+        return segment.m_type == SegmentType::CLOSE;
+      });
+  }
+
+  bool is_inward(const std::vector<Effect>& effects) {
+    return std::any_of(effects.begin(), effects.end(), [] (const auto& effect) {
+      if(auto shadow = std::get_if<InnerShadow>(&effect)) {
+        return shadow->m_is_visible;
+      } else if(auto blur = std::get_if<Blur>(&effect)) {
+        return blur->m_is_visible && blur->m_is_background;
+      }
+      return false;
+    });
   }
 
   StrokeGeometry to_geometry(const Stroke& stroke) {
@@ -312,6 +359,26 @@ void SceneBuilder::add_shape(
     stroke.emplace(outline.m_stroke, placement.m_transform,
       make_paint(style.m_stroke->m_color, placement.m_opacity),
       placement.m_clip);
+    if(style.m_stroke->m_dashes.empty() &&
+        (style.m_stroke->m_alignment == StrokeAlignment::CENTER ||
+          is_open(*outline.m_path))) {
+      stroke->m_stroke = StrokeLine(
+        outline.m_path, style.m_stroke->m_width, style.m_stroke->m_cap);
+    }
+  }
+  auto is_inside = style.m_stroke &&
+    style.m_stroke->m_alignment == StrokeAlignment::INSIDE;
+  if(fill && stroke && outline.m_layered && is_opaque(style.m_fill) &&
+      placement.m_opacity >= 1 && !is_inward(style.m_effects) &&
+      (!is_inside || style.m_stroke->m_color.m_alpha >= 1)) {
+    if(is_inside) {
+      stroke->m_path = outline.m_path;
+      fill->m_path = outline.m_layered;
+    } else {
+      stroke->m_path = outline.m_layered;
+    }
+    add_styled(list, std::move(stroke), std::move(fill), style.m_effects);
+    return;
   }
   add_styled(list, std::move(fill), std::move(stroke), style.m_effects);
 }
@@ -324,6 +391,7 @@ SceneBuilder::Outline& SceneBuilder::get_outline(
     outline.m_record = m_document->get_nodes().get_record(node.get_id());
     outline.m_path = std::make_shared<const Path>(to_path(shape.m_geometry));
     outline.m_stroke = nullptr;
+    outline.m_layered = nullptr;
     outline.m_tolerance = 0;
   }
   outline.m_generation = m_generation;
@@ -337,6 +405,16 @@ SceneBuilder::Outline& SceneBuilder::get_outline(
       4 * outline.m_tolerance >= tolerance)) {
     outline.m_stroke = std::make_shared<const Path>(
       outline_stroke(*outline.m_path, to_geometry(*stroke), tolerance));
+    outline.m_layered = nullptr;
+    if(stroke->m_alignment != StrokeAlignment::CENTER &&
+        stroke->m_dashes.empty() && is_closed(*outline.m_path)) {
+      auto operation = BooleanOperation::ADD;
+      if(stroke->m_alignment == StrokeAlignment::INSIDE) {
+        operation = BooleanOperation::SUBTRACT;
+      }
+      outline.m_layered = std::make_shared<const Path>(combine(
+        *outline.m_path, *outline.m_stroke, operation, tolerance));
+    }
     outline.m_tolerance = tolerance;
   }
   add_tolerance(outline.m_tolerance * divisor * (1 + TOLERANCE_MARGIN),

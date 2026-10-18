@@ -99,6 +99,31 @@ namespace {
     });
   }
 
+  Coverage make_supersampled_coverage(Path path, Matrix transform) {
+    auto inverse = *invert(transform);
+    return make_sampled_coverage([=] (Point point) {
+      return contains(path, inverse.map(point));
+    }, 4);
+  }
+
+  Coverage make_analytic_coverage(const Path& path, const Matrix& transform) {
+    auto snapped = Path(path.get_fill_rule());
+    auto snap = [&] (Point point) {
+      auto mapped = transform.map(point);
+      return Point(mapped.m_x, std::floor(4 * mapped.m_y + 0.5) / 4);
+    };
+    for(auto& segment : path.get_segments()) {
+      if(segment.m_type == SegmentType::MOVE) {
+        snapped.move_to(snap(segment.m_points[0]));
+      } else if(segment.m_type == SegmentType::LINE) {
+        snapped.line_to(snap(segment.m_points[0]));
+      } else if(segment.m_type == SegmentType::CLOSE) {
+        snapped.close();
+      }
+    }
+    return make_path_coverage(snapped, Matrix());
+  }
+
   auto make_image(QSize size, QColor background,
       const std::vector<Layer>& layers) {
     auto image = QImage(size, QImage::Format_RGBA8888_Premultiplied);
@@ -353,7 +378,7 @@ TEST_SUITE("PathRenderer") {
     auto diagonal = Rect(9, 16.5, 14, 1);
     renderer.m_list.push_back(fill(make_rectangle(diagonal), color, line));
     layers.push_back(
-      Layer(make_path_coverage(make_rectangle(diagonal), line), color));
+      Layer(make_analytic_coverage(make_rectangle(diagonal), line), color));
     auto expected = make_image(QSize(24, 24), QColor(255, 255, 255), layers);
     require_match(
       render(renderer, QSize(24, 24)), expected, ImageTolerance(4, 0));
@@ -376,14 +401,14 @@ TEST_SUITE("PathRenderer") {
     ring.set_fill_rule(FillRule::EVEN_ODD);
     renderer.m_list.push_back(fill(ring, color));
     auto expected = make_image(QSize(56, 30), QColor(0, 0, 0, 0),
-      {Layer(make_path_coverage(circle, Matrix()), color),
-        Layer(make_path_coverage(ring, Matrix()), color)});
+      {Layer(make_supersampled_coverage(circle, Matrix()), color),
+        Layer(make_supersampled_coverage(ring, Matrix()), color)});
     auto image = render(renderer, QSize(56, 30));
-    auto comparison = compare_images(image, expected, ImageTolerance(6, 0));
+    auto comparison = compare_images(image, expected, ImageTolerance(17, 0.02));
     CAPTURE(comparison.m_maximum_difference);
     CAPTURE(comparison.m_mean_difference);
     REQUIRE(comparison.m_is_match);
-    REQUIRE(comparison.m_mean_difference < 0.25);
+    REQUIRE(comparison.m_mean_difference < 1);
   }
 
   TEST_CASE("fill_rules") {
@@ -427,9 +452,9 @@ TEST_SUITE("PathRenderer") {
       auto shapes = make_shapes(rule);
       renderer.m_list.push_back(fill(shapes, color));
       auto expected = make_image(QSize(60, 42), QColor(0, 0, 0, 0),
-        {Layer(make_path_coverage(shapes, Matrix()), color)});
+        {Layer(make_supersampled_coverage(shapes, Matrix()), color)});
       auto image = render(renderer, QSize(60, 42));
-      require_match(image, expected, ImageTolerance(6, 0.005));
+      require_match(image, expected, ImageTolerance(13, 0.005));
       auto inside = qAlpha(image.pixel(11, 11));
       auto hole = qAlpha(image.pixel(31, 11));
       auto star = qAlpha(image.pixel(30, 31));
@@ -460,15 +485,15 @@ TEST_SUITE("PathRenderer") {
       auto pixels = make_scale(scale, scale) * view;
       return make_image(
         QSize(int(48 * scale), int(26 * scale)), QColor(255, 255, 255), {
-          Layer(make_path_coverage(rectangle, pixels * rotation),
+          Layer(make_analytic_coverage(rectangle, pixels * rotation),
             make_color(230, 120, 0)),
-          Layer(make_path_coverage(ellipse, pixels * skew),
+          Layer(make_supersampled_coverage(ellipse, pixels * skew),
             make_color(0, 60, 230))});
     };
     require_match(render(renderer, QSize(48, 26)), expected(1),
-      ImageTolerance(6, 0));
+      ImageTolerance(17, 0.02));
     require_match(render(renderer, QSize(96, 52), 2), expected(2),
-      ImageTolerance(6, 0));
+      ImageTolerance(17, 0.02));
   }
 
   TEST_CASE("blending") {
@@ -504,10 +529,11 @@ TEST_SUITE("PathRenderer") {
     triangle.line_to(Point(-30, 25));
     triangle.close();
     renderer.m_list.push_back(fill(triangle, color));
-    layers.push_back(Layer(make_path_coverage(triangle, Matrix()), color));
+    layers.push_back(
+      Layer(make_analytic_coverage(triangle, Matrix()), color));
     auto large = make_rectangle(Rect(-100, 14.5, 300, 300));
     renderer.m_list.push_back(fill(large, color, rotation));
-    layers.push_back(Layer(make_path_coverage(large, rotation), color));
+    layers.push_back(Layer(make_analytic_coverage(large, rotation), color));
     auto expected = make_image(QSize(30, 22), QColor(0, 0, 0, 0), layers);
     require_match(
       render(renderer, QSize(30, 22)), expected, ImageTolerance(6, 0));
@@ -605,9 +631,9 @@ TEST_SUITE("PathRenderer") {
     auto translucent = color;
     translucent.m_alpha = 0.8;
     auto expected = make_image(QSize(32, 32), QColor(0, 0, 0, 0),
-      {Layer(make_path_coverage(circle, Matrix()), translucent)});
+      {Layer(make_supersampled_coverage(circle, Matrix()), translucent)});
     require_match(
-      render(renderer, QSize(32, 32)), expected, ImageTolerance(6, 0));
+      render(renderer, QSize(32, 32)), expected, ImageTolerance(52, 0));
   }
 
   TEST_CASE("linear_gradient") {

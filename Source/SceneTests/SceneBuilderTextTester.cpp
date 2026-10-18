@@ -80,6 +80,21 @@ TEST_SUITE("SceneBuilder") {
     REQUIRE(builder.build().size() == 1);
   }
 
+  TEST_CASE("outlined_text") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    transaction.append(NodeId(), make_header(make_translation(5, 30)),
+      make_text(make_color(255, 0, 0)));
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    builder.set_device_transform(make_scale(20, 20));
+    auto list = builder.build();
+    REQUIRE(list.size() == 1);
+    auto& fill = get_fill(list, 0);
+    REQUIRE(fill.m_transform == make_translation(5, 30));
+    REQUIRE(get_color(fill) == make_color(255, 0, 0));
+  }
+
   TEST_CASE("text_clip") {
     auto document = Document();
     auto transaction = Transaction(document);

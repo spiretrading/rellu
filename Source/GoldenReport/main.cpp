@@ -16,6 +16,7 @@
 #include <vector>
 #include <QGuiApplication>
 #include <QImage>
+#include <QImageReader>
 #include <QtPlugin>
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
@@ -37,8 +38,8 @@ using namespace Rellu;
 namespace {
   constexpr auto THRESHOLDS = std::array<int, 6>({2, 4, 8, 16, 32, 64});
   const auto UNSUPPORTED = std::set<std::string>({"broken_reference",
-    "font_substitution", "missing", "scroll_group", "text_effect",
-    "text_paint", "text_stroke"});
+    "font_substitution", "missing", "not_exported", "scroll_group",
+    "text_effect", "text_paint", "text_stroke"});
 
   struct Options {
     std::filesystem::path m_corpus;
@@ -488,6 +489,12 @@ namespace {
         } else {
           collector.add(*id, Matrix());
         }
+        if(std::any_of(reference.m_errors.begin(), reference.m_errors.end(),
+            [&] (const auto& error) {
+              return error.m_index == item.m_index;
+            })) {
+          collector.m_features.insert("not_exported");
+        }
         auto scope = get_scope(collector.m_features);
         if(id && to_string(item.m_guid) == options.m_dump) {
           dump(document, *id, Matrix(), 0);
@@ -496,6 +503,10 @@ namespace {
         for(auto& image : item.m_images) {
           auto scale = image.first;
           auto expected = QImage(image.second);
+          if(expected.isNull()) {
+            std::cout << std::format("  unreadable reference {}@{}x\n",
+              item.m_index, scale);
+          }
           expected.setDevicePixelRatio(1);
           auto size = get_pixel_size(item.m_draw_bounds, scale);
           auto actual = QImage();
@@ -583,6 +594,7 @@ int main(int argc, char** argv) {
   arguments.push_back(nullptr);
   argv = arguments.data();
   auto application = QGuiApplication(argc, argv);
+  QImageReader::setAllocationLimit(0);
   if(argc >= 3 && std::string_view(argv[1]) == "--time") {
     try {
       for(auto i = 2; i < argc; ++i) {

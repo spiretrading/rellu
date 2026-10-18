@@ -146,20 +146,57 @@ TEST_SUITE("SceneBuilder") {
     auto builder = SceneBuilder(document, TOLERANCE);
     auto list = builder.build();
     REQUIRE(list.size() == 4);
-    REQUIRE(get_color(get_fill(list, 0)) == make_color(255, 0, 0));
-    auto& outline = get_fill(list, 1);
-    REQUIRE(*outline.m_path == outline_stroke(
-      make_rectangle(Rect(0, 0, 10, 10)), StrokeGeometry(2,
-        StrokeAlignment::INSIDE, StrokeCap::ROUND, StrokeJoin::BEVEL, 3, {},
-        0), TOLERANCE / 2));
+    auto& outline = get_fill(list, 0);
+    REQUIRE(*outline.m_path == make_rectangle(Rect(0, 0, 10, 10)));
     REQUIRE(outline.m_transform == make_scale(2, 2));
     REQUIRE(get_color(outline) == make_color(0, 0, 0));
+    REQUIRE(!outline.m_stroke);
+    auto& inner = get_fill(list, 1);
+    REQUIRE(get_color(inner) == make_color(255, 0, 0));
+    REQUIRE(inner.m_transform == make_scale(2, 2));
+    REQUIRE(contains(*inner.m_path, Point(5, 5)));
+    REQUIRE(contains(*inner.m_path, Point(2.5, 5)));
+    REQUIRE(!contains(*inner.m_path, Point(1.5, 5)));
     REQUIRE(get_color(get_fill(list, 2)) == make_color(255, 0, 0));
-    REQUIRE(get_color(get_fill(list, 3)) == make_color(0, 255, 0));
-    REQUIRE(*get_fill(list, 3).m_path == outline_stroke(
+    auto& line_stroke = get_fill(list, 3);
+    REQUIRE(get_color(line_stroke) == make_color(0, 255, 0));
+    REQUIRE(*line_stroke.m_path == outline_stroke(
       make_line(Point(0, 0), Point(10, 0)), StrokeGeometry(1,
         StrokeAlignment::CENTER, StrokeCap::BUTT, StrokeJoin::MITER, 4, {},
         0), TOLERANCE));
+    REQUIRE(line_stroke.m_stroke);
+    REQUIRE(*line_stroke.m_stroke->m_path ==
+      make_line(Point(0, 0), Point(10, 0)));
+    REQUIRE(line_stroke.m_stroke->m_width == 1);
+    REQUIRE(line_stroke.m_stroke->m_cap == StrokeCap::BUTT);
+  }
+
+  TEST_CASE("outside_stroke") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto shape = make_shape(Rect(0, 0, 10, 10), make_color(255, 0, 0));
+    shape.m_style.m_stroke = Stroke(make_color(0, 0, 0), 2,
+      StrokeAlignment::OUTSIDE, StrokeCap::BUTT, StrokeJoin::MITER, 4);
+    transaction.append(NodeId(), make_header(), shape);
+    auto translucent = shape;
+    translucent.m_style.m_fill = SolidFill(make_color(255, 0, 0, 0.5));
+    transaction.append(NodeId(), make_header(), translucent);
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto list = builder.build();
+    REQUIRE(list.size() == 4);
+    auto& beneath = get_fill(list, 0);
+    REQUIRE(get_color(beneath) == make_color(0, 0, 0));
+    REQUIRE(contains(*beneath.m_path, Point(-1, 5)));
+    REQUIRE(contains(*beneath.m_path, Point(5, 5)));
+    REQUIRE(!contains(*beneath.m_path, Point(-3, 5)));
+    REQUIRE(get_color(get_fill(list, 1)) == make_color(255, 0, 0));
+    REQUIRE(*get_fill(list, 1).m_path == make_rectangle(Rect(0, 0, 10, 10)));
+    REQUIRE(get_color(get_fill(list, 2)) == make_color(255, 0, 0, 0.5));
+    auto& ring = get_fill(list, 3);
+    REQUIRE(get_color(ring) == make_color(0, 0, 0));
+    REQUIRE(contains(*ring.m_path, Point(-1, 5)));
+    REQUIRE(!contains(*ring.m_path, Point(5, 5)));
   }
 
   TEST_CASE("dashes") {

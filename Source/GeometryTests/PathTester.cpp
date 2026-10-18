@@ -158,6 +158,37 @@ TEST_SUITE("Path") {
     REQUIRE(transformed == expected);
   }
 
+  TEST_CASE("arc") {
+    auto path = Path();
+    path.move_to(Point(4, 0));
+    path.arc_to(Point(4, 4), Point(0, 4));
+    auto& segment = path.get_segments()[1];
+    REQUIRE(segment.m_type == SegmentType::CUBIC);
+    REQUIRE(segment.m_is_arc);
+    REQUIRE(segment.m_points[0] == Point(4, 4 * ARC_CONTROL));
+    REQUIRE(segment.m_points[1] == Point(4 * ARC_CONTROL, 4));
+    REQUIRE(segment.m_points[2] == Point(0, 4));
+    auto cubic = Path();
+    cubic.move_to(Point(4, 0));
+    cubic.cubic_to(segment.m_points[0], segment.m_points[1], Point(0, 4));
+    REQUIRE(path != cubic);
+  }
+
+  TEST_CASE("transformed_arc") {
+    auto path = Path();
+    path.move_to(Point(4, 0));
+    path.arc_to(Point(4, 4), Point(0, 4));
+    auto transformed = transform(path, make_translation(10, 20) *
+      make_scale(2, 3));
+    auto& segment = transformed.get_segments()[1];
+    REQUIRE(segment.m_is_arc);
+    REQUIRE(distance(segment.m_points[0], Point(18, 20 + 12 * ARC_CONTROL)) <
+      1e-9);
+    REQUIRE(distance(segment.m_points[1], Point(10 + 8 * ARC_CONTROL, 32)) <
+      1e-9);
+    REQUIRE(segment.m_points[2] == Point(10, 32));
+  }
+
   TEST_CASE("line_bounds") {
     auto path = Path();
     path.move_to(Point(5, 10));

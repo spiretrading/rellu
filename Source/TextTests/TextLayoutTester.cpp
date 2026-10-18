@@ -163,6 +163,27 @@ TEST_SUITE("TextLayout") {
       doctest::Approx(right.m_glyphs.front().m_origin.m_x / 2));
   }
 
+  TEST_CASE("trailing_whitespace") {
+    auto text = make_text(u"ab ab");
+    text.m_frame = AutoHeightFrame(300);
+    text.m_paragraph_style.m_alignment = TextAlignment::RIGHT;
+    auto stored = StoredLayout();
+    auto& paragraph = stored.m_paragraphs.emplace_back();
+    paragraph.m_lines.push_back(StoredLine({make_run(0, 3, Point(0, 0))}));
+    paragraph.m_lines.push_back(StoredLine({make_run(3, 5, Point(0, 0))}));
+    text.m_layout = Shared(stored);
+    auto wrapped = lay_out(text, get_library());
+    REQUIRE(wrapped.m_glyphs.size() == 4);
+    REQUIRE(wrapped.m_glyphs[0].m_origin.m_x ==
+      doctest::Approx(wrapped.m_glyphs[2].m_origin.m_x));
+    auto spaced = make_text(u"ab ");
+    spaced.m_paragraph_style.m_alignment = TextAlignment::RIGHT;
+    auto plain = make_text(u"ab");
+    plain.m_paragraph_style.m_alignment = TextAlignment::RIGHT;
+    REQUIRE(lay_out(spaced, get_library()).m_glyphs[0].m_origin.m_x <
+      lay_out(plain, get_library()).m_glyphs[0].m_origin.m_x);
+  }
+
   TEST_CASE("letter_spacing") {
     auto text = make_text(u"abc");
     auto plain = lay_out(text, get_library());
@@ -172,6 +193,16 @@ TEST_SUITE("TextLayout") {
       REQUIRE(spaced.m_glyphs[i].m_origin.m_x == doctest::Approx(
         plain.m_glyphs[i].m_origin.m_x + 2.0 * i));
     }
+  }
+
+  TEST_CASE("tab_stops") {
+    auto layout = lay_out(make_text(u"a\tb\t\tc"), get_library());
+    REQUIRE(layout.m_glyphs.size() == 3);
+    REQUIRE(layout.m_glyphs[0].m_origin.m_x == 0);
+    REQUIRE(layout.m_glyphs[1].m_origin.m_x ==
+      doctest::Approx(4 * FONT.m_size));
+    REQUIRE(layout.m_glyphs[2].m_origin.m_x ==
+      doctest::Approx(12 * FONT.m_size));
   }
 
   TEST_CASE("text_transform") {

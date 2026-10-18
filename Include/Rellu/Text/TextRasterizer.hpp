@@ -42,7 +42,7 @@ namespace Rellu {
   enum class GlyphRasterization : unsigned char {
 
     /**
-     * DirectWrite's symmetric natural rendering in grayscale, which is how
+     * DirectWrite's natural rendering in grayscale, which is how
      * Adobe XD draws text on Windows. Available only on Windows.
      */
     DIRECT_WRITE,
@@ -91,7 +91,18 @@ namespace Rellu {
       static bool is_supported(const Matrix& transform);
 
       /**
-       * Rasterizes a layout.
+       * Tests whether a glyph is too large to rasterize, in which case Adobe
+       * XD fills its outline like any other path.
+       * @param glyph The glyph to test.
+       * @param transform The transform from the glyph's space to device
+       *        pixels.
+       */
+      static bool is_outlined(
+        const PlacedGlyph& glyph, const Matrix& transform);
+
+      /**
+       * Rasterizes a layout's decorations and the glyphs that are not
+       * outlined.
        * @param layout The layout to rasterize.
        * @param transform The supported transform from the layout's space to
        *        device pixels.
