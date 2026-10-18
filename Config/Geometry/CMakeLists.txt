@@ -1,0 +1,5 @@
+file(GLOB_RECURSE header_files ${RELLU_INCLUDE_PATH}/Rellu/Geometry/*.hpp)
+file(GLOB_RECURSE source_files ${RELLU_SOURCE_PATH}/Geometry/*.cpp)
+add_library(RelluGeometry STATIC ${header_files} ${source_files})
+source_group("Header Files" FILES ${header_files})
+rellu_track_target(RelluGeometry)

@@ -1,0 +1,102 @@
+#ifndef RELLU_GEOMETRY_SHAPES_HPP
+#define RELLU_GEOMETRY_SHAPES_HPP
+#include <span>
+#include "Rellu/Geometry/Path.hpp"
+#include "Rellu/Geometry/Point.hpp"
+#include "Rellu/Geometry/Rect.hpp"
+#include "Rellu/Geometry/Size.hpp"
+
+namespace Rellu {
+
+  /**
+   * The radius of each corner of a rectangle, in the order Adobe XD stores
+   * them.
+   */
+  struct CornerRadii {
+
+    /** The radius of the top left corner. */
+    double m_top_left;
+
+    /** The radius of the top right corner. */
+    double m_top_right;
+
+    /** The radius of the bottom right corner. */
+    double m_bottom_right;
+
+    /** The radius of the bottom left corner. */
+    double m_bottom_left;
+
+    bool operator ==(const CornerRadii&) const = default;
+  };
+
+  /**
+   * Returns the corner radii Adobe XD renders for a rectangle, limiting each
+   * radius to the range [0, half the rectangle's shorter side].
+   * @param radii The requested corner radii.
+   * @param size The size of the rectangle.
+   * @return The effective corner radii.
+   */
+  CornerRadii clamp_corner_radii(const CornerRadii& radii, Size size);
+
+  /**
+   * Makes a closed rectangle running clockwise on screen from its top left
+   * corner.
+   * @param bounds The rectangle.
+   */
+  Path make_rectangle(const Rect& bounds);
+
+  /**
+   * Makes a closed rectangle with rounded corners, running clockwise on
+   * screen from its top left corner.
+   * @param bounds The rectangle.
+   * @param radii The requested corner radii, clamped by clamp_corner_radii.
+   */
+  Path make_rectangle(const Rect& bounds, const CornerRadii& radii);
+
+  /**
+   * Makes a closed ellipse running clockwise on screen from its rightmost
+   * point.
+   * @param center The center of the ellipse.
+   * @param x_radius The horizontal radius.
+   * @param y_radius The vertical radius.
+   */
+  Path make_ellipse(Point center, double x_radius, double y_radius);
+
+  /**
+   * Makes a closed circle running clockwise on screen from its rightmost
+   * point.
+   * @param center The center of the circle.
+   * @param radius The radius.
+   */
+  Path make_circle(Point center, double radius);
+
+  /**
+   * Makes an open straight line.
+   * @param start The start of the line.
+   * @param end The end of the line.
+   */
+  Path make_line(Point start, Point end);
+
+  /**
+   * Makes a closed polygon through a sequence of vertices, rounding each
+   * vertex with a circular arc tangent to both of its edges. A radius too
+   * large for an edge is reduced so that no rounding takes up more than half
+   * of either adjacent edge.
+   * @param vertices The vertices in order.
+   * @param corner_radius The radius rounding each vertex.
+   */
+  Path make_polygon(std::span<const Point> vertices, double corner_radius);
+
+  /**
+   * Makes the regular polygon Adobe XD draws for a corner count, starting
+   * from a vertex at the top and running clockwise on screen, stretched so
+   * its vertices span the bounds.
+   * @param corner_count The number of vertices, at least 3; fewer produce an
+   *        empty Path.
+   * @param bounds The rect the vertices span.
+   * @param corner_radius The radius rounding each vertex.
+   */
+  Path make_polygon(int corner_count, const Rect& bounds, double corner_radius);
+}
+
+#endif

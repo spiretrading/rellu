@@ -1,0 +1,6 @@
+file(GLOB_RECURSE source_files ${RELLU_SOURCE_PATH}/GeometryTests/*.cpp)
+add_executable(GeometryTests ${source_files})
+target_include_directories(GeometryTests SYSTEM PRIVATE ${DOCTEST_INCLUDE_PATH})
+target_link_libraries(GeometryTests PRIVATE RelluGeometry)
+add_custom_command(TARGET GeometryTests POST_BUILD COMMAND GeometryTests)
+rellu_install_target(GeometryTests "${TEST_INSTALL_DIRECTORY}/$<CONFIG>")
