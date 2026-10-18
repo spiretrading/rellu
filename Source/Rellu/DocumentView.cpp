@@ -1,12 +1,12 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <limits>
 #include <utility>
-#include <variant>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QResizeEvent>
 #include <QWheelEvent>
-#include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Rendering/StripRasterizer.hpp"
 #include "DocumentView.hpp"
 
@@ -17,22 +17,7 @@ namespace {
   constexpr auto MAXIMUM_ZOOM = 256.0;
   constexpr auto FIT_MARGIN = 24.0;
   constexpr auto WHEEL_ZOOM = 1.0015;
-
-  Rect get_draw_bounds(const DrawList& list) {
-    auto bounds = Rect(0, 0, 0, 0);
-    for(auto& command : list) {
-      auto fill = std::get_if<FillCommand>(&command);
-      if(!fill) {
-        continue;
-      }
-      auto box = get_bounds(fill->m_path, fill->m_transform);
-      if(fill->m_clip) {
-        box = intersect(box, *fill->m_clip);
-      }
-      bounds = unite(bounds, box);
-    }
-    return bounds;
-  }
+  constexpr auto SCENE_BUDGET = std::chrono::milliseconds(8);
 
   double get_level(double zoom) {
     return std::exp2(std::ceil(std::log2(zoom)));
@@ -41,7 +26,6 @@ namespace {
 
 DocumentView::DocumentView(QWidget* parent)
   : Canvas(parent),
-    m_bounds(0, 0, 0, 0),
     m_zoom(1),
     m_offset(0, 0),
     m_level(1),
@@ -59,33 +43,73 @@ const Document* DocumentView::get_document() const {
 
 void DocumentView::set_document(std::unique_ptr<Document> document) {
   get_renderer().set_draw_list(nullptr);
-  m_builder.reset();
+  m_subscription.release();
+  m_scene.reset();
   m_document = std::move(document);
   if(m_document) {
-    m_builder = std::make_unique<SceneBuilder>(
-      *m_document, StripRasterizer::TOLERANCE);
     m_level = 1;
-    build();
-    m_bounds = get_draw_bounds(*get_renderer().get_draw_list());
-  } else {
-    m_bounds = Rect(0, 0, 0, 0);
+    m_scene = std::make_unique<Scene>(*m_document, StripRasterizer::TOLERANCE);
+    m_scene->update();
+    get_renderer().set_drawing(m_scene->get_drawing());
+    m_subscription = m_document->subscribe([this] (const auto&) {
+      update();
+    });
   }
   fit();
 }
 
 void DocumentView::fit() {
   m_is_fitting = true;
-  auto width = static_cast<double>(this->width());
-  auto height = static_cast<double>(this->height());
-  if(m_bounds.is_empty() || width <= 0 || height <= 0) {
+  auto bounds = Rect(0, 0, 0, 0);
+  if(m_scene) {
+    bounds = m_scene->get_drawing()->get_bounds();
+  }
+  if(bounds.is_empty() || width() <= 0 || height() <= 0) {
     m_zoom = 1;
     m_offset = Point(0, 0);
+    update_view();
   } else {
-    m_zoom = std::clamp(std::min(
-      std::max(width - 2 * FIT_MARGIN, 1.0) / m_bounds.m_width,
-      std::max(height - 2 * FIT_MARGIN, 1.0) / m_bounds.m_height),
-      MINIMUM_ZOOM, MAXIMUM_ZOOM);
-    auto center = m_bounds.get_center();
+    frame(bounds);
+  }
+}
+
+void DocumentView::zoom_to(const Rect& region) {
+  m_is_fitting = false;
+  frame(region);
+}
+
+void DocumentView::set_zoom(double zoom) {
+  this->zoom(zoom / m_zoom, QPointF(width() / 2.0, height() / 2.0));
+}
+
+void DocumentView::render(QRhiCommandBuffer* buffer) {
+  if(m_scene && !m_scene->is_current()) {
+    auto region = Rect(-m_offset.m_x / m_zoom, -m_offset.m_y / m_zoom,
+      width() / m_zoom, height() / m_zoom);
+    get_renderer().invalidate(m_scene->update(region, SCENE_BUDGET));
+    if(!m_scene->is_current()) {
+      update();
+    }
+  }
+  Canvas::render(buffer);
+}
+
+void DocumentView::frame(const Rect& region) {
+  auto width = static_cast<double>(this->width());
+  auto height = static_cast<double>(this->height());
+  if(width > 0 && height > 0) {
+    auto zoom = std::numeric_limits<double>::infinity();
+    if(region.m_width > 0) {
+      zoom = std::max(width - 2 * FIT_MARGIN, 1.0) / region.m_width;
+    }
+    if(region.m_height > 0) {
+      zoom = std::min(zoom,
+        std::max(height - 2 * FIT_MARGIN, 1.0) / region.m_height);
+    }
+    if(std::isfinite(zoom)) {
+      m_zoom = std::clamp(zoom, MINIMUM_ZOOM, MAXIMUM_ZOOM);
+    }
+    auto center = region.get_center();
     m_offset = Point(width / 2 - m_zoom * center.m_x,
       height / 2 - m_zoom * center.m_y);
   }
@@ -177,15 +201,6 @@ void DocumentView::resizeEvent(QResizeEvent* event) {
   }
 }
 
-void DocumentView::build() {
-  if(!m_builder) {
-    return;
-  }
-  m_builder->set_tolerance(StripRasterizer::TOLERANCE / m_level);
-  get_renderer().set_draw_list(
-    std::make_shared<const DrawList>(m_builder->build()));
-}
-
 void DocumentView::zoom(double factor, QPointF center) {
   m_is_fitting = false;
   auto zoom = std::clamp(m_zoom * factor, MINIMUM_ZOOM, MAXIMUM_ZOOM);
@@ -207,7 +222,9 @@ void DocumentView::update_view() {
   auto level = get_level(m_zoom * devicePixelRatio());
   if(level != m_level) {
     m_level = level;
-    build();
+    if(m_scene) {
+      m_scene->set_tolerance(StripRasterizer::TOLERANCE / m_level);
+    }
   }
   get_renderer().set_view(
     make_translation(m_offset.m_x, m_offset.m_y) * make_scale(m_zoom, m_zoom));

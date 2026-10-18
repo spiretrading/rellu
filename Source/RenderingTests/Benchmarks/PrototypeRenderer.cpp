@@ -96,7 +96,7 @@ void Rellu::prepare_stencil(const DrawList& list, const Matrix& view,
   for(auto& command : list) {
     auto& fill = std::get<FillCommand>(command);
     auto polylines =
-      flatten(transform(fill.m_path, view * fill.m_transform), TOLERANCE);
+      flatten(transform(*fill.m_path, view * fill.m_transform), TOLERANCE);
     auto bounds = get_polyline_bounds(polylines);
     if(!is_visible(bounds, size)) {
       continue;
@@ -126,7 +126,7 @@ void Rellu::prepare_stencil(const DrawList& list, const Matrix& view,
       scene.m_covers.push_back(to_vertex(corner.m_x, corner.m_y, color));
     }
     scene.m_draws.push_back(
-      PrototypeDraw(first, count, fill.m_path.get_fill_rule()));
+      PrototypeDraw(first, count, fill.m_path->get_fill_rule()));
   }
 }
 
@@ -138,7 +138,7 @@ void Rellu::prepare_triangulation(const DrawList& list, const Matrix& view,
   for(auto& command : list) {
     auto& fill = std::get<FillCommand>(command);
     auto polylines =
-      flatten(transform(fill.m_path, view * fill.m_transform), TOLERANCE);
+      flatten(transform(*fill.m_path, view * fill.m_transform), TOLERANCE);
     auto bounds = get_polyline_bounds(polylines);
     if(!is_visible(bounds, size)) {
       continue;
@@ -152,7 +152,7 @@ void Rellu::prepare_triangulation(const DrawList& list, const Matrix& view,
       }
     }
     auto rule = Clipper2Lib::FillRule::NonZero;
-    if(fill.m_path.get_fill_rule() == FillRule::EVEN_ODD) {
+    if(fill.m_path->get_fill_rule() == FillRule::EVEN_ODD) {
       rule = Clipper2Lib::FillRule::EvenOdd;
     }
     auto solution = Clipper2Lib::Union(paths, rule);

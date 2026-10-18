@@ -205,6 +205,13 @@ namespace Rellu {
     /** The uniform blocks of the passes. */
     std::vector<PlanUniforms> m_uniforms;
 
+    /**
+     * The index of the texture a region is drawn to, whose top left as
+     * rendered is the region's top left pixel, or -1 if the plan draws to
+     * the render target.
+     */
+    int m_target = -1;
+
     /** Returns the number of rows of gradient ramps. */
     int get_ramp_height() const;
   };
@@ -221,6 +228,38 @@ namespace Rellu {
   void make_render_plan(const DrawList& list, const StripScene& scene,
     const Matrix& view, QSize size, const PlanOptions& options,
     RenderPlan& plan);
+
+  /**
+   * Plans the drawing of a draw sequence.
+   * @param commands The draw sequence.
+   * @param scene The draw sequence rasterized.
+   * @param view The transform from document coordinates to pixels.
+   * @param size The size in pixels of the render target.
+   * @param options The conventions of the graphics API.
+   * @param plan The plan receiving the result, reusing its storage.
+   */
+  void make_render_plan(const DrawSequence& commands, const StripScene& scene,
+    const Matrix& view, QSize size, const PlanOptions& options,
+    RenderPlan& plan);
+
+  /**
+   * Plans the drawing of a region of the pixels of a draw sequence into a
+   * texture of the plan. Each pixel of the region is drawn the same whatever
+   * the region, provided that the region contains every pixel that the
+   * backdrop blurs and blended layers outside of other layers read when
+   * drawing it.
+   * @param commands The draw sequence.
+   * @param scene The draw sequence rasterized for the region.
+   * @param view The transform from document coordinates to pixels.
+   * @param size The size in pixels of the area drawn, which starts at the
+   *        origin and contains the region.
+   * @param region The region drawn.
+   * @param options The conventions of the graphics API.
+   * @param plan The plan receiving the result, reusing its storage.
+   */
+  void make_render_plan(const DrawSequence& commands, const StripScene& scene,
+    const Matrix& view, QSize size, const QRect& region,
+    const PlanOptions& options, RenderPlan& plan);
 
   /**
    * Evaluates a gradient's color at an offset, interpolating straight alpha

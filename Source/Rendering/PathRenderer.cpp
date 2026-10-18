@@ -17,6 +17,7 @@ namespace {
   const auto MINIMUM_ATLAS_HEIGHT = 16;
   const auto MINIMUM_STRIPS_SIZE = 4096 * sizeof(Strip);
   const auto MINIMUM_UNIFORM_COUNT = 16;
+  const auto MAXIMUM_SPARE_AREA = 24LL * 1024 * 1024;
 
   void create(auto& resource) {
     if(!resource.create()) {
@@ -102,6 +103,7 @@ namespace {
 
 PathRenderer::PathRenderer()
   : m_rhi(nullptr),
+    m_preparations(0),
     m_uniform_stride(0),
     m_is_corners_uploaded(false) {}
 
@@ -158,7 +160,8 @@ void PathRenderer::initialize(
       QRhiShaderResourceBinding::FragmentStage, m_atlas.get(),
       m_nearest.get()),
     QRhiShaderResourceBinding::sampledTexture(2,
-      QRhiShaderResourceBinding::VertexStage, m_paints.get(),
+      QRhiShaderResourceBinding::VertexStage |
+        QRhiShaderResourceBinding::FragmentStage, m_paints.get(),
       m_nearest.get()),
     QRhiShaderResourceBinding::sampledTexture(3,
       QRhiShaderResourceBinding::FragmentStage, m_ramps.get(),
@@ -217,11 +220,31 @@ void PathRenderer::release() {
 
 void PathRenderer::prepare(QRhiResourceUpdateBatch& batch,
     const DrawList& list, const Matrix& view, QSize size) {
-  m_rasterizer.rasterize(list, view, size, m_scene);
+  prepare(batch, to_sequence(list), view, size);
+}
+
+void PathRenderer::prepare(QRhiResourceUpdateBatch& batch,
+    const DrawSequence& commands, const Matrix& view, QSize size) {
+  m_rasterizer.rasterize(commands, view, size, m_scene);
   auto options = PlanOptions(
     m_rhi->clipSpaceCorrMatrix(), m_rhi->isYUpInFramebuffer());
-  make_render_plan(list, m_scene, view, size, options, m_plan);
+  make_render_plan(commands, m_scene, view, size, options, m_plan);
   m_size = size;
+  upload(batch);
+}
+
+void PathRenderer::prepare(QRhiResourceUpdateBatch& batch,
+    const DrawSequence& commands, const Matrix& view, QSize size,
+    const QRect& region) {
+  m_rasterizer.rasterize(commands, view, size, region, m_scene);
+  auto options = PlanOptions(
+    m_rhi->clipSpaceCorrMatrix(), m_rhi->isYUpInFramebuffer());
+  make_render_plan(commands, m_scene, view, size, region, options, m_plan);
+  m_size = size;
+  upload(batch);
+}
+
+void PathRenderer::upload(QRhiResourceUpdateBatch& batch) {
   if(!m_is_corners_uploaded) {
     batch.uploadStaticBuffer(m_corners.get(), CORNERS.data());
     m_is_corners_uploaded = true;
@@ -314,6 +337,21 @@ void PathRenderer::prepare(QRhiResourceUpdateBatch& batch,
 void PathRenderer::render(QRhiCommandBuffer& buffer,
     QRhiRenderTarget& target, const QColor& background,
     QRhiResourceUpdateBatch* batch) {
+  record_steps(buffer, &target, background, batch);
+}
+
+void PathRenderer::render(QRhiCommandBuffer& buffer,
+    const QColor& background, QRhiResourceUpdateBatch* batch) {
+  record_steps(buffer, nullptr, background, batch);
+}
+
+QRhiTexture& PathRenderer::get_region_texture() const {
+  return *m_surfaces[m_assignments[m_plan.m_target]].m_texture;
+}
+
+void PathRenderer::record_steps(QRhiCommandBuffer& buffer,
+    QRhiRenderTarget* target, const QColor& background,
+    QRhiResourceUpdateBatch* batch) {
   for(auto& step : m_plan.m_steps) {
     if(auto copy = std::get_if<PlanCopy>(&step)) {
       if(!batch) {
@@ -337,7 +375,7 @@ void PathRenderer::render(QRhiCommandBuffer& buffer,
       clear = background;
     }
     if(pass.m_target < 0) {
-      buffer.beginPass(&target, clear, QRhiDepthStencilClearValue(1, 0),
+      buffer.beginPass(target, clear, QRhiDepthStencilClearValue(1, 0),
         batch);
     } else {
       auto& surface = m_surfaces[m_assignments[pass.m_target]];
@@ -439,25 +477,51 @@ void PathRenderer::prepare_surfaces() {
       match = m_surfaces.end() - 1;
     }
     match->m_is_used = true;
+    match->m_preparation = m_preparations;
     m_assignments[i] = static_cast<int>(match - m_surfaces.begin());
   }
-  if(std::any_of(m_surfaces.begin(), m_surfaces.end(),
-      [] (const auto& surface) {
-        return !surface.m_is_used;
-      })) {
-    m_bindings.clear();
-    auto kept = std::vector<Surface>();
-    auto indices = std::vector<int>(m_surfaces.size(), -1);
-    for(auto i = std::size_t(0); i != m_surfaces.size(); ++i) {
-      if(m_surfaces[i].m_is_used) {
-        indices[i] = static_cast<int>(kept.size());
-        kept.push_back(std::move(m_surfaces[i]));
-      }
+  ++m_preparations;
+  auto spares = std::vector<std::size_t>();
+  auto spare_area = 0LL;
+  for(auto i = std::size_t(0); i != m_surfaces.size(); ++i) {
+    if(!m_surfaces[i].m_is_used) {
+      spares.push_back(i);
+      spare_area += static_cast<long long>(m_surfaces[i].m_size.width()) *
+        m_surfaces[i].m_size.height();
     }
-    m_surfaces = std::move(kept);
-    for(auto& assignment : m_assignments) {
-      assignment = indices[assignment];
+  }
+  if(spare_area <= MAXIMUM_SPARE_AREA) {
+    return;
+  }
+  std::sort(spares.begin(), spares.end(), [&] (auto left, auto right) {
+    return m_surfaces[left].m_preparation < m_surfaces[right].m_preparation;
+  });
+  auto is_released = std::vector<bool>(m_surfaces.size(), false);
+  for(auto spare : spares) {
+    if(spare_area <= MAXIMUM_SPARE_AREA) {
+      break;
     }
+    auto& surface = m_surfaces[spare];
+    spare_area -= static_cast<long long>(surface.m_size.width()) *
+      surface.m_size.height();
+    is_released[spare] = true;
+    auto texture = surface.m_texture.get();
+    std::erase_if(m_bindings, [&] (const auto& binding) {
+      return std::get<0>(binding.first) == texture ||
+        std::get<1>(binding.first) == texture;
+    });
+  }
+  auto kept = std::vector<Surface>();
+  auto indices = std::vector<int>(m_surfaces.size(), -1);
+  for(auto i = std::size_t(0); i != m_surfaces.size(); ++i) {
+    if(!is_released[i]) {
+      indices[i] = static_cast<int>(kept.size());
+      kept.push_back(std::move(m_surfaces[i]));
+    }
+  }
+  m_surfaces = std::move(kept);
+  for(auto& assignment : m_assignments) {
+    assignment = indices[assignment];
   }
 }
 
@@ -524,7 +588,8 @@ QRhiShaderResourceBindings& PathRenderer::get_bindings(
       QRhiShaderResourceBinding::FragmentStage, m_atlas.get(),
       m_nearest.get()),
     QRhiShaderResourceBinding::sampledTexture(2,
-      QRhiShaderResourceBinding::VertexStage, m_paints.get(),
+      QRhiShaderResourceBinding::VertexStage |
+        QRhiShaderResourceBinding::FragmentStage, m_paints.get(),
       m_nearest.get()),
     QRhiShaderResourceBinding::sampledTexture(3,
       QRhiShaderResourceBinding::FragmentStage, m_ramps.get(),

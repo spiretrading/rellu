@@ -22,6 +22,9 @@ void Canvas::initialize(QRhiCommandBuffer* buffer) {
 
 void Canvas::render(QRhiCommandBuffer* buffer) {
   m_renderer.render(*buffer, *renderTarget(), devicePixelRatio());
+  if(!m_renderer.is_complete()) {
+    update();
+  }
 }
 
 void Canvas::releaseResources() {

@@ -16,6 +16,10 @@
 using namespace Rellu;
 
 namespace {
+  auto share(Path path) {
+    return std::make_shared<const Path>(std::move(path));
+  }
+
   using Coverage = std::function<double (int, int)>;
 
   struct Layer {
@@ -57,7 +61,7 @@ namespace {
   };
 
   auto fill(Path path, Color color, Matrix transform = Matrix()) {
-    return DrawCommand(FillCommand(std::move(path), transform,
+    return DrawCommand(FillCommand(share(std::move(path)), transform,
       SolidPaint(color)));
   }
 
@@ -593,7 +597,7 @@ TEST_SUITE("PathRenderer") {
     auto color = make_color(20, 160, 60);
     auto circle = make_circle(Point(16.3, 15.6), 10.4);
     auto layer = begin_layer(0.8);
-    layer.m_mask = LayerMask(circle, Matrix());
+    layer.m_mask = LayerMask(share(circle), Matrix());
     renderer.m_list.push_back(layer);
     renderer.m_list.push_back(
       fill(make_rectangle(Rect(0, 0, 40, 32)), color));
@@ -612,12 +616,14 @@ TEST_SUITE("PathRenderer") {
       GradientStop(0, make_color(255, 0, 0)),
       GradientStop(0.5, make_color(0, 0, 255, 0.5)),
       GradientStop(1, make_color(0, 255, 0))});
-    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 0, 64, 8)),
+    renderer.m_list.push_back(FillCommand(
+      share(make_rectangle(Rect(0, 0, 64, 8))),
       Matrix(), GradientPaint(
         LinearGradient(Point(8, 0), Point(56, 0)), stops, Matrix())));
     auto transform = make_translation(32, 8) *
       make_rotation(std::numbers::pi / 2) * make_scale(16, 16);
-    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 8, 64, 24)),
+    renderer.m_list.push_back(FillCommand(
+      share(make_rectangle(Rect(0, 8, 64, 24))),
       Matrix(), GradientPaint(
         LinearGradient(Point(0, 0), Point(1, 0)), stops, transform)));
     auto image = render(renderer, QSize(64, 32));
@@ -644,7 +650,8 @@ TEST_SUITE("PathRenderer") {
           Rect(i % 30, 10 * pass + i / 30, 1, 1)), make_color(255, 0, 0)));
       }
       renderer.m_list.push_back(FillCommand(
-        make_rectangle(Rect(32, 10 * pass, 4, 4)), Matrix(), GradientPaint(
+        share(make_rectangle(Rect(32, 10 * pass, 4, 4))), Matrix(),
+        GradientPaint(
           LinearGradient(Point(0, 0), Point(1, 0)), stops, Matrix())));
     }
     auto image = render(renderer, QSize(40, 30));
@@ -661,9 +668,11 @@ TEST_SUITE("PathRenderer") {
       GradientStop(1, make_color(0, 0, 0))});
     auto gradient = RadialGradient(Point(32, 32), 24, Point(42, 30));
     auto transform = make_translation(0, 64) * make_scale(1, 0.5);
-    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 0, 64, 64)),
+    renderer.m_list.push_back(FillCommand(
+      share(make_rectangle(Rect(0, 0, 64, 64))),
       Matrix(), GradientPaint(gradient, stops, Matrix())));
-    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 64, 64, 32)),
+    renderer.m_list.push_back(FillCommand(
+      share(make_rectangle(Rect(0, 64, 64, 32))),
       Matrix(), GradientPaint(gradient, stops, transform)));
     auto image = render(renderer, QSize(64, 96));
     auto inverse = *invert(transform);
@@ -691,9 +700,11 @@ TEST_SUITE("PathRenderer") {
     }
     auto image = std::make_shared<const QImage>(source);
     auto renderer = TestRenderer();
-    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 0, 36, 18)),
+    renderer.m_list.push_back(FillCommand(
+      share(make_rectangle(Rect(0, 0, 36, 18))),
       Matrix(), ImagePaint(image, make_scale(9, 9))));
-    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 18, 36, 18)),
+    renderer.m_list.push_back(FillCommand(
+      share(make_rectangle(Rect(0, 18, 36, 18))),
       Matrix(), ImagePaint(image,
         make_translation(36, 18) * make_scale(-9, 9), 0.5)));
     auto result = render(renderer, QSize(36, 36));
@@ -721,7 +732,8 @@ TEST_SUITE("PathRenderer") {
       }
     }
     auto renderer = TestRenderer();
-    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 0, 10, 10)),
+    renderer.m_list.push_back(FillCommand(
+      share(make_rectangle(Rect(0, 0, 10, 10))),
       Matrix(), ImagePaint(std::make_shared<const QImage>(source),
         make_scale(10.0 / 64, 10.0 / 64))));
     auto image = render(renderer, QSize(10, 10));
@@ -804,7 +816,8 @@ TEST_SUITE("PathRenderer") {
         fill(make_rectangle(Rect(x + 1, 0, 1, 32)), make_color(0, 0, 0)));
     }
     renderer.m_list.push_back(BackdropBlurCommand(
-      make_rectangle(Rect(16, 8, 32, 16)), Matrix(), 4, 0.2, std::nullopt));
+      share(make_rectangle(Rect(16, 8, 32, 16))), Matrix(), 4, 0.2,
+      std::nullopt));
     auto image = render(renderer, QSize(64, 32));
     for(auto x = 20; x != 44; ++x) {
       require_pixel(image, x, 16, Pixel({0.7, 0.7, 0.7, 1}), 3);

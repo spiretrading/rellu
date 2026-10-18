@@ -147,7 +147,8 @@ namespace {
     public:
       void rasterize(const Path& path, const Matrix& transform,
         const std::optional<Rect>& clip, const std::array<qfloat16, 4>& color,
-        float paint, const Matrix& view, QSize size, Output& output);
+        float paint, const Matrix& view, QSize size, int first_band,
+        int end_band, Output& output);
 
     private:
       QSize m_size;
@@ -192,7 +193,8 @@ namespace {
 
   void PathRasterizer::rasterize(const Path& path, const Matrix& transform,
       const std::optional<Rect>& clip, const std::array<qfloat16, 4>& color,
-      float paint, const Matrix& view, QSize size, Output& output) {
+      float paint, const Matrix& view, QSize size, int first_band,
+      int end_band, Output& output) {
     auto& segments = path.get_segments();
     if(segments.empty() || color[3] == qfloat16(0)) {
       return;
@@ -232,9 +234,12 @@ namespace {
     auto first_row = static_cast<int>(std::max(top, box.m_top));
     auto last_row = static_cast<int>(
       std::min(std::ceil(bottom), std::ceil(box.m_bottom)));
-    m_first_band = first_row / STRIP_HEIGHT;
-    m_band_count =
-      (last_row + STRIP_HEIGHT - 1) / STRIP_HEIGHT - m_first_band;
+    m_first_band = std::max(first_band, first_row / STRIP_HEIGHT);
+    m_band_count = std::min(end_band,
+      (last_row + STRIP_HEIGHT - 1) / STRIP_HEIGHT) - m_first_band;
+    if(m_band_count <= 0) {
+      return;
+    }
     m_rule = path.get_fill_rule();
     m_color = color;
     m_paint = paint;
@@ -484,7 +489,8 @@ namespace {
       auto bottom = std::max(line.m_y0, line.m_y1);
       if(top == bottom) {
         auto band = static_cast<int>(top) / STRIP_HEIGHT;
-        if(top != static_cast<float>(band * STRIP_HEIGHT)) {
+        if(top != static_cast<float>(band * STRIP_HEIGHT) &&
+            band >= m_first_band && band < m_first_band + m_band_count) {
           add_tiles(band - m_first_band,
             to_tile(std::min(line.m_x0, line.m_x1)),
             to_tile(std::max(line.m_x0, line.m_x1)), i);
@@ -492,9 +498,11 @@ namespace {
         continue;
       }
       auto slope = (line.m_x1 - line.m_x0) / (line.m_y1 - line.m_y0);
-      auto first_band = static_cast<int>(top) / STRIP_HEIGHT;
-      auto last_band = std::max(first_band,
-        (static_cast<int>(std::ceil(bottom)) - 1) / STRIP_HEIGHT);
+      auto first_band =
+        std::max(m_first_band, static_cast<int>(top) / STRIP_HEIGHT);
+      auto last_band = std::min(m_first_band + m_band_count - 1,
+        std::max(static_cast<int>(top) / STRIP_HEIGHT,
+          (static_cast<int>(std::ceil(bottom)) - 1) / STRIP_HEIGHT));
       for(auto band = first_band; band <= last_band; ++band) {
         auto band_top =
           std::max(top, static_cast<float>(band * STRIP_HEIGHT));
@@ -764,16 +772,49 @@ StripRasterizer::~StripRasterizer() = default;
 
 void StripRasterizer::rasterize(const DrawList& list, const Matrix& view,
     QSize size, StripScene& scene) {
+  rasterize(to_sequence(list), view, size, scene);
+}
+
+void StripRasterizer::rasterize(const DrawSequence& commands,
+    const Matrix& view, QSize size, StripScene& scene) {
+  m_restrictions.assign(commands.size(), 0);
+  rasterize(commands, view, size, 0, 0, scene);
+}
+
+void StripRasterizer::rasterize(const DrawSequence& commands,
+    const Matrix& view, QSize size, const QRect& region, StripScene& scene) {
+  m_restrictions.resize(commands.size());
+  auto depth = 0;
+  for(auto i = std::size_t(0); i != commands.size(); ++i) {
+    auto& command = *commands[i];
+    m_restrictions[i] =
+      depth == 0 && std::holds_alternative<FillCommand>(command);
+    if(std::holds_alternative<BeginLayerCommand>(command)) {
+      ++depth;
+    } else if(std::holds_alternative<EndLayerCommand>(command)) {
+      depth = std::max(0, depth - 1);
+    }
+  }
+  auto first_band = std::max(0, region.top()) / STRIP_HEIGHT;
+  auto end_band = std::max(first_band,
+    (region.y() + region.height() + STRIP_HEIGHT - 1) / STRIP_HEIGHT);
+  rasterize(commands, view, size, first_band, end_band, scene);
+}
+
+void StripRasterizer::rasterize(const DrawSequence& commands,
+    const Matrix& view, QSize size, int first_band, int end_band,
+    StripScene& scene) {
   auto chunk_count = std::max<std::size_t>(1, std::min<std::size_t>(
-    (list.size() + CHUNK_SIZE - 1) / CHUNK_SIZE, 4 * m_thread_count));
+    (commands.size() + CHUNK_SIZE - 1) / CHUNK_SIZE, 4 * m_thread_count));
   while(m_chunks.size() < chunk_count) {
     m_chunks.push_back(std::make_unique<Chunk>());
   }
-  m_slots.resize(list.size());
+  m_slots.resize(commands.size());
   scene.m_paints.clear();
-  for(auto i = std::size_t(0); i != list.size(); ++i) {
-    auto fill = std::get_if<FillCommand>(&list[i]);
-    if(std::holds_alternative<EndLayerCommand>(list[i]) ||
+  for(auto i = std::size_t(0); i != commands.size(); ++i) {
+    auto& command = *commands[i];
+    auto fill = std::get_if<FillCommand>(&command);
+    if(std::holds_alternative<EndLayerCommand>(command) ||
         (fill && std::holds_alternative<SolidPaint>(fill->m_paint))) {
       m_slots[i] = -1;
     } else {
@@ -787,26 +828,32 @@ void StripRasterizer::rasterize(const DrawList& list, const Matrix& view,
     output.m_strips.clear();
     output.m_texels.clear();
     chunk.m_offsets.clear();
-    auto first = list.size() * index / chunk_count;
-    auto last = list.size() * (index + 1) / chunk_count;
+    auto first = commands.size() * index / chunk_count;
+    auto last = commands.size() * (index + 1) / chunk_count;
     for(auto i = first; i != last; ++i) {
       chunk.m_offsets.push_back(
         static_cast<std::uint32_t>(output.m_strips.size()));
       auto& rasterizer = chunk.m_rasterizer;
-      if(auto fill = std::get_if<FillCommand>(&list[i])) {
-        rasterizer.rasterize(fill->m_path, fill->m_transform, fill->m_clip,
-          to_premultiplied(fill->m_paint), m_slots[i], view, size, output);
-      } else if(auto layer = std::get_if<BeginLayerCommand>(&list[i])) {
+      auto& command = *commands[i];
+      if(auto fill = std::get_if<FillCommand>(&command)) {
+        auto bands = std::pair(0, std::numeric_limits<int>::max());
+        if(m_restrictions[i]) {
+          bands = std::pair(first_band, end_band);
+        }
+        rasterizer.rasterize(*fill->m_path, fill->m_transform, fill->m_clip,
+          to_premultiplied(fill->m_paint), m_slots[i], view, size,
+          bands.first, bands.second, output);
+      } else if(auto layer = std::get_if<BeginLayerCommand>(&command)) {
         if(layer->m_mask) {
-          rasterizer.rasterize(layer->m_mask->m_path,
+          rasterizer.rasterize(*layer->m_mask->m_path,
             layer->m_mask->m_transform, layer->m_clip,
             to_premultiplied(Color(1, 1, 1, layer->m_opacity)), m_slots[i],
-            view, size, output);
+            view, size, 0, std::numeric_limits<int>::max(), output);
         }
-      } else if(auto blur = std::get_if<BackdropBlurCommand>(&list[i])) {
-        rasterizer.rasterize(blur->m_path, blur->m_transform, blur->m_clip,
-          to_premultiplied(Color(1, 1, 1, 1)), m_slots[i], view, size,
-          output);
+      } else if(auto blur = std::get_if<BackdropBlurCommand>(&command)) {
+        rasterizer.rasterize(*blur->m_path, blur->m_transform, blur->m_clip,
+          to_premultiplied(Color(1, 1, 1, 1)), m_slots[i], view, size, 0,
+          std::numeric_limits<int>::max(), output);
       }
     }
     auto column = 0;
@@ -837,11 +884,11 @@ void StripRasterizer::rasterize(const DrawList& list, const Matrix& view,
   scene.m_strips.resize(strip_count);
   scene.m_atlas.resize(
     static_cast<std::size_t>(row_count) * STRIP_ATLAS_WIDTH);
-  scene.m_offsets.resize(list.size() + 1);
+  scene.m_offsets.resize(commands.size() + 1);
   scene.m_offsets.back() = static_cast<std::uint32_t>(strip_count);
   run(chunk_count, m_thread_count, [&] (auto index) {
     auto& chunk = *m_chunks[index];
-    auto first = list.size() * index / chunk_count;
+    auto first = commands.size() * index / chunk_count;
     for(auto i = std::size_t(0); i != chunk.m_offsets.size(); ++i) {
       scene.m_offsets[first + i] = static_cast<std::uint32_t>(
         chunk.m_first_strip + chunk.m_offsets[i]);

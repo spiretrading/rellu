@@ -73,21 +73,22 @@ void SceneBuilder::add_text(
           auto color = raster.m_color;
           color.m_alpha *=
             placement.m_opacity * get_text_opacity(level, raster.m_color);
-          list.push_back(FillCommand(
-            std::move(path), *inverse, SolidPaint(color), clip));
+          list.push_back(FillCommand(std::make_shared<const Path>(
+            std::move(path)), *inverse, SolidPaint(color), clip));
         }
       }
       return;
     }
   }
-  for(auto& fill : outline.m_fills) {
-    if(fill.m_path.is_empty()) {
+  for(auto i = std::size_t(0); i != outline.m_fills.size(); ++i) {
+    auto& fill = outline.m_fills[i];
+    if(outline.m_paths[i]->is_empty()) {
       continue;
     }
     auto color = fill.m_color;
     color.m_alpha *= placement.m_opacity;
-    list.push_back(FillCommand(
-      fill.m_path, placement.m_transform, SolidPaint(color), clip));
+    list.push_back(FillCommand(outline.m_paths[i], placement.m_transform,
+      SolidPaint(color), clip));
   }
 }
 
@@ -97,6 +98,11 @@ SceneBuilder::TextOutline& SceneBuilder::get_text_outline(const Node& node) {
     outline.m_record = m_document->get_nodes().get_record(node.get_id());
     outline.m_layout = lay_out(*node.get_text(), get_default_font_library());
     outline.m_fills = Rellu::outline(outline.m_layout);
+    outline.m_paths.clear();
+    for(auto& fill : outline.m_fills) {
+      outline.m_paths.push_back(
+        std::make_shared<const Path>(std::move(fill.m_path)));
+    }
     outline.m_rasters.clear();
   }
   outline.m_generation = m_generation;

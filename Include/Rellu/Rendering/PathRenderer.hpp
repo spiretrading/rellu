@@ -59,8 +59,40 @@ namespace Rellu {
         const Matrix& view, QSize size);
 
       /**
-       * Records the drawing of the most recently prepared draw list,
-       * including every render pass.
+       * Rasterizes a draw sequence and records the uploads needed to draw it.
+       * @param batch The batch receiving the uploads, which must be submitted
+       *        within the frame drawing the sequence.
+       * @param commands The draw sequence to draw, whose commands must remain
+       *        unchanged until it is drawn.
+       * @param view The transform from document coordinates to pixels of the
+       *        render target.
+       * @param size The size in pixels of the render target.
+       */
+      void prepare(QRhiResourceUpdateBatch& batch,
+        const DrawSequence& commands, const Matrix& view, QSize size);
+
+      /**
+       * Rasterizes what a draw sequence needs to draw a region of pixels into
+       * a texture and records the uploads needed to draw it. Each pixel of
+       * the region is drawn the same whatever the region, provided that the
+       * region contains every pixel that the backdrop blurs and blended
+       * layers outside of other layers read when drawing it.
+       * @param batch The batch receiving the uploads, which must be submitted
+       *        within the frame drawing the sequence.
+       * @param commands The draw sequence to draw, whose commands must remain
+       *        unchanged until it is drawn.
+       * @param view The transform from document coordinates to pixels.
+       * @param size The size in pixels of the area drawn, which starts at the
+       *        origin and contains the region.
+       * @param region The region drawn.
+       */
+      void prepare(QRhiResourceUpdateBatch& batch,
+        const DrawSequence& commands, const Matrix& view, QSize size,
+        const QRect& region);
+
+      /**
+       * Records the drawing of the most recently prepared draw list or
+       * sequence, including every render pass.
        * @param buffer The command buffer, without an active render pass.
        * @param target The render target of the prepared size.
        * @param background The color the render target is cleared to, whose
@@ -69,6 +101,24 @@ namespace Rellu {
        */
       void render(QRhiCommandBuffer& buffer, QRhiRenderTarget& target,
         const QColor& background, QRhiResourceUpdateBatch* batch);
+
+      /**
+       * Records the drawing of the most recently prepared region into the
+       * region texture, including every render pass.
+       * @param buffer The command buffer, without an active render pass.
+       * @param background The color the region is cleared to, whose
+       *        components are taken as premultiplied by its alpha.
+       * @param batch A batch submitted with the first render pass, or null.
+       */
+      void render(QRhiCommandBuffer& buffer, const QColor& background,
+        QRhiResourceUpdateBatch* batch);
+
+      /**
+       * Returns the RGBA8 texture that the most recently prepared region is
+       * drawn to, whose top left as rendered is the region's top left pixel,
+       * valid until the next preparation.
+       */
+      QRhiTexture& get_region_texture() const;
 
       /** Returns the scene most recently prepared. */
       const StripScene& get_scene() const;
@@ -85,6 +135,7 @@ namespace Rellu {
         std::unique_ptr<QRhiRenderPassDescriptor> m_clearing_descriptor;
         std::unique_ptr<QRhiRenderPassDescriptor> m_keeping_descriptor;
         bool m_is_used;
+        std::uint64_t m_preparation;
       };
       struct ImageTexture {
         std::weak_ptr<const QImage> m_image;
@@ -122,11 +173,15 @@ namespace Rellu {
       std::vector<Surface> m_surfaces;
       std::vector<int> m_assignments;
       std::unordered_map<const QImage*, ImageTexture> m_images;
+      std::uint64_t m_preparations;
       std::uint32_t m_uniform_stride;
       bool m_is_corners_uploaded;
 
       PathRenderer(const PathRenderer&) = delete;
       PathRenderer& operator =(const PathRenderer&) = delete;
+      void upload(QRhiResourceUpdateBatch& batch);
+      void record_steps(QRhiCommandBuffer& buffer, QRhiRenderTarget* target,
+        const QColor& background, QRhiResourceUpdateBatch* batch);
       void reserve_strips(std::size_t size);
       void reserve_uniforms(std::size_t size);
       void reserve_texture(std::unique_ptr<QRhiTexture>& texture,

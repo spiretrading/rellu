@@ -5,8 +5,9 @@
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
 #include "Rellu/Model/Document.hpp"
+#include "Rellu/Model/Subscription.hpp"
 #include "Rellu/Rendering/Canvas.hpp"
-#include "Rellu/Scene/SceneBuilder.hpp"
+#include "Rellu/Scene/Scene.hpp"
 
 namespace Rellu {
 
@@ -37,7 +38,21 @@ namespace Rellu {
        */
       void fit();
 
+      /**
+       * Zooms and centers the view so that a region of the document is
+       * visible.
+       * @param region The region in document coordinates.
+       */
+      void zoom_to(const Rect& region);
+
+      /**
+       * Zooms about the center of the view.
+       * @param zoom The number of widget pixels per document pixel.
+       */
+      void set_zoom(double zoom);
+
     protected:
+      void render(QRhiCommandBuffer* buffer) override;
       void mousePressEvent(QMouseEvent* event) override;
       void mouseMoveEvent(QMouseEvent* event) override;
       void mouseReleaseEvent(QMouseEvent* event) override;
@@ -48,8 +63,8 @@ namespace Rellu {
 
     private:
       std::unique_ptr<Document> m_document;
-      std::unique_ptr<SceneBuilder> m_builder;
-      Rect m_bounds;
+      std::unique_ptr<Scene> m_scene;
+      Subscription m_subscription;
       double m_zoom;
       Point m_offset;
       double m_level;
@@ -58,7 +73,7 @@ namespace Rellu {
       bool m_is_panning;
       QPointF m_position;
 
-      void build();
+      void frame(const Rect& region);
       void zoom(double factor, QPointF center);
       void pan(QPointF delta);
       void update_view();

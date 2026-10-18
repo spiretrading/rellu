@@ -1,0 +1,6 @@
+file(GLOB source_files ${RELLU_SOURCE_PATH}/FormatTests/*.cpp)
+add_executable(FormatTests ${source_files})
+target_link_libraries(FormatTests PRIVATE RelluFormat)
+rellu_link_dependencies(FormatTests PRIVATE DOCTEST QT)
+add_custom_command(TARGET FormatTests POST_BUILD COMMAND FormatTests)
+rellu_install_target(FormatTests "${TEST_INSTALL_DIRECTORY}/$<CONFIG>")

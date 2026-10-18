@@ -1,4 +1,6 @@
 #include <cmath>
+#include <memory>
+#include <utility>
 #include <variant>
 #include <doctest/doctest.h>
 #include "Rellu/Geometry/Shapes.hpp"
@@ -7,6 +9,10 @@
 using namespace Rellu;
 
 namespace {
+  auto share(Path path) {
+    return std::make_shared<const Path>(std::move(path));
+  }
+
   auto plan(const DrawList& list, QSize size) {
     auto scene = StripScene();
     auto rasterizer = StripRasterizer();
@@ -36,7 +42,8 @@ TEST_SUITE("RenderPlan") {
   TEST_CASE("single_pass") {
     auto list = DrawList();
     for(auto i = 0; i != 3; ++i) {
-      list.push_back(FillCommand(make_rectangle(Rect(i, i, 4, 4)), Matrix(),
+      list.push_back(FillCommand(
+        share(make_rectangle(Rect(i, i, 4, 4))), Matrix(),
         SolidPaint(make_color(255, 0, 0))));
     }
     auto result = plan(list, QSize(16, 16));
@@ -55,12 +62,13 @@ TEST_SUITE("RenderPlan") {
     auto add_solids = [&] (int count) {
       for(auto i = 0; i != count; ++i) {
         list.push_back(FillCommand(
-          make_rectangle(Rect(i % 64, i / 64, 1, 1)), Matrix(),
+          share(make_rectangle(Rect(i % 64, i / 64, 1, 1))), Matrix(),
           SolidPaint(make_color(255, 0, 0))));
       }
     };
     add_solids(300);
-    list.push_back(FillCommand(make_rectangle(Rect(0, 10, 4, 1)), Matrix(),
+    list.push_back(FillCommand(
+      share(make_rectangle(Rect(0, 10, 4, 1))), Matrix(),
       GradientPaint(LinearGradient(), {GradientStop()}, Matrix())));
     add_solids(300);
     auto result = plan(list, QSize(64, 64));
@@ -77,12 +85,14 @@ TEST_SUITE("RenderPlan") {
 
   TEST_CASE("layers") {
     auto list = DrawList();
-    list.push_back(FillCommand(make_rectangle(Rect(0, 0, 16, 16)), Matrix(),
+    list.push_back(FillCommand(
+      share(make_rectangle(Rect(0, 0, 16, 16))), Matrix(),
       SolidPaint(make_color(255, 0, 0))));
     auto layer = BeginLayerCommand();
     layer.m_blend_mode = BlendMode::SCREEN;
     list.push_back(layer);
-    list.push_back(FillCommand(make_rectangle(Rect(2, 2, 4, 4)), Matrix(),
+    list.push_back(FillCommand(
+      share(make_rectangle(Rect(2, 2, 4, 4))), Matrix(),
       SolidPaint(make_color(0, 255, 0))));
     list.push_back(EndLayerCommand());
     auto result = plan(list, QSize(16, 16));

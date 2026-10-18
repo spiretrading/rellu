@@ -6,18 +6,77 @@ layout(location = 2) in vec4 v_paint;
 layout(location = 3) in vec4 v_extra;
 layout(location = 4) in vec4 v_gradient;
 layout(location = 5) in vec2 v_position;
+layout(location = 6) in float v_index;
 
 layout(location = 0) out vec4 fragment_color;
 
+layout(std140, binding = 0) uniform Uniforms {
+  mat4 projection;
+  vec4 sizes;
+  vec4 source_rect;
+  vec4 blur;
+  vec4 options;
+  vec4 bounds;
+};
+
 layout(binding = 1) uniform sampler2D atlas;
+layout(binding = 2) uniform sampler2D paints;
 layout(binding = 4) uniform sampler2D source;
 layout(binding = 5) uniform sampler2D backdrop;
+
+vec4 paint;
+vec4 extra;
+vec4 gradient;
+
+vec4 fetch(float index) {
+  float row = floor(index / sizes.z);
+  float column = index - row * sizes.z;
+  return textureLod(paints,
+    vec2((column + 0.5) / sizes.z, (row + 0.5) / sizes.w), 0.0);
+}
+
+bool is_exact() {
+  return bounds.w > 0.5;
+}
+
+vec2 get_position() {
+  vec2 position = gl_FragCoord.xy;
+  if(bounds.z > 0.0) {
+    position.y = bounds.z - position.y;
+  }
+  return position + bounds.xy;
+}
+
+void load_paint() {
+  paint = v_paint;
+  extra = v_extra;
+  gradient = v_gradient;
+  if(!is_exact() || v_index < -0.5) {
+    return;
+  }
+  float base = 4.0 * floor(v_index + 0.5);
+  vec4 first = fetch(base);
+  vec4 second = fetch(base + 1.0);
+  vec4 third = fetch(base + 2.0);
+  vec4 fourth = fetch(base + 3.0);
+  vec2 position = get_position();
+  vec3 point = vec3(position, 1.0);
+  paint = vec4(dot(first.xyz, point), dot(second.xyz, point), first.w,
+    second.w);
+  extra = vec4(third.x * position.x + third.y,
+    third.z * position.y + third.w, fourth.xy);
+  gradient = vec4(first.x, second.x, first.y, second.y);
+}
 
 float get_coverage() {
   if(v_coverage.z < 0.0) {
     return 1.0;
   }
   vec4 coverage = textureLod(atlas, v_coverage.xy, 0.0);
+  if(is_exact()) {
+    return dot(coverage,
+      vec4(equal(vec4(floor(v_coverage.z)), vec4(0.0, 1.0, 2.0, 3.0))));
+  }
   vec4 row = clamp(
     1.0 - abs(vec4(v_coverage.z) - vec4(0.5, 1.5, 2.5, 3.5)), 0.0, 1.0);
   return dot(coverage, row);
@@ -138,11 +197,12 @@ vec3 blend(vec3 b, vec3 s, float mode) {
 }
 
 void main() {
-  vec4 s = textureGrad(source, v_paint.xy, v_gradient.xy, v_gradient.zw);
-  vec4 b = textureLod(backdrop, v_extra.xy, 0.0);
+  load_paint();
+  vec4 s = textureGrad(source, paint.xy, gradient.xy, gradient.zw);
+  vec4 b = textureLod(backdrop, extra.xy, 0.0);
   vec3 cs = s.a > 0.0 ? s.rgb / s.a : vec3(0.0);
   vec3 cb = b.a > 0.0 ? b.rgb / b.a : vec3(0.0);
-  vec3 mixed = clamp(blend(cb, cs, v_paint.w), 0.0, 1.0);
+  vec3 mixed = clamp(blend(cb, cs, paint.w), 0.0, 1.0);
   vec4 result = vec4(s.rgb * (1.0 - b.a) + b.rgb * (1.0 - s.a) +
     s.a * b.a * mixed, s.a + b.a - s.a * b.a);
   fragment_color = mix(b, result, v_color.a * get_coverage());

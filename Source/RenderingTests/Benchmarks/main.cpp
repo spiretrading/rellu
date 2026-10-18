@@ -124,7 +124,8 @@ namespace {
         static_cast<int>(uniform(random) * 255),
         static_cast<int>(uniform(random) * 255), 0.35 + 0.65 * uniform(random));
       list->push_back(
-        FillCommand(std::move(path), transform, SolidPaint(color)));
+        FillCommand(std::make_shared<const Path>(std::move(path)), transform,
+          SolidPaint(color)));
     }
     return list;
   }

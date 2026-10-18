@@ -419,7 +419,7 @@ namespace {
     auto segments = std::size_t(0);
     for(auto& command : list) {
       if(auto fill = std::get_if<FillCommand>(&command)) {
-        segments += fill->m_path.get_segments().size();
+        segments += fill->m_path->get_segments().size();
       }
     }
     std::cout << std::format("{}: {} nodes, {} commands, {} segments; import "

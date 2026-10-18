@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 #include <QFloat16>
+#include <QRect>
 #include <QSize>
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Rendering/DrawList.hpp"
@@ -121,14 +122,46 @@ namespace Rellu {
       void rasterize(const DrawList& list, const Matrix& view, QSize size,
         StripScene& scene);
 
+      /**
+       * Rasterizes a draw sequence, replacing a scene's contents and reusing
+       * its storage.
+       * @param commands The draw sequence to rasterize.
+       * @param view The transform from document coordinates to pixels.
+       * @param size The size in pixels of the region rasterized, which
+       *        starts at the origin.
+       * @param scene The scene receiving the strips.
+       */
+      void rasterize(const DrawSequence& commands, const Matrix& view,
+        QSize size, StripScene& scene);
+
+      /**
+       * Rasterizes what a draw sequence needs to draw a region of pixels,
+       * replacing a scene's contents and reusing its storage. Fills outside
+       * of every layer are rasterized only in the bands of STRIP_HEIGHT rows
+       * the region spans, giving each of their pixels the coverage that
+       * rasterizing the whole sequence gives it, and every other command is
+       * rasterized whole.
+       * @param commands The draw sequence to rasterize.
+       * @param view The transform from document coordinates to pixels.
+       * @param size The size in pixels of the region rasterized, which
+       *        starts at the origin.
+       * @param region The region of pixels drawn.
+       * @param scene The scene receiving the strips.
+       */
+      void rasterize(const DrawSequence& commands, const Matrix& view,
+        QSize size, const QRect& region, StripScene& scene);
+
     private:
       struct Chunk;
       int m_thread_count;
       std::vector<std::unique_ptr<Chunk>> m_chunks;
       std::vector<float> m_slots;
+      std::vector<unsigned char> m_restrictions;
 
       StripRasterizer(const StripRasterizer&) = delete;
       StripRasterizer& operator =(const StripRasterizer&) = delete;
+      void rasterize(const DrawSequence& commands, const Matrix& view,
+        QSize size, int first_band, int end_band, StripScene& scene);
   };
 }
 

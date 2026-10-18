@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Geometry/Shapes.hpp"
@@ -9,10 +11,14 @@
 using namespace Rellu;
 
 namespace {
+  auto share(Path path) {
+    return std::make_shared<const Path>(std::move(path));
+  }
+
   auto rasterize(Path path, QSize size, Matrix view = Matrix(),
       std::optional<Rect> clip = std::nullopt) {
     auto list = DrawList();
-    list.push_back(FillCommand(std::move(path), Matrix(),
+    list.push_back(FillCommand(share(std::move(path)), Matrix(),
       SolidPaint(make_color(0, 0, 0)), clip));
     auto scene = StripScene();
     auto rasterizer = StripRasterizer();

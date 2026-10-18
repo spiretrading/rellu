@@ -110,18 +110,19 @@ namespace {
 
   class Planner {
     public:
-      Planner(const DrawList& list, const StripScene& scene,
-        const Matrix& view, QSize size, const PlanOptions& options,
-        RenderPlan& plan);
+      Planner(const DrawSequence& commands, const StripScene& scene,
+        const Matrix& view, QSize size, const std::optional<QRect>& region,
+        const PlanOptions& options, RenderPlan& plan);
 
       void run();
 
     private:
-      const DrawList* m_list;
+      const DrawSequence* m_commands;
       const StripScene* m_scene;
       Matrix m_view;
       double m_scale;
       QSize m_size;
+      std::optional<QRect> m_region;
       const PlanOptions* m_options;
       RenderPlan* m_plan;
       std::vector<Surface> m_surfaces;
@@ -129,6 +130,7 @@ namespace {
       std::vector<int> m_slot_images;
       std::vector<int> m_free;
 
+      const DrawCommand& get_command(std::size_t index) const;
       void add_paints();
       void add_gradient(int slot, const FillCommand& command,
         const GradientPaint& paint);
@@ -170,20 +172,27 @@ namespace {
         const Target& destination);
   };
 
-  Planner::Planner(const DrawList& list, const StripScene& scene,
-    const Matrix& view, QSize size, const PlanOptions& options,
-    RenderPlan& plan)
-    : m_list(&list),
+  Planner::Planner(const DrawSequence& commands, const StripScene& scene,
+    const Matrix& view, QSize size, const std::optional<QRect>& region,
+    const PlanOptions& options, RenderPlan& plan)
+    : m_commands(&commands),
       m_scene(&scene),
       m_view(view),
       m_scale(get_scale(view)),
       m_size(size),
+      m_region(region),
       m_options(&options),
       m_plan(&plan) {}
 
   void Planner::run() {
     add_paints();
     add_surfaces();
+    if(m_region) {
+      auto target = allocate(m_region->size(), m_region->topLeft(), 1);
+      emit_content(0, target, PlanClear::BACKGROUND);
+      m_plan->m_target = target.m_texture;
+      return;
+    }
     auto& root = m_surfaces.front();
     auto is_direct = std::all_of(root.m_operations.begin(),
       root.m_operations.end(), [] (const auto& operation) {
@@ -208,16 +217,20 @@ namespace {
     }
   }
 
+  const DrawCommand& Planner::get_command(std::size_t index) const {
+    return *(*m_commands)[index];
+  }
+
   void Planner::add_paints() {
     auto& paints = m_scene->m_paints;
     m_plan->m_paints.assign(PAINT_TEXELS * paints.size(), Texel());
-    m_command_slots.assign(m_list->size(), -1);
+    m_command_slots.assign(m_commands->size(), -1);
     m_slot_images.assign(paints.size(), -1);
     auto images = std::unordered_map<const QImage*, int>();
     for(auto slot = std::size_t(0); slot != paints.size(); ++slot) {
       auto command = paints[slot];
       m_command_slots[command] = static_cast<int>(slot);
-      auto fill = std::get_if<FillCommand>(&(*m_list)[command]);
+      auto fill = std::get_if<FillCommand>(&get_command(command));
       if(!fill) {
         continue;
       }
@@ -322,7 +335,7 @@ namespace {
       static_cast<float>(matrix.m_ty / height), 0});
     auto image_bounds = paint.m_transform.map(Rect(0, 0, width, height));
     auto margin = 1e-3 * std::max(image_bounds.m_width, image_bounds.m_height);
-    auto path_bounds = Rellu::get_bounds(command.m_path);
+    auto path_bounds = Rellu::get_bounds(*command.m_path);
     if(!inflate(image_bounds, margin).contains(path_bounds)) {
       record[2] = Texel({0, 1, 0, 0});
     }
@@ -337,8 +350,8 @@ namespace {
     m_surfaces.push_back(
       Surface(NONE, QRect(), QRect(), std::vector<Operation>()));
     auto stack = std::vector<std::size_t>({0});
-    for(auto i = std::size_t(0); i != m_list->size(); ++i) {
-      auto& command = (*m_list)[i];
+    for(auto i = std::size_t(0); i != m_commands->size(); ++i) {
+      auto& command = get_command(i);
       if(std::holds_alternative<FillCommand>(command)) {
         add_strips(m_surfaces[stack.back()], get_first(i), get_count(i));
       } else if(std::holds_alternative<BeginLayerCommand>(command)) {
@@ -386,7 +399,7 @@ namespace {
     auto index = stack.back();
     stack.pop_back();
     auto command = m_surfaces[index].m_command;
-    auto& layer = std::get<BeginLayerCommand>((*m_list)[command]);
+    auto& layer = std::get<BeginLayerCommand>(get_command(command));
     if(!(layer.m_opacity > 0)) {
       return;
     }
@@ -458,7 +471,17 @@ namespace {
   }
 
   Target Planner::allocate(QSize size, QPoint origin, int scale) {
-    auto round = [] (int value) {
+    auto round = [&] (int value) {
+      if(m_region) {
+        auto bucket = TEXTURE_GRANULARITY;
+        while(bucket < value) {
+          if(bucket + bucket / 2 >= value) {
+            return bucket + bucket / 2;
+          }
+          bucket *= 2;
+        }
+        return bucket;
+      }
       return std::max(1, (value + TEXTURE_GRANULARITY - 1) /
         TEXTURE_GRANULARITY) * TEXTURE_GRANULARITY;
     };
@@ -496,6 +519,14 @@ namespace {
       static_cast<float>(target.m_origin.y()), -1, 1);
     std::copy(projection.constData(), projection.constData() + 16,
       uniforms.begin());
+    if(m_region) {
+      uniforms[32] = static_cast<float>(target.m_origin.x());
+      uniforms[33] = static_cast<float>(target.m_origin.y());
+      if(m_options->m_is_y_up) {
+        uniforms[34] = static_cast<float>(extent.height());
+      }
+      uniforms[35] = 1;
+    }
     if(clear == PlanClear::KEEP && !steps.empty()) {
       if(auto pass = std::get_if<PlanPass>(&steps.back())) {
         if(pass->m_target == target.m_texture &&
@@ -628,7 +659,7 @@ namespace {
       } else if(operation.m_type == OperationType::LAYER) {
         auto& child = m_surfaces[operation.m_index];
         auto& layer =
-          std::get<BeginLayerCommand>((*m_list)[child.m_command]);
+          std::get<BeginLayerCommand>(get_command(child.m_command));
         auto source = emit_layer(operation.m_index);
         auto slot = m_command_slots[child.m_command];
         auto first = std::uint32_t(0);
@@ -659,12 +690,15 @@ namespace {
         release(source);
       } else {
         auto& command =
-          std::get<BackdropBlurCommand>((*m_list)[operation.m_index]);
+          std::get<BackdropBlurCommand>(get_command(operation.m_index));
         auto radius = command.m_radius * m_scale;
         auto margin = get_margin(radius);
         auto region = get_bounds(operation.m_first, operation.m_count).adjusted(
           -margin, -margin, margin, margin) &
           QRect(target.m_origin, target.get_extent());
+        if(m_region && index == 0) {
+          region &= QRect(QPoint(0, 0), m_size);
+        }
         if(region.isEmpty()) {
           continue;
         }
@@ -686,7 +720,7 @@ namespace {
   Target Planner::emit_layer(std::size_t index) {
     auto region = m_surfaces[index].m_region;
     auto& layer = std::get<BeginLayerCommand>(
-      (*m_list)[m_surfaces[index].m_command]);
+      get_command(m_surfaces[index].m_command));
     auto target = allocate(region.size(), region.topLeft(), 1);
     emit_content(index, target, PlanClear::CLEAR);
     for(auto& shadow : layer.m_inner_shadows) {
@@ -828,6 +862,21 @@ namespace {
     m_plan->m_steps.push_back(
       PlanCopy(source.m_texture, texels, destination.m_texture));
   }
+
+  void plan_render(const DrawSequence& commands, const StripScene& scene,
+      const Matrix& view, QSize size, const std::optional<QRect>& region,
+      const PlanOptions& options, RenderPlan& plan) {
+    plan.m_steps.clear();
+    plan.m_textures.clear();
+    plan.m_strips.clear();
+    plan.m_paints.clear();
+    plan.m_ramps.clear();
+    plan.m_images.clear();
+    plan.m_uniforms.clear();
+    plan.m_target = -1;
+    auto planner = Planner(commands, scene, view, size, region, options, plan);
+    planner.run();
+  }
 }
 
 int RenderPlan::get_ramp_height() const {
@@ -837,15 +886,19 @@ int RenderPlan::get_ramp_height() const {
 void Rellu::make_render_plan(const DrawList& list, const StripScene& scene,
     const Matrix& view, QSize size, const PlanOptions& options,
     RenderPlan& plan) {
-  plan.m_steps.clear();
-  plan.m_textures.clear();
-  plan.m_strips.clear();
-  plan.m_paints.clear();
-  plan.m_ramps.clear();
-  plan.m_images.clear();
-  plan.m_uniforms.clear();
-  auto planner = Planner(list, scene, view, size, options, plan);
-  planner.run();
+  make_render_plan(to_sequence(list), scene, view, size, options, plan);
+}
+
+void Rellu::make_render_plan(const DrawSequence& commands,
+    const StripScene& scene, const Matrix& view, QSize size,
+    const PlanOptions& options, RenderPlan& plan) {
+  plan_render(commands, scene, view, size, std::nullopt, options, plan);
+}
+
+void Rellu::make_render_plan(const DrawSequence& commands,
+    const StripScene& scene, const Matrix& view, QSize size,
+    const QRect& region, const PlanOptions& options, RenderPlan& plan) {
+  plan_render(commands, scene, view, size, region, options, plan);
 }
 
 Color Rellu::evaluate_gradient(

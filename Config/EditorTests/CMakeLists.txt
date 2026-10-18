@@ -1,0 +1,6 @@
+file(GLOB_RECURSE source_files ${RELLU_SOURCE_PATH}/EditorTests/*.cpp)
+add_executable(EditorTests ${source_files})
+target_include_directories(EditorTests SYSTEM PRIVATE ${DOCTEST_INCLUDE_PATH})
+target_link_libraries(EditorTests PRIVATE RelluEditor)
+add_custom_command(TARGET EditorTests POST_BUILD COMMAND EditorTests)
+rellu_install_target(EditorTests "${TEST_INSTALL_DIRECTORY}/$<CONFIG>")

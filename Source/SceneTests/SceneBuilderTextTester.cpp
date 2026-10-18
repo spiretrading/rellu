@@ -44,7 +44,7 @@ TEST_SUITE("SceneBuilder") {
     auto& fill = get_fill(list, 0);
     REQUIRE(fill.m_transform == make_translation(5, 30));
     REQUIRE(get_color(fill) == make_color(255, 0, 0));
-    auto bounds = get_bounds(fill.m_path);
+    auto bounds = get_bounds(*fill.m_path);
     REQUIRE(bounds.get_left() >= 0);
     REQUIRE(bounds.get_bottom() <= 0.5);
     REQUIRE(bounds.get_top() < -10);
@@ -69,7 +69,7 @@ TEST_SUITE("SceneBuilder") {
       REQUIRE(fill.m_transform == *invert(device));
       REQUIRE(get_color(fill).m_alpha > 0);
       REQUIRE(get_color(fill).m_alpha <= 1);
-      for(auto& segment : fill.m_path.get_segments()) {
+      for(auto& segment : fill.m_path->get_segments()) {
         for(auto& point : segment.m_points) {
           REQUIRE(point.m_x == static_cast<int>(point.m_x));
           REQUIRE(point.m_y == static_cast<int>(point.m_y));

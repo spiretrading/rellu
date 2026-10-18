@@ -1,4 +1,6 @@
+#include <memory>
 #include <optional>
+#include <utility>
 #include <variant>
 #include <doctest/doctest.h>
 #include "Rellu/Geometry/Shapes.hpp"
@@ -7,8 +9,12 @@
 using namespace Rellu;
 
 namespace {
+  auto share(Path path) {
+    return std::make_shared<const Path>(std::move(path));
+  }
+
   FillCommand make_fill(Color color, Matrix transform = Matrix()) {
-    return FillCommand(make_rectangle(Rect(0, 0, 10, 10)), transform,
+    return FillCommand(share(make_rectangle(Rect(0, 0, 10, 10))), transform,
       SolidPaint(color), Rect(0, 0, 100, 100));
   }
 
@@ -76,9 +82,9 @@ TEST_SUITE("Compositing") {
       EllipseShape(Point(0, 0), 4, 4)));
     auto united = make_mask(mask, Matrix(), 0.01, rotated);
     REQUIRE(united);
-    REQUIRE(contains(united->m_path, Point(0, 0)));
-    REQUIRE(contains(united->m_path, Point(20, 10)));
-    REQUIRE(!contains(united->m_path, Point(20, 2)));
+    REQUIRE(contains(*united->m_path, Point(0, 0)));
+    REQUIRE(contains(*united->m_path, Point(20, 10)));
+    REQUIRE(!contains(*united->m_path, Point(20, 2)));
   }
 
   TEST_CASE("opacity") {
@@ -144,7 +150,7 @@ TEST_SUITE("Compositing") {
   TEST_CASE("layer_mask") {
     auto list = DrawList({make_fill(make_color(255, 0, 0))});
     add_composite(list, 0, NodeHeader(),
-      LayerMask(make_circle(Point(5, 5), 5), Matrix()), std::nullopt);
+      LayerMask(share(make_circle(Point(5, 5), 5)), Matrix()), std::nullopt);
     REQUIRE(list.size() == 3);
     REQUIRE(std::get<BeginLayerCommand>(list[0]).m_mask);
   }

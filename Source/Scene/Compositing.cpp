@@ -165,7 +165,8 @@ std::optional<LayerMask> Rellu::make_mask(const Mask& mask,
     }
   }
   if(mask.m_shapes.size() == 1) {
-    return LayerMask(to_path(mask.m_shapes[0].m_geometry),
+    return LayerMask(
+      std::make_shared<const Path>(to_path(mask.m_shapes[0].m_geometry)),
       transform * mask.m_shapes[0].m_transform);
   }
   auto paths = std::vector<Path>();
@@ -173,8 +174,8 @@ std::optional<LayerMask> Rellu::make_mask(const Mask& mask,
   for(auto& shape : mask.m_shapes) {
     paths.push_back(::transform(to_path(shape.m_geometry), shape.m_transform));
   }
-  return LayerMask(
-    combine(paths, BooleanOperation::ADD, tolerance / scale), transform);
+  return LayerMask(std::make_shared<const Path>(
+    combine(paths, BooleanOperation::ADD, tolerance / scale)), transform);
 }
 
 void Rellu::add_composite(DrawList& list, std::size_t first,

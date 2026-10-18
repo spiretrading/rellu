@@ -1,4 +1,5 @@
 #include <memory>
+#include <utility>
 #include <doctest/doctest.h>
 #include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Rendering/CanvasRenderer.hpp"
@@ -7,6 +8,10 @@
 using namespace Rellu;
 
 namespace {
+  auto share(Path path) {
+    return std::make_shared<const Path>(std::move(path));
+  }
+
   auto is_filled(const QImage& image, QColor color) {
     for(auto y = 0; y != image.height(); ++y) {
       for(auto x = 0; x != image.width(); ++x) {
@@ -40,7 +45,8 @@ TEST_SUITE("CanvasRenderer") {
   TEST_CASE("draw_list") {
     auto renderer = CanvasRenderer();
     auto list = std::make_shared<DrawList>();
-    list->push_back(FillCommand(make_rectangle(Rect(2, 3, 5, 4)), Matrix(),
+    list->push_back(FillCommand(
+      share(make_rectangle(Rect(2, 3, 5, 4))), Matrix(),
       SolidPaint(make_color(255, 0, 0))));
     renderer.set_draw_list(list);
     renderer.set_view(make_translation(1, 2));

@@ -54,7 +54,7 @@ TEST_SUITE("SceneBuilder") {
     auto list = builder.build();
     REQUIRE(list.size() == 1);
     auto& fill = get_fill(list, 0);
-    REQUIRE(fill.m_path == make_rectangle(Rect(1, 2, 3, 4)));
+    REQUIRE(*fill.m_path == make_rectangle(Rect(1, 2, 3, 4)));
     REQUIRE(fill.m_transform == make_translation(5, 6));
     REQUIRE(get_color(fill) == red);
     REQUIRE(!fill.m_clip);
@@ -148,7 +148,7 @@ TEST_SUITE("SceneBuilder") {
     REQUIRE(list.size() == 4);
     REQUIRE(get_color(get_fill(list, 0)) == make_color(255, 0, 0));
     auto& outline = get_fill(list, 1);
-    REQUIRE(outline.m_path == outline_stroke(
+    REQUIRE(*outline.m_path == outline_stroke(
       make_rectangle(Rect(0, 0, 10, 10)), StrokeGeometry(2,
         StrokeAlignment::INSIDE, StrokeCap::ROUND, StrokeJoin::BEVEL, 3, {},
         0), TOLERANCE / 2));
@@ -156,7 +156,7 @@ TEST_SUITE("SceneBuilder") {
     REQUIRE(get_color(outline) == make_color(0, 0, 0));
     REQUIRE(get_color(get_fill(list, 2)) == make_color(255, 0, 0));
     REQUIRE(get_color(get_fill(list, 3)) == make_color(0, 255, 0));
-    REQUIRE(get_fill(list, 3).m_path == outline_stroke(
+    REQUIRE(*get_fill(list, 3).m_path == outline_stroke(
       make_line(Point(0, 0), Point(10, 0)), StrokeGeometry(1,
         StrokeAlignment::CENTER, StrokeCap::BUTT, StrokeJoin::MITER, 4, {},
         0), TOLERANCE));
@@ -174,7 +174,7 @@ TEST_SUITE("SceneBuilder") {
     auto builder = SceneBuilder(document, TOLERANCE);
     auto list = builder.build();
     REQUIRE(list.size() == 1);
-    auto& outline = get_fill(list, 0).m_path;
+    auto& outline = *get_fill(list, 0).m_path;
     REQUIRE(contains(outline, Point(2, -0.5)));
     REQUIRE(contains(outline, Point(-0.5, 2)));
     REQUIRE(contains(outline, Point(10.5, 3)));
@@ -197,7 +197,7 @@ TEST_SUITE("SceneBuilder") {
     auto list = builder.build();
     REQUIRE(list.size() == 2);
     auto& background = get_fill(list, 0);
-    REQUIRE(background.m_path == make_rectangle(Rect(0, 0, 50, 60)));
+    REQUIRE(*background.m_path == make_rectangle(Rect(0, 0, 50, 60)));
     REQUIRE(background.m_transform == make_translation(100, 200));
     REQUIRE(get_color(background) == make_color(255, 255, 255));
     auto& content = get_fill(list, 1);
@@ -228,7 +228,7 @@ TEST_SUITE("SceneBuilder") {
     auto builder = SceneBuilder(document, TOLERANCE);
     auto list = builder.build();
     REQUIRE(list.size() == 2);
-    REQUIRE(get_fill(list, 0).m_path == make_rectangle(Rect(0, 0, 4, 4)));
+    REQUIRE(*get_fill(list, 0).m_path == make_rectangle(Rect(0, 0, 4, 4)));
     REQUIRE(get_fill(list, 0).m_transform == make_translation(11, 11));
     REQUIRE(get_color(get_fill(list, 0)) == make_color(255, 0, 0));
     REQUIRE(get_fill(list, 1).m_transform == make_translation(15, 10));
@@ -249,7 +249,7 @@ TEST_SUITE("SceneBuilder") {
     auto builder = SceneBuilder(document, TOLERANCE);
     auto list = builder.build();
     REQUIRE(list.size() == 1);
-    REQUIRE(get_fill(list, 0).m_path == result);
+    REQUIRE(*get_fill(list, 0).m_path == result);
   }
 
   TEST_CASE("unsupported") {
@@ -278,7 +278,7 @@ TEST_SUITE("SceneBuilder") {
     transaction->commit();
     auto edited = builder.build();
     REQUIRE(edited.size() == 2);
-    REQUIRE(get_fill(edited, 0).m_path == make_rectangle(Rect(0, 0, 8, 8)));
-    REQUIRE(get_bounds(get_fill(edited, 1).m_path) == Rect(-0.5, -0.5, 9, 9));
+    REQUIRE(*get_fill(edited, 0).m_path == make_rectangle(Rect(0, 0, 8, 8)));
+    REQUIRE(get_bounds(*get_fill(edited, 1).m_path) == Rect(-0.5, -0.5, 9, 9));
   }
 }

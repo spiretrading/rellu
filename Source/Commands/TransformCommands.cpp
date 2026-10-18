@@ -1,0 +1,344 @@
+#include <cmath>
+#include <optional>
+#include <type_traits>
+#include <variant>
+#include "Rellu/Commands/Bounds.hpp"
+#include "Rellu/Commands/Hierarchy.hpp"
+#include "Rellu/Commands/TransformCommands.hpp"
+#include "Rellu/Geometry/Path.hpp"
+
+using namespace Rellu;
+
+namespace {
+  constexpr auto TOLERANCE = 1e-9;
+
+  std::optional<Point> get_axis_scale(const Matrix& matrix) {
+    auto magnitude = std::abs(matrix.m_a) + std::abs(matrix.m_d);
+    if(!(matrix.m_a > 0) || !(matrix.m_d > 0) ||
+        std::abs(matrix.m_b) > TOLERANCE * magnitude ||
+        std::abs(matrix.m_c) > TOLERANCE * magnitude) {
+      return std::nullopt;
+    }
+    return Point(matrix.m_a, matrix.m_d);
+  }
+
+  bool is_unit(Point scale) {
+    return std::abs(scale.m_x - 1) <= TOLERANCE &&
+      std::abs(scale.m_y - 1) <= TOLERANCE;
+  }
+
+  bool is_scalable(const Node& node, Point scale) {
+    if(is_unit(scale) || node.get_shape()) {
+      return true;
+    } else if(auto text = node.get_text()) {
+      if(std::holds_alternative<AreaFrame>(text->m_frame)) {
+        return true;
+      } else if(std::holds_alternative<AutoHeightFrame>(text->m_frame)) {
+        return std::abs(scale.m_y - 1) <= TOLERANCE;
+      }
+    } else if(auto group = node.get_group()) {
+      return !group->m_repeat_grid && !group->m_scroll_group &&
+        !group->m_stack && !group->m_padding && !group->m_component_instance;
+    }
+    return false;
+  }
+
+  Point scale_point(Point point, Point scale) {
+    return Point(point.m_x * scale.m_x, point.m_y * scale.m_y);
+  }
+
+  ShapeGeometry scale_geometry(const ShapeGeometry& geometry, Point scale) {
+    return std::visit([&] (const auto& shape) -> ShapeGeometry {
+      using Type = std::decay_t<decltype(shape)>;
+      auto scaled = shape;
+      if constexpr(std::is_same_v<Type, RectangleShape>) {
+        scaled.m_bounds = Rect(shape.m_bounds.m_x * scale.m_x,
+          shape.m_bounds.m_y * scale.m_y, shape.m_bounds.m_width * scale.m_x,
+          shape.m_bounds.m_height * scale.m_y);
+      } else if constexpr(std::is_same_v<Type, EllipseShape>) {
+        scaled.m_center = scale_point(shape.m_center, scale);
+        scaled.m_x_radius = shape.m_x_radius * scale.m_x;
+        scaled.m_y_radius = shape.m_y_radius * scale.m_y;
+      } else if constexpr(std::is_same_v<Type, LineShape>) {
+        scaled.m_start = scale_point(shape.m_start, scale);
+        scaled.m_end = scale_point(shape.m_end, scale);
+      } else if constexpr(std::is_same_v<Type, PolygonShape>) {
+        scaled.m_size = Size(
+          shape.m_size.m_width * scale.m_x, shape.m_size.m_height * scale.m_y);
+        for(auto& vertex : scaled.m_vertices) {
+          vertex = scale_point(vertex, scale);
+        }
+      } else {
+        scaled.m_path = Shared(
+          transform(*shape.m_path, make_scale(scale.m_x, scale.m_y)));
+      }
+      return scaled;
+    }, geometry);
+  }
+
+  void reshape(const Document& document, Transaction& transaction,
+    const NodeId& id, const Matrix& transform, const Matrix& local,
+    const Matrix& composed);
+
+  void scale_children(const Document& document, Transaction& transaction,
+      const std::vector<NodeId>& children, Point scale) {
+    auto matrix = make_scale(scale.m_x, scale.m_y);
+    for(auto& child : children) {
+      auto transform = get_transform(document, child);
+      auto composed = matrix * transform;
+      if(auto inverse = invert(transform)) {
+        reshape(document, transaction, child, transform,
+          *inverse * matrix * transform, composed);
+      } else {
+        set_transform(document, transaction, child, composed);
+      }
+    }
+  }
+
+  void scale_content(const Document& document, Transaction& transaction,
+      const NodeId& id, Point scale) {
+    if(is_unit(scale)) {
+      return;
+    }
+    auto& node = document.get(id);
+    auto children = node.m_children;
+    if(auto shape = node.get_shape()) {
+      auto payload = *shape;
+      payload.m_geometry = scale_geometry(shape->m_geometry, scale);
+      auto is_compound =
+        std::holds_alternative<CompoundShape>(payload.m_geometry);
+      transaction.replace_payload(id, std::move(payload));
+      if(is_compound) {
+        scale_children(document, transaction, children, scale);
+      }
+    } else if(auto text = node.get_text()) {
+      auto payload = *text;
+      if(auto area = std::get_if<AreaFrame>(&payload.m_frame)) {
+        area->m_size = Size(area->m_size.m_width * scale.m_x,
+          area->m_size.m_height * scale.m_y);
+      } else if(auto frame = std::get_if<AutoHeightFrame>(&payload.m_frame)) {
+        frame->m_width *= scale.m_x;
+      }
+      transaction.replace_payload(id, std::move(payload));
+    } else if(auto group = node.get_group()) {
+      if(group->m_mask) {
+        auto payload = *group;
+        auto matrix = make_scale(scale.m_x, scale.m_y);
+        for(auto& shape : payload.m_mask->m_shapes) {
+          shape.m_transform = matrix * shape.m_transform;
+        }
+        transaction.replace_payload(id, std::move(payload));
+      }
+      scale_children(document, transaction, children, scale);
+    }
+  }
+
+  void reshape(const Document& document, Transaction& transaction,
+      const NodeId& id, const Matrix& transform, const Matrix& local,
+      const Matrix& composed) {
+    auto scale = get_axis_scale(local);
+    if(scale && is_scalable(document.get(id), *scale)) {
+      auto updated = transform * make_translation(local.m_tx, local.m_ty);
+      if(updated != transform) {
+        set_transform(document, transaction, id, updated);
+      }
+      scale_content(document, transaction, id, *scale);
+    } else if(composed != transform) {
+      set_transform(document, transaction, id, composed);
+    }
+  }
+
+  void transform_artboard(const Document& document, Transaction& transaction,
+      const NodeId& id, const Matrix& mapping) {
+    auto& node = document.get(id);
+    auto parent = get_parent_transform(document, id);
+    auto inverse = invert(parent);
+    if(!inverse) {
+      return;
+    }
+    auto local = *inverse * mapping * parent;
+    auto scale = get_axis_scale(local);
+    if(!scale) {
+      return;
+    }
+    auto payload = *node.get_artboard();
+    auto frame = payload.m_frame;
+    payload.m_frame = local.map(frame);
+    if(payload.m_frame == frame) {
+      return;
+    }
+    auto children = node.m_children;
+    auto offset = Point(frame.m_x - payload.m_frame.m_x,
+      frame.m_y - payload.m_frame.m_y);
+    transaction.replace_payload(id, std::move(payload));
+    if(!is_unit(*scale)) {
+      for(auto& child : children) {
+        translate_node(document, transaction, child, offset);
+      }
+    }
+  }
+}
+
+void Rellu::set_transform(const Document& document, Transaction& transaction,
+    const NodeId& id, const Matrix& transform) {
+  auto& node = document.get(id);
+  if(auto reference = node.get_reference()) {
+    auto payload = *reference;
+    payload.m_transform = transform;
+    transaction.replace_payload(id, std::move(payload));
+  } else if(!node.get_artboard()) {
+    auto header = node.m_header;
+    header.m_transform = transform;
+    transaction.replace_header(std::move(header));
+  }
+}
+
+void Rellu::translate_node(const Document& document,
+    Transaction& transaction, const NodeId& id, Point delta) {
+  if(delta == Point(0, 0)) {
+    return;
+  }
+  auto& node = document.get(id);
+  if(auto artboard = node.get_artboard()) {
+    auto payload = *artboard;
+    payload.m_frame.m_x += delta.m_x;
+    payload.m_frame.m_y += delta.m_y;
+    transaction.replace_payload(id, std::move(payload));
+    return;
+  }
+  auto inverse = invert(get_parent_transform(document, id));
+  if(!inverse) {
+    return;
+  }
+  auto transform = get_transform(document, id);
+  transform.m_tx += inverse->m_a * delta.m_x + inverse->m_c * delta.m_y;
+  transform.m_ty += inverse->m_b * delta.m_x + inverse->m_d * delta.m_y;
+  set_transform(document, transaction, id, transform);
+}
+
+void Rellu::transform_node(const Document& document,
+    Transaction& transaction, const NodeId& id, const Matrix& mapping) {
+  if(document.get(id).get_artboard()) {
+    transform_artboard(document, transaction, id, mapping);
+    return;
+  }
+  auto parent = get_parent_transform(document, id);
+  auto inverse_parent = invert(parent);
+  if(!inverse_parent) {
+    return;
+  }
+  auto relative = *inverse_parent * mapping * parent;
+  auto transform = get_transform(document, id);
+  auto composed = relative * transform;
+  if(auto inverse = invert(transform)) {
+    reshape(document, transaction, id, transform,
+      *inverse * relative * transform, composed);
+  } else {
+    set_transform(document, transaction, id, composed);
+  }
+}
+
+TranslateCommand::TranslateCommand(std::vector<NodeId> nodes, Point delta)
+  : TranslateCommand(std::move(nodes), delta, "Move") {}
+
+TranslateCommand::TranslateCommand(
+  std::vector<NodeId> nodes, Point delta, std::string label) noexcept
+  : m_nodes(std::move(nodes)),
+    m_delta(delta),
+    m_label(std::move(label)) {}
+
+const std::vector<NodeId>& TranslateCommand::get_nodes() const {
+  return m_nodes;
+}
+
+Point TranslateCommand::get_delta() const {
+  return m_delta;
+}
+
+std::string TranslateCommand::get_label() const {
+  return m_label;
+}
+
+void TranslateCommand::apply(
+    const Document& document, Transaction& transaction) {
+  for(auto& id : get_top_level(document, m_nodes)) {
+    translate_node(document, transaction, id, m_delta);
+  }
+}
+
+bool TranslateCommand::merge(const Command& command) {
+  auto translation = dynamic_cast<const TranslateCommand*>(&command);
+  if(!translation || translation->m_label != m_label ||
+      translation->m_nodes != m_nodes) {
+    return false;
+  }
+  m_delta = m_delta + translation->m_delta;
+  return true;
+}
+
+TransformCommand::TransformCommand(std::vector<NodeId> nodes,
+  const Matrix& mapping, std::string label) noexcept
+  : m_nodes(std::move(nodes)),
+    m_mapping(mapping),
+    m_label(std::move(label)) {}
+
+const std::vector<NodeId>& TransformCommand::get_nodes() const {
+  return m_nodes;
+}
+
+const Matrix& TransformCommand::get_mapping() const {
+  return m_mapping;
+}
+
+std::string TransformCommand::get_label() const {
+  return m_label;
+}
+
+void TransformCommand::apply(
+    const Document& document, Transaction& transaction) {
+  for(auto& id : get_top_level(document, m_nodes)) {
+    transform_node(document, transaction, id, m_mapping);
+  }
+}
+
+bool TransformCommand::merge(const Command& command) {
+  auto transformation = dynamic_cast<const TransformCommand*>(&command);
+  if(!transformation || transformation->m_label != m_label ||
+      transformation->m_nodes != m_nodes) {
+    return false;
+  }
+  m_mapping = transformation->m_mapping * m_mapping;
+  return true;
+}
+
+std::unique_ptr<TranslateCommand> Rellu::make_nudge_command(
+    std::vector<NodeId> nodes, Point delta) {
+  return std::make_unique<TranslateCommand>(std::move(nodes), delta, "Nudge");
+}
+
+std::unique_ptr<TransformCommand> Rellu::make_resize_command(
+    std::vector<NodeId> nodes, const Rect& from, const Rect& to) {
+  return std::make_unique<TransformCommand>(
+    std::move(nodes), make_rect_mapping(from, to), "Resize");
+}
+
+std::unique_ptr<TransformCommand> Rellu::make_bounds_command(
+    const Document& document, const NodeId& id, const Rect& bounds) {
+  auto local = get_local_bounds(document, id);
+  if(!local) {
+    return nullptr;
+  }
+  auto world = get_world_transform(document, id);
+  auto inverse = invert(world);
+  if(!inverse) {
+    return nullptr;
+  }
+  return std::make_unique<TransformCommand>(std::vector{id},
+    world * make_rect_mapping(*local, bounds) * *inverse, "Resize");
+}
+
+std::unique_ptr<TransformCommand> Rellu::make_rotate_command(
+    std::vector<NodeId> nodes, double angle, Point center) {
+  return std::make_unique<TransformCommand>(
+    std::move(nodes), make_rotation(angle, center), "Rotate");
+}

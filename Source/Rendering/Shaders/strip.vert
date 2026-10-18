@@ -11,6 +11,7 @@ layout(location = 2) out vec4 v_paint;
 layout(location = 3) out vec4 v_extra;
 layout(location = 4) out vec4 v_gradient;
 layout(location = 5) out vec2 v_position;
+layout(location = 6) out float v_index;
 
 layout(std140, binding = 0) uniform Uniforms {
   mat4 projection;
@@ -35,6 +36,7 @@ void main() {
   gl_Position = projection * vec4(position, 0.0, 1.0);
   v_color = color;
   v_position = position;
+  v_index = origin.z;
   if(origin.x < 0.0) {
     v_coverage = vec3(0.0, 0.0, -1.0);
   } else {

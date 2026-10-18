@@ -62,8 +62,11 @@ namespace Rellu {
   /** Fills the region enclosed by a path under the path's fill rule. */
   struct FillCommand {
 
-    /** The outline of the region, every subpath treated as closed. */
-    Path m_path;
+    /**
+     * The non-null outline of the region, every subpath treated as closed,
+     * shared with whatever else draws it.
+     */
+    std::shared_ptr<const Path> m_path;
 
     /** The transform from the path's coordinates to document coordinates. */
     Matrix m_transform;
@@ -98,8 +101,8 @@ namespace Rellu {
   /** The region a layer's content is clipped to when it is composited. */
   struct LayerMask {
 
-    /** The outline of the region. */
-    Path m_path;
+    /** The non-null outline of the region. */
+    std::shared_ptr<const Path> m_path;
 
     /** The transform from the path's coordinates to document coordinates. */
     Matrix m_transform;
@@ -153,8 +156,10 @@ namespace Rellu {
    */
   struct BackdropBlurCommand {
 
-    /** The outline of the region, every subpath treated as closed. */
-    Path m_path;
+    /**
+     * The non-null outline of the region, every subpath treated as closed.
+     */
+    std::shared_ptr<const Path> m_path;
 
     /** The transform from the path's coordinates to document coordinates. */
     Matrix m_transform;
@@ -185,6 +190,27 @@ namespace Rellu {
    * specifies otherwise.
    */
   using DrawList = std::vector<DrawCommand>;
+
+  /**
+   * The commands of a drawing in the order they are drawn, held elsewhere,
+   * which draw as a DrawList holding them in the same order does.
+   */
+  using DrawSequence = std::vector<const DrawCommand*>;
+
+  /**
+   * Returns the sequence of a draw list's commands.
+   * @param list The draw list, which must outlive the sequence.
+   */
+  DrawSequence to_sequence(const DrawList& list);
+
+  inline DrawSequence to_sequence(const DrawList& list) {
+    auto sequence = DrawSequence();
+    sequence.reserve(list.size());
+    for(auto& command : list) {
+      sequence.push_back(&command);
+    }
+    return sequence;
+  }
 }
 
 #endif
