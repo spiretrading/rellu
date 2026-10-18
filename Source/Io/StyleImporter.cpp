@@ -348,14 +348,14 @@ void Rellu::add_style_importer(XdImporter& importer) {
       return;
     }
     auto& import = *node.m_import;
-    if(auto shape = std::get_if<Shape>(&*node.m_payload)) {
-      import_style(*json, shape->m_style, import);
-    } else if(auto text = std::get_if<Text>(&*node.m_payload)) {
-      import_style(*json, text->m_style, import);
-    } else if(auto artboard = std::get_if<Artboard>(&*node.m_payload)) {
+    if(auto shape = std::get_if<Box<Shape>>(&*node.m_payload)) {
+      import_style(*json, shape->edit().m_style, import);
+    } else if(auto text = std::get_if<Box<Text>>(&*node.m_payload)) {
+      import_style(*json, text->edit().m_style, import);
+    } else if(auto artboard = std::get_if<Box<Artboard>>(&*node.m_payload)) {
       if(auto fill_json = json->get_object("fill"_L1)) {
         if(auto fill = read_fill(*fill_json, import)) {
-          artboard->m_background = std::move(*fill);
+          artboard->edit().m_background = std::move(*fill);
         } else {
           import.warn("Unsupported fill");
         }

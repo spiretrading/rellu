@@ -1,0 +1,375 @@
+#include <algorithm>
+#include <cmath>
+#include <numbers>
+#include <utility>
+#include <variant>
+#include "Rellu/Commands/Hierarchy.hpp"
+#include "Rellu/Commands/PropertyCommands.hpp"
+#include "Rellu/Commands/StyleCommands.hpp"
+#include "Rellu/Commands/TransformCommands.hpp"
+#include "Rellu/Model/Transaction.hpp"
+#include "Rellu/Ui/PropertyEditors.hpp"
+
+using namespace Rellu;
+
+namespace {
+  class SetBlendModeCommand : public Command {
+    public:
+      SetBlendModeCommand(
+          std::vector<NodeId> nodes, BlendMode blend_mode) noexcept
+        : m_nodes(std::move(nodes)),
+          m_blend_mode(blend_mode) {}
+
+      std::string get_label() const override {
+        return "Change Blend Mode";
+      }
+
+      void apply(
+          const Document& document, Transaction& transaction) override {
+        for(auto& id : m_nodes) {
+          auto node = document.find(id);
+          if(!node || node->m_header.m_blend_mode == m_blend_mode) {
+            continue;
+          }
+          auto header = node->m_header;
+          header.m_blend_mode = m_blend_mode;
+          transaction.replace_header(std::move(header));
+        }
+      }
+
+    private:
+      std::vector<NodeId> m_nodes;
+      BlendMode m_blend_mode;
+  };
+
+  std::optional<double> get_number(const PropertyValue& value) {
+    if(auto number = std::get_if<double>(&value); number &&
+        std::isfinite(*number)) {
+      return *number;
+    }
+    return std::nullopt;
+  }
+
+  std::vector<NodeId> get_movable(
+      const Document& document, const std::vector<NodeId>& nodes) {
+    auto movable = get_top_level(document, nodes);
+    std::erase_if(movable, [&] (const auto& id) {
+      return document.get(id).m_parent.is_nil() && !document.is_on_canvas(id);
+    });
+    return movable;
+  }
+
+  bool has_artboard(
+      const Document& document, const std::vector<NodeId>& nodes) {
+    return std::any_of(nodes.begin(), nodes.end(), [&] (const auto& id) {
+      return document.get(id).get_artboard();
+    });
+  }
+
+  double get_rotation(const Document& document, const NodeId& id) {
+    auto transform = get_transform(document, id);
+    return std::atan2(transform.m_b, transform.m_a) * 180 / std::numbers::pi;
+  }
+
+  PropertySetter make_position_setter(bool is_x, TextMeasurer measurer) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      auto number = get_number(value);
+      auto targets = get_movable(document, nodes);
+      if(!number || targets.empty()) {
+        return nullptr;
+      }
+      auto frame = get_frame(document, nodes, measurer);
+      if(!frame) {
+        return nullptr;
+      }
+      auto delta = is_x ? Point(*number - frame->m_x, 0) :
+        Point(0, *number - frame->m_y);
+      if(nodes.size() == 1 && !document.get(nodes.front()).get_artboard()) {
+        auto parent = get_parent_transform(document, nodes.front());
+        delta = Point(parent.m_a * delta.m_x + parent.m_c * delta.m_y,
+          parent.m_b * delta.m_x + parent.m_d * delta.m_y);
+      }
+      return std::make_unique<TranslateCommand>(std::move(targets), delta);
+    };
+  }
+
+  PropertySetter make_size_setter(bool is_width, TextMeasurer measurer) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      auto number = get_number(value);
+      auto targets = get_movable(document, nodes);
+      if(!number || !(*number > 0) || targets.empty()) {
+        return nullptr;
+      }
+      auto resize = [&] (Rect bounds) {
+        if(is_width) {
+          bounds.m_width = *number;
+        } else {
+          bounds.m_height = *number;
+        }
+        return bounds;
+      };
+      if(targets.size() == 1) {
+        auto& id = targets.front();
+        if(auto artboard = document.get(id).get_artboard()) {
+          return make_resize_command(
+            targets, artboard->m_frame, resize(artboard->m_frame));
+        }
+        auto local =
+          get_local_bounds(document, id, BoundsType::GEOMETRY, measurer);
+        auto world = get_world_transform(document, id);
+        auto inverse = invert(world);
+        if(!local || !inverse) {
+          return nullptr;
+        }
+        return std::make_unique<TransformCommand>(std::move(targets),
+          world * make_rect_mapping(*local, resize(*local)) * *inverse,
+          "Resize");
+      }
+      auto bounds =
+        get_world_bounds(document, targets, BoundsType::GEOMETRY, measurer);
+      if(!bounds) {
+        return nullptr;
+      }
+      return make_resize_command(std::move(targets), *bounds, resize(*bounds));
+    };
+  }
+
+  PropertySetter make_rotation_setter(TextMeasurer measurer) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      auto number = get_number(value);
+      auto targets = get_movable(document, nodes);
+      if(!number || targets.empty() || has_artboard(document, targets)) {
+        return nullptr;
+      }
+      auto rotation = get_rotation(document, targets.front());
+      if(std::any_of(targets.begin(), targets.end(), [&] (const auto& id) {
+          return get_rotation(document, id) != rotation;
+        })) {
+        rotation = 0;
+      }
+      auto center = Point(0, 0);
+      if(targets.size() == 1) {
+        auto local = get_local_bounds(
+          document, targets.front(), BoundsType::GEOMETRY, measurer);
+        if(!local) {
+          return nullptr;
+        }
+        center = get_world_transform(document, targets.front()).map(
+          local->get_center());
+      } else if(auto bounds = get_world_bounds(
+          document, targets, BoundsType::GEOMETRY, measurer)) {
+        center = bounds->get_center();
+      } else {
+        return nullptr;
+      }
+      return make_rotate_command(std::move(targets),
+        (*number - rotation) * std::numbers::pi / 180, center);
+    };
+  }
+
+  std::optional<Color> find_fill_color(
+      const Document& document, const std::vector<NodeId>& nodes) {
+    for(auto& id : nodes) {
+      auto& node = document.get(id);
+      auto fill = static_cast<const Fill*>(nullptr);
+      if(auto shape = node.get_shape()) {
+        fill = &shape->m_style.m_fill;
+      } else if(auto text = node.get_text()) {
+        fill = &text->m_style.m_fill;
+      } else if(auto artboard = node.get_artboard()) {
+        fill = &artboard->m_background;
+      }
+      if(!fill) {
+        continue;
+      }
+      if(auto solid = std::get_if<SolidFill>(fill)) {
+        return solid->m_color;
+      } else if(auto gradient = std::get_if<GradientFill>(fill);
+          gradient && !gradient->m_stops.empty()) {
+        return gradient->m_stops.front().m_color;
+      }
+    }
+    return std::nullopt;
+  }
+
+  std::unique_ptr<Command> set_fill_type(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto choice = std::get_if<Choice>(&value);
+    if(!choice || nodes.empty()) {
+      return nullptr;
+    }
+    auto color =
+      find_fill_color(document, nodes).value_or(make_color(255, 255, 255));
+    if(choice->m_index == 0) {
+      return std::make_unique<SetFillCommand>(nodes, NoFill());
+    } else if(choice->m_index == 1) {
+      return std::make_unique<SetFillCommand>(nodes, SolidFill(color));
+    } else if(choice->m_index == 2) {
+      auto gradient = GradientFill();
+      gradient.m_geometry = LinearGradient(Point(0, 0), Point(1, 0));
+      gradient.m_stops.push_back(GradientStop(0, color));
+      gradient.m_stops.push_back(
+        GradientStop(1, make_color(255, 255, 255)));
+      return std::make_unique<SetFillCommand>(nodes, std::move(gradient));
+    }
+    return nullptr;
+  }
+
+  std::unique_ptr<Command> set_fill_color(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto color = std::get_if<Color>(&value);
+    if(!color || nodes.empty()) {
+      return nullptr;
+    }
+    return std::make_unique<SetFillCommand>(nodes, SolidFill(*color));
+  }
+
+  PropertySetter make_stroke_setter(auto edit) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      if(nodes.empty()) {
+        return nullptr;
+      }
+      auto stroke = StrokeEdit();
+      if(!edit(stroke, value)) {
+        return nullptr;
+      }
+      return std::make_unique<SetStrokeCommand>(nodes, std::move(stroke));
+    };
+  }
+
+  std::unique_ptr<Command> set_opacity(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto number = get_number(value);
+    if(!number || nodes.empty()) {
+      return nullptr;
+    }
+    return std::make_unique<SetOpacityCommand>(nodes, *number);
+  }
+
+  std::unique_ptr<Command> set_blend_mode(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto choice = std::get_if<Choice>(&value);
+    if(!choice || nodes.empty() || choice->m_index < 0 ||
+        choice->m_index > static_cast<int>(BlendMode::LUMINOSITY)) {
+      return nullptr;
+    }
+    return std::make_unique<SetBlendModeCommand>(
+      nodes, static_cast<BlendMode>(choice->m_index));
+  }
+
+  std::unique_ptr<Command> set_name(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto name = std::get_if<QString>(&value);
+    if(!name || nodes.size() != 1 || name->trimmed().isEmpty()) {
+      return nullptr;
+    }
+    return std::make_unique<RenameCommand>(
+      nodes.front(), name->toStdString());
+  }
+
+  std::unique_ptr<Command> set_visibility(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto is_visible = std::get_if<bool>(&value);
+    if(!is_visible || nodes.empty()) {
+      return nullptr;
+    }
+    return std::make_unique<SetVisibilityCommand>(nodes, *is_visible);
+  }
+
+  std::unique_ptr<Command> set_lock(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto is_locked = std::get_if<bool>(&value);
+    if(!is_locked || nodes.empty()) {
+      return nullptr;
+    }
+    return std::make_unique<SetLockCommand>(nodes, *is_locked);
+  }
+
+  PropertyEditor make_editor(PropertySetter setter) {
+    auto editor = PropertyEditor();
+    editor.m_setter = std::move(setter);
+    return editor;
+  }
+
+  PropertyEditor make_number_editor(PropertySetter setter,
+      std::optional<double> minimum, std::optional<double> maximum) {
+    auto editor = make_editor(std::move(setter));
+    editor.m_minimum = minimum;
+    editor.m_maximum = maximum;
+    return editor;
+  }
+}
+
+void PropertyEditors::add(std::string path, PropertyEditor editor) {
+  m_editors.insert_or_assign(std::move(path), std::move(editor));
+}
+
+const PropertyEditor* PropertyEditors::find(std::string_view path) const {
+  if(auto editor = m_editors.find(path); editor != m_editors.end()) {
+    return &editor->second;
+  }
+  return nullptr;
+}
+
+PropertyEditors Rellu::make_standard_property_editors(TextMeasurer measurer) {
+  auto editors = PropertyEditors();
+  editors.add("layer.name", make_editor(set_name));
+  editors.add("layer.visible", make_editor(set_visibility));
+  editors.add("layer.locked", make_editor(set_lock));
+  editors.add("transform.x", make_number_editor(
+    make_position_setter(true, measurer), std::nullopt, std::nullopt));
+  editors.add("transform.y", make_number_editor(
+    make_position_setter(false, measurer), std::nullopt, std::nullopt));
+  editors.add("transform.width", make_number_editor(
+    make_size_setter(true, measurer), 0.0, std::nullopt));
+  editors.add("transform.height", make_number_editor(
+    make_size_setter(false, measurer), 0.0, std::nullopt));
+  editors.add("transform.rotation", make_number_editor(
+    make_rotation_setter(measurer), std::nullopt, std::nullopt));
+  auto opacity = make_number_editor(set_opacity, 0.0, 1.0);
+  opacity.m_scale = 100;
+  opacity.m_suffix = "%";
+  editors.add("appearance.opacity", std::move(opacity));
+  editors.add("appearance.blend_mode", make_editor(set_blend_mode));
+  editors.add("fill", make_editor(set_fill_type));
+  editors.add("fill.color", make_editor(set_fill_color));
+  editors.add("stroke.enabled", make_editor(make_stroke_setter(
+    [] (StrokeEdit& edit, const PropertyValue& value) {
+      if(auto is_enabled = std::get_if<bool>(&value)) {
+        edit.m_is_enabled = *is_enabled;
+        return true;
+      }
+      return false;
+    })));
+  editors.add("stroke.color", make_editor(make_stroke_setter(
+    [] (StrokeEdit& edit, const PropertyValue& value) {
+      if(auto color = std::get_if<Color>(&value)) {
+        edit.m_color = *color;
+        return true;
+      }
+      return false;
+    })));
+  editors.add("stroke.width", make_number_editor(make_stroke_setter(
+    [] (StrokeEdit& edit, const PropertyValue& value) {
+      if(auto width = get_number(value); width && *width >= 0) {
+        edit.m_width = *width;
+        return true;
+      }
+      return false;
+    }), 0.0, std::nullopt));
+  editors.add("stroke.alignment", make_editor(make_stroke_setter(
+    [] (StrokeEdit& edit, const PropertyValue& value) {
+      auto choice = std::get_if<Choice>(&value);
+      if(!choice || choice->m_index < 0 ||
+          choice->m_index > static_cast<int>(StrokeAlignment::OUTSIDE)) {
+        return false;
+      }
+      edit.m_alignment = static_cast<StrokeAlignment>(choice->m_index);
+      return true;
+    })));
+  return editors;
+}

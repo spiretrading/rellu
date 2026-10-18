@@ -13,6 +13,7 @@
 #include <private/qzipreader_p.h>
 #include "Rellu/Io/XdError.hpp"
 #include "Rellu/Io/XdPackage.hpp"
+#include "ParallelJson.hpp"
 
 using namespace Qt::StringLiterals;
 using namespace Rellu;
@@ -22,16 +23,50 @@ struct XdPackage::Data {
     qint64 m_size;
     std::uint32_t m_crc;
   };
+  struct Reader {
+    QBuffer m_buffer;
+    std::unique_ptr<QZipReader> m_reader;
+  };
   QByteArray m_bytes;
-  QBuffer m_buffer;
-  std::unique_ptr<QZipReader> m_reader;
   std::mutex m_mutex;
+  std::vector<std::unique_ptr<Reader>> m_readers;
   std::vector<std::string> m_entries;
   std::unordered_map<std::string, Entry> m_sizes;
   std::vector<std::string> m_artboard_entries;
   std::vector<std::string> m_image_entries;
   QJsonObject m_manifest;
+
+  std::unique_ptr<Reader> make_reader();
+  std::unique_ptr<Reader> acquire();
+  void release(std::unique_ptr<Reader> reader);
 };
+
+std::unique_ptr<XdPackage::Data::Reader> XdPackage::Data::make_reader() {
+  auto reader = std::make_unique<Reader>();
+  reader->m_buffer.setBuffer(&m_bytes);
+  if(!reader->m_buffer.open(QIODevice::ReadOnly)) {
+    throw XdError("The package cannot be read.");
+  }
+  reader->m_reader = std::make_unique<QZipReader>(&reader->m_buffer);
+  return reader;
+}
+
+std::unique_ptr<XdPackage::Data::Reader> XdPackage::Data::acquire() {
+  {
+    auto lock = std::lock_guard(m_mutex);
+    if(!m_readers.empty()) {
+      auto reader = std::move(m_readers.back());
+      m_readers.pop_back();
+      return reader;
+    }
+  }
+  return make_reader();
+}
+
+void XdPackage::Data::release(std::unique_ptr<Reader> reader) {
+  auto lock = std::lock_guard(m_mutex);
+  m_readers.push_back(std::move(reader));
+}
 
 namespace {
   using CrcTable = std::array<std::array<std::uint32_t, 256>, 8>;
@@ -150,10 +185,9 @@ QByteArray XdPackage::read(std::string_view name) const {
   if(size == m_data->m_sizes.end()) {
     throw XdError("The package is missing the entry " + key + ".");
   }
-  auto bytes = [&] {
-    auto lock = std::lock_guard(m_data->m_mutex);
-    return m_data->m_reader->fileData(QString::fromStdString(key));
-  }();
+  auto reader = m_data->acquire();
+  auto bytes = reader->m_reader->fileData(QString::fromStdString(key));
+  m_data->release(std::move(reader));
   if(bytes.size() != size->second.m_size ||
       compute_crc(bytes) != size->second.m_crc) {
     throw XdError("The package's entry " + key + " is corrupt.");
@@ -164,7 +198,7 @@ QByteArray XdPackage::read(std::string_view name) const {
 QJsonObject XdPackage::read_json(std::string_view name) const {
   auto bytes = read(name);
   auto error = QJsonParseError();
-  auto document = QJsonDocument::fromJson(bytes, &error);
+  auto document = parse_json(bytes, error);
   if(error.error != QJsonParseError::NoError) {
     throw XdError("The package's entry " + std::string(name) +
       " is not valid JSON: " + error.errorString().toStdString() +
@@ -208,16 +242,13 @@ XdPackage& XdPackage::operator =(XdPackage&& package) noexcept = default;
 
 void XdPackage::initialize() {
   auto& data = *m_data;
-  data.m_buffer.setBuffer(&data.m_bytes);
-  if(!data.m_buffer.open(QIODevice::ReadOnly)) {
-    throw XdError("The package cannot be read.");
-  }
-  data.m_reader = std::make_unique<QZipReader>(&data.m_buffer);
-  if(data.m_reader->status() != QZipReader::NoError ||
-      !data.m_reader->isReadable()) {
+  auto reader = data.make_reader();
+  if(reader->m_reader->status() != QZipReader::NoError ||
+      !reader->m_reader->isReadable()) {
     throw XdError("The package is not a readable ZIP archive.");
   }
-  auto entries = data.m_reader->fileInfoList();
+  auto entries = reader->m_reader->fileInfoList();
+  data.release(std::move(reader));
   if(entries.isEmpty()) {
     throw XdError("The package is not a ZIP archive or is empty.");
   }

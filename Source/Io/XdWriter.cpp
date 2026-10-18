@@ -1,13 +1,19 @@
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <functional>
+#include <optional>
+#include <system_error>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <QFile>
 #include <QtZlib/zlib.h>
+#include "Rellu/Geometry/BooleanOperation.hpp"
+#include "Rellu/Geometry/Polyline.hpp"
 #include "Rellu/Io/XdError.hpp"
 #include "Rellu/Io/XdOpaque.hpp"
 #include "Rellu/Io/XdPackage.hpp"
@@ -22,6 +28,7 @@ namespace {
     std::string_view("application/vnd.adobe.sparkler.project+dcxucf");
   const auto METADATA = std::string_view("META-INF/metadata.xml");
   const auto SHARING = std::string_view("sharing/sharing.json");
+  const auto COMPOUND_TOLERANCE = 0.01;
 
   using Hook = std::function<void (std::size_t, std::string&)>;
 
@@ -56,6 +63,75 @@ namespace {
       ends_with(name, ".jpg") || ends_with(name, ".jpeg") ||
       ends_with(name, ".gif") || (starts_with(name, "resources/") &&
         !starts_with(name, "resources/graphics/"));
+  }
+
+  double get_area(const Path& path) {
+    auto area = 0.0;
+    for(auto& polyline : flatten(path, COMPOUND_TOLERANCE)) {
+      auto& points = polyline.m_points;
+      for(auto i = std::size_t(0); i != points.size(); ++i) {
+        area += cross(points[i], points[(i + 1) % points.size()]);
+      }
+    }
+    return std::abs(area) / 2;
+  }
+
+  BooleanOperation to_operation(CompoundOperation operation) {
+    switch(operation) {
+      case CompoundOperation::SUBTRACT:
+        return BooleanOperation::SUBTRACT;
+      case CompoundOperation::INTERSECT:
+        return BooleanOperation::INTERSECT;
+      case CompoundOperation::EXCLUDE:
+        return BooleanOperation::EXCLUDE;
+      default:
+        return BooleanOperation::ADD;
+    }
+  }
+
+  std::optional<Path> refresh_compound(
+    const Document& document, const Node& node, const CompoundShape& compound);
+
+  Path get_outline(const Document& document, const Node& node,
+      const Shape& shape) {
+    if(auto compound = std::get_if<CompoundShape>(&shape.m_geometry)) {
+      if(auto result = refresh_compound(document, node, *compound)) {
+        return *result;
+      }
+      return *compound->m_path;
+    }
+    return to_path(shape.m_geometry);
+  }
+
+  std::optional<Path> refresh_compound(const Document& document,
+      const Node& node, const CompoundShape& compound) {
+    if(!decode_node_data(node.m_header.m_opaque.get_bytes()).
+        m_orphans.empty()) {
+      return std::nullopt;
+    }
+    auto operands = std::vector<Path>();
+    for(auto& id : node.m_children) {
+      auto child = document.find(id);
+      if(!child || !child->get_shape()) {
+        return std::nullopt;
+      }
+      operands.push_back(transform(get_outline(
+        document, *child, *child->get_shape()), child->m_header.m_transform));
+    }
+    if(operands.empty()) {
+      return std::nullopt;
+    }
+    auto result = combine(
+      operands, to_operation(compound.m_operation), COMPOUND_TOLERANCE);
+    auto& stored = *compound.m_path;
+    auto difference = get_area(
+      combine(result, stored, BooleanOperation::EXCLUDE, COMPOUND_TOLERANCE));
+    auto total = get_area(
+      combine(result, stored, BooleanOperation::ADD, COMPOUND_TOLERANCE));
+    if(difference <= std::max(0.01 * total, 0.5)) {
+      return std::nullopt;
+    }
+    return result;
   }
 
   void serialize(const XdValue& value, std::string& out,
@@ -231,6 +307,29 @@ namespace {
     return QByteArray(out.data(), static_cast<qsizetype>(out.size()));
   }
 
+  bool is_transient(const std::error_code& error) {
+    auto condition = error.default_error_condition();
+    return condition == std::errc::permission_denied ||
+      condition == std::errc::device_or_resource_busy ||
+      condition == std::errc::no_lock_available ||
+      condition == std::errc::resource_unavailable_try_again;
+  }
+
+  void replace(const std::filesystem::path& source,
+      const std::filesystem::path& target, std::error_code& error) {
+    auto delay = std::chrono::milliseconds(5);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while(true) {
+      std::filesystem::rename(source, target, error);
+      if(!error || !is_transient(error) ||
+          std::chrono::steady_clock::now() >= deadline) {
+        return;
+      }
+      std::this_thread::sleep_for(delay);
+      delay = std::min(2 * delay, std::chrono::milliseconds(200));
+    }
+  }
+
   XdValue* find_child(XdValue& children, std::string_view path) {
     for(auto& child : children.get_elements()) {
       if(auto entry = child.find("path"); entry && entry->to_string() == path) {
@@ -365,6 +464,13 @@ namespace {
 
   void Writer::write_node(const Node& node, std::string& out) const {
     auto json = m_generator.make_node(node);
+    if(auto shape = node.get_shape()) {
+      if(auto compound = std::get_if<CompoundShape>(&shape->m_geometry)) {
+        if(auto result = refresh_compound(*m_document, node, *compound)) {
+          json.find("shape")->set("path", to_svg_path(*result));
+        }
+      }
+    }
     auto data = decode_node_data(node.m_header.m_opaque.get_bytes());
     if(!data.m_patch.empty()) {
       auto is_cache_valid = !data.m_has_cache ||
@@ -766,12 +872,13 @@ void Rellu::write_xd(const Document& document,
     }
   }
   auto error = std::error_code();
-  std::filesystem::rename(temporary, path, error);
+  replace(temporary, path, error);
   if(error) {
+    auto message = error.message();
     std::filesystem::remove(temporary, error);
     auto name = path.generic_u8string();
     throw XdError("The package cannot be replaced: " +
-      std::string(name.begin(), name.end()));
+      std::string(name.begin(), name.end()) + ": " + message);
   }
 }
 

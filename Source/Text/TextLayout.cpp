@@ -232,10 +232,43 @@ namespace {
     return x - pen.m_x;
   }
 
+  bool is_kerned(char16_t character) {
+    return !QChar::isSurrogate(character) && character != u'\t' &&
+      !is_line_separator(character);
+  }
+
+  double get_kerning(char16_t left, char16_t right, const TextStyle& style,
+      const Font& font, const FontLibrary& library) {
+    if(style.m_script != TextScript::NORMAL || !is_kerned(left) ||
+        !is_kerned(right)) {
+      return 0;
+    }
+    auto resolution = library.resolve(font);
+    if(!resolution.m_typeface) {
+      return 0;
+    }
+    auto& typeface = *resolution.m_typeface;
+    auto pair =
+      apply_transform(std::u16string({left, right}), style.m_transform);
+    if(pair.size() != 2 || !typeface.has_glyph(pair[0]) ||
+        !typeface.has_glyph(pair[1])) {
+      return 0;
+    }
+    auto joined = typeface.shape(pair, 0, 2);
+    auto single = typeface.shape(pair, 0, 1);
+    if(joined.size() != 2 || single.size() != 1) {
+      return 0;
+    }
+    return (joined[0].m_advance - single[0].m_advance) * font.m_size;
+  }
+
   double place(const std::u16string& content, const Segment& segment,
       std::size_t end, const std::vector<Span>& spans, Point pen,
       double origin, const FontLibrary& library, TextLayout* layout) {
     auto x = pen.m_x;
+    auto previous = static_cast<const TextStyle*>(nullptr);
+    auto previous_font = static_cast<const Font*>(nullptr);
+    auto previous_end = std::size_t(0);
     for(auto& span : spans) {
       auto from = std::max(segment.m_start, span.m_start);
       auto to = std::min({end, segment.m_end, span.m_end});
@@ -243,8 +276,18 @@ namespace {
         auto& style = *span.m_style;
         auto& font = segment.m_font ? *segment.m_font : style.m_font;
         auto color = segment.m_color ? *segment.m_color : style.m_color;
+        if(previous && previous_end == from && *previous_font == font &&
+            previous->m_letter_spacing == style.m_letter_spacing &&
+            previous->m_transform == style.m_transform &&
+            previous->m_script == style.m_script) {
+          x += get_kerning(
+            content[from - 1], content[from], style, font, library);
+        }
         x += place(content, from, to, style, font, color, Point(x, pen.m_y),
           origin, library, layout);
+        previous = &style;
+        previous_font = &font;
+        previous_end = to;
       }
     }
     return x - pen.m_x;
@@ -435,9 +478,9 @@ namespace {
     return metrics;
   }
 
-  void place_lines(const Text& text, const std::vector<Line>& lines,
+  void visit_lines(const Text& text, const std::vector<Line>& lines,
       const std::vector<Span>& spans, const FontLibrary& library,
-      TextLayout& layout) {
+      auto visit) {
     auto& content = *text.m_content;
     auto& style = text.m_paragraph_style;
     auto width = get_wrap_width(text.m_frame).value_or(0);
@@ -468,9 +511,26 @@ namespace {
           x = width - line_width;
         }
       }
-      place(content, line, content.size(), spans, Point(x, baseline),
-        library, &layout);
+      visit(line, Point(x, baseline), metrics);
     }
+  }
+
+  void place_lines(const Text& text, const std::vector<Line>& lines,
+      const std::vector<Span>& spans, const FontLibrary& library,
+      TextLayout& layout) {
+    auto& content = *text.m_content;
+    visit_lines(text, lines, spans, library,
+      [&] (const Line& line, Point origin, const LineMetrics&) {
+        place(content, line, content.size(), spans, origin, library, &layout);
+      });
+  }
+
+  std::vector<Line> get_lines(const Text& text,
+      const std::vector<Span>& spans, const FontLibrary& library) {
+    if(text.m_layout) {
+      return read_lines(**text.m_layout, text.m_content->size());
+    }
+    return break_lines(text, spans, library);
   }
 }
 
@@ -514,17 +574,74 @@ std::u16string Rellu::apply_transform(
 TextLayout Rellu::lay_out(const Text& text, const FontLibrary& library) {
   auto layout = TextLayout();
   auto spans = make_spans(text);
-  if(text.m_layout) {
-    place_lines(text, read_lines(**text.m_layout, text.m_content->size()),
-      spans, library, layout);
-  } else {
-    place_lines(text, break_lines(text, spans, library), spans, library,
-      layout);
-  }
+  place_lines(text, get_lines(text, spans, library), spans, library, layout);
   if(auto area = std::get_if<AreaFrame>(&text.m_frame)) {
     layout.m_clip =
       Rect(0, 0, area->m_size.m_width, area->m_size.m_height);
   }
+  return layout;
+}
+
+Rect Rellu::measure_text(const Text& text, const FontLibrary& library) {
+  if(auto area = std::get_if<AreaFrame>(&text.m_frame)) {
+    return Rect(0, 0, area->m_size.m_width, area->m_size.m_height);
+  }
+  auto& content = *text.m_content;
+  auto spans = make_spans(text);
+  auto bounds = std::optional<Rect>();
+  visit_lines(text, get_lines(text, spans, library), spans, library,
+    [&] (const Line& line, Point origin, const LineMetrics& metrics) {
+      auto box = Rect(origin.m_x, origin.m_y - metrics.m_ascent,
+        measure_width(content, line, spans, library),
+        metrics.m_ascent + metrics.m_descent);
+      if(bounds) {
+        bounds = unite(*bounds, box);
+      } else {
+        bounds = box;
+      }
+    });
+  if(auto frame = std::get_if<AutoHeightFrame>(&text.m_frame)) {
+    auto height = bounds ? std::max(bounds->get_bottom(), 0.0) : 0.0;
+    return Rect(0, 0, frame->m_width, height);
+  }
+  return bounds.value_or(Rect(0, 0, 0, 0));
+}
+
+StoredLayout Rellu::store_layout(const Text& text, const FontLibrary& library) {
+  if(text.m_layout) {
+    return **text.m_layout;
+  }
+  auto& content = *text.m_content;
+  auto spans = make_spans(text);
+  auto layout = StoredLayout();
+  auto is_paragraph_start = true;
+  visit_lines(text, break_lines(text, spans, library), spans, library,
+    [&] (const Line& line, Point origin, const LineMetrics&) {
+      if(is_paragraph_start) {
+        layout.m_paragraphs.emplace_back();
+      }
+      auto& runs = layout.m_paragraphs.back().m_lines.emplace_back().m_runs;
+      auto x = origin.m_x;
+      for(auto& segment : line.m_segments) {
+        auto is_placed = false;
+        for(auto& span : spans) {
+          auto from = std::max(segment.m_start, span.m_start);
+          auto to = std::min(segment.m_end, span.m_end);
+          if(from < to) {
+            runs.push_back(StoredRun(from, to, Point(x, origin.m_y)));
+            auto& style = *span.m_style;
+            x += place(content, from, to, style, style.m_font, style.m_color,
+              Point(x, origin.m_y), origin.m_x, library, nullptr);
+            is_placed = true;
+          }
+        }
+        if(!is_placed) {
+          runs.push_back(StoredRun(
+            segment.m_start, segment.m_end, Point(x, origin.m_y)));
+        }
+      }
+      is_paragraph_start = line.m_is_paragraph_end;
+    });
   return layout;
 }
 

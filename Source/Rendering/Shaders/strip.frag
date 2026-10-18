@@ -7,6 +7,7 @@ layout(location = 3) in vec4 v_extra;
 layout(location = 4) in vec4 v_gradient;
 layout(location = 5) in vec2 v_position;
 layout(location = 6) in float v_index;
+layout(location = 7) in float v_divisor;
 
 layout(location = 0) out vec4 fragment_color;
 
@@ -29,6 +30,7 @@ const float RAMP_WIDTH = 512.0;
 vec4 paint;
 vec4 extra;
 vec4 gradient;
+float divisor;
 
 vec4 fetch(float index) {
   float row = floor(index / sizes.z);
@@ -53,20 +55,23 @@ void load_paint() {
   paint = v_paint;
   extra = v_extra;
   gradient = v_gradient;
+  divisor = v_divisor;
   if(!is_exact()) {
     return;
   }
   paint = vec4(0.0);
   extra = vec4(0.0);
   gradient = vec4(0.0);
+  divisor = 1.0;
   if(v_index < -0.5) {
     return;
   }
-  float base = 4.0 * floor(v_index + 0.5);
+  float base = 5.0 * floor(v_index + 0.5);
   vec4 first = fetch(base);
   vec4 second = fetch(base + 1.0);
   vec2 position = get_position();
   vec3 point = vec3(position, 1.0);
+  divisor = dot(fetch(base + 4.0).xyz, point) + 1.0;
   paint = vec4(dot(first.xyz, point), dot(second.xyz, point), first.w,
     second.w);
   if(first.w > 2.5) {
@@ -148,5 +153,9 @@ vec4 get_paint() {
 
 void main() {
   load_paint();
+  paint.xy /= divisor;
+  if(paint.z > 2.5) {
+    gradient /= divisor;
+  }
   fragment_color = v_color * get_paint() * get_coverage();
 }

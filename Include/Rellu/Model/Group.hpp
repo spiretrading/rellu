@@ -1,12 +1,12 @@
 #ifndef RELLU_MODEL_GROUP_HPP
 #define RELLU_MODEL_GROUP_HPP
 #include <map>
-#include <optional>
 #include <vector>
 #include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Size.hpp"
+#include "Rellu/Model/Box.hpp"
 #include "Rellu/Model/Component.hpp"
 #include "Rellu/Model/Layout.hpp"
 #include "Rellu/Model/NodeId.hpp"
@@ -148,22 +148,22 @@ namespace Rellu {
   struct Group {
 
     /** The mask role, if any. */
-    std::optional<Mask> m_mask;
+    OptionalBox<Mask> m_mask;
 
     /** The repeat grid role, if any. */
-    std::optional<RepeatGrid> m_repeat_grid;
+    OptionalBox<RepeatGrid> m_repeat_grid;
 
     /** The scroll group role, if any. */
-    std::optional<ScrollGroup> m_scroll_group;
+    OptionalBox<ScrollGroup> m_scroll_group;
 
     /** The stack role, if any. */
-    std::optional<Stack> m_stack;
+    OptionalBox<Stack> m_stack;
 
     /** The padding role, if any. */
-    std::optional<Padding> m_padding;
+    OptionalBox<Padding> m_padding;
 
     /** The component instance role, if any. */
-    std::optional<ComponentInstance> m_component_instance;
+    OptionalBox<ComponentInstance> m_component_instance;
 
     bool operator ==(const Group&) const = default;
   };

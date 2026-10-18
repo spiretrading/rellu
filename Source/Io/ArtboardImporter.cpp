@@ -1,3 +1,4 @@
+#include <mutex>
 #include <optional>
 #include <utility>
 #include "Rellu/Io/XdImporters.hpp"
@@ -87,18 +88,21 @@ void Rellu::add_artboard_importer(XdImporter& importer) {
     if(!reference) {
       reference = node.m_json->get_json().value("id"_L1).toString();
     }
-    auto frames = import.get_resources().get_object("artboards"_L1);
-    auto frame = frames ? frames->get_object(*reference) : nullptr;
-    if(frame) {
-      artboard.m_frame = Rect(frame->get_number("x"_L1, 0),
-        frame->get_number("y"_L1, 0), frame->get_number("width"_L1, 0),
-        frame->get_number("height"_L1, 0));
-      if(auto name = frame->get_string("name"_L1)) {
-        node.m_header.m_name = to_std_string(*name);
+    {
+      auto lock = std::lock_guard(import.get_mutex());
+      auto frames = import.get_resources().get_object("artboards"_L1);
+      auto frame = frames ? frames->get_object(*reference) : nullptr;
+      if(frame) {
+        artboard.m_frame = Rect(frame->get_number("x"_L1, 0),
+          frame->get_number("y"_L1, 0), frame->get_number("width"_L1, 0),
+          frame->get_number("height"_L1, 0));
+        if(auto name = frame->get_string("name"_L1)) {
+          node.m_header.m_name = to_std_string(*name);
+        }
+        artboard.m_viewport_height = frame->get_number("viewportHeight"_L1);
+      } else {
+        import.warn("Artboard without a frame");
       }
-      artboard.m_viewport_height = frame->get_number("viewportHeight"_L1);
-    } else {
-      import.warn("Artboard without a frame");
     }
     if(auto ux = get_ux(*json)) {
       ux->ignore({"path"_L1});
@@ -133,6 +137,10 @@ void Rellu::add_artboard_importer(XdImporter& importer) {
       std::get_if<Reference>(&*node.m_payload) : nullptr;
     if(!reference) {
       node.m_header.m_transform = offset * node.m_header.m_transform;
+      if(auto& transform = node.m_header.m_transform_3d) {
+        transform->m_matrix[3] = node.m_header.m_transform.m_tx;
+        transform->m_matrix[7] = node.m_header.m_transform.m_ty;
+      }
     } else if(reference->m_transform) {
       reference->m_transform = offset * *reference->m_transform;
     }

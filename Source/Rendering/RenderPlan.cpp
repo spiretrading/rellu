@@ -16,6 +16,7 @@ namespace {
   constexpr auto TEXTURE_GRANULARITY = 32;
   constexpr auto SOLID_RUN = 256u;
   constexpr auto MAXIMUM_COORDINATE = 1 << 24;
+  constexpr auto INNER_SHADOW_MODE = 16.0f;
   constexpr auto NONE = std::numeric_limits<std::size_t>::max();
 
   using Texel = std::array<float, 4>;
@@ -108,6 +109,20 @@ namespace {
     return static_cast<float>(kind);
   }
 
+  Projection get_projection(const Matrix& view, const FillCommand& command,
+      const Matrix& transform, const std::optional<Projection>& projection) {
+    if(projection) {
+      return view * command.m_transform * *projection * transform;
+    }
+    return to_projection(view * command.m_transform * transform);
+  }
+
+  Texel to_divisor(const Projection& projection) {
+    return Texel({static_cast<float>(projection.m_wx),
+      static_cast<float>(projection.m_wy),
+      static_cast<float>(projection.m_w0 - 1), 0});
+  }
+
   class Planner {
     public:
       Planner(const DrawSequence& commands, const StripScene& scene,
@@ -159,7 +174,7 @@ namespace {
       int add_paint();
       void set_texture_paint(int slot, const Target& target, Point offset,
         PaintKind kind, const Target* backdrop = nullptr,
-        BlendMode mode = BlendMode::NORMAL);
+        float mode = 0);
       void emit_content(std::size_t surface, const Target& target,
         PlanClear clear);
       Target emit_layer(std::size_t surface);
@@ -245,10 +260,15 @@ namespace {
   void Planner::add_gradient(
       int slot, const FillCommand& command, const GradientPaint& paint) {
     auto record = PaintRecord();
-    auto inverse = invert(m_view * command.m_transform * paint.m_transform);
+    auto inverse = invert(get_projection(
+      m_view, command, paint.m_transform, paint.m_projection));
     auto constant = [&] {
       record[0] = Texel({0, 0, 1, to_float(PaintKind::LINEAR)});
+      record[4] = Texel();
     };
+    if(inverse) {
+      record[4] = to_divisor(*inverse);
+    }
     if(!inverse) {
       constant();
     } else if(auto linear = std::get_if<LinearGradient>(&paint.m_geometry)) {
@@ -259,14 +279,14 @@ namespace {
         constant();
       } else {
         auto& matrix = *inverse;
+        auto start = dot(direction, linear->m_start);
         record[0] = Texel({
           static_cast<float>((direction.m_x * matrix.m_a +
-            direction.m_y * matrix.m_b) / length),
+            direction.m_y * matrix.m_b - start * matrix.m_wx) / length),
           static_cast<float>((direction.m_x * matrix.m_c +
-            direction.m_y * matrix.m_d) / length),
-          static_cast<float>(
-            (direction.m_x * (matrix.m_tx - linear->m_start.m_x) +
-              direction.m_y * (matrix.m_ty - linear->m_start.m_y)) / length),
+            direction.m_y * matrix.m_d - start * matrix.m_wy) / length),
+          static_cast<float>((direction.m_x * matrix.m_tx +
+            direction.m_y * matrix.m_ty - start * matrix.m_w0) / length),
           to_float(PaintKind::LINEAR)});
       }
     } else {
@@ -312,7 +332,9 @@ namespace {
     if(!paint.m_image || paint.m_image->isNull()) {
       return;
     }
-    auto inverse = invert(m_view * command.m_transform * paint.m_transform);
+    auto projection = get_projection(
+      m_view, command, paint.m_transform, paint.m_projection);
+    auto inverse = invert(projection);
     if(!inverse) {
       return;
     }
@@ -334,6 +356,10 @@ namespace {
       static_cast<float>(matrix.m_d / height),
       static_cast<float>(matrix.m_ty / height), 1});
     auto image_bounds = paint.m_transform.map(Rect(0, 0, width, height));
+    if(paint.m_projection) {
+      image_bounds = (*paint.m_projection * paint.m_transform).map(
+        Rect(0, 0, width, height));
+    }
     auto margin = 1e-3 * std::max(image_bounds.m_width, image_bounds.m_height);
     auto path_bounds = Rellu::get_bounds(*command.m_path);
     if(!inflate(image_bounds, margin).contains(path_bounds)) {
@@ -341,6 +367,7 @@ namespace {
     }
     record[3] =
       Texel({static_cast<float>(width), static_cast<float>(height), 0, 0});
+    record[4] = to_divisor(matrix);
     std::copy(record.begin(), record.end(),
       m_plan->m_paints.begin() + PAINT_TEXELS * slot);
   }
@@ -621,7 +648,7 @@ namespace {
   }
 
   void Planner::set_texture_paint(int slot, const Target& target,
-      Point offset, PaintKind kind, const Target* backdrop, BlendMode mode) {
+      Point offset, PaintKind kind, const Target* backdrop, float mode) {
     auto map = [&] (const Target& texture, Point shift) {
       auto extent = texture.get_extent();
       auto width = static_cast<double>(extent.width());
@@ -640,7 +667,7 @@ namespace {
     auto source = map(target, offset);
     auto record = PaintRecord();
     record[0] = Texel({source[0], 0, source[1], to_float(kind)});
-    record[1] = Texel({0, source[2], source[3], static_cast<float>(mode)});
+    record[1] = Texel({0, source[2], source[3], mode});
     if(backdrop) {
       record[2] = map(*backdrop, Point(0, 0));
     }
@@ -681,7 +708,7 @@ namespace {
           auto backdrop = allocate(region.size(), region.topLeft(), 1);
           add_copy(target, region, backdrop);
           set_texture_paint(slot, source, Point(0, 0), PaintKind::TEXTURE,
-            &backdrop, layer.m_blend_mode);
+            &backdrop, static_cast<float>(layer.m_blend_mode));
           pass = add_pass(target, PlanClear::KEEP);
           draw(pass, PlanPipeline::BLEND, first, count,
             PlanSource(-1, source.m_texture), backdrop.m_texture);
@@ -726,13 +753,16 @@ namespace {
     for(auto& shadow : layer.m_inner_shadows) {
       auto blurred =
         blur(target, region, shadow.m_radius * m_scale, true, 0);
+      auto backdrop = allocate(region.size(), region.topLeft(), 1);
+      add_copy(target, region, backdrop);
       auto slot = add_paint();
       set_texture_paint(slot, blurred, map_vector(m_view, shadow.m_offset),
-        PaintKind::TEXTURE_ALPHA);
+        PaintKind::TEXTURE, &backdrop, INNER_SHADOW_MODE);
       auto span = add_span(region, to_premultiplied(shadow.m_color), slot);
       auto pass = add_pass(target, PlanClear::KEEP);
-      draw(pass, PlanPipeline::ATOP, span, 1,
-        PlanSource(-1, blurred.m_texture));
+      draw(pass, PlanPipeline::BLEND, span, 1,
+        PlanSource(-1, blurred.m_texture), backdrop.m_texture);
+      release(backdrop);
       release(blurred);
     }
     if(!layer.m_drop_shadows.empty()) {

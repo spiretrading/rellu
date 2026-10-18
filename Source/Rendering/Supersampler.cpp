@@ -390,6 +390,20 @@ namespace {
     return true;
   }
 
+  bool is_closed(const Path& path) {
+    auto& segments = path.get_segments();
+    if(segments.empty()) {
+      return false;
+    } else if(segments.back().m_type == SegmentType::CLOSE) {
+      return true;
+    }
+    auto& last = segments.back();
+    if(last.m_type != SegmentType::LINE) {
+      return false;
+    }
+    return last.m_points[0] == segments.front().m_points[0];
+  }
+
   bool is_rectangle(const CurveOutline& outline) {
     auto path = Path();
     auto index = std::size_t(0);
@@ -731,7 +745,7 @@ Antialiasing Supersampler::get_antialiasing(
 bool Supersampler::is_frame(const Path& line, StrokeJoin join,
     double miter_limit, const Matrix& matrix) {
   return join == StrokeJoin::MITER && miter_limit >= std::numbers::sqrt2 &&
-    is_rectangle(line, matrix);
+    is_closed(line) && is_rectangle(line, matrix);
 }
 
 bool Supersampler::is_hairline(

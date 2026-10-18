@@ -1,8 +1,10 @@
 #include <string>
+#include <utility>
 #include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Io/XdImporter.hpp"
 #include "Rellu/Io/XdValues.hpp"
+#include "Rellu/Model/DocumentComparison.hpp"
 #include "XdTestPackage.hpp"
 
 using namespace Qt::StringLiterals;
@@ -33,6 +35,56 @@ namespace {
       events.push_back("finish " + node.m_header.m_name + " " +
         (node.m_is_inserted ? "inserted" : "pending"));
     });
+    return importer;
+  }
+
+  struct Counter {
+    int m_value = 0;
+
+    Counter fork() const {
+      return Counter();
+    }
+
+    void merge(Counter fork) {
+      m_value += fork.m_value;
+    }
+  };
+
+  XdImporter make_canvas_importer(bool is_parallel) {
+    auto importer = XdImporter();
+    importer.set_node_importer("group"_L1, [] (XdNode& node) {
+      if(auto id = node.m_json->get_string("id"_L1)) {
+        node.m_header.m_id = to_node_id(*id);
+      }
+      if(auto name = node.m_json->get_string("name"_L1)) {
+        node.m_header.m_name = name->toStdString();
+      }
+      if(auto group = node.m_json->get_object("group"_L1)) {
+        node.m_children = group->get_array("children"_L1);
+      }
+      node.m_payload = Group();
+    });
+    importer.add_finisher([] (XdNode& node) {
+      ++node.m_import->get_states().get<Counter>().m_value;
+    });
+    importer.add_document_importer(XdPhase::CANVAS,
+      [=] (XdImport& import) {
+        auto nodes = std::vector<QJsonObject>();
+        auto children = import.get_pasteboard().get_array("children"_L1);
+        for(auto child : children->get_json()) {
+          nodes.push_back(child.toObject());
+        }
+        if(is_parallel) {
+          import.import_nodes(nodes, XdNodeRole::NODE);
+        } else {
+          for(auto& node : nodes) {
+            auto json = import.make_node_json(node);
+            import.import_node(*json, nullptr, XdNodeRole::NODE);
+          }
+        }
+        import.warn("finished " +
+          std::to_string(import.get_states().get<Counter>().m_value));
+      });
     return importer;
   }
 }
@@ -98,6 +150,45 @@ TEST_SUITE("XdImporter") {
     REQUIRE(document.get_canvas().empty());
   }
 
+  TEST_CASE("parallel_nodes") {
+    auto package = XdTestPackage();
+    package.m_pasteboard = parse_json_array(R"([{"type": "group",
+      "id": "00000000-0000-0000-0000-000000000001", "name": "a", "size": 1,
+      "group": {"children": [{"type": "group",
+      "id": "00000000-0000-0000-0000-000000000002", "name": "b"},
+      {"type": "widget"}]}}, {"type": "group",
+      "id": "00000000-0000-0000-0000-000000000003", "name": "c"},
+      {"type": "group", "id": "00000000-0000-0000-0000-000000000002",
+      "name": "copy", "group": {"children": [{"type": "group",
+      "id": "00000000-0000-0000-0000-000000000005"}]}}, {"type": "group",
+      "id": "00000000-0000-0000-0000-000000000004", "name": "d",
+      "group": {"children": [{"type": "group",
+      "id": "00000000-0000-0000-0000-000000000004"}]}}])");
+    auto bytes = package.build();
+    auto sequential = Document();
+    auto sequential_report =
+      make_canvas_importer(false).import(XdPackage(bytes), sequential);
+    auto parallel = Document();
+    auto parallel_report =
+      make_canvas_importer(true).import(XdPackage(bytes), parallel);
+    REQUIRE(find_differences(sequential, parallel).empty());
+    REQUIRE(parallel_report.m_warnings == sequential_report.m_warnings);
+    REQUIRE(parallel_report.m_unconsumed == sequential_report.m_unconsumed);
+    REQUIRE(parallel_report.m_node_count == 4);
+    REQUIRE(parallel.get_canvas() == std::vector<NodeId>({
+      *parse_node_id("00000000-0000-0000-0000-000000000001"),
+      *parse_node_id("00000000-0000-0000-0000-000000000003"),
+      *parse_node_id("00000000-0000-0000-0000-000000000004")}));
+    REQUIRE(parallel_report.m_warnings.at("finished 4") == 1);
+    REQUIRE(
+      parallel_report.m_warnings.at("Node not inserted: Duplicate node "
+        "(group)") == 1);
+    REQUIRE(
+      parallel_report.m_warnings.at("Node not inserted: Duplicate node "
+        "(group in group)") == 1);
+    REQUIRE(parallel_report.m_unconsumed.at("<group>.size:number") == 1);
+  }
+
   TEST_CASE("states") {
     auto states = XdStates();
     REQUIRE(!states.find<int>());
@@ -105,6 +196,21 @@ TEST_SUITE("XdImporter") {
     states.get<std::string>() = "text";
     REQUIRE(*states.find<int>() == 5);
     REQUIRE(states.get<std::string>() == "text");
+  }
+
+  TEST_CASE("state_fork") {
+    auto states = XdStates();
+    states.get<Counter>().m_value = 1;
+    states.get<int>() = 5;
+    auto fork = states.fork();
+    REQUIRE(fork.get<Counter>().m_value == 0);
+    REQUIRE(fork.find<int>() == states.find<int>());
+    fork.get<Counter>().m_value = 2;
+    fork.get<std::string>() = "text";
+    states.merge(std::move(fork));
+    REQUIRE(states.get<Counter>().m_value == 3);
+    REQUIRE(states.get<std::string>() == "text");
+    REQUIRE(*states.find<int>() == 5);
   }
 
   TEST_CASE("failure") {

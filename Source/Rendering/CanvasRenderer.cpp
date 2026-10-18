@@ -75,15 +75,25 @@ void CanvasRenderer::set_background(const QColor& background) {
   m_background = background;
 }
 
+const CanvasOverlay& CanvasRenderer::get_overlay() const {
+  return m_overlay;
+}
+
+void CanvasRenderer::set_overlay(CanvasOverlay overlay) {
+  m_overlay = std::move(overlay);
+}
+
 void CanvasRenderer::initialize(
     QRhi& rhi, QRhiRenderPassDescriptor& descriptor, int sample_count) {
   m_rhi = &rhi;
   m_paths.initialize(rhi, descriptor, sample_count);
   m_tiles.initialize(rhi, descriptor, sample_count);
+  m_overlays.initialize(rhi);
   m_is_prepared = false;
 }
 
 void CanvasRenderer::release() {
+  m_overlays.release();
   m_tiles.release();
   m_paths.release();
   m_rhi = nullptr;
@@ -98,6 +108,7 @@ void CanvasRenderer::render(
     m_tiles.render(buffer, target, *m_drawing, view, m_background);
     m_is_complete = m_tiles.is_complete();
     m_is_prepared = false;
+    m_overlays.render(buffer, target, scale, m_overlay);
     return;
   }
   m_is_complete = true;
@@ -120,6 +131,7 @@ void CanvasRenderer::render(
     m_scale = scale;
   }
   m_paths.render(buffer, target, m_background, batch);
+  m_overlays.render(buffer, target, scale, m_overlay);
 }
 
 void CanvasRenderer::render(QRhiCommandBuffer& buffer, QRhiTexture& texture,

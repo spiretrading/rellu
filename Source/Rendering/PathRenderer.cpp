@@ -50,12 +50,6 @@ namespace {
       blend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
       blend.srcAlpha = QRhiGraphicsPipeline::One;
       blend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
-    } else if(pipeline == PlanPipeline::ATOP) {
-      blend.enable = true;
-      blend.srcColor = QRhiGraphicsPipeline::DstAlpha;
-      blend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
-      blend.srcAlpha = QRhiGraphicsPipeline::Zero;
-      blend.dstAlpha = QRhiGraphicsPipeline::One;
     }
     return blend;
   }
@@ -243,8 +237,6 @@ void PathRenderer::initialize(
     rhi, PlanPipeline::SOLID, *m_layout, *m_format_descriptor, 1);
   m_over = make_pipeline(
     rhi, PlanPipeline::OVER, *m_layout, *m_format_descriptor, 1);
-  m_atop = make_pipeline(
-    rhi, PlanPipeline::ATOP, *m_layout, *m_format_descriptor, 1);
   m_blend = make_pipeline(
     rhi, PlanPipeline::BLEND, *m_layout, *m_format_descriptor, 1);
   m_blur = make_pipeline(
@@ -255,7 +247,6 @@ void PathRenderer::release() {
   m_bindings.clear();
   m_blur.reset();
   m_blend.reset();
-  m_atop.reset();
   m_over.reset();
   m_solid.reset();
   m_solid_pipeline.reset();
@@ -671,8 +662,6 @@ QRhiGraphicsPipeline& PathRenderer::get_pipeline(
     return *m_pipeline;
   } else if(pipeline == PlanPipeline::SOLID) {
     return *m_solid;
-  } else if(pipeline == PlanPipeline::ATOP) {
-    return *m_atop;
   } else if(pipeline == PlanPipeline::BLEND) {
     return *m_blend;
   } else if(pipeline == PlanPipeline::BLUR) {

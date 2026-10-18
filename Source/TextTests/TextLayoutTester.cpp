@@ -309,4 +309,57 @@ TEST_SUITE("TextLayout") {
     REQUIRE(fills[1].m_color == make_color(0, 0, 255));
     REQUIRE(!fills[0].m_path.is_empty());
   }
+
+  TEST_CASE("kerning_across_runs") {
+    auto whole = lay_out(make_text(u"AVAV"), get_library());
+    auto text = make_text(u"AVAV");
+    text.m_runs.push_back(TextRun(1, text.m_base_style));
+    text.m_runs.back().m_style.m_color = make_color(255, 0, 0);
+    text.m_runs.push_back(TextRun(3, text.m_base_style));
+    auto split = lay_out(text, get_library());
+    REQUIRE(split.m_glyphs.size() == 4);
+    for(auto i = std::size_t(0); i != 4; ++i) {
+      REQUIRE(std::abs(split.m_glyphs[i].m_origin.m_x -
+        whole.m_glyphs[i].m_origin.m_x) < 1e-9);
+    }
+    auto resized = make_text(u"AVAV");
+    resized.m_runs.push_back(TextRun(1, resized.m_base_style));
+    resized.m_runs.push_back(TextRun(3, resized.m_base_style));
+    resized.m_runs.back().m_style.m_font.m_size = 10;
+    auto unkerned = lay_out(resized, get_library());
+    REQUIRE(
+      unkerned.m_glyphs[1].m_origin.m_x > whole.m_glyphs[1].m_origin.m_x);
+  }
+
+  TEST_CASE("measure_text") {
+    auto text = make_text(u"Hello\nWorld");
+    auto height = 2 * get_ascent() + 2 * get_descent();
+    auto bounds = measure_text(text, get_library());
+    REQUIRE(bounds.m_x == 0);
+    REQUIRE(bounds.m_y == -get_ascent());
+    REQUIRE(bounds.m_width > 0);
+    REQUIRE(bounds.m_height == height);
+    text.m_frame = AutoHeightFrame(150);
+    REQUIRE(measure_text(text, get_library()) == Rect(0, 0, 150, height));
+    text.m_frame = AreaFrame(Size(200, 100));
+    REQUIRE(measure_text(text, get_library()) == Rect(0, 0, 200, 100));
+  }
+
+  TEST_CASE("store_layout") {
+    auto text = make_text(u"Hello\nWorld");
+    auto stored = store_layout(text, get_library());
+    REQUIRE(stored.m_paragraphs.size() == 2);
+    REQUIRE(stored.m_paragraphs[0].m_lines.size() == 1);
+    REQUIRE(stored.m_paragraphs[0].m_lines[0].m_runs ==
+      std::vector<StoredRun>({make_run(0, 5, Point(0, 0))}));
+    REQUIRE(stored.m_paragraphs[1].m_lines.size() == 1);
+    REQUIRE(stored.m_paragraphs[1].m_lines[0].m_runs ==
+      std::vector<StoredRun>(
+        {make_run(6, 11, Point(0, get_ascent() + get_descent()))}));
+    auto unstored = lay_out(text, get_library());
+    text.m_layout = Shared(stored);
+    REQUIRE(store_layout(text, get_library()) == stored);
+    REQUIRE(get_baselines(lay_out(text, get_library())) ==
+      get_baselines(unstored));
+  }
 }

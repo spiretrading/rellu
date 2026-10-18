@@ -1,7 +1,9 @@
 #ifndef RELLU_IO_XD_IMPORTER_HPP
 #define RELLU_IO_XD_IMPORTER_HPP
+#include <concepts>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string_view>
 #include <typeindex>
@@ -25,6 +27,13 @@ namespace Rellu {
   /**
    * Holds at most one value of each type, letting importers keep their own
    * data alongside an import or a node without knowing of one another.
+   * Each import XdImport::import_nodes runs in parallel starts with a fork
+   * of its parent's states: a value whose type has a member
+   * <code>T fork() const</code> starts as the result of that call, and any
+   * other value is shared, so it must be safe to use from several threads.
+   * Once they finish, the values each one made or forked are merged back in
+   * node order, through the member <code>void merge(T fork)</code> of the
+   * parent's value, or kept if the parent has none.
    */
   class XdStates {
     public:
@@ -44,8 +53,29 @@ namespace Rellu {
       template<typename T>
       T* find();
 
+      /** Returns the states a parallel import starts with. */
+      XdStates fork() const;
+
+      /**
+       * Merges back the states of a parallel import.
+       * @param states The states, made by fork.
+       */
+      void merge(XdStates states);
+
     private:
-      std::vector<std::pair<std::type_index, std::shared_ptr<void>>> m_states;
+      struct Entry {
+        std::type_index m_type;
+        std::shared_ptr<void> m_state;
+        std::shared_ptr<void> (*m_fork)(const void*);
+        void (*m_merge)(void*, void*);
+        bool m_is_own;
+      };
+      std::vector<Entry> m_states;
+
+      template<typename T>
+      static std::shared_ptr<void> fork_state(const void* state);
+      template<typename T>
+      static void merge_state(void* state, void* fork);
   };
 
   /** Lists the places a node being imported takes in the document. */
@@ -139,6 +169,9 @@ namespace Rellu {
    * of the document. For every node, the importer of its type makes the
    * payload, then every property importer runs in registration order, then
    * the node is inserted, its children are imported and every finisher runs.
+   * The node importers, property importers and finishers of nodes imported
+   * by XdImport::import_nodes run on several threads at once, each node
+   * reaching the rest of the import only through its own XdImport.
    */
   class XdImporter {
     public:
@@ -213,7 +246,13 @@ namespace Rellu {
       std::vector<std::pair<XdPhase, DocumentImporter>> m_document_importers;
   };
 
-  /** The state of one import shared by every importer. */
+  /**
+   * The state of one import shared by every importer. The nodes imported by
+   * import_nodes are each imported by a parallel import of their own, whose
+   * nodes reach the document only once import_nodes returns: until then,
+   * they are found through find_node rather than the document, and there is
+   * no transaction.
+   */
   class XdImport {
     public:
 
@@ -237,7 +276,10 @@ namespace Rellu {
       /** Returns the document being built. */
       Document& get_document();
 
-      /** Returns the transaction making every change. */
+      /**
+       * Returns the transaction making every change, throwing
+       * std::logic_error within a parallel import.
+       */
       Transaction& get_transaction();
 
       /** Returns the report of the import. */
@@ -245,6 +287,12 @@ namespace Rellu {
 
       /** Returns the data importers keep for the import. */
       XdStates& get_states();
+
+      /**
+       * Returns the mutex guarding the graphic content and interactions
+       * shared by parallel imports.
+       */
+      std::mutex& get_mutex();
 
       /** Returns the graphic content holding the shared resources. */
       XdObject& get_resources();
@@ -276,6 +324,33 @@ namespace Rellu {
       NodeId import_node(XdObject& json, XdNode* parent, XdNodeRole role);
 
       /**
+       * Imports nodes without a parent and their descendants on every
+       * processor, with the same result as importing each in turn.
+       * @param nodes The nodes' JSON.
+       * @param role The place the nodes take in the document.
+       * @param path The normalized path their keys are reported under, or
+       *        empty to report them under their node type.
+       * @return The nodes' ids, nil for those skipped.
+       */
+      std::vector<NodeId> import_nodes(const std::vector<QJsonObject>& nodes,
+        XdNodeRole role, std::string_view path = {});
+
+      /**
+       * Finds a node imported so far.
+       * @param id The node's id.
+       * @return The node, or <code>nullptr</code> if there is none, valid
+       *         until the next node is imported.
+       */
+      const Node* find_node(const NodeId& id);
+
+      /**
+       * Replaces the payload of a node this import inserted.
+       * @param id The node's id.
+       * @param payload The payload.
+       */
+      void replace_payload(const NodeId& id, Payload payload);
+
+      /**
        * Records a warning.
        * @param message The warning's message.
        */
@@ -294,11 +369,13 @@ namespace Rellu {
       void set_opaque(OpaqueData opaque);
 
     private:
+      struct Batch;
       const XdImporter* m_importer;
       const XdPackage* m_package;
       Document* m_document;
       Transaction* m_transaction;
       ImportReport* m_report;
+      XdImport* m_main;
       XdStates m_states;
       std::unique_ptr<XdObject> m_resources;
       std::unique_ptr<XdObject> m_pasteboard;
@@ -306,9 +383,16 @@ namespace Rellu {
       std::unique_ptr<XdObject> m_interactions;
       std::vector<XdNodeRecord> m_records;
       OpaqueData m_opaque;
+      std::unique_ptr<Batch> m_batch;
+      std::mutex m_mutex;
 
+      explicit XdImport(XdImport& main);
       XdImport(const XdImport&) = delete;
       XdImport& operator =(const XdImport&) = delete;
+      std::unique_ptr<XdObject> make_root(
+        const QJsonObject& json, std::string_view path);
+      NodeId insert(XdNode& node);
+      bool merge(XdImport& batch);
   };
 
   template<typename T>
@@ -318,7 +402,18 @@ namespace Rellu {
     }
     auto state = std::make_shared<T>();
     auto& result = *state;
-    m_states.emplace_back(std::type_index(typeid(T)), std::move(state));
+    auto entry =
+      Entry(std::type_index(typeid(T)), std::move(state), nullptr, nullptr,
+        true);
+    if constexpr(requires(const T& value) {
+        { value.fork() } -> std::same_as<T>; }) {
+      entry.m_fork = &fork_state<T>;
+    }
+    if constexpr(requires(T& value, T fork) {
+        value.merge(std::move(fork)); }) {
+      entry.m_merge = &merge_state<T>;
+    }
+    m_states.push_back(std::move(entry));
     return result;
   }
 
@@ -326,11 +421,21 @@ namespace Rellu {
   T* XdStates::find() {
     auto type = std::type_index(typeid(T));
     for(auto& state : m_states) {
-      if(state.first == type) {
-        return static_cast<T*>(state.second.get());
+      if(state.m_type == type) {
+        return static_cast<T*>(state.m_state.get());
       }
     }
     return nullptr;
+  }
+
+  template<typename T>
+  std::shared_ptr<void> XdStates::fork_state(const void* state) {
+    return std::make_shared<T>(static_cast<const T*>(state)->fork());
+  }
+
+  template<typename T>
+  void XdStates::merge_state(void* state, void* fork) {
+    static_cast<T*>(state)->merge(std::move(*static_cast<T*>(fork)));
   }
 }
 

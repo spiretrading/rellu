@@ -3,13 +3,19 @@
 #include <functional>
 #include <QTreeView>
 #include <QWidget>
+#include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/NodeId.hpp"
+#include "Rellu/Model/Subscription.hpp"
 #include "Rellu/Ui/LayersModel.hpp"
 
 namespace Rellu {
 
-  /** Lists a document's layers as a tree and tracks the current layer. */
+  /**
+   * Lists a document's layers as a tree and tracks the current layer. With
+   * an editor, the layers selected in the tree are the editor's selection,
+   * the current layer being its primary node.
+   */
   class LayersPanel : public QWidget {
     public:
 
@@ -32,17 +38,30 @@ namespace Rellu {
       QTreeView& get_view();
 
       /**
-       * Lists a document's layers, clearing the current layer.
+       * Lists a document's layers without an editor, clearing the current
+       * layer.
        * @param document The document, or <code>nullptr</code> for none. It
        *        must outlive this panel or be replaced first.
        */
       void set_document(Document* document);
 
+      /** Returns the editor whose selection is shown, if any. */
+      Editor* get_editor() const;
+
+      /**
+       * Lists the layers of an editor's document, showing and setting its
+       * selection.
+       * @param editor The editor, or <code>nullptr</code> for none. It must
+       *        outlive this panel or be replaced first.
+       */
+      void set_editor(Editor* editor);
+
       /** Returns the current layer's id, or nil if there is none. */
       const NodeId& get_current() const;
 
       /**
-       * Makes a layer current, expanding its ancestors and scrolling to it.
+       * Makes a layer current and the only one selected, expanding its
+       * ancestors and scrolling to it.
        * @param id The layer's id, or nil to clear the current layer.
        */
       void set_current(const NodeId& id);
@@ -53,12 +72,25 @@ namespace Rellu {
        */
       void set_current_handler(CurrentHandler handler);
 
+      /**
+       * Sets the function called when the user makes a layer current in the
+       * tree.
+       * @param handler The function to call.
+       */
+      void set_activation_handler(CurrentHandler handler);
+
     private:
       LayersModel* m_model;
       QTreeView* m_view;
+      Editor* m_editor;
+      Subscription m_subscription;
       NodeId m_current;
+      bool m_is_synchronizing;
       CurrentHandler m_current_handler;
+      CurrentHandler m_activation_handler;
 
+      void synchronize();
+      void on_selection();
       void on_current(const QModelIndex& index);
   };
 }

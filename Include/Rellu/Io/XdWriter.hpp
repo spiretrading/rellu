@@ -12,8 +12,8 @@ namespace Rellu {
   struct XdWriteOptions {
 
     /**
-     * The layout of text without a stored layout, or empty to place each
-     * paragraph on one line.
+     * The layout of text without a stored layout, or empty to write such
+     * text without a layout.
      */
     XdTextLayout m_layout;
 

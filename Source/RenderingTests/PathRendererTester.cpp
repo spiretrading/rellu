@@ -830,6 +830,20 @@ TEST_SUITE("PathRenderer") {
     }
   }
 
+  TEST_CASE("inner_shadow_edge") {
+    auto renderer = TestRenderer();
+    auto layer = begin_layer();
+    layer.m_inner_shadows.push_back(
+      Shadow(Point(0, 0), 0, make_color(0, 0, 0)));
+    renderer.m_list.push_back(layer);
+    renderer.m_list.push_back(
+      fill(make_rectangle(Rect(8.5, 0, 16, 16)), make_color(255, 255, 255)));
+    renderer.m_list.push_back(EndLayerCommand());
+    auto image = render(renderer, QSize(32, 16));
+    require_pixel(image, 8, 8, Pixel({0.375, 0.375, 0.375, 0.625}), 3);
+    require_pixel(image, 16, 8, Pixel({1, 1, 1, 1}), 1);
+  }
+
   TEST_CASE("blur") {
     auto renderer = TestRenderer();
     auto layer = begin_layer();

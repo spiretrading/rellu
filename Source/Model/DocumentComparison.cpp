@@ -71,6 +71,8 @@ namespace {
     collector.check(left.m_is_locked == right.m_is_locked, subject, "lock");
     collector.check(
       left.m_transform == right.m_transform, subject, "transform");
+    collector.check(left.m_transform_3d == right.m_transform_3d, subject,
+      "3D transform");
     collector.check(
       is_same(left.m_opacity, right.m_opacity), subject, "opacity");
     collector.check(
@@ -162,6 +164,12 @@ namespace {
       left.m_transform == right.m_transform, subject, "transform override");
     collector.check(left.m_has_children == right.m_has_children, subject,
       "children override");
+  }
+
+  template<typename T>
+  void compare(const Box<T>& left, const Box<T>& right,
+      const std::string& subject, Collector& collector) {
+    compare(*left, *right, subject, collector);
   }
 
   void compare(const Node& left, const Node& right, Collector& collector) {

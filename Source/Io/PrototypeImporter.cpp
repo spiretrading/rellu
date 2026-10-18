@@ -1,3 +1,4 @@
+#include <iterator>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -22,6 +23,23 @@ namespace {
     std::unordered_map<InteractionId, bool> m_enabled;
     std::vector<InheritedInteraction> m_inherited;
     std::vector<Flow> m_flows;
+
+    PrototypeTable fork() const {
+      return PrototypeTable();
+    }
+
+    void merge(PrototypeTable fork) {
+      m_own.insert(m_own.end(), std::make_move_iterator(fork.m_own.begin()),
+        std::make_move_iterator(fork.m_own.end()));
+      for(auto& entry : fork.m_enabled) {
+        m_enabled.insert_or_assign(entry.first, entry.second);
+      }
+      m_inherited.insert(m_inherited.end(), fork.m_inherited.begin(),
+        fork.m_inherited.end());
+      m_flows.insert(m_flows.end(),
+        std::make_move_iterator(fork.m_flows.begin()),
+        std::make_move_iterator(fork.m_flows.end()));
+    }
   };
 
   std::optional<Transition> to_transition(const QString& name) {

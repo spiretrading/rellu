@@ -165,7 +165,6 @@ namespace Rellu {
       std::unique_ptr<QRhiGraphicsPipeline> m_solid_pipeline;
       std::unique_ptr<QRhiGraphicsPipeline> m_solid;
       std::unique_ptr<QRhiGraphicsPipeline> m_over;
-      std::unique_ptr<QRhiGraphicsPipeline> m_atop;
       std::unique_ptr<QRhiGraphicsPipeline> m_blend;
       std::unique_ptr<QRhiGraphicsPipeline> m_blur;
       std::map<std::tuple<QRhiTexture*, QRhiTexture*, PlanPipeline>,

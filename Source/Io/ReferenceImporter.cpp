@@ -9,6 +9,15 @@ using namespace Rellu;
 namespace {
   struct ReferenceSources {
     std::vector<NodeId> m_sources;
+
+    ReferenceSources fork() const {
+      return ReferenceSources();
+    }
+
+    void merge(ReferenceSources fork) {
+      m_sources.insert(
+        m_sources.end(), fork.m_sources.begin(), fork.m_sources.end());
+    }
   };
 }
 

@@ -82,6 +82,27 @@ TEST_SUITE("HeaderImporter") {
     REQUIRE(report.m_unconsumed.at("<group>.style.isolation:str") == 1);
   }
 
+  TEST_CASE("transform_3d") {
+    auto document = Document();
+    auto report = import_nodes(R"([{"type": "group",
+      "id": "9fac4ba0-f4aa-4529-ae35-4f279c49c1bd",
+      "transform": {"0": [1, 0, 0, -269.5], "1": [0, 0.98, 0.17, 463.25],
+      "2": [0, -0.17, 0.98, 3.5], "3": [0, 0, 0, 1]},
+      "meta": {"ux": {"rotationX": -10, "rotationY": 5,
+      "perspectiveCenter": {"x": 92, "y": 21.5}}}}])", document);
+    REQUIRE(report.m_unconsumed.empty());
+    REQUIRE(report.m_warnings.empty());
+    auto& header = document.get(RECTANGLE_ID).m_header;
+    REQUIRE(header.m_transform == Matrix(1, 0, 0, 0.98, -269.5, 463.25));
+    REQUIRE(header.m_transform_3d);
+    auto& transform = *header.m_transform_3d;
+    REQUIRE(transform.m_matrix == std::array<double, 16>({1, 0, 0, -269.5, 0,
+      0.98, 0.17, 463.25, 0, -0.17, 0.98, 3.5, 0, 0, 0, 1}));
+    REQUIRE(transform.m_rotation_x == -10);
+    REQUIRE(transform.m_rotation_y == 5);
+    REQUIRE(transform.m_perspective_center == Point(92, 21.5));
+  }
+
   TEST_CASE("derived_id") {
     auto document = Document();
     import_nodes(R"([{"type": "group", "id": "8"}, {"type": "group",

@@ -8,18 +8,6 @@ using namespace Rellu;
 namespace {
   constexpr auto MAXIMUM_RASTERS = 4;
 
-  std::optional<Rect> get_clip(const TextLayout& layout,
-      const Matrix& transform, const std::optional<Rect>& parent) {
-    if(!layout.m_clip) {
-      return parent;
-    }
-    auto frame = transform.map(*layout.m_clip);
-    if(parent) {
-      return intersect(*parent, frame);
-    }
-    return frame;
-  }
-
   Matrix to_single(const Matrix& matrix) {
     auto round = [] (double value) {
       return static_cast<double>(static_cast<float>(value));
@@ -75,6 +63,33 @@ namespace {
     }
   }
 
+  void add_fills(const TextLayout& layout, const Matrix& transform,
+      double opacity, const std::optional<Rect>& clip, DrawList& list) {
+    for(auto& fill : outline(layout)) {
+      if(fill.m_path.is_empty()) {
+        continue;
+      }
+      auto color = fill.m_color;
+      color.m_alpha *= opacity;
+      list.push_back(FillCommand(std::make_shared<const Path>(
+        std::move(fill.m_path)), transform, SolidPaint(color), clip));
+    }
+  }
+
+  void add_glyphs(const TextLayout& layout, const Matrix& transform,
+      double opacity, const std::optional<Rect>& clip, DrawList& list) {
+    auto single = TextLayout();
+    for(auto& glyph : layout.m_glyphs) {
+      single.m_glyphs.assign(1, glyph);
+      add_fills(single, transform, opacity, clip, list);
+    }
+    if(!layout.m_decorations.empty()) {
+      single.m_glyphs.clear();
+      single.m_decorations = layout.m_decorations;
+      add_fills(single, transform, opacity, clip, list);
+    }
+  }
+
   Path make_level(const CoverageMask& mask, int level) {
     auto path = Path();
     for(auto row = 0; row != mask.m_height; ++row) {
@@ -115,8 +130,7 @@ void SceneBuilder::set_device_transform(
 void SceneBuilder::add_text(
     const Node& node, const Placement& placement, DrawList& list) {
   auto& outline = get_text_outline(node);
-  auto clip = get_clip(outline.m_layout, placement.m_transform,
-    placement.m_clip);
+  auto& clip = placement.m_clip;
   auto first = list.size();
   auto inverse = std::optional<Matrix>();
   auto transform = Matrix();
@@ -124,7 +138,8 @@ void SceneBuilder::add_text(
     inverse = invert(*m_device_transform);
     transform = *m_device_transform * to_single(placement.m_transform);
   }
-  if(inverse && TextRasterizer::is_supported(transform)) {
+  if(inverse && !placement.m_projection &&
+      TextRasterizer::is_supported(transform)) {
     for(auto& raster : get_rasters(outline, transform)) {
       for(auto level = 1; level <= 16; ++level) {
         auto path = make_level(raster.m_mask, level);
@@ -149,13 +164,11 @@ void SceneBuilder::add_text(
           local->map(TextRasterizer::get_origin(glyph, transform));
       }
     }
-    for(auto& fill : Rellu::outline(outlined)) {
-      auto color = fill.m_color;
-      color.m_alpha *= placement.m_opacity;
-      list.push_back(FillCommand(std::make_shared<const Path>(
-        std::move(fill.m_path)), to_single(placement.m_transform),
-        SolidPaint(color), clip));
-    }
+    add_glyphs(outlined, to_single(placement.m_transform),
+      placement.m_opacity, clip, list);
+  } else if(placement.m_projection) {
+    add_glyphs(outline.m_layout, placement.m_transform, placement.m_opacity,
+      clip, list);
   } else {
     for(auto i = std::size_t(0); i != outline.m_fills.size(); ++i) {
       auto& fill = outline.m_fills[i];

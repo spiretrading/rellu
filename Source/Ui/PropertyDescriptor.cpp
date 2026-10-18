@@ -4,7 +4,9 @@
 #include <numbers>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
+#include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Ui/NodeDescription.hpp"
@@ -13,7 +15,6 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto MAXIMUM_DEPTH = 64;
   constexpr auto CONTENT_LENGTH = 80;
 
   const auto BLEND_MODES = QStringList({"Normal", "Multiply", "Screen",
@@ -119,47 +120,6 @@ namespace {
     return Placement(source, resolution->m_transform, children);
   }
 
-  std::optional<Rect> get_local_bounds(
-      const Document& document, const Placement& placement, int depth) {
-    if(depth > MAXIMUM_DEPTH) {
-      return std::nullopt;
-    }
-    auto& node = *placement.m_node;
-    if(auto shape = node.get_shape()) {
-      return Rellu::get_bounds(to_path(shape->m_geometry));
-    } else if(auto artboard = node.get_artboard()) {
-      return Rect(0, 0, artboard->m_frame.m_width, artboard->m_frame.m_height);
-    } else if(auto text = node.get_text()) {
-      if(auto area = std::get_if<AreaFrame>(&text->m_frame)) {
-        return Rect(0, 0, area->m_size.m_width, area->m_size.m_height);
-      }
-      return std::nullopt;
-    }
-    auto bounds = std::optional<Rect>();
-    for(auto& id : placement.m_children->m_children) {
-      auto child = document.find(id);
-      if(!child) {
-        continue;
-      }
-      auto child_placement = get_placement(document, *child);
-      if(!child_placement) {
-        continue;
-      }
-      auto child_bounds =
-        get_local_bounds(document, *child_placement, depth + 1);
-      if(!child_bounds) {
-        continue;
-      }
-      auto mapped = child_placement->m_transform.map(*child_bounds);
-      if(bounds) {
-        bounds = unite(*bounds, mapped);
-      } else {
-        bounds = mapped;
-      }
-    }
-    return bounds;
-  }
-
   PropertyDescriptor make_layer(
       const Document& document, const Node& node, const Node& displayed) {
     auto section = make_property("layer", "Layer");
@@ -182,25 +142,40 @@ namespace {
     return section;
   }
 
-  PropertyDescriptor make_transform(
-      const Document& document, const Placement& placement) {
-    auto section = make_property("transform", "Transform");
-    auto& node = *placement.m_node;
+  std::optional<Rect> get_node_frame(
+      const Document& document, const Node& node, const Matrix& transform,
+      const TextMeasurer& measurer) {
     if(auto artboard = node.get_artboard()) {
-      add(section, "x", "X", artboard->m_frame.m_x);
-      add(section, "y", "Y", artboard->m_frame.m_y);
-      add(section, "width", "Width", artboard->m_frame.m_width);
-      add(section, "height", "Height", artboard->m_frame.m_height);
+      return artboard->m_frame;
+    }
+    auto bounds = Rellu::get_local_bounds(
+      document, node.get_id(), BoundsType::GEOMETRY, measurer);
+    if(!bounds) {
+      return std::nullopt;
+    }
+    auto origin = transform.map(bounds->get_top_left());
+    return Rect(origin.m_x, origin.m_y, bounds->m_width, bounds->m_height);
+  }
+
+  PropertyDescriptor make_transform(const Document& document,
+      const Node& node, const Placement& placement,
+      const TextMeasurer& measurer) {
+    auto section = make_property("transform", "Transform");
+    auto& transform = placement.m_transform;
+    auto frame = get_node_frame(document, node, transform, measurer);
+    if(frame && node.get_artboard()) {
+      add(section, "x", "X", frame->m_x);
+      add(section, "y", "Y", frame->m_y);
+      add(section, "width", "Width", frame->m_width);
+      add(section, "height", "Height", frame->m_height);
       return section;
     }
-    auto& transform = placement.m_transform;
-    auto bounds = get_local_bounds(document, placement, 0);
-    auto origin = transform.map(bounds ? bounds->get_top_left() : Point(0, 0));
+    auto origin = frame ? frame->get_top_left() : transform.map(Point(0, 0));
     add(section, "x", "X", origin.m_x);
     add(section, "y", "Y", origin.m_y);
-    if(bounds) {
-      add(section, "width", "Width", bounds->m_width);
-      add(section, "height", "Height", bounds->m_height);
+    if(frame) {
+      add(section, "width", "Width", frame->m_width);
+      add(section, "height", "Height", frame->m_height);
     }
     auto scale_x = std::hypot(transform.m_a, transform.m_b);
     auto rotation = std::atan2(transform.m_b, transform.m_a) *
@@ -505,10 +480,58 @@ namespace {
   int to_byte(double component) {
     return std::clamp(static_cast<int>(std::lround(component * 255)), 0, 255);
   }
+
+  void intersect_properties(std::vector<PropertyDescriptor>& properties,
+      const std::vector<PropertyDescriptor>& others) {
+    std::erase_if(properties, [&] (auto& property) {
+      auto other = std::find_if(others.begin(), others.end(),
+        [&] (const auto& other) {
+          return other.m_path == property.m_path;
+        });
+      if(other == others.end()) {
+        return true;
+      }
+      if(other->m_is_mixed || !(property.m_value == other->m_value)) {
+        property.m_is_mixed = true;
+      }
+      intersect_properties(property.m_children, other->m_children);
+      return false;
+    });
+  }
+
+  bool is_frame_property(std::string_view path) {
+    return path == "transform.x" || path == "transform.y" ||
+      path == "transform.width" || path == "transform.height";
+  }
+
+  double get_frame_value(const Rect& frame, std::string_view path) {
+    if(path == "transform.x") {
+      return frame.m_x;
+    } else if(path == "transform.y") {
+      return frame.m_y;
+    } else if(path == "transform.width") {
+      return frame.m_width;
+    }
+    return frame.m_height;
+  }
+
+  void set_frame(
+      PropertyDescriptor& section, const std::optional<Rect>& frame) {
+    std::erase_if(section.m_children, [&] (auto& property) {
+      if(!is_frame_property(property.m_path)) {
+        return false;
+      } else if(!frame) {
+        return true;
+      }
+      property.m_value = get_frame_value(*frame, property.m_path);
+      property.m_is_mixed = false;
+      return false;
+    });
+  }
 }
 
 std::vector<PropertyDescriptor> Rellu::extract_properties(
-    const Document& document, const NodeId& id) {
+    const Document& document, const NodeId& id, const TextMeasurer& measurer) {
   auto sections = std::vector<PropertyDescriptor>();
   auto node = document.find(id);
   if(!node) {
@@ -518,7 +541,8 @@ std::vector<PropertyDescriptor> Rellu::extract_properties(
   auto displayed = placement ? placement->m_node : node;
   sections.push_back(make_layer(document, *node, *displayed));
   if(placement) {
-    sections.push_back(make_transform(document, *placement));
+    sections.push_back(
+      make_transform(document, *node, *placement, measurer));
   }
   sections.push_back(make_appearance(*displayed));
   if(auto shape = displayed->get_shape()) {
@@ -543,6 +567,59 @@ std::vector<PropertyDescriptor> Rellu::extract_properties(
       document, *node, placement ? placement->m_node : nullptr));
   }
   return sections;
+}
+
+std::vector<PropertyDescriptor> Rellu::extract_common_properties(
+    const Document& document, const std::vector<NodeId>& nodes,
+    const TextMeasurer& measurer) {
+  if(nodes.empty()) {
+    return {};
+  }
+  auto sections = extract_properties(document, nodes.front(), measurer);
+  if(nodes.size() == 1) {
+    return sections;
+  }
+  for(auto i = std::size_t(1); i != nodes.size(); ++i) {
+    intersect_properties(
+      sections, extract_properties(document, nodes[i], measurer));
+  }
+  auto transform = std::find_if(sections.begin(), sections.end(),
+    [] (const auto& section) {
+      return section.m_path == "transform";
+    });
+  if(transform != sections.end()) {
+    set_frame(*transform, get_frame(document, nodes, measurer));
+  }
+  return sections;
+}
+
+std::optional<Rect> Rellu::get_frame(const Document& document,
+    const std::vector<NodeId>& nodes, const TextMeasurer& measurer) {
+  if(nodes.size() == 1) {
+    auto node = document.find(nodes.front());
+    if(!node) {
+      return std::nullopt;
+    }
+    return get_node_frame(document, *node,
+      get_transform(document, node->get_id()), measurer);
+  }
+  auto bounds = get_world_bounds(
+    document, nodes, BoundsType::GEOMETRY, measurer);
+  if(!bounds || nodes.empty()) {
+    return bounds;
+  }
+  auto artboard = find_artboard(document, nodes.front());
+  if(artboard.is_nil()) {
+    return bounds;
+  }
+  for(auto& id : nodes) {
+    if(id == artboard || find_artboard(document, id) != artboard) {
+      return bounds;
+    }
+  }
+  auto& frame = document.get(artboard).get_artboard()->m_frame;
+  return Rect(bounds->m_x - frame.m_x, bounds->m_y - frame.m_y,
+    bounds->m_width, bounds->m_height);
 }
 
 const PropertyDescriptor* Rellu::find_property(

@@ -1,4 +1,5 @@
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -11,10 +12,28 @@ using namespace Qt::StringLiterals;
 using namespace Rellu;
 
 namespace {
+  using DefaultStates = std::unordered_map<ComponentId, StateId>;
+
   struct ComponentTable {
-    std::unordered_map<ComponentId, StateId> m_default_states;
+    std::shared_ptr<const DefaultStates> m_default_states;
     std::unordered_map<NodeId, Component> m_masters;
     std::unordered_map<NodeId, ComponentState> m_states;
+
+    ComponentTable fork() const {
+      auto table = ComponentTable();
+      table.m_default_states = m_default_states;
+      return table;
+    }
+
+    void merge(ComponentTable fork) {
+      for(auto& master : fork.m_masters) {
+        m_masters.insert_or_assign(master.first, std::move(master.second));
+      }
+    }
+  };
+
+  struct MasterComponent {
+    Component m_component;
   };
 
   struct OverrideScope {
@@ -150,8 +169,7 @@ namespace {
     ux.ignore({"width"_L1, "height"_L1, "linkedElementBookmarkRef"_L1});
     ignore_component_keys(ux);
     component.m_states = import_states(ux, import);
-    import.get_states().get<ComponentTable>().m_masters.insert_or_assign(
-      node.m_header.m_id, std::move(component));
+    node.m_states.get<MasterComponent>().m_component = std::move(component);
   }
 
   void import_state(XdNode& node, XdObject& ux) {
@@ -178,10 +196,14 @@ namespace {
     auto instance = ComponentInstance();
     instance.m_component = to_node_id(*ux.get_string("symbolId"_L1));
     instance.m_state = read_state_id(ux);
-    auto default_state = table.m_default_states.find(instance.m_component);
-    if(instance.m_state == instance.m_component ||
-        (default_state != table.m_default_states.end() &&
-          default_state->second == instance.m_state)) {
+    auto is_default = instance.m_state == instance.m_component;
+    if(!is_default && table.m_default_states) {
+      auto& defaults = *table.m_default_states;
+      auto default_state = defaults.find(instance.m_component);
+      is_default = default_state != defaults.end() &&
+        default_state->second == instance.m_state;
+    }
+    if(is_default) {
       instance.m_state = StateId();
     }
     instance.m_size = Size(
@@ -239,21 +261,24 @@ void Rellu::add_component_importer(XdImporter& importer) {
       return;
     }
     auto& table = import.get_states().get<ComponentTable>();
+    auto defaults = DefaultStates();
+    auto nodes = std::vector<QJsonObject>();
     for(auto symbol : symbols->get_json()) {
       auto symbol_ux =
         symbol.toObject().value("meta"_L1).toObject().value("ux"_L1).toObject();
       auto id = symbol_ux.value("symbolId"_L1).toString();
       auto state = symbol_ux.value("stateId"_L1).toString();
       if(!id.isEmpty() && !state.isEmpty()) {
-        table.m_default_states.emplace(to_node_id(id), to_node_id(state));
+        defaults.emplace(to_node_id(id), to_node_id(state));
+      }
+      if(symbol.isObject()) {
+        nodes.push_back(symbol.toObject());
       }
     }
-    for(auto i = std::size_t(0); i != symbols->get_size(); ++i) {
-      auto symbol = symbols->get_object(i);
-      if(!symbol) {
-        continue;
-      }
-      auto id = import.import_node(*symbol, nullptr, XdNodeRole::MASTER);
+    table.m_default_states =
+      std::make_shared<const DefaultStates>(std::move(defaults));
+    for(auto& id : import.import_nodes(nodes, XdNodeRole::MASTER,
+        "agc.resources.meta.ux.symbols[]")) {
       if(id.is_nil()) {
         continue;
       }
@@ -288,11 +313,16 @@ void Rellu::add_component_importer(XdImporter& importer) {
     }
   });
   importer.add_finisher([] (XdNode& node) {
+    auto& import = *node.m_import;
+    if(auto master = node.m_states.find<MasterComponent>()) {
+      auto& component = master->m_component;
+      import.get_states().get<ComponentTable>().m_masters.insert_or_assign(
+        component.m_master, std::move(component));
+    }
     auto scope = node.m_states.find<OverrideScope>();
     if(!scope || scope->m_overrides == Overrides()) {
       return;
     }
-    auto& import = *node.m_import;
     if(node.m_role == XdNodeRole::STATE) {
       auto& states = import.get_states().get<ComponentTable>().m_states;
       if(auto entry = states.find(node.m_header.m_id); entry != states.end()) {
@@ -300,7 +330,7 @@ void Rellu::add_component_importer(XdImporter& importer) {
       }
       return;
     }
-    auto current = import.get_document().find(node.m_header.m_id);
+    auto current = import.find_node(node.m_header.m_id);
     if(!current || !current->get_group() ||
         !current->get_group()->m_component_instance) {
       return;
@@ -308,7 +338,6 @@ void Rellu::add_component_importer(XdImporter& importer) {
     auto group = *current->get_group();
     merge(std::move(scope->m_overrides),
       group.m_component_instance->m_overrides);
-    import.get_transaction().replace_payload(
-      node.m_header.m_id, std::move(group));
+    import.replace_payload(node.m_header.m_id, std::move(group));
   });
 }

@@ -238,6 +238,10 @@ this table.
   Large payloads (paths, text content, images) are held by
   `std::shared_ptr<const T>`, so replacing a record never deep-copies them and
   undo keeps the old value cheaply.
+- Records stay small whatever their kind: the artboard, shape and text
+  payloads are each held in a `Box` and a group's roles in an `OptionalBox`
+  (Box.hpp), single pointers to a value shared by copies and copied only when
+  modified while shared. A plain group or a reference is held inline.
 - Reads go through a `const` API: lookup by id, parent, children, and typed
   accessors for each payload. Readers never see a partially applied
   transaction.
@@ -292,7 +296,9 @@ The XD importer (in `Io`) builds a document from an `.xd` package:
    and the image resources.
 2. Create nodes depth-first, preserving z order and ids, and translate each
    XD field into the model as described above. `syncRef` becomes
-   `Reference`.
+   `Reference`. The component masters, then the top-level canvas nodes, are
+   translated in parallel and inserted in order, with the same result as
+   importing them one after another.
 3. Report every JSON key it does not recognise, with counts. That report is
    the import coverage metric and must reach zero for the golden documents.
 4. Keep everything else as opaque data, so that writing an unchanged

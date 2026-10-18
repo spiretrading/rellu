@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -18,14 +19,18 @@ namespace {
   };
 
   struct PathCache {
+    std::mutex m_mutex;
     std::unordered_map<QString, Shared<Path>, StringHash> m_paths;
   };
 
   std::optional<Shared<Path>> parse_path(const QString& data,
       XdImport& import) {
-    auto& paths = import.get_states().get<PathCache>().m_paths;
-    if(auto entry = paths.find(data); entry != paths.end()) {
-      return entry->second;
+    auto& cache = import.get_states().get<PathCache>();
+    {
+      auto lock = std::lock_guard(cache.m_mutex);
+      if(auto entry = cache.m_paths.find(data); entry != cache.m_paths.end()) {
+        return entry->second;
+      }
     }
     auto bytes = data.toLatin1();
     auto path = parse_svg_path(
@@ -34,9 +39,8 @@ namespace {
     if(!path) {
       return std::nullopt;
     }
-    auto shared = Shared(std::move(*path));
-    paths.emplace(data, shared);
-    return shared;
+    auto lock = std::lock_guard(cache.m_mutex);
+    return cache.m_paths.emplace(data, Shared(std::move(*path))).first->second;
   }
 
   std::optional<ShapeGeometry> read_rectangle(XdObject& shape) {
@@ -200,6 +204,9 @@ std::optional<ShapeGeometry> Rellu::read_geometry(
 }
 
 void Rellu::add_shape_importer(XdImporter& importer) {
+  importer.add_document_importer(XdPhase::RESOURCES, [] (XdImport& import) {
+    import.get_states().get<PathCache>();
+  });
   importer.set_node_importer("shape"_L1, [] (XdNode& node) {
     auto shape = node.m_json->get_object("shape"_L1);
     if(!shape) {

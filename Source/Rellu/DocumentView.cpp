@@ -2,9 +2,13 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <utility>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPixmap>
 #include <QResizeEvent>
 #include <QWheelEvent>
 #include "Rellu/Rendering/StripRasterizer.hpp"
@@ -18,24 +22,91 @@ namespace {
   constexpr auto FIT_MARGIN = 24.0;
   constexpr auto WHEEL_ZOOM = 1.0015;
   constexpr auto SCENE_BUDGET = std::chrono::milliseconds(8);
+  constexpr auto CURSOR_SIZE = 24;
+  constexpr auto PREPARATION_BUDGET = std::chrono::milliseconds(8);
 
   double get_level(double zoom) {
     return std::exp2(std::ceil(std::log2(zoom)));
   }
+
+  PointerEvent to_pointer_event(const QMouseEvent& event) {
+    return PointerEvent(Point(event.position().x(), event.position().y()),
+      event.button(), event.buttons(), event.modifiers());
+  }
+
+  KeyEvent to_key_event(const QKeyEvent& event) {
+    return KeyEvent(event.key(), event.modifiers(), event.isAutoRepeat());
+  }
+
+  Qt::CursorShape get_resize_shape(double angle) {
+    auto eighth = std::numbers::pi / 4;
+    auto index = static_cast<int>(std::lround(angle / eighth)) % 4;
+    if(index < 0) {
+      index += 4;
+    }
+    if(index == 0) {
+      return Qt::SizeHorCursor;
+    } else if(index == 1) {
+      return Qt::SizeFDiagCursor;
+    } else if(index == 2) {
+      return Qt::SizeVerCursor;
+    }
+    return Qt::SizeBDiagCursor;
+  }
+
+  QCursor make_rotate_cursor() {
+    auto pixmap = QPixmap(CURSOR_SIZE, CURSOR_SIZE);
+    pixmap.fill(Qt::transparent);
+    auto painter = QPainter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    auto arc = QPainterPath();
+    auto bounds = QRectF(5, 5, 14, 14);
+    arc.arcMoveTo(bounds, 200);
+    arc.arcTo(bounds, 200, 230);
+    auto draw = [&] (const QColor& color, double width) {
+      painter.setPen(QPen(color, width, Qt::SolidLine, Qt::RoundCap,
+        Qt::RoundJoin));
+      painter.drawPath(arc);
+      auto start = arc.pointAtPercent(0);
+      auto end = arc.pointAtPercent(1);
+      painter.drawLine(start, start + QPointF(-2.5, -3));
+      painter.drawLine(start, start + QPointF(3, -2));
+      painter.drawLine(end, end + QPointF(3, 1.5));
+      painter.drawLine(end, end + QPointF(1, 3.5));
+    };
+    draw(Qt::white, 3.5);
+    draw(Qt::black, 1.5);
+    painter.end();
+    return QCursor(pixmap, CURSOR_SIZE / 2, CURSOR_SIZE / 2);
+  }
 }
 
 DocumentView::DocumentView(QWidget* parent)
-  : Canvas(parent),
-    m_zoom(1),
-    m_offset(0, 0),
-    m_level(1),
-    m_is_fitting(false),
-    m_is_space_pressed(false),
-    m_is_panning(false) {
+    : Canvas(parent),
+      m_shared_editor(nullptr),
+      m_editor(nullptr),
+      m_zoom(1),
+      m_offset(0, 0),
+      m_level(1),
+      m_is_fitting(false),
+      m_is_space_pressed(false),
+      m_is_panning(false) {
   setFocusPolicy(Qt::StrongFocus);
+  setMouseTracking(true);
+  m_preparation.setInterval(0);
+  QObject::connect(&m_preparation, &QTimer::timeout, this, [this] {
+    if(!m_tools || m_tools->get_hit_tester().prepare(PREPARATION_BUDGET)) {
+      m_preparation.stop();
+    }
+  });
 }
 
-DocumentView::~DocumentView() = default;
+DocumentView::~DocumentView() {
+  m_preparation.stop();
+  m_tool_subscription.release();
+  m_tools.reset();
+  m_own_editor.reset();
+}
 
 const Document* DocumentView::get_document() const {
   return m_document.get();
@@ -43,6 +114,11 @@ const Document* DocumentView::get_document() const {
 
 void DocumentView::set_document(std::unique_ptr<Document> document) {
   get_renderer().set_draw_list(nullptr);
+  get_renderer().set_overlay(CanvasOverlay());
+  m_tool_subscription.release();
+  m_tools.reset();
+  m_own_editor.reset();
+  m_editor = nullptr;
   m_subscription.release();
   m_scene.reset();
   m_document = std::move(document);
@@ -55,7 +131,22 @@ void DocumentView::set_document(std::unique_ptr<Document> document) {
       update();
     });
   }
+  attach_tools();
   fit();
+}
+
+Editor* DocumentView::get_editor() const {
+  return m_editor;
+}
+
+void DocumentView::set_editor(Editor* editor) {
+  m_shared_editor = editor;
+  attach_tools();
+  update_view();
+}
+
+ToolManager* DocumentView::get_tools() const {
+  return m_tools.get();
 }
 
 void DocumentView::fit() {
@@ -91,6 +182,9 @@ void DocumentView::render(QRhiCommandBuffer* buffer) {
       update();
     }
   }
+  if(m_tools) {
+    get_renderer().set_overlay(m_tools->draw());
+  }
   Canvas::render(buffer);
 }
 
@@ -125,6 +219,11 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
     event->accept();
     return;
   }
+  if(forward(event, [&] (const auto& pointer) {
+      m_tools->press(pointer);
+    })) {
+    return;
+  }
   Canvas::mousePressEvent(event);
 }
 
@@ -134,6 +233,11 @@ void DocumentView::mouseMoveEvent(QMouseEvent* event) {
     pan(position - m_position);
     m_position = position;
     event->accept();
+    return;
+  }
+  if(forward(event, [&] (const auto& pointer) {
+      m_tools->move(pointer);
+    })) {
     return;
   }
   Canvas::mouseMoveEvent(event);
@@ -147,7 +251,26 @@ void DocumentView::mouseReleaseEvent(QMouseEvent* event) {
     event->accept();
     return;
   }
+  if(forward(event, [&] (const auto& pointer) {
+      m_tools->release(pointer);
+    })) {
+    return;
+  }
   Canvas::mouseReleaseEvent(event);
+}
+
+void DocumentView::mouseDoubleClickEvent(QMouseEvent* event) {
+  if(event->button() == Qt::MiddleButton ||
+      (event->button() == Qt::LeftButton && m_is_space_pressed)) {
+    mousePressEvent(event);
+    return;
+  }
+  if(forward(event, [&] (const auto& pointer) {
+      m_tools->double_click(pointer);
+    })) {
+    return;
+  }
+  Canvas::mouseDoubleClickEvent(event);
 }
 
 void DocumentView::wheelEvent(QWheelEvent* event) {
@@ -179,6 +302,12 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
     event->accept();
     return;
   }
+  if(m_tools && m_tools->key_press(to_key_event(*event))) {
+    update_cursor();
+    update();
+    event->accept();
+    return;
+  }
   Canvas::keyPressEvent(event);
 }
 
@@ -191,13 +320,29 @@ void DocumentView::keyReleaseEvent(QKeyEvent* event) {
     event->accept();
     return;
   }
+  if(m_tools && m_tools->key_release(to_key_event(*event))) {
+    update_cursor();
+    update();
+    event->accept();
+    return;
+  }
   Canvas::keyReleaseEvent(event);
+}
+
+void DocumentView::leaveEvent(QEvent* event) {
+  if(m_tools && !m_tools->is_busy()) {
+    m_tools->leave();
+    update_cursor();
+  }
+  Canvas::leaveEvent(event);
 }
 
 void DocumentView::resizeEvent(QResizeEvent* event) {
   Canvas::resizeEvent(event);
   if(m_is_fitting) {
     fit();
+  } else {
+    update_view();
   }
 }
 
@@ -226,17 +371,86 @@ void DocumentView::update_view() {
       m_scene->set_tolerance(StripRasterizer::TOLERANCE / m_level);
     }
   }
-  get_renderer().set_view(
-    make_translation(m_offset.m_x, m_offset.m_y) * make_scale(m_zoom, m_zoom));
+  auto view =
+    make_translation(m_offset.m_x, m_offset.m_y) * make_scale(m_zoom, m_zoom);
+  get_renderer().set_view(view);
+  if(m_tools) {
+    m_tools->set_view(view, devicePixelRatio(), Size(width(), height()));
+  }
   update();
 }
 
 void DocumentView::update_cursor() {
   if(m_is_panning) {
     setCursor(Qt::ClosedHandCursor);
+    return;
   } else if(m_is_space_pressed) {
     setCursor(Qt::OpenHandCursor);
+    return;
+  }
+  auto cursor = ToolCursor();
+  if(m_tools) {
+    cursor = m_tools->get_cursor();
+  }
+  if(cursor.m_kind == CursorKind::RESIZE) {
+    setCursor(get_resize_shape(cursor.m_angle));
+  } else if(cursor.m_kind == CursorKind::ROTATE) {
+    if(!m_rotate_cursor) {
+      m_rotate_cursor = make_rotate_cursor();
+    }
+    setCursor(*m_rotate_cursor);
   } else {
     unsetCursor();
   }
+}
+
+void DocumentView::attach_tools() {
+  auto editor = static_cast<Editor*>(nullptr);
+  if(m_document) {
+    if(m_shared_editor) {
+      if(&m_shared_editor->get_document() == m_document.get()) {
+        editor = m_shared_editor;
+      }
+    } else {
+      if(!m_own_editor) {
+        m_own_editor = std::make_unique<Editor>(*m_document);
+      }
+      editor = m_own_editor.get();
+    }
+  }
+  if(editor == m_editor && (m_tools || !editor)) {
+    return;
+  }
+  m_tool_subscription.release();
+  m_tools.reset();
+  m_editor = editor;
+  get_renderer().set_overlay(CanvasOverlay());
+  if(editor != m_own_editor.get()) {
+    m_own_editor.reset();
+  }
+  update_cursor();
+  if(!editor) {
+    return;
+  }
+  m_tools = std::make_unique<ToolManager>(*editor);
+  m_tool_subscription = m_tools->subscribe([this] {
+    update();
+  });
+  m_tools->set_view(get_renderer().get_view(), devicePixelRatio(),
+    Size(width(), height()));
+  m_preparation.start();
+}
+
+bool DocumentView::forward(QMouseEvent* event, auto handler) {
+  if(!m_tools || m_is_space_pressed) {
+    return false;
+  }
+  if(event->type() != QEvent::MouseMove &&
+      event->button() != Qt::LeftButton) {
+    return false;
+  }
+  handler(to_pointer_event(*event));
+  update_cursor();
+  event->accept();
+  return true;
 }

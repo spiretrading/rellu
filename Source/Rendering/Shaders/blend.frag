@@ -54,7 +54,7 @@ void load_paint() {
   if(!is_exact() || v_index < -0.5) {
     return;
   }
-  float base = 4.0 * floor(v_index + 0.5);
+  float base = 5.0 * floor(v_index + 0.5);
   vec4 first = fetch(base);
   vec4 second = fetch(base + 1.0);
   vec4 third = fetch(base + 2.0);
@@ -200,6 +200,12 @@ void main() {
   load_paint();
   vec4 s = textureGrad(source, paint.xy, gradient.xy, gradient.zw);
   vec4 b = textureLod(backdrop, extra.xy, 0.0);
+  if(paint.w > 15.5) {
+    vec4 shadow = v_color * s.a * b.a;
+    fragment_color =
+      mix(b, shadow + b * (1.0 - shadow.a), get_coverage());
+    return;
+  }
   vec3 cs = s.a > 0.0 ? s.rgb / s.a : vec3(0.0);
   vec3 cb = b.a > 0.0 ? b.rgb / b.a : vec3(0.0);
   vec3 mixed = clamp(blend(cb, cs, paint.w), 0.0, 1.0);

@@ -25,6 +25,78 @@ namespace {
       sum + std::sqrt(std::max(0.0, sum * sum - determinant * determinant)));
   }
 
+  double get_scale(
+      const Matrix& matrix, const std::optional<Projection>& projection) {
+    if(!projection) {
+      return get_scale(matrix);
+    }
+    return get_scale(
+      linearize(*projection, matrix.map(Point(0, 0))) * matrix);
+  }
+
+  Point map_vector(const Matrix& matrix, Point vector) {
+    return Point(matrix.m_a * vector.m_x + matrix.m_c * vector.m_y,
+      matrix.m_b * vector.m_x + matrix.m_d * vector.m_y);
+  }
+
+  std::shared_ptr<const Path> project(const Path& path,
+      const Matrix& transform, const Projection& projection) {
+    return std::make_shared<const Path>(
+      Rellu::transform(path, projection * transform));
+  }
+
+  void project(Shadow& shadow, const Matrix& jacobian, double scale) {
+    shadow.m_offset = map_vector(jacobian, shadow.m_offset);
+    shadow.m_radius *= scale;
+  }
+
+  void project(
+      DrawList& list, std::size_t first, const Projection& projection) {
+    auto bounds = std::optional<Rect>();
+    for(auto i = first; i != list.size(); ++i) {
+      if(auto fill = std::get_if<FillCommand>(&list[i])) {
+        auto region = get_bounds(*fill->m_path, fill->m_transform);
+        if(bounds) {
+          bounds = unite(*bounds, region);
+        } else {
+          bounds = region;
+        }
+      }
+    }
+    auto center = bounds ? bounds->get_center() : Point(0, 0);
+    auto jacobian = linearize(projection, center);
+    auto scale = std::sqrt(std::abs(jacobian.get_determinant()));
+    for(auto i = first; i != list.size(); ++i) {
+      if(auto fill = std::get_if<FillCommand>(&list[i])) {
+        auto mapping = projection * fill->m_transform;
+        fill->m_path = project(*fill->m_path, fill->m_transform, projection);
+        if(auto gradient = std::get_if<GradientPaint>(&fill->m_paint)) {
+          gradient->m_projection = mapping;
+        } else if(auto image = std::get_if<ImagePaint>(&fill->m_paint)) {
+          image->m_projection = mapping;
+        }
+        fill->m_transform = Matrix();
+        fill->m_stroke = std::nullopt;
+      } else if(auto layer = std::get_if<BeginLayerCommand>(&list[i])) {
+        if(auto& mask = layer->m_mask) {
+          mask = LayerMask(
+            project(*mask->m_path, mask->m_transform, projection), Matrix());
+        }
+        for(auto& shadow : layer->m_inner_shadows) {
+          project(shadow, jacobian, scale);
+        }
+        for(auto& shadow : layer->m_drop_shadows) {
+          project(shadow, jacobian, scale);
+        }
+        layer->m_blur *= scale;
+      } else if(auto blur = std::get_if<BackdropBlurCommand>(&list[i])) {
+        blur->m_path = project(*blur->m_path, blur->m_transform, projection);
+        blur->m_transform = Matrix();
+        blur->m_radius *= scale;
+      }
+    }
+  }
+
   SolidPaint make_paint(Color color, double opacity) {
     color.m_alpha *= opacity;
     return SolidPaint(color);
@@ -241,8 +313,18 @@ std::optional<SceneBuilder::Entry> SceneBuilder::enter(
   if(!header.m_is_visible || !(header.m_opacity > 0)) {
     return std::nullopt;
   }
-  auto placement =
-    Placement(parent.m_transform * transform, parent.m_opacity, parent.m_clip);
+  auto placement = Placement(parent.m_transform * transform,
+    parent.m_opacity, parent.m_clip, parent.m_projection);
+  if(!node.get_reference() && header.m_transform_3d) {
+    auto projection = to_projection(*header.m_transform_3d, transform);
+    if(parent.m_projection) {
+      placement.m_projection =
+        *parent.m_projection * parent.m_transform * projection;
+    } else {
+      placement.m_projection = parent.m_transform * projection;
+    }
+    placement.m_transform = Matrix();
+  }
   if(auto artboard = source->get_artboard()) {
     auto& frame = artboard->m_frame;
     placement.m_transform =
@@ -253,8 +335,8 @@ std::optional<SceneBuilder::Entry> SceneBuilder::enter(
     }
     placement.m_clip = clip;
   } else if(auto group = source->get_group()) {
-    if(auto viewport = get_viewport(*group);
-        viewport && is_axis_aligned(placement.m_transform)) {
+    if(auto viewport = get_viewport(*group); viewport &&
+        !placement.m_projection && is_axis_aligned(placement.m_transform)) {
       clip_to(placement.m_clip, placement.m_transform.map(*viewport));
     }
   }
@@ -298,7 +380,11 @@ void SceneBuilder::add_node(const NodeId& id, const Placement& parent,
   auto first = list.size();
   auto mask = std::optional<LayerMask>();
   if(auto group = source.get_group(); group && group->m_mask) {
-    mask = get_mask(source, placement.m_transform, placement.m_clip);
+    if(placement.m_projection) {
+      mask = get_mask(*group->m_mask, placement);
+    } else {
+      mask = get_mask(source, placement.m_transform, placement.m_clip);
+    }
   }
   if(source.get_artboard()) {
     add_artboard(source, placement, list);
@@ -307,14 +393,21 @@ void SceneBuilder::add_node(const NodeId& id, const Placement& parent,
   } else if(source.get_text()) {
     add_text(source, placement, list);
   }
+  if(placement.m_projection && (source.get_shape() || source.get_text())) {
+    project(list, first, *placement.m_projection);
+  }
   if(!source.get_shape() && !source.get_text()) {
     for(auto& child : *entry->m_children) {
       add_node(child, placement, depth + 1, list);
     }
   }
   if(auto group = source.get_group()) {
-    if(auto viewport = get_viewport(*group);
-        viewport && !is_axis_aligned(placement.m_transform)) {
+    if(auto viewport = get_viewport(*group); viewport &&
+        placement.m_projection) {
+      add_composite(list, first, NodeHeader(), LayerMask(
+        project(make_rectangle(*viewport), placement.m_transform,
+          *placement.m_projection), Matrix()), placement.m_clip);
+    } else if(viewport && !is_axis_aligned(placement.m_transform)) {
       add_composite(list, first, NodeHeader(), LayerMask(
         std::make_shared<const Path>(make_rectangle(*viewport)),
         placement.m_transform), placement.m_clip);
@@ -403,6 +496,21 @@ std::optional<LayerMask> SceneBuilder::get_mask(const Node& node,
   return outline.m_mask;
 }
 
+std::optional<LayerMask> SceneBuilder::get_mask(
+    const Mask& mask, const Placement& placement) {
+  auto clip = std::optional<Rect>();
+  auto local = make_mask(mask, placement.m_transform, m_tolerance, clip);
+  if(local) {
+    return LayerMask(project(*local->m_path, local->m_transform,
+      *placement.m_projection), Matrix());
+  } else if(clip) {
+    return LayerMask(
+      project(make_rectangle(*clip), Matrix(), *placement.m_projection),
+      Matrix());
+  }
+  return std::nullopt;
+}
+
 void SceneBuilder::add_artboard(
     const Node& node, const Placement& placement, DrawList& list) {
   auto& artboard = *node.get_artboard();
@@ -423,7 +531,8 @@ void SceneBuilder::add_shape(
     const Node& node, const Placement& placement, DrawList& list) {
   auto& shape = *node.get_shape();
   auto& style = shape.m_style;
-  auto& outline = get_outline(node, get_scale(placement.m_transform));
+  auto& outline = get_outline(
+    node, get_scale(placement.m_transform, placement.m_projection));
   auto fill = std::optional<FillCommand>();
   if(!std::holds_alternative<LineShape>(shape.m_geometry)) {
     if(auto paint = convert(style.m_fill, *outline.m_path)) {

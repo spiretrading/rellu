@@ -12,6 +12,7 @@ layout(location = 3) out vec4 v_extra;
 layout(location = 4) out vec4 v_gradient;
 layout(location = 5) out vec2 v_position;
 layout(location = 6) out float v_index;
+layout(location = 7) out float v_divisor;
 
 layout(std140, binding = 0) uniform Uniforms {
   mat4 projection;
@@ -47,11 +48,13 @@ void main() {
   v_paint = vec4(0.0);
   v_extra = vec4(0.0);
   v_gradient = vec4(0.0);
+  v_divisor = 1.0;
   if(origin.z >= 0.0) {
-    float base = 4.0 * origin.z;
+    float base = 5.0 * origin.z;
     vec4 first = fetch(base);
     vec4 second = fetch(base + 1.0);
     vec3 point = vec3(position, 1.0);
+    v_divisor = dot(fetch(base + 4.0).xyz, point) + 1.0;
     v_paint = vec4(dot(first.xyz, point), dot(second.xyz, point), first.w,
       second.w);
     if(first.w > 2.5) {

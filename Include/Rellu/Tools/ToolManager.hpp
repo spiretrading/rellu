@@ -1,0 +1,110 @@
+#ifndef RELLU_TOOLS_TOOL_MANAGER_HPP
+#define RELLU_TOOLS_TOOL_MANAGER_HPP
+#include <functional>
+#include <memory>
+#include "Rellu/Commands/Signal.hpp"
+#include "Rellu/Editor/Editor.hpp"
+#include "Rellu/Geometry/Matrix.hpp"
+#include "Rellu/Geometry/Size.hpp"
+#include "Rellu/Model/Subscription.hpp"
+#include "Rellu/Rendering/CanvasOverlay.hpp"
+#include "Rellu/Tools/ArtboardTitles.hpp"
+#include "Rellu/Tools/HitTester.hpp"
+#include "Rellu/Tools/Tool.hpp"
+#include "Rellu/Tools/ToolContext.hpp"
+
+namespace Rellu {
+
+  /**
+   * Routes the canvas's pointer and key events to the active tool and
+   * draws the overlay: the artboard titles, the active tool's state and the
+   * snap guides. Modifier keys pressed or released during a gesture replay
+   * the most recent pointer move, so that constraints apply at once.
+   */
+  class ToolManager {
+    public:
+
+      /**
+       * Constructs a ToolManager whose active tool is a SelectTool.
+       * @param editor The editing state, which must outlive this
+       *        ToolManager.
+       */
+      explicit ToolManager(Editor& editor);
+
+      ~ToolManager();
+
+      /** Returns the context tools work in. */
+      ToolContext& get_context();
+
+      /** Returns the context tools work in. */
+      const ToolContext& get_context() const;
+
+      /** Returns the hit tester. */
+      HitTester& get_hit_tester();
+
+      /** Returns the active tool. */
+      Tool& get_tool();
+
+      /**
+       * Makes a tool active, cancelling the gesture of the one before.
+       * @param tool The tool to make active.
+       */
+      void set_tool(std::unique_ptr<Tool> tool);
+
+      /**
+       * Sets the view of the canvas.
+       * @param view The invertible transform from document space to logical
+       *        units.
+       * @param scale The number of pixels per logical unit.
+       * @param size The size of the view in logical units.
+       */
+      void set_view(const Matrix& view, double scale, Size size);
+
+      void press(const PointerEvent& event);
+      void move(const PointerEvent& event);
+      void release(const PointerEvent& event);
+      void double_click(const PointerEvent& event);
+      void leave();
+      bool key_press(const KeyEvent& event);
+      bool key_release(const KeyEvent& event);
+
+      /** Abandons the active tool's gesture. */
+      void cancel();
+
+      /** Returns <code>true</code> iff a gesture is in progress. */
+      bool is_busy() const;
+
+      /** Returns the pointer to show. */
+      ToolCursor get_cursor() const;
+
+      /** Draws the overlay. */
+      CanvasOverlay draw();
+
+      /**
+       * Subscribes an observer to every change that may change the overlay
+       * or the pointer.
+       * @param observer The function called after each change.
+       * @return The handle ending the subscription when released.
+       */
+      [[nodiscard]] Subscription subscribe(std::function<void ()> observer);
+
+    private:
+      Editor* m_editor;
+      HitTester m_hit_tester;
+      ArtboardTitles m_titles;
+      ToolContext m_context;
+      std::unique_ptr<Tool> m_tool;
+      PointerEvent m_last_move;
+      bool m_has_move;
+      Signal m_signal;
+      Subscription m_document_subscription;
+      Subscription m_selection_subscription;
+      Subscription m_context_subscription;
+
+      ToolManager(const ToolManager&) = delete;
+      ToolManager& operator =(const ToolManager&) = delete;
+      bool replay(const KeyEvent& event);
+  };
+}
+
+#endif

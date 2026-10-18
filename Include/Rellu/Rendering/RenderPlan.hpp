@@ -21,8 +21,11 @@ namespace Rellu {
   /** The width in texels of a RenderPlan's paint table. */
   inline constexpr auto PAINT_TABLE_WIDTH = 1024;
 
-  /** The number of paint table texels describing each paint. */
-  inline constexpr auto PAINT_TEXELS = 4;
+  /**
+   * The number of paint table texels describing each paint, the last
+   * holding the divisor of a projective paint.
+   */
+  inline constexpr auto PAINT_TEXELS = 5;
 
   /** Lists the kinds of paint a paint table entry describes. */
   enum class PaintKind : unsigned char {
@@ -55,12 +58,10 @@ namespace Rellu {
     /** Composites strips with premultiplied source-over blending. */
     OVER,
 
-    /** Composites strips onto the target's content, keeping its alpha. */
-    ATOP,
-
     /**
      * Replaces the target under strips with the blend of a texture over a
-     * backdrop texture.
+     * backdrop texture, or with a shadow texture masked by the backdrop's
+     * alpha over the backdrop.
      */
     BLEND,
 

@@ -1,6 +1,8 @@
 #include <chrono>
+#include <exception>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -183,15 +185,29 @@ namespace {
         data.m_image_names.emplace_back(id, entry);
       }
     }
+    auto names = std::vector<std::string_view>();
     for(auto& entry : data.m_entries) {
-      if(generated_entries.contains(entry)) {
-        continue;
+      if(!generated_entries.contains(entry)) {
+        names.push_back(entry);
       }
-      auto bytes = package.read(entry);
-      if(entry == "mimetype" && to_bytes(bytes) == MIMETYPE) {
-        continue;
+    }
+    auto contents = std::vector<std::string>(names.size());
+    auto errors = std::vector<std::exception_ptr>(names.size());
+    parallel_for(names.size(), [&] (std::size_t index) {
+      try {
+        contents[index] = to_bytes(package.read(names[index]));
+      } catch(...) {
+        errors[index] = std::current_exception();
       }
-      data.m_parts.emplace_back(entry, to_bytes(bytes));
+    });
+    for(auto i = std::size_t(0); i != names.size(); ++i) {
+      if(errors[i]) {
+        std::rethrow_exception(errors[i]);
+      }
+      if(names[i] != "mimetype" || contents[i] != MIMETYPE) {
+        data.m_parts.emplace_back(
+          std::string(names[i]), std::move(contents[i]));
+      }
     }
     auto bytes = encode_package_data(data);
     report.m_package_size = bytes.size();

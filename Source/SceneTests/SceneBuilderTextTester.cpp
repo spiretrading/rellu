@@ -90,10 +90,14 @@ TEST_SUITE("SceneBuilder") {
     auto builder = SceneBuilder(document, TOLERANCE);
     builder.set_device_transform(make_scale(20, 20));
     auto list = builder.build();
-    REQUIRE(list.size() == 1);
-    auto& fill = get_fill(list, 0);
-    REQUIRE(fill.m_transform == make_translation(5, 30));
-    REQUIRE(get_color(fill) == make_color(255, 0, 0));
+    REQUIRE(list.size() == 4);
+    for(auto i = std::size_t(0); i != list.size(); ++i) {
+      auto& fill = get_fill(list, i);
+      REQUIRE(fill.m_transform == make_translation(5, 30));
+      REQUIRE(get_color(fill) == make_color(255, 0, 0));
+    }
+    REQUIRE(get_bounds(*get_fill(list, 0).m_path).get_right() <
+      get_bounds(*get_fill(list, 3).m_path).get_left());
   }
 
   TEST_CASE("single_precision_text") {
@@ -148,7 +152,7 @@ TEST_SUITE("SceneBuilder") {
     REQUIRE(std::holds_alternative<EndLayerCommand>(list[4]));
   }
 
-  TEST_CASE("text_clip") {
+  TEST_CASE("area_text") {
     auto document = Document();
     auto transaction = Transaction(document);
     auto text = make_text(make_color(0, 0, 0));
@@ -158,6 +162,6 @@ TEST_SUITE("SceneBuilder") {
     auto builder = SceneBuilder(document, TOLERANCE);
     auto list = builder.build();
     REQUIRE(list.size() == 1);
-    REQUIRE(get_fill(list, 0).m_clip == Rect(5, 6, 20, 10));
+    REQUIRE(!get_fill(list, 0).m_clip);
   }
 }

@@ -7,6 +7,8 @@
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Rendering/DrawList.hpp"
 #include "Rellu/Rendering/Drawing.hpp"
+#include "Rellu/Rendering/CanvasOverlay.hpp"
+#include "Rellu/Rendering/OverlayRenderer.hpp"
 #include "Rellu/Rendering/PathRenderer.hpp"
 #include "Rellu/Rendering/Renderer.hpp"
 #include "Rellu/Rendering/TileCache.hpp"
@@ -19,7 +21,8 @@ namespace Rellu {
   /**
    * Renders the contents of the canvas: either a draw list, rendered whole
    * every time the frame changes, or a drawing, rendered through a
-   * TileCache so that a frame renders only what it has not drawn before.
+   * TileCache so that a frame renders only what it has not drawn before,
+   * with an overlay drawn over it in screen space.
    */
   class CanvasRenderer : public Renderer {
     public:
@@ -84,6 +87,16 @@ namespace Rellu {
        */
       void set_background(const QColor& background);
 
+      /** Returns the overlay drawn over the frame. */
+      const CanvasOverlay& get_overlay() const;
+
+      /**
+       * Sets the overlay drawn over the frame, which never redraws the
+       * drawing's tiles.
+       * @param overlay The overlay to draw.
+       */
+      void set_overlay(CanvasOverlay overlay);
+
       void initialize(QRhi& rhi, QRhiRenderPassDescriptor& descriptor,
         int sample_count) override;
       void release() override;
@@ -110,6 +123,8 @@ namespace Rellu {
     private:
       PathRenderer m_paths;
       TileCache m_tiles;
+      OverlayRenderer m_overlays;
+      CanvasOverlay m_overlay;
       std::shared_ptr<const DrawList> m_list;
       std::shared_ptr<const Drawing> m_drawing;
       std::unique_ptr<Drawing> m_list_drawing;

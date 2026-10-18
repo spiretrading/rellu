@@ -1,3 +1,4 @@
+#include <array>
 #include <cmath>
 #include <memory>
 #include <utility>
@@ -108,6 +109,31 @@ TEST_SUITE("RenderPlan") {
     empty.push_back(BeginLayerCommand());
     empty.push_back(EndLayerCommand());
     REQUIRE(plan(empty, QSize(16, 16)).m_steps.size() == 1);
+  }
+
+  TEST_CASE("projective_gradient") {
+    auto projection = Projection(1.2, 0.1, -0.2, 0.9, 3, 4, 0.01, 0.02, 1);
+    auto paint = GradientPaint(LinearGradient(Point(0, 0), Point(10, 0)),
+      {GradientStop(0, make_color(255, 0, 0)),
+        GradientStop(1, make_color(0, 0, 255))}, make_scale(2, 1));
+    paint.m_projection = projection;
+    auto list = DrawList();
+    list.push_back(FillCommand(share(make_rectangle(Rect(0, 0, 32, 32))),
+      Matrix(), paint));
+    auto result = plan(list, QSize(32, 32));
+    REQUIRE(result.m_paints.size() == PAINT_TEXELS);
+    auto& first = result.m_paints[0];
+    auto& divisor = result.m_paints[4];
+    auto inverse = *invert(projection * make_scale(2, 1));
+    for(auto point : {Point(0.5, 0.5), Point(20.5, 7.5), Point(9.5, 30.5)}) {
+      auto offset = (first[0] * point.m_x + first[1] * point.m_y + first[2]) /
+        (divisor[0] * point.m_x + divisor[1] * point.m_y + divisor[2] + 1);
+      REQUIRE(std::abs(offset - inverse.map(point).m_x / 10) < 1e-5);
+    }
+    auto affine = plan(DrawList({FillCommand(share(make_rectangle(
+      Rect(0, 0, 4, 4))), Matrix(), GradientPaint(LinearGradient(), {
+        GradientStop()}, Matrix()))}), QSize(8, 8));
+    REQUIRE(affine.m_paints[4] == std::array<float, 4>({0, 0, 0, 0}));
   }
 
   TEST_CASE("gradient_evaluation") {

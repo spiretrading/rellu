@@ -395,6 +395,7 @@ namespace {
   Result run(const std::filesystem::path& source,
       const std::filesystem::path& temporary, bool is_baseline,
       Usages& preserved) {
+    std::filesystem::create_directories(temporary.parent_path());
     auto result = Result();
     result.m_original_size =
       static_cast<std::size_t>(std::filesystem::file_size(source));
@@ -448,11 +449,15 @@ int main(int argc, char** argv) {
   auto arguments = std::vector<std::string>(argv + 1, argv + argc);
   auto is_baseline = false;
   auto is_kept = false;
+  auto output = std::filesystem::path();
   while(!arguments.empty() && arguments.front().starts_with("--")) {
     if(arguments.front() == "--baseline") {
       is_baseline = true;
     } else if(arguments.front() == "--keep") {
       is_kept = true;
+    } else if(arguments.front() == "--output" && arguments.size() >= 2) {
+      arguments.erase(arguments.begin());
+      output = arguments.front();
     } else {
       break;
     }
@@ -486,7 +491,9 @@ int main(int argc, char** argv) {
   for(auto& document_path : documents) {
     auto result = Result();
     try {
-      result = run(corpus / document_path, temporary, is_baseline, preserved);
+      result = run(corpus / document_path,
+        output.empty() ? temporary : output / document_path, is_baseline,
+        preserved);
     } catch(const std::exception& error) {
       result.m_error = error.what();
     }

@@ -8,6 +8,7 @@
 #include <utility>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <private/qjson_p.h>
 #include "Rellu/Io/XdPatch.hpp"
 
 using namespace Rellu;
@@ -36,6 +37,8 @@ namespace {
   constexpr auto HAS_ADDS = std::uint64_t(2);
   constexpr auto HAS_REMOVES = std::uint64_t(4);
   constexpr auto HAS_CHILDREN = std::uint64_t(8);
+
+  const auto ELEMENTS = std::string_view("[]");
 
   bool is_guarded_child(std::string_view key) {
     return key == "paragraphs";
@@ -109,7 +112,26 @@ namespace {
     return false;
   }
 
-  bool is_equal_scalar(const QJsonValue& original, const XdValue& generated) {
+  bool is_equal_string(const QJsonValue& original, std::string_view text) {
+    return original.toString() ==
+      QUtf8StringView(text.data(), static_cast<qsizetype>(text.size()));
+  }
+
+  bool is_equal_string(QJsonValueConstRef original, std::string_view text) {
+    auto& element = QJsonPrivate::Value::elementHelper(original);
+    auto data = QJsonPrivate::Value::container(original)->byteData(element);
+    if(!data) {
+      return text.empty();
+    } else if(element.flags & QtCbor::Element::StringIsUtf16) {
+      return data->asStringView() ==
+        QUtf8StringView(text.data(), static_cast<qsizetype>(text.size()));
+    }
+    return std::string_view(
+      data->byte(), static_cast<std::size_t>(data->len)) == text;
+  }
+
+  template<typename V>
+  bool is_equal_scalar(const V& original, const XdValue& generated) {
     switch(original.type()) {
       case QJsonValue::Null:
         return generated.get_type() == XdValue::Type::NUL;
@@ -120,14 +142,8 @@ namespace {
         return generated.get_type() == XdValue::Type::NUMBER &&
           generated.to_number() == original.toDouble();
       case QJsonValue::String:
-        {
-          if(generated.get_type() != XdValue::Type::STRING) {
-            return false;
-          }
-          auto text = generated.to_string();
-          return original.toString() == QUtf8StringView(
-            text.data(), static_cast<qsizetype>(text.size()));
-        }
+        return generated.get_type() == XdValue::Type::STRING &&
+          is_equal_string(original, generated.to_string());
       default:
         return false;
     }
@@ -139,14 +155,14 @@ namespace {
         XdPatchCounts* counts);
 
       bool has_cache() const;
-      bool diff(const QJsonValue& original, const XdValue& generated,
+      template<typename V>
+      bool diff(const V& original, const XdValue& generated,
         std::string& out);
 
     private:
       const XdStructure* m_structure;
       std::string_view m_root;
       XdPatchCounts* m_counts;
-      std::vector<std::string> m_path;
       std::vector<std::string_view> m_keys;
       bool m_has_cache;
 
@@ -185,6 +201,19 @@ namespace {
     return false;
   }
 
+  void append_segment(std::string_view key, std::string& path) {
+    if(key.data() == ELEMENTS.data()) {
+      path += ELEMENTS;
+      return;
+    }
+    path += '.';
+    if(is_identifier(key)) {
+      path += "<id>";
+    } else {
+      path += key;
+    }
+  }
+
   void Differ::count(std::string_view kind, std::string_view key) {
     if(!m_counts) {
       return;
@@ -192,16 +221,11 @@ namespace {
     auto path = std::string(kind);
     path += ' ';
     path += m_root;
-    for(auto& segment : m_path) {
-      path += segment;
+    for(auto segment : m_keys) {
+      append_segment(segment, path);
     }
     if(!key.empty()) {
-      path += '.';
-      if(is_identifier(key)) {
-        path += "<id>";
-      } else {
-        path += key;
-      }
+      append_segment(key, path);
     }
     ++(*m_counts)[path];
   }
@@ -213,7 +237,8 @@ namespace {
     encode_fixed(hash_value(generated), out);
   }
 
-  bool Differ::diff(const QJsonValue& original, const XdValue& generated,
+  template<typename V>
+  bool Differ::diff(const V& original, const XdValue& generated,
       std::string& out) {
     if(original.isObject() && generated.is_object()) {
       return diff_object(original.toObject(), generated, out);
@@ -222,7 +247,7 @@ namespace {
     } else if(is_equal_scalar(original, generated)) {
       return false;
     }
-    replace(original, generated, out);
+    replace(QJsonValue(original), generated, out);
     count("replace", "");
     return true;
   }
@@ -230,12 +255,17 @@ namespace {
   bool Differ::diff_object(const QJsonObject& original,
       const XdValue& generated, std::string& out) {
     auto size = static_cast<std::size_t>(original.size());
-    auto matched = std::vector<bool>(size, false);
+    auto mask = std::uint64_t(0);
+    auto overflow = std::vector<bool>();
+    if(size > 64) {
+      overflow.resize(size);
+    }
     auto removes = std::string();
     auto remove_count = std::size_t(0);
     auto children = std::string();
     auto child_count = std::size_t(0);
     auto child = std::string();
+    auto begin = original.constBegin();
     for(auto& member : generated.get_members()) {
       auto entry = find_key(original, member.m_key);
       if(entry == original.constEnd()) {
@@ -248,7 +278,12 @@ namespace {
         count("remove", member.m_key);
         continue;
       }
-      matched[static_cast<std::size_t>(entry - original.constBegin())] = true;
+      auto index = static_cast<std::size_t>(entry - begin);
+      if(size > 64) {
+        overflow[index] = true;
+      } else {
+        mask |= std::uint64_t(1) << index;
+      }
       auto value = entry.value();
       if(value.isArray() && member.m_value.is_array() &&
           is_structural(member.m_key)) {
@@ -256,10 +291,7 @@ namespace {
       }
       child.clear();
       m_keys.push_back(member.m_key);
-      m_path.push_back(
-        is_identifier(member.m_key) ? ".<id>" : "." + member.m_key);
       auto is_different = diff(value, member.m_value, child);
-      m_path.pop_back();
       m_keys.pop_back();
       if(!is_different) {
         continue;
@@ -278,10 +310,10 @@ namespace {
     auto adds = std::string();
     auto add_count = std::size_t(0);
     for(auto i = std::size_t(0); i != size; ++i) {
-      if(matched[i]) {
+      if(size > 64 ? overflow[i] : ((mask >> i) & 1) != 0) {
         continue;
       }
-      auto entry = original.constBegin() + static_cast<qsizetype>(i);
+      auto entry = begin + static_cast<qsizetype>(i);
       auto key = to_utf8(entry.keyView());
       encode_string(key, adds);
       encode_value(entry.value(), adds);
@@ -375,8 +407,7 @@ namespace {
   bool Differ::diff_array(const QJsonArray& original, const XdValue& generated,
       std::string& out) {
     auto& elements = generated.get_elements();
-    m_path.push_back("[]");
-    m_keys.push_back("[]");
+    m_keys.push_back(ELEMENTS);
     auto result = [&] {
       if(auto id_key = get_id_key(original, generated)) {
         auto qkey = QLatin1StringView(
@@ -460,7 +491,8 @@ namespace {
       auto child = std::string();
       for(auto i = std::size_t(0); i != elements.size(); ++i) {
         child.clear();
-        if(diff(original.at(static_cast<qsizetype>(i)), elements[i], child)) {
+        if(diff(original.constBegin()[static_cast<qsizetype>(i)],
+            elements[i], child)) {
           encode_varint(i, patches);
           encode_varint(child.size(), patches);
           patches += child;
@@ -477,7 +509,6 @@ namespace {
       return true;
     }();
     m_keys.pop_back();
-    m_path.pop_back();
     return result;
   }
 

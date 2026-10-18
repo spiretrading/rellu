@@ -8,6 +8,7 @@
 #include <vector>
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Path.hpp"
+#include "Rellu/Geometry/Projection.hpp"
 #include "Rellu/Geometry/Rect.hpp"
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/Node.hpp"
@@ -119,6 +120,7 @@ namespace Rellu {
         Matrix m_transform;
         double m_opacity;
         std::optional<Rect> m_clip;
+        std::optional<Projection> m_projection;
       };
       struct Entry {
         const Node* m_source;
@@ -178,6 +180,8 @@ namespace Rellu {
       std::optional<Paint> convert(const Fill& fill, const Path& outline);
       std::optional<LayerMask> get_mask(const Node& node,
         const Matrix& transform, std::optional<Rect>& clip);
+      std::optional<LayerMask> get_mask(
+        const Mask& mask, const Placement& placement);
       void add_artboard(const Node& node, const Placement& placement,
         DrawList& list);
       void add_shape(const Node& node, const Placement& placement,

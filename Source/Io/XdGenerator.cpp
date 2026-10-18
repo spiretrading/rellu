@@ -2,6 +2,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <string>
 #include <utility>
 #include <QString>
 #include "Rellu/Io/XdGenerator.hpp"
@@ -58,6 +59,24 @@ namespace {
     json.set("d", matrix.m_d);
     json.set("tx", matrix.m_tx);
     json.set("ty", matrix.m_ty);
+    return json;
+  }
+
+  XdValue make_matrix(const Transform3d& transform, const Matrix& planar) {
+    auto matrix = transform.m_matrix;
+    matrix[0] = planar.m_a;
+    matrix[1] = planar.m_c;
+    matrix[3] = planar.m_tx;
+    matrix[4] = planar.m_b;
+    matrix[5] = planar.m_d;
+    matrix[7] = planar.m_ty;
+    auto json = XdValue::make_object();
+    for(auto row = 0; row != 4; ++row) {
+      auto& entries = json.set(std::to_string(row), XdValue::make_array());
+      for(auto column = 0; column != 4; ++column) {
+        entries.append(matrix[4 * row + column]);
+      }
+    }
     return json;
   }
 
@@ -626,8 +645,17 @@ namespace {
 
   XdValue make_sync_map(const std::map<NodeId, NodeId>& sync_map) {
     auto json = XdValue::make_object();
+    auto& members = json.get_members();
+    members.reserve(sync_map.size());
+    auto indices = std::unordered_map<NodeId, std::size_t>();
+    indices.reserve(sync_map.size());
     for(auto& entry : sync_map) {
-      json.set(to_id(entry.second), to_id(entry.first));
+      auto index = indices.try_emplace(entry.second, members.size());
+      if(index.second) {
+        members.push_back(XdMember(to_id(entry.second), to_id(entry.first)));
+      } else {
+        members[index.first->second].m_value = to_id(entry.first);
+      }
     }
     return json;
   }
@@ -842,7 +870,9 @@ XdValue XdGenerator::make_node(const Node& node) const {
   }
   json.set("id", to_id(header.m_id));
   if(auto transform = to_document(header.m_transform);
-      !transform.is_identity()) {
+      header.m_transform_3d) {
+    json.set("transform", make_matrix(*header.m_transform_3d, transform));
+  } else if(!transform.is_identity()) {
     json.set("transform", make_matrix(transform));
   }
   json.set("meta", XdValue::make_object()).set("ux", make_ux(node));
@@ -1123,6 +1153,17 @@ XdValue XdGenerator::make_ux(const Node& node) const {
   auto& id = node.get_id();
   add_constraints(header,
     node.get_reference() && header.m_constraints == Constraints(), ux);
+  if(auto& transform = header.m_transform_3d) {
+    if(transform->m_rotation_x != 0) {
+      ux.set("rotationX", transform->m_rotation_x);
+    }
+    if(transform->m_rotation_y != 0) {
+      ux.set("rotationY", transform->m_rotation_y);
+    }
+    auto& center = ux.set("perspectiveCenter", XdValue::make_object());
+    center.set("x", transform->m_perspective_center.m_x);
+    center.set("y", transform->m_perspective_center.m_y);
+  }
   if(!node.m_parent.is_nil()) {
     if(auto parent = m_document->find(node.m_parent)) {
       if(auto group = parent->get_group()) {
@@ -1345,7 +1386,9 @@ XdValue XdGenerator::make_text(const Node& node, const Text& text) const {
   } else {
     frame.set("type", "positioned");
   }
-  json.set("paragraphs", make_layout(text));
+  if(auto paragraphs = make_layout(text); paragraphs.is_array()) {
+    json.set("paragraphs", std::move(paragraphs));
+  }
   json.set("rawText", to_utf8(*text.m_content));
   return json;
 }
@@ -1358,20 +1401,7 @@ XdValue XdGenerator::make_layout(const Text& text) const {
     layout = m_layout(text);
   }
   if(!layout) {
-    layout.emplace();
-    auto& content = *text.m_content;
-    auto start = std::size_t(0);
-    while(true) {
-      auto end = content.find(u'\n', start);
-      auto stop = end == std::u16string::npos ? content.size() : end;
-      auto& paragraph = layout->m_paragraphs.emplace_back();
-      paragraph.m_lines.emplace_back().m_runs.push_back(
-        StoredRun(start, stop, Point(0, 0)));
-      if(end == std::u16string::npos) {
-        break;
-      }
-      start = end + 1;
-    }
+    return XdValue();
   }
   auto paragraphs = XdValue::make_array();
   for(auto& paragraph : layout->m_paragraphs) {

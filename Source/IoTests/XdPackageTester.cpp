@@ -1,5 +1,7 @@
 #include <string>
 #include <vector>
+#include <QJsonDocument>
+#include <QJsonParseError>
 #include <doctest/doctest.h>
 #include "Rellu/Io/XdError.hpp"
 #include "Rellu/Io/XdPackage.hpp"
@@ -21,6 +23,29 @@ namespace {
       R"({"children": []})");
     entries.insert(entries.end(), extra.begin(), extra.end());
     return make_archive(entries);
+  }
+
+  std::string make_children(int count) {
+    auto children = std::string();
+    for(auto i = 0; i != count; ++i) {
+      if(i != 0) {
+        children += ", ";
+      }
+      auto index = std::to_string(i);
+      children += R"({"type": "shape", "id": ")" + index +
+        R"(", "name": "Shape \"quoted\" \u00e9 )" + index +
+        R"(", "values": [1, 2.5, -3e2, true, false, null], "dup": 1, )"
+        R"("dup": 2, "group": {"children": [{"id": "a"}, {"id": "b"}]}})";
+    }
+    return children;
+  }
+
+  std::string make_large_json() {
+    auto children = make_children(3000);
+    return R"({"version": "1.5.0", "children": [{"type": "artboard", )"
+      R"("artboard": {"children": [)" + children + R"(]}}], "text": ")" +
+      std::string(200000, 'x') + R"(", "list": [")" +
+      std::string(100000, 'y') + R"(", )" + children + R"(], "empty": []})";
   }
 }
 
@@ -50,6 +75,27 @@ TEST_SUITE("XdPackage") {
     REQUIRE(package.read_resources().value("version").toString() == "1.5.0");
     REQUIRE(package.read_pasteboard().value("children").isArray());
     REQUIRE(package.read_interactions().isEmpty());
+  }
+
+  TEST_CASE("large_json_entry") {
+    auto name = std::string("artwork/artboard-a/graphics/graphicContent.agc");
+    auto json = make_large_json();
+    auto bytes = QByteArray(json.data(), static_cast<qsizetype>(json.size()));
+    REQUIRE(bytes.size() > (1 << 20));
+    auto package = XdPackage(make_minimal_package({{name, bytes}}));
+    REQUIRE(package.read_json(name) == QJsonDocument::fromJson(bytes).object());
+    auto duplicate = QByteArray(R"({"children": [], )") + bytes.mid(1);
+    auto duplicate_package = XdPackage(make_minimal_package({{name, duplicate}}));
+    REQUIRE(duplicate_package.read_json(name) ==
+      QJsonDocument::fromJson(duplicate).object());
+    auto invalid = bytes.left(bytes.size() - 1);
+    auto error = QJsonParseError();
+    QJsonDocument::fromJson(invalid, &error);
+    auto invalid_package = XdPackage(make_minimal_package({{name, invalid}}));
+    REQUIRE_THROWS_WITH_AS(invalid_package.read_json(name),
+      ("The package's entry " + name + " is not valid JSON: " +
+        error.errorString().toStdString() + " at offset " +
+        std::to_string(error.offset) + ".").c_str(), XdError);
   }
 
   TEST_CASE("missing_entry") {

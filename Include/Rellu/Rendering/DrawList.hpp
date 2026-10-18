@@ -10,6 +10,7 @@
 #include "Rellu/Geometry/Gradient.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Path.hpp"
+#include "Rellu/Geometry/Projection.hpp"
 #include "Rellu/Geometry/Rect.hpp"
 #include "Rellu/Geometry/Stroke.hpp"
 
@@ -39,6 +40,12 @@ namespace Rellu {
      * the path it fills.
      */
     Matrix m_transform;
+
+    /**
+     * The projective transform applied after m_transform to reach the
+     * coordinates of the path, or none if m_transform reaches them alone.
+     */
+    std::optional<Projection> m_projection;
   };
 
   /** Paints an image, extending its edge pixels beyond its bounds. */
@@ -55,6 +62,12 @@ namespace Rellu {
 
     /** The opacity multiplying the image's alpha. */
     double m_opacity = 1;
+
+    /**
+     * The projective transform applied after m_transform to reach the
+     * coordinates of the path, or none if m_transform reaches them alone.
+     */
+    std::optional<Projection> m_projection;
   };
 
   /** The ways a region can be painted. */
@@ -162,8 +175,8 @@ namespace Rellu {
     std::optional<LayerMask> m_mask;
 
     /**
-     * The shadows cast inside the content's outline, drawn atop the content
-     * in order.
+     * The shadows cast inside the content's outline, each masked by the
+     * content's alpha and drawn over the content, in order.
      */
     std::vector<Shadow> m_inner_shadows;
 

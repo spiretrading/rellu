@@ -1,12 +1,19 @@
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstddef>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 #include <doctest/doctest.h>
 #include <QJsonArray>
+#include <QTemporaryDir>
 #include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Geometry/SvgPath.hpp"
+#include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Io/XdWriter.hpp"
 #include "Rellu/Model/DocumentComparison.hpp"
 #include "Rellu/Model/Transaction.hpp"
@@ -163,7 +170,7 @@ namespace {
       transaction.append(built.m_artboard, make_header("Path"), path);
     auto compound = Shape();
     compound.m_geometry = CompoundShape(CompoundOperation::SUBTRACT,
-      Shared(*parse_svg_path("M 0 0 L 20 0 L 20 20 L 0 20 Z")));
+      Shared(*parse_svg_path("M 10 0 L 20 0 L 20 20 L 0 20 L 0 10 L 10 10 Z")));
     built.m_compound = transaction.append(
       built.m_artboard, make_header("Compound"), compound);
     transaction.append(built.m_compound, make_header("First"),
@@ -502,14 +509,14 @@ TEST_SUITE("XdWriter") {
       transaction.append(NodeId(), make_header("Text"), text);
       transaction.commit();
     }
-    auto pasteboard = XdPackage(write_xd(document)).read_pasteboard();
-    auto paragraphs = pasteboard.value("children"_L1).toArray().first().
-      toObject().value("text"_L1).toObject().value("paragraphs"_L1).toArray();
-    REQUIRE(paragraphs.size() == 2);
-    auto second = paragraphs.at(1).toObject().value("lines"_L1).toArray().
-      first().toArray().first().toObject();
-    REQUIRE(second.value("from"_L1).toInt() == 4);
-    REQUIRE(second.value("to"_L1).toInt() == 7);
+    auto bytes = write_xd(document);
+    auto pasteboard = XdPackage(bytes).read_pasteboard();
+    REQUIRE(!pasteboard.value("children"_L1).toArray().first().toObject().
+      value("text"_L1).toObject().contains("paragraphs"_L1));
+    auto imported = Document();
+    import_package(bytes, imported);
+    REQUIRE(!imported.get(imported.get_canvas().front()).get_text()->
+      m_layout);
     auto options = XdWriteOptions();
     options.m_layout = [] (const Text&) {
       auto layout = StoredLayout();
@@ -518,7 +525,7 @@ TEST_SUITE("XdWriter") {
       return std::optional(layout);
     };
     pasteboard = XdPackage(write_xd(document, options)).read_pasteboard();
-    paragraphs = pasteboard.value("children"_L1).toArray().first().
+    auto paragraphs = pasteboard.value("children"_L1).toArray().first().
       toObject().value("text"_L1).toObject().value("paragraphs"_L1).toArray();
     REQUIRE(paragraphs.size() == 1);
   }
@@ -548,6 +555,42 @@ TEST_SUITE("XdWriter") {
     REQUIRE(package.read("resources/" + to_uid(built.m_image)).size() == 12);
   }
 
+  TEST_CASE("transform_3d") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(100, 50, 375, 812);
+    auto artboard_id =
+      transaction.append(NodeId(), make_header("Home"), artboard);
+    auto header = make_header("Tilted");
+    header.m_transform = Matrix(1, 0, 0, 0.5, 8, 7);
+    auto& transform = header.m_transform_3d.emplace();
+    transform.m_matrix = std::array<double, 16>(
+      {1, 0, 0, 8, 0, 0.5, 0.25, 7, 0, -0.25, 0.5, 3, 0, 0, 0, 1});
+    transform.m_rotation_x = -10;
+    transform.m_perspective_center = Point(92, 21.5);
+    auto group = transaction.append(artboard_id, header, Group());
+    transaction.commit();
+    auto bytes = write_xd(document);
+    auto written = find_written(XdPackage(bytes), group);
+    auto matrix = written.value("transform"_L1).toObject();
+    REQUIRE(matrix.value("0"_L1).toArray() == QJsonArray({1, 0, 0, 108}));
+    REQUIRE(matrix.value("1"_L1).toArray() == QJsonArray({0, 0.5, 0.25, 57}));
+    REQUIRE(matrix.value("2"_L1).toArray() == QJsonArray({0, -0.25, 0.5, 3}));
+    REQUIRE(matrix.value("3"_L1).toArray() == QJsonArray({0, 0, 0, 1}));
+    auto ux = get_ux(written);
+    REQUIRE(ux.value("rotationX"_L1).toDouble() == -10);
+    REQUIRE(!ux.contains("rotationY"_L1));
+    auto center = ux.value("perspectiveCenter"_L1).toObject();
+    REQUIRE(center.value("x"_L1).toDouble() == 92);
+    REQUIRE(center.value("y"_L1).toDouble() == 21.5);
+    auto imported = Document();
+    auto report = import_package(bytes, imported);
+    REQUIRE(report.m_warnings.empty());
+    REQUIRE(report.m_unconsumed.empty());
+    REQUIRE(join(filter(find_differences(document, imported))) == "");
+  }
+
   TEST_CASE("empty_document") {
     auto document = Document();
     auto package = XdPackage(write_xd(document));
@@ -556,5 +599,56 @@ TEST_SUITE("XdWriter") {
     auto report = import_package(write_xd(document), imported);
     REQUIRE(report.m_warnings.empty());
     REQUIRE(imported.get_nodes().get_size() == 0);
+  }
+
+  TEST_CASE("stale_compound") {
+    auto document = Document();
+    auto id = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto compound = Shape();
+      compound.m_geometry = CompoundShape(CompoundOperation::SUBTRACT,
+        Shared(*parse_svg_path("M 0 0 L 80 0 L 80 80 L 0 80 Z")));
+      id = transaction.append(NodeId(), make_header("Compound"), compound);
+      transaction.append(id, make_header("Square"),
+        make_rectangle_shape(80, 80));
+      auto hole = make_rectangle_shape(20, 20);
+      auto hole_header = make_header("Hole");
+      hole_header.m_transform = make_translation(30, 30);
+      transaction.append(id, hole_header, hole);
+      transaction.commit();
+    }
+    auto imported = Document();
+    import_package(write_xd(document), imported);
+    auto& path = *std::get<CompoundShape>(
+      imported.get(id).get_shape()->m_geometry).m_path;
+    REQUIRE(contains(path, Point(10, 10)));
+    REQUIRE(!contains(path, Point(40, 40)));
+    auto rewritten = XdPackage(write_xd(imported)).read_pasteboard();
+    REQUIRE(rewritten.value("children"_L1).toArray().first().toObject().value(
+      "shape"_L1).toObject().value("path"_L1).toString().toStdString() ==
+        to_svg_path(path));
+  }
+
+  TEST_CASE("replace_open_file") {
+    auto document = Document();
+    build(document);
+    auto directory = QTemporaryDir();
+    REQUIRE(directory.isValid());
+    auto path = std::filesystem::path(
+      directory.filePath("document.xd").toStdU16String());
+    write_xd(document, path);
+    auto file = std::ifstream(path, std::ios::binary);
+    REQUIRE(file.is_open());
+    auto release = std::jthread([&] {
+      std::this_thread::sleep_for(std::chrono::milliseconds(300));
+      file.close();
+    });
+    write_xd(document, path);
+    release.join();
+    auto imported = Document();
+    import_xd(path, imported);
+    REQUIRE(join(filter(find_differences(document, imported))) == "");
+    REQUIRE(!std::filesystem::exists(path.string() + ".saving"));
   }
 }

@@ -33,7 +33,7 @@ namespace Rellu {
        * @param document The document to generate, which must not change
        *        while the generator is in use.
        * @param layout The layout of text without a stored layout, or empty
-       *        to place each paragraph on one line.
+       *        to generate such text without a layout.
        */
       XdGenerator(const Document& document, XdTextLayout layout);
 

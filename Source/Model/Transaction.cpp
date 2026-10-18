@@ -18,22 +18,13 @@ namespace {
     return std::invalid_argument(message + ": " + to_string(id));
   }
 
-  bool accepts(const Payload& parent, NodeKind kind) {
-    if(kind == NodeKind::ARTBOARD) {
-      return false;
-    }
-    if(auto shape = std::get_if<Shape>(&parent)) {
-      return kind == NodeKind::SHAPE &&
-        std::holds_alternative<CompoundShape>(shape->m_geometry);
-    } else if(auto reference = std::get_if<Reference>(&parent)) {
-      return reference->m_has_children;
-    }
-    return !std::holds_alternative<Text>(parent);
-  }
-
   void validate_payload(const Payload& payload) {
-    auto text = std::get_if<Text>(&payload);
-    if(!text || text->m_runs.empty()) {
+    auto box = std::get_if<Box<Text>>(&payload);
+    if(!box) {
+      return;
+    }
+    auto& text = *box;
+    if(text->m_runs.empty()) {
       return;
     }
     auto length = std::size_t(0);
@@ -207,6 +198,11 @@ namespace {
       mask |= ChangeMask::TRANSFORM;
     }
     return mask;
+  }
+
+  template<typename T>
+  ChangeMask diff(const Box<T>& previous, const Box<T>& current) {
+    return diff(*previous, *current);
   }
 
   ChangeMask diff(const Node& previous, const Node& current) {
@@ -524,7 +520,7 @@ void Transaction::move(
         throw make_error("Move would create a cycle", id);
       }
     }
-    if(!accepts(parent_node->m_payload, kind)) {
+    if(!can_contain(parent_node->m_payload, kind)) {
       throw make_error("Parent does not accept the node", parent);
     }
   }
@@ -572,17 +568,17 @@ void Transaction::replace_payload(const NodeId& id, Payload payload) {
   }
   validate_payload(payload);
   for(auto& child : node->m_children) {
-    if(!accepts(payload, nodes.get(child).get_kind())) {
+    if(!can_contain(payload, nodes.get(child).get_kind())) {
       throw make_error("Payload does not accept the node's children", id);
     }
   }
-  if(auto text = std::get_if<Text>(&payload)) {
+  if(auto text = std::get_if<Box<Text>>(&payload)) {
     auto& previous = *node->get_text();
-    if(text->m_layout && text->m_layout == previous.m_layout) {
-      if(is_layout_affected(previous, *text)) {
-        text->m_layout = std::nullopt;
+    if((*text)->m_layout && (*text)->m_layout == previous.m_layout) {
+      if(is_layout_affected(previous, **text)) {
+        text->edit().m_layout = std::nullopt;
       } else {
-        recolor(previous, *text);
+        recolor(previous, text->edit());
       }
     }
   }
@@ -859,7 +855,7 @@ NodeId Transaction::add(const NodeId& parent, std::size_t index,
       throw make_error("Unknown parent", parent);
     }
     auto& parent_node = *nodes.m_slots[parent_slot].m_record;
-    if(!accepts(parent_node.m_payload, get_kind(payload))) {
+    if(!can_contain(parent_node.m_payload, get_kind(payload))) {
       throw make_error("Parent does not accept the node", parent);
     }
     count = parent_node.m_children.size();

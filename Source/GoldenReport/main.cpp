@@ -40,8 +40,8 @@ using namespace Rellu;
 namespace {
   constexpr auto THRESHOLDS = std::array<int, 6>({2, 4, 8, 16, 32, 64});
   const auto UNSUPPORTED = std::set<std::string>({"broken_reference",
-    "font_style_substitution", "missing", "not_exported", "text_effect",
-    "text_paint", "text_stroke"});
+    "font_style_substitution", "missing", "not_exported", "text_paint",
+    "text_stroke"});
 
   struct Options {
     std::filesystem::path m_corpus;

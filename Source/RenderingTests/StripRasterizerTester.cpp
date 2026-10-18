@@ -330,6 +330,35 @@ TEST_SUITE("StripRasterizer") {
     }
   }
 
+  TEST_CASE("open_frame") {
+    auto size = QSize(16, 16);
+    auto draw = [&] (const Path& line) {
+      auto list = DrawList();
+      auto fill = FillCommand(share(outline_stroke(line, StrokeGeometry(2,
+        StrokeAlignment::CENTER, StrokeCap::BUTT, StrokeJoin::MITER, 4, {}, 0),
+        0.01)), Matrix(), SolidPaint(make_color(0, 0, 0)));
+      fill.m_stroke = StrokeLine(share(line), 2, StrokeCap::BUTT);
+      list.push_back(fill);
+      auto scene = StripScene();
+      auto rasterizer = StripRasterizer();
+      rasterizer.rasterize(list, Matrix(), size, scene);
+      return get_coverage(scene, size);
+    };
+    auto open = Path();
+    open.move_to(Point(3, 1));
+    open.line_to(Point(3, 8.13));
+    open.line_to(Point(13, 8.13));
+    open.line_to(Point(13, 1));
+    auto snapped = draw(open);
+    REQUIRE(std::abs(snapped[7 * 16 + 8] - 0.75) < 1.0 / 255);
+    REQUIRE(std::abs(snapped[9 * 16 + 8] - 0.25) < 1.0 / 255);
+    auto closed = open;
+    closed.close();
+    auto exact = draw(closed);
+    REQUIRE(std::abs(exact[7 * 16 + 8] - 0.87) < 1.0 / 255);
+    REQUIRE(std::abs(exact[9 * 16 + 8] - 0.13) < 1.0 / 255);
+  }
+
   TEST_CASE("view") {
     auto size = QSize(20, 20);
     auto scene = rasterize(make_rectangle(Rect(1, 2, 3, 4)), size,

@@ -2,13 +2,64 @@
 #define RELLU_IO_PARALLEL_HPP
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
+#include <deque>
 #include <exception>
 #include <mutex>
 #include <thread>
 #include <vector>
 
 namespace Rellu {
+
+  /**
+   * Threads kept for running work in parallel, sleeping while there is
+   * none.
+   */
+  class WorkerPool {
+    public:
+
+      /** Returns the pool shared by every parallel operation. */
+      static WorkerPool& get();
+
+      /** Constructs a WorkerPool with a thread per additional processor. */
+      WorkerPool();
+
+      /** Stops and joins the threads. */
+      ~WorkerPool();
+
+      /** Returns the number of threads. */
+      std::size_t get_size() const;
+
+      /**
+       * Runs a function on the calling thread and on up to a number of the
+       * pool's threads at once, returning once every call has returned.
+       * Calls not yet started when the calling thread's call returns are
+       * not made.
+       * @param helpers The largest number of the pool's threads to use.
+       * @param work The function to call.
+       * @param context The argument passed to the <i>work</i>.
+       */
+      void run(std::size_t helpers, void (*work)(void*), void* context);
+
+    private:
+      struct Job {
+        void (*m_work)(void*);
+        void* m_context;
+        std::size_t m_unclaimed;
+        std::size_t m_running;
+        std::condition_variable m_done;
+      };
+      std::mutex m_mutex;
+      std::condition_variable m_ready;
+      std::deque<Job*> m_jobs;
+      bool m_is_stopping;
+      std::vector<std::thread> m_threads;
+
+      WorkerPool(const WorkerPool&) = delete;
+      WorkerPool& operator =(const WorkerPool&) = delete;
+      void serve();
+  };
 
   /**
    * Calls a function with every index in [0, count) on all processors,
@@ -36,18 +87,15 @@ namespace Rellu {
         }
       }
     };
-    auto thread_count = std::min<std::size_t>(
-      count, std::max(1U, std::thread::hardware_concurrency()));
-    auto threads = std::vector<std::jthread>();
-    if(thread_count > 1) {
-      threads.reserve(thread_count - 1);
-      for(auto i = std::size_t(1); i < thread_count; ++i) {
-        threads.emplace_back(work);
-      }
-    }
-    work();
-    for(auto& thread : threads) {
-      thread.join();
+    auto& pool = WorkerPool::get();
+    auto helpers =
+      std::min(count, pool.get_size() + 1) - std::min<std::size_t>(count, 1);
+    if(helpers == 0) {
+      work();
+    } else {
+      pool.run(helpers, [] (void* context) {
+        (*static_cast<decltype(work)*>(context))();
+      }, &work);
     }
     if(error) {
       std::rethrow_exception(error);

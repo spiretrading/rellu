@@ -3,6 +3,7 @@
 #include <variant>
 #include <vector>
 #include "Rellu/Model/Artboard.hpp"
+#include "Rellu/Model/Box.hpp"
 #include "Rellu/Model/Group.hpp"
 #include "Rellu/Model/NodeHeader.hpp"
 #include "Rellu/Model/NodeId.hpp"
@@ -31,14 +32,25 @@ namespace Rellu {
     REFERENCE
   };
 
-  /** The kind-specific data of a node. */
-  using Payload = std::variant<Artboard, Group, Shape, Text, Reference>;
+  /**
+   * The kind-specific data of a node, keeping the larger kinds in boxes so
+   * that every node record stays small.
+   */
+  using Payload =
+    std::variant<Box<Artboard>, Group, Box<Shape>, Box<Text>, Reference>;
 
   /**
    * Returns the kind of node a payload belongs to.
    * @param payload The payload.
    */
   NodeKind get_kind(const Payload& payload);
+
+  /**
+   * Tests whether a node may hold a child of a given kind.
+   * @param parent The payload of the parent.
+   * @param kind The kind of the child.
+   */
+  bool can_contain(const Payload& parent, NodeKind kind);
 
   /** An immutable record of a node within a NodeStore. */
   struct Node {
@@ -83,6 +95,19 @@ namespace Rellu {
     return static_cast<NodeKind>(payload.index());
   }
 
+  inline bool can_contain(const Payload& parent, NodeKind kind) {
+    if(kind == NodeKind::ARTBOARD) {
+      return false;
+    }
+    if(auto shape = std::get_if<Box<Shape>>(&parent)) {
+      return kind == NodeKind::SHAPE &&
+        std::holds_alternative<CompoundShape>((*shape)->m_geometry);
+    } else if(auto reference = std::get_if<Reference>(&parent)) {
+      return reference->m_has_children;
+    }
+    return !std::holds_alternative<Box<Text>>(parent);
+  }
+
   inline const NodeId& Node::get_id() const {
     return m_header.m_id;
   }
@@ -92,7 +117,10 @@ namespace Rellu {
   }
 
   inline const Artboard* Node::get_artboard() const {
-    return std::get_if<Artboard>(&m_payload);
+    if(auto artboard = std::get_if<Box<Artboard>>(&m_payload)) {
+      return &**artboard;
+    }
+    return nullptr;
   }
 
   inline const Group* Node::get_group() const {
@@ -100,11 +128,17 @@ namespace Rellu {
   }
 
   inline const Shape* Node::get_shape() const {
-    return std::get_if<Shape>(&m_payload);
+    if(auto shape = std::get_if<Box<Shape>>(&m_payload)) {
+      return &**shape;
+    }
+    return nullptr;
   }
 
   inline const Text* Node::get_text() const {
-    return std::get_if<Text>(&m_payload);
+    if(auto text = std::get_if<Box<Text>>(&m_payload)) {
+      return &**text;
+    }
+    return nullptr;
   }
 
   inline const Reference* Node::get_reference() const {

@@ -1,3 +1,4 @@
+#include <array>
 #include <optional>
 #include <string>
 #include <utility>
@@ -336,6 +337,58 @@ TEST_SUITE("SceneBuilder") {
     REQUIRE(layer.m_opacity == 1);
     REQUIRE(!get_fill(list, 1).m_clip);
     REQUIRE(std::holds_alternative<EndLayerCommand>(list[2]));
+  }
+
+  TEST_CASE("transform_3d") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto parent = transaction.append(
+      NodeId(), make_header(make_translation(100, 50)), Group());
+    auto tilted = make_header(Matrix(1, 0, 0, 0.9, 10, 20));
+    auto& transform = tilted.m_transform_3d.emplace();
+    transform.m_matrix = std::array<double, 16>(
+      {1, 0, 0, 10, 0, 0.9, 0.4, 20, 0, -0.4, 0.9, 8, 0, 0, 0, 1});
+    transform.m_perspective_center = Point(20, 10);
+    auto group = Group();
+    group.m_scroll_group =
+      ScrollGroup(ScrollDirection::PANNING, Size(30, 20), Point(0, 0));
+    auto id = transaction.append(parent, tilted, group);
+    auto shape = Shape();
+    shape.m_geometry = RectangleShape(Rect(0, 0, 40, 20));
+    auto gradient = GradientFill();
+    gradient.m_geometry = LinearGradient(Point(0, 0), Point(1, 0));
+    gradient.m_stops = {GradientStop(0, make_color(255, 0, 0)),
+      GradientStop(1, make_color(0, 0, 255))};
+    shape.m_style.m_fill = gradient;
+    shape.m_style.m_effects.push_back(
+      DropShadow(Point(0, 3), 2, make_color(0, 0, 0, 0.5), true));
+    transaction.append(id, make_header(make_translation(2, 1)), shape);
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto list = builder.build();
+    REQUIRE(list.size() == 5);
+    auto projection = make_translation(100, 50) *
+      to_projection(transform, tilted.m_transform);
+    auto& viewport = std::get<BeginLayerCommand>(list[0]);
+    REQUIRE(viewport.m_mask);
+    REQUIRE(*viewport.m_mask->m_path ==
+      Rellu::transform(make_rectangle(Rect(0, 0, 30, 20)), projection));
+    REQUIRE(viewport.m_mask->m_transform == Matrix());
+    auto& shadow = std::get<BeginLayerCommand>(list[1]);
+    REQUIRE(shadow.m_drop_shadows.size() == 1);
+    auto jacobian = linearize(projection, Point(22, 11));
+    REQUIRE(distance(shadow.m_drop_shadows[0].m_offset,
+      Point(3 * jacobian.m_c, 3 * jacobian.m_d)) < 1e-9);
+    auto& fill = get_fill(list, 2);
+    auto shape_projection = projection * make_translation(2, 1);
+    REQUIRE(*fill.m_path ==
+      Rellu::transform(make_rectangle(Rect(0, 0, 40, 20)), shape_projection));
+    REQUIRE(fill.m_transform == Matrix());
+    REQUIRE(!fill.m_stroke);
+    auto& paint = std::get<GradientPaint>(fill.m_paint);
+    REQUIRE(paint.m_projection == shape_projection);
+    REQUIRE(std::holds_alternative<EndLayerCommand>(list[3]));
+    REQUIRE(std::holds_alternative<EndLayerCommand>(list[4]));
   }
 
   TEST_CASE("repeat_grid") {

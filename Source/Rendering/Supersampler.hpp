@@ -65,8 +65,8 @@ namespace Rellu {
 
       /**
        * Returns whether XD's renderer draws a stroke along a line as a frame
-       * whose exact area it covers, which is when the line is an axis aligned
-       * rectangle with mitered corners.
+       * whose exact area it covers, which is when the line is a closed axis
+       * aligned rectangle with mitered corners.
        * @param line The line the stroke follows.
        * @param join The shape joining the line's segments.
        * @param miter_limit The largest ratio of a miter's length to the width.

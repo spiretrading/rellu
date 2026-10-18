@@ -1,60 +1,93 @@
 #include <algorithm>
-#include <atomic>
 #include <chrono>
+#include <deque>
 #include <exception>
+#include <iterator>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
-#include <thread>
+#include <unordered_map>
 #include <utility>
 #include "Rellu/Io/XdImporter.hpp"
+#include "Parallel.hpp"
 
 using namespace Qt::StringLiterals;
 using namespace Rellu;
 
 namespace {
-  std::vector<QJsonObject> read_entries(const XdPackage& package,
-      const std::vector<std::string_view>& names) {
-    auto objects = std::vector<QJsonObject>(names.size());
-    auto errors = std::vector<std::exception_ptr>(names.size());
-    auto next = std::atomic<std::size_t>(0);
-    auto work = [&] {
-      while(true) {
-        auto index = next.fetch_add(1);
-        if(index >= names.size()) {
-          return;
-        }
-        try {
-          objects[index] = package.read_json(names[index]);
-        } catch(...) {
-          errors[index] = std::current_exception();
-        }
-      }
-    };
-    auto count = std::min<std::size_t>(names.size(),
-      std::max(1U, std::thread::hardware_concurrency()));
-    auto threads = std::vector<std::jthread>();
-    threads.reserve(count - 1);
-    for(auto i = std::size_t(1); i < count; ++i) {
-      threads.emplace_back(work);
-    }
-    work();
-    for(auto& thread : threads) {
-      thread.join();
-    }
-    for(auto& error : errors) {
-      if(error) {
-        std::rethrow_exception(error);
-      }
-    }
-    return objects;
-  }
-
   std::string get_reason(const std::invalid_argument& error) {
     auto message = std::string(error.what());
     if(auto colon = message.find(':'); colon != std::string::npos) {
       message.resize(colon);
     }
     return message;
+  }
+
+  bool has_valid_runs(const Payload& payload) {
+    auto text = std::get_if<Box<Text>>(&payload);
+    if(!text || (*text)->m_runs.empty()) {
+      return true;
+    }
+    auto length = std::size_t(0);
+    for(auto& run : (*text)->m_runs) {
+      length += run.m_length;
+    }
+    return length == (*text)->m_content->size();
+  }
+
+  void add_counts(const auto& source, auto& target) {
+    for(auto& entry : source) {
+      if(auto i = target.find(entry.first); i != target.end()) {
+        i->second += entry.second;
+      } else {
+        target.emplace(entry.first, entry.second);
+      }
+    }
+  }
+}
+
+struct XdImport::Batch {
+  struct Pending {
+    Node m_node;
+    XdNodeRole m_role;
+  };
+  ImportReport m_report;
+  std::deque<Pending> m_pending;
+  std::unordered_map<NodeId, std::size_t> m_index;
+  std::vector<NodeId> m_misses;
+};
+
+XdStates XdStates::fork() const {
+  auto states = XdStates();
+  states.m_states.reserve(m_states.size());
+  for(auto& entry : m_states) {
+    if(entry.m_fork) {
+      states.m_states.push_back(Entry(entry.m_type,
+        entry.m_fork(entry.m_state.get()), entry.m_fork, entry.m_merge,
+        true));
+    } else {
+      states.m_states.push_back(Entry(entry.m_type, entry.m_state,
+        entry.m_fork, entry.m_merge, false));
+    }
+  }
+  return states;
+}
+
+void XdStates::merge(XdStates states) {
+  for(auto& entry : states.m_states) {
+    if(!entry.m_is_own) {
+      continue;
+    }
+    auto state = std::find_if(m_states.begin(), m_states.end(),
+      [&] (const auto& state) {
+        return state.m_type == entry.m_type;
+      });
+    if(state == m_states.end()) {
+      m_states.push_back(std::move(entry));
+    } else if(state->m_merge) {
+      state->m_merge(state->m_state.get(), entry.m_state.get());
+    }
   }
 }
 
@@ -127,7 +160,8 @@ XdImport::XdImport(const XdImporter& importer, const XdPackage& package,
       m_package(&package),
       m_document(&document),
       m_transaction(&transaction),
-      m_report(&report) {
+      m_report(&report),
+      m_main(this) {
   auto start = std::chrono::steady_clock::now();
   auto names = std::vector<std::string_view>();
   names.push_back(XdPackage::RESOURCES);
@@ -139,7 +173,20 @@ XdImport::XdImport(const XdImporter& importer, const XdPackage& package,
   if(has_interactions) {
     names.push_back(XdPackage::INTERACTIONS);
   }
-  auto objects = read_entries(package, names);
+  auto objects = std::vector<QJsonObject>(names.size());
+  auto errors = std::vector<std::exception_ptr>(names.size());
+  parallel_for(names.size(), [&] (std::size_t index) {
+    try {
+      objects[index] = package.read_json(names[index]);
+    } catch(...) {
+      errors[index] = std::current_exception();
+    }
+  });
+  for(auto& error : errors) {
+    if(error) {
+      std::rethrow_exception(error);
+    }
+  }
   m_resources = std::make_unique<XdObject>(
     std::move(objects[0]), "agc", report);
   m_pasteboard = std::make_unique<XdObject>(
@@ -161,7 +208,35 @@ XdImport::XdImport(const XdImporter& importer, const XdPackage& package,
     std::chrono::steady_clock::now() - start);
 }
 
-XdImport::~XdImport() = default;
+XdImport::XdImport(XdImport& main)
+    : m_importer(main.m_importer),
+      m_package(main.m_package),
+      m_document(main.m_document),
+      m_transaction(nullptr),
+      m_report(nullptr),
+      m_main(&main),
+      m_states(main.m_states.fork()),
+      m_batch(std::make_unique<Batch>()) {
+  m_report = &m_batch->m_report;
+}
+
+XdImport::~XdImport() {
+  if(m_batch) {
+    return;
+  }
+  m_resources = nullptr;
+  m_pasteboard = nullptr;
+  m_artboards.clear();
+  m_interactions = nullptr;
+  auto block_size = std::size_t(1024);
+  parallel_for((m_records.size() + block_size - 1) / block_size,
+    [&] (std::size_t block) {
+      auto end = std::min(m_records.size(), (block + 1) * block_size);
+      for(auto i = block * block_size; i != end; ++i) {
+        m_records[i] = XdNodeRecord();
+      }
+    });
+}
 
 const XdPackage& XdImport::get_package() const {
   return *m_package;
@@ -172,6 +247,9 @@ Document& XdImport::get_document() {
 }
 
 Transaction& XdImport::get_transaction() {
+  if(!m_transaction) {
+    throw std::logic_error("No transaction within a parallel import.");
+  }
   return *m_transaction;
 }
 
@@ -183,20 +261,24 @@ XdStates& XdImport::get_states() {
   return m_states;
 }
 
+std::mutex& XdImport::get_mutex() {
+  return m_main->m_mutex;
+}
+
 XdObject& XdImport::get_resources() {
-  return *m_resources;
+  return *m_main->m_resources;
 }
 
 XdObject& XdImport::get_pasteboard() {
-  return *m_pasteboard;
+  return *m_main->m_pasteboard;
 }
 
 const std::vector<std::unique_ptr<XdObject>>& XdImport::get_artboards() {
-  return m_artboards;
+  return m_main->m_artboards;
 }
 
 XdObject& XdImport::get_interactions() {
-  return *m_interactions;
+  return *m_main->m_interactions;
 }
 
 std::unique_ptr<XdObject> XdImport::make_node_json(const QJsonObject& json) {
@@ -233,14 +315,7 @@ NodeId XdImport::import_node(
     property_importer(node);
   }
   try {
-    if(role == XdNodeRole::NODE) {
-      auto parent_id = parent ? parent->m_header.m_id : NodeId();
-      node.m_header.m_id = m_transaction->append(
-        parent_id, node.m_header, std::move(*node.m_payload));
-    } else {
-      node.m_header.m_id = m_transaction->insert_root(
-        node.m_header, std::move(*node.m_payload));
-    }
+    node.m_header.m_id = insert(node);
   } catch(const std::invalid_argument& error) {
     auto message = "Node not inserted: " + get_reason(error) + " (" +
       node.m_type.toStdString();
@@ -283,6 +358,62 @@ NodeId XdImport::import_node(
   return node.m_header.m_id;
 }
 
+std::vector<NodeId> XdImport::import_nodes(
+    const std::vector<QJsonObject>& nodes, XdNodeRole role,
+    std::string_view path) {
+  auto ids = std::vector<NodeId>(nodes.size());
+  if(m_batch || nodes.size() < 2) {
+    for(auto i = std::size_t(0); i != nodes.size(); ++i) {
+      auto json = make_root(nodes[i], path);
+      ids[i] = import_node(*json, nullptr, role);
+    }
+    return ids;
+  }
+  auto batches = std::vector<std::unique_ptr<XdImport>>(nodes.size());
+  parallel_for(nodes.size(), [&] (std::size_t index) {
+    auto batch = std::unique_ptr<XdImport>(new XdImport(*this));
+    {
+      auto json = batch->make_root(nodes[index], path);
+      ids[index] = batch->import_node(*json, nullptr, role);
+    }
+    batches[index] = std::move(batch);
+  });
+  for(auto i = std::size_t(0); i != nodes.size(); ++i) {
+    if(!merge(*batches[i])) {
+      auto json = make_root(nodes[i], path);
+      ids[i] = import_node(*json, nullptr, role);
+    }
+    batches[i] = nullptr;
+  }
+  return ids;
+}
+
+const Node* XdImport::find_node(const NodeId& id) {
+  if(!m_batch) {
+    return m_document->find(id);
+  }
+  if(auto entry = m_batch->m_index.find(id); entry != m_batch->m_index.end()) {
+    return &m_batch->m_pending[entry->second].m_node;
+  }
+  if(auto node = m_document->find(id)) {
+    return node;
+  }
+  m_batch->m_misses.push_back(id);
+  return nullptr;
+}
+
+void XdImport::replace_payload(const NodeId& id, Payload payload) {
+  if(!m_batch) {
+    m_transaction->replace_payload(id, std::move(payload));
+    return;
+  }
+  auto entry = m_batch->m_index.find(id);
+  if(entry == m_batch->m_index.end()) {
+    throw std::logic_error("Node not imported by this parallel import.");
+  }
+  m_batch->m_pending[entry->second].m_node.m_payload = std::move(payload);
+}
+
 const std::vector<XdNodeRecord>& XdImport::get_records() const {
   return m_records;
 }
@@ -302,4 +433,96 @@ void XdImport::warn(std::string_view message) {
   } else {
     ++entry->second;
   }
+}
+
+std::unique_ptr<XdObject> XdImport::make_root(
+    const QJsonObject& json, std::string_view path) {
+  if(path.empty()) {
+    return make_node_json(json);
+  }
+  return std::make_unique<XdObject>(json, std::string(path), *m_report);
+}
+
+NodeId XdImport::insert(XdNode& node) {
+  auto& payload = *node.m_payload;
+  if(!m_batch) {
+    if(node.m_role == XdNodeRole::NODE) {
+      auto parent = node.m_parent ? node.m_parent->m_header.m_id : NodeId();
+      return m_transaction->append(parent, node.m_header, std::move(payload));
+    }
+    return m_transaction->insert_root(node.m_header, std::move(payload));
+  }
+  auto header = node.m_header;
+  if(header.m_id.is_nil()) {
+    header.m_id = generate_node_id();
+  }
+  auto kind = get_kind(payload);
+  auto parent = NodeId();
+  if(node.m_role != XdNodeRole::NODE) {
+    if(kind == NodeKind::ARTBOARD) {
+      throw std::invalid_argument("An artboard must be on the canvas");
+    }
+  } else if(node.m_parent) {
+    parent = node.m_parent->m_header.m_id;
+  }
+  if(!has_valid_runs(payload)) {
+    throw std::invalid_argument("Text runs do not cover the content.");
+  }
+  auto& index = m_batch->m_index;
+  auto& pending = m_batch->m_pending;
+  auto parent_index = std::optional<std::size_t>();
+  if(!parent.is_nil()) {
+    auto entry = index.find(parent);
+    if(entry == index.end()) {
+      throw std::logic_error("Parent not imported by this parallel import.");
+    }
+    if(!can_contain(pending[entry->second].m_node.m_payload, kind)) {
+      throw std::invalid_argument("Parent does not accept the node");
+    }
+    parent_index = entry->second;
+  }
+  auto id = header.m_id;
+  if(index.contains(id) || m_document->find(id)) {
+    throw std::invalid_argument("Duplicate node");
+  }
+  index.emplace(id, pending.size());
+  pending.push_back(Batch::Pending(Node(std::move(header), std::move(payload),
+    parent, std::vector<NodeId>()), node.m_role));
+  if(parent_index) {
+    pending[*parent_index].m_node.m_children.push_back(id);
+  }
+  return id;
+}
+
+bool XdImport::merge(XdImport& batch) {
+  auto& data = *batch.m_batch;
+  for(auto& pending : data.m_pending) {
+    if(m_document->find(pending.m_node.get_id())) {
+      return false;
+    }
+  }
+  for(auto& miss : data.m_misses) {
+    if(m_document->find(miss)) {
+      return false;
+    }
+  }
+  for(auto& pending : data.m_pending) {
+    auto& node = pending.m_node;
+    if(pending.m_role == XdNodeRole::NODE) {
+      m_transaction->append(
+        node.m_parent, std::move(node.m_header), std::move(node.m_payload));
+    } else {
+      m_transaction->insert_root(
+        std::move(node.m_header), std::move(node.m_payload));
+    }
+  }
+  m_records.insert(m_records.end(), std::make_move_iterator(
+    batch.m_records.begin()), std::make_move_iterator(batch.m_records.end()));
+  auto& report = data.m_report;
+  add_counts(report.m_unconsumed, m_report->m_unconsumed);
+  add_counts(report.m_warnings, m_report->m_warnings);
+  add_counts(report.m_preserved, m_report->m_preserved);
+  m_report->m_node_count += report.m_node_count;
+  m_states.merge(std::move(batch.m_states));
+  return true;
 }

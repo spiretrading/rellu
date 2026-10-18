@@ -1,3 +1,5 @@
+#include <array>
+#include <cstddef>
 #include <optional>
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Io/XdValues.hpp"
@@ -41,6 +43,52 @@ namespace {
       return BlendMode::LUMINOSITY;
     }
     return std::nullopt;
+  }
+
+  std::optional<std::array<double, 16>> read_matrix_3d(XdObject& transform) {
+    auto& json = transform.get_json();
+    for(auto row : {"0"_L1, "1"_L1, "2"_L1, "3"_L1}) {
+      auto values = json.value(row);
+      if(!values.isArray() || values.toArray().size() != 4) {
+        return std::nullopt;
+      }
+      for(auto value : values.toArray()) {
+        if(!value.isDouble()) {
+          return std::nullopt;
+        }
+      }
+    }
+    auto matrix = std::array<double, 16>();
+    auto index = std::size_t(0);
+    for(auto row : {"0"_L1, "1"_L1, "2"_L1, "3"_L1}) {
+      for(auto value : transform.get_array(row)->get_json()) {
+        matrix[index] = value.toDouble();
+        ++index;
+      }
+    }
+    return matrix;
+  }
+
+  void import_transform_3d(
+      XdObject& transform, XdObject* ux, NodeHeader& header) {
+    auto matrix = read_matrix_3d(transform);
+    if(!matrix) {
+      return;
+    }
+    auto& entries = *matrix;
+    header.m_transform = Matrix(entries[0], entries[4], entries[1],
+      entries[5], entries[3], entries[7]);
+    auto& transform_3d = header.m_transform_3d.emplace();
+    transform_3d.m_matrix = entries;
+    if(!ux) {
+      return;
+    }
+    transform_3d.m_rotation_x = ux->get_number("rotationX"_L1, 0);
+    transform_3d.m_rotation_y = ux->get_number("rotationY"_L1, 0);
+    if(auto center = ux->get_object("perspectiveCenter"_L1)) {
+      transform_3d.m_perspective_center = Point(
+        center->get_number("x"_L1, 0), center->get_number("y"_L1, 0));
+    }
   }
 
   void import_style(XdObject& style, NodeHeader& header) {
@@ -89,7 +137,10 @@ void Rellu::add_header_importer(XdImporter& importer) {
         if(auto matrix = read_matrix(*transform)) {
           header.m_transform = *matrix;
         } else {
-          node.m_import->warn("Unsupported transform");
+          import_transform_3d(*transform, get_ux(json), header);
+          if(!header.m_transform_3d) {
+            node.m_import->warn("Unsupported transform");
+          }
         }
       }
     }

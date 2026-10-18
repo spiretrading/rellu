@@ -50,13 +50,15 @@ namespace {
       auto& other = std::get<GradientPaint>(right);
       return gradient->m_geometry == other.m_geometry &&
         gradient->m_stops == other.m_stops &&
-        gradient->m_transform == other.m_transform;
+        gradient->m_transform == other.m_transform &&
+        gradient->m_projection == other.m_projection;
     }
     auto& image = std::get<ImagePaint>(left);
     auto& other = std::get<ImagePaint>(right);
     return image.m_image == other.m_image &&
       image.m_transform == other.m_transform &&
-      image.m_opacity == other.m_opacity;
+      image.m_opacity == other.m_opacity &&
+      image.m_projection == other.m_projection;
   }
 
   bool is_equal(const DrawCommand& left, const DrawCommand& right) {

@@ -58,7 +58,8 @@ namespace {
        "shape": {"type": "rect", "x": 0, "y": 0, "width": 1, "height": 1}},
       {"type": "shape", "id": "00000000-0000-0000-0000-00000000000e",
        "name": "Compound", "meta": {"ux": {}},
-       "shape": {"type": "compound", "operation": "add", "path": "M 0 0 Z",
+       "shape": {"type": "compound", "operation": "add",
+         "path": "M 0 0 L 1 0 L 1 1 L 0 1 Z",
          "children": [
            {"type": "group", "id": "00000000-0000-0000-0000-0000000000f1",
             "group": {"children": []}},

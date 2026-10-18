@@ -87,6 +87,25 @@ namespace Rellu {
   TextLayout lay_out(const Text& text, const FontLibrary& library);
 
   /**
+   * Measures a text node laid out as by lay_out: the frame of area text,
+   * otherwise the boxes of its lines from ascent to descent, spanning the
+   * frame's width for auto height text.
+   * @param text The text node's payload.
+   * @param library The fonts to resolve the text's fonts with.
+   * @return The bounds in the node's local space.
+   */
+  Rect measure_text(const Text& text, const FontLibrary& library);
+
+  /**
+   * Computes the line breaks and run positions Adobe XD stores for a text
+   * node laid out as by lay_out.
+   * @param text The text node's payload.
+   * @param library The fonts to resolve the text's fonts with.
+   * @return The layout to store, the text's own if it has one.
+   */
+  StoredLayout store_layout(const Text& text, const FontLibrary& library);
+
+  /**
    * Converts a TextLayout into filled regions, merging the glyphs and
    * decorations of each color, with each layer of a color glyph filled in
    * its own color.

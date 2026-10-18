@@ -1,13 +1,16 @@
 #ifndef RELLU_UI_PROPERTY_DESCRIPTOR_HPP
 #define RELLU_UI_PROPERTY_DESCRIPTOR_HPP
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
 #include <vector>
 #include <QString>
 #include <QStringList>
+#include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Geometry/Color.hpp"
 #include "Rellu/Geometry/Point.hpp"
+#include "Rellu/Geometry/Rect.hpp"
 #include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/NodeId.hpp"
@@ -50,6 +53,9 @@ namespace Rellu {
 
     /** The nested properties. */
     std::vector<PropertyDescriptor> m_children;
+
+    /** Whether the value differs among the nodes described. */
+    bool m_is_mixed = false;
   };
 
   /**
@@ -58,10 +64,40 @@ namespace Rellu {
    * describing the reference itself.
    * @param document The document containing the node.
    * @param id The node's id.
+   * @param measurer The function measuring text.
    * @return The sections, or empty if there is no such node.
    */
-  std::vector<PropertyDescriptor> extract_properties(
-    const Document& document, const NodeId& id);
+  std::vector<PropertyDescriptor> extract_properties(const Document& document,
+    const NodeId& id, const TextMeasurer& measurer = estimate_text_bounds);
+
+  /**
+   * Describes the properties several nodes share, a value that differs
+   * among them being marked mixed. The transform section of several nodes
+   * describes the frame of them all.
+   * @param document The document containing the nodes.
+   * @param nodes The nodes' ids.
+   * @param measurer The function measuring text.
+   * @return The sections, or empty if there are no nodes.
+   */
+  std::vector<PropertyDescriptor> extract_common_properties(
+    const Document& document, const std::vector<NodeId>& nodes,
+    const TextMeasurer& measurer = estimate_text_bounds);
+
+  /**
+   * Returns the position and size shown for nodes: for a single node, the
+   * top left corner of its bounds in its parent's space and the size of its
+   * bounds in its own space; for several nodes, the bounds of them all in
+   * document space, relative to the artboard holding them all if there is
+   * one.
+   * @param document The document containing the nodes.
+   * @param nodes The nodes' ids.
+   * @param measurer The function measuring text.
+   * @return The frame, or <code>std::nullopt</code> if the nodes draw
+   *         nothing.
+   */
+  std::optional<Rect> get_frame(const Document& document,
+    const std::vector<NodeId>& nodes,
+    const TextMeasurer& measurer = estimate_text_bounds);
 
   /**
    * Finds a property by its path.

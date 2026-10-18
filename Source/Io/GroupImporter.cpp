@@ -59,16 +59,16 @@ namespace {
   }
 
   std::optional<ScrollGroup> find_scroll_group(
-      const Document& document, const NodeId& id) {
-    auto node = document.find(id);
+      XdImport& import, const NodeId& id) {
+    auto node = import.find_node(id);
     for(auto depth = 0; node && node->get_reference() && depth != 64;
         ++depth) {
-      node = document.find(node->get_reference()->m_source);
+      node = import.find_node(node->get_reference()->m_source);
     }
-    if(!node || !node->get_group()) {
+    if(!node || !node->get_group() || !node->get_group()->m_scroll_group) {
       return std::nullopt;
     }
-    return node->get_group()->m_scroll_group;
+    return *node->get_group()->m_scroll_group;
   }
 
   Margins read_margins(XdObject& margins) {
@@ -191,8 +191,8 @@ void Rellu::add_scroll_group_importer(XdImporter& importer) {
     }
     if(group) {
       group->m_scroll_group = *scroll;
-    } else if(find_scroll_group(node.m_import->get_document(),
-        reference->m_source) != scroll) {
+    } else if(find_scroll_group(*node.m_import, reference->m_source) !=
+        scroll) {
       return;
     }
     ux->ignore({"scrollingType"_L1, "viewportWidth"_L1, "viewportHeight"_L1,
