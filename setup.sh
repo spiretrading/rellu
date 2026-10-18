@@ -26,6 +26,15 @@ main() {
     "$qt_url/submodules/qtbase-everywhere-src-6.12.0.tar.xz" \
     "a951bd163c7b80fc6b8c88d7668fb56abf91c152373e13c10666763238131307" 1 \
     "build_qt"
+  add_dependency "qtshadertools-6.12.0" \
+    "$qt_url/submodules/qtshadertools-everywhere-src-6.12.0.tar.xz" \
+    "c7d84f436e1aaef39fdcadebf2bd71bdf24dc69497e13f2e0198873cbbfea2ab" 1 \
+    "build_qt_shader_tools"
+  local clipper_url="https://github.com/AngusJohnson/Clipper2/archive/refs/tags"
+  add_dependency "Clipper2-2.0.1" \
+    "$clipper_url/Clipper2_2.0.1.tar.gz" \
+    "2a3693aceab4aed3e39b743e038d87701acc53cf05ed7b2013aab3e0aec5287e" 1 \
+    "build_clipper2"
   install_dependencies || return 1
 }
 
@@ -33,9 +42,37 @@ get_core_count() {
   nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4
 }
 
+build_clipper2() {
+  local cores
+  cores=$(get_core_count)
+  rm -rf build install || return 1
+  cmake -S CPP -B build -DCMAKE_BUILD_TYPE=Release -DCLIPPER2_UTILS=OFF \
+    -DCLIPPER2_EXAMPLES=OFF -DCLIPPER2_TESTS=OFF -DCLIPPER2_USINGZ=OFF \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_INSTALL_PREFIX="$ROOT/Clipper2-2.0.1/install" || return 1
+  cmake --build build --parallel "$cores" || return 1
+  cmake --install build || return 1
+  rm -rf build
+}
+
+build_qt_shader_tools() {
+  local cores
+  cores=$(get_core_count)
+  rm -rf build || return 1
+  mkdir build || return 1
+  pushd build > /dev/null || return 1
+  "$ROOT/qtbase-6.12.0/install/bin/qt-configure-module" .. \
+    -cmake-generator "Unix Makefiles" || { popd > /dev/null; return 1; }
+  cmake --build . --parallel "$cores" || { popd > /dev/null; return 1; }
+  cmake --install . || { popd > /dev/null; return 1; }
+  popd > /dev/null
+  rm -rf build
+}
+
 build_qt() {
   local cores
   cores=$(get_core_count)
+  rm -f "$CACHE_DIRECTORY/qtshadertools-6.12.0.build_complete" || return 1
   rm -rf build || return 1
   mkdir build || return 1
   pushd build > /dev/null || return 1

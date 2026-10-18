@@ -18,11 +18,57 @@ CALL :AddDependency "qtbase-6.12.0" ^
   "!QT_URL!/submodules/qtbase-everywhere-src-6.12.0.zip" ^
   "0529901575c413e34ded504eeda177c4a6dfd0dff1e39ed52c811dc5204b43c7" 1 ^
   ":BuildQt"
+CALL :AddDependency "qtshadertools-6.12.0" ^
+  "!QT_URL!/submodules/qtshadertools-everywhere-src-6.12.0.zip" ^
+  "d3dbfd833769bb9f341e39352247c3910f8c77f5e64d34b10f65bb40d8da4ce6" 1 ^
+  ":BuildQtShaderTools"
+SET "CLIPPER_URL=https://github.com/AngusJohnson/Clipper2/archive/refs/tags"
+CALL :AddDependency "Clipper2-2.0.1" ^
+  "!CLIPPER_URL!/Clipper2_2.0.1.zip" ^
+  "2fbfe548aa1427716510b572446bcec34c88990df7da510039cbdc2ee2406a23" 1 ^
+  ":BuildClipper2"
 CALL :InstallDependencies || EXIT /B 1
 EXIT /B 0
 ENDLOCAL
 
+:BuildClipper2
+FOR %%D IN (build install) DO (
+  IF EXIST %%D (
+    RD /S /Q %%D || EXIT /B 1
+  )
+)
+cmake -S CPP -B build -DCLIPPER2_UTILS=OFF -DCLIPPER2_EXAMPLES=OFF ^
+  -DCLIPPER2_TESTS=OFF -DCLIPPER2_USINGZ=OFF -DCMAKE_DEBUG_POSTFIX=d ^
+  -DCMAKE_INSTALL_PREFIX="!ROOT!\!FOLDER!\install" || EXIT /B 1
+FOR %%C IN (Debug Release) DO (
+  cmake --build build --config %%C --parallel || EXIT /B 1
+  cmake --install build --config %%C || EXIT /B 1
+)
+RD /S /Q build
+EXIT /B !ERRORLEVEL!
+
+:BuildQtShaderTools
+IF EXIST build (
+  RD /S /Q build || EXIT /B 1
+)
+MD build || EXIT /B 1
+PUSHD build || EXIT /B 1
+CALL "!ROOT!\qtbase-6.12.0\install\bin\qt-configure-module.bat" .. ^
+  -cmake-generator "Visual Studio 18 2026" || (
+  POPD
+  EXIT /B 1
+)
+SETLOCAL
+SET "CL=/MP"
+cmake --build . --config Release --parallel || (ENDLOCAL & POPD & EXIT /B 1)
+ENDLOCAL
+cmake --install . --config Release || (POPD & EXIT /B 1)
+POPD
+RD /S /Q build
+EXIT /B !ERRORLEVEL!
+
 :BuildQt
+DEL /F /Q "!CACHE_DIRECTORY!\qtshadertools-6.12.0.build_complete" 2>NUL
 FOR %%D IN (install debug_cmake) DO (
   IF EXIST %%D (
     RD /S /Q %%D || EXIT /B 1
