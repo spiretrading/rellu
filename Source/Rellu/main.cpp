@@ -1,6 +1,10 @@
 #include <QApplication>
 #include <QMainWindow>
+#include <QtPlugin>
 #include "Rellu/Rendering/Canvas.hpp"
+
+Q_IMPORT_PLUGIN(QModernWindowsStylePlugin)
+Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)
 
 using namespace Rellu;
 
