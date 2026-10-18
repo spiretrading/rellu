@@ -22,6 +22,7 @@ namespace {
   constexpr auto LUMINANCE_LEVELS = 1 << LUMINANCE_BITS;
   constexpr auto CONTRAST = 128.0f / 255.0f;
   constexpr auto MAXIMUM_RASTERIZED_SIZE = 256.0;
+  constexpr auto MAXIMUM_LAYERS = std::size_t(32);
 
   using OpacityTable = std::array<double, 17>;
 
@@ -151,7 +152,7 @@ namespace {
     return mask;
   }
 
-  CoverageMask combine(const std::vector<Placement>& placements) {
+  Rect get_bounds(const std::vector<Placement>& placements) {
     auto left = std::numeric_limits<int>::max();
     auto top = left;
     auto right = std::numeric_limits<int>::min();
@@ -166,10 +167,70 @@ namespace {
       right = std::max(right, placement.m_x + mask.m_left + mask.m_width);
       bottom = std::max(bottom, placement.m_y + mask.m_top + mask.m_height);
     }
-    auto result = CoverageMask();
     if(left >= right || top >= bottom) {
+      return Rect(0, 0, 0, 0);
+    }
+    return Rect(left, top, right - left, bottom - top);
+  }
+
+  std::vector<std::vector<Placement>> separate(
+      const std::vector<Placement>& placements) {
+    auto layers = std::vector<std::vector<Placement>>();
+    auto bounds = get_bounds(placements);
+    if(bounds.is_empty()) {
+      return layers;
+    }
+    auto left = static_cast<int>(bounds.m_x);
+    auto top = static_cast<int>(bounds.m_y);
+    auto width = static_cast<int>(bounds.m_width);
+    auto height = static_cast<int>(bounds.m_height);
+    auto occupancy = std::vector<std::uint32_t>(width * height, 0);
+    for(auto& placement : placements) {
+      auto& mask = *placement.m_mask;
+      auto x = placement.m_x + mask.m_left - left;
+      auto y = placement.m_y + mask.m_top - top;
+      auto used = std::uint32_t(0);
+      for(auto row = 0; row != mask.m_height; ++row) {
+        auto source = mask.m_coverage.data() + row * mask.m_width;
+        auto target = occupancy.data() + (y + row) * width + x;
+        for(auto column = 0; column != mask.m_width; ++column) {
+          if(source[column] != 0) {
+            used |= target[column];
+          }
+        }
+      }
+      auto layer = std::size_t(0);
+      while(layer + 1 != MAXIMUM_LAYERS &&
+          (used & (std::uint32_t(1) << layer))) {
+        ++layer;
+      }
+      for(auto row = 0; row != mask.m_height; ++row) {
+        auto source = mask.m_coverage.data() + row * mask.m_width;
+        auto target = occupancy.data() + (y + row) * width + x;
+        for(auto column = 0; column != mask.m_width; ++column) {
+          if(source[column] != 0) {
+            target[column] |= std::uint32_t(1) << layer;
+          }
+        }
+      }
+      if(layers.size() <= layer) {
+        layers.resize(layer + 1);
+      }
+      layers[layer].push_back(placement);
+    }
+    return layers;
+  }
+
+  CoverageMask combine(const std::vector<Placement>& placements) {
+    auto bounds = get_bounds(placements);
+    auto result = CoverageMask();
+    if(bounds.is_empty()) {
       return result;
     }
+    auto left = static_cast<int>(bounds.m_x);
+    auto top = static_cast<int>(bounds.m_y);
+    auto right = left + static_cast<int>(bounds.m_width);
+    auto bottom = top + static_cast<int>(bounds.m_height);
     result.m_left = left;
     result.m_top = top;
     result.m_width = right - left;
@@ -256,6 +317,20 @@ bool TextRasterizer::is_outlined(
       transform.m_d * transform.m_d) > limit;
 }
 
+Point TextRasterizer::get_origin(
+    const PlacedGlyph& glyph, const Matrix& transform) {
+  auto origin = transform.map(glyph.m_origin);
+  auto x = std::floor(origin.m_x * SUBPIXELS + 0.5) / SUBPIXELS;
+  auto y = std::floor(origin.m_y * SUBPIXELS + 0.5) / SUBPIXELS;
+  if(transform.m_a == 0 && transform.m_d == 0) {
+    x = std::floor(x + 0.5);
+    y = std::floor(y + 0.5);
+  } else if(transform.m_b == 0 && transform.m_c == 0) {
+    y = std::floor(origin.m_y + 0.5);
+  }
+  return Point(x, y);
+}
+
 std::vector<TextRaster> TextRasterizer::rasterize(
     const TextLayout& layout, const Matrix& transform) const {
   auto rasters = std::vector<TextRaster>();
@@ -265,8 +340,6 @@ std::vector<TextRaster> TextRasterizer::rasterize(
   auto scale = std::sqrt(std::abs(transform.get_determinant()));
   auto residual = Matrix(transform.m_a / scale, transform.m_b / scale,
     transform.m_c / scale, transform.m_d / scale, 0, 0);
-  auto is_horizontal = transform.m_b == 0 && transform.m_c == 0;
-  auto is_vertical = transform.m_a == 0 && transform.m_d == 0;
   auto colors = std::vector<std::pair<Color, std::vector<Placement>>>();
   auto get_placements = [&] (std::size_t first, Color color) ->
       std::vector<Placement>& {
@@ -279,23 +352,16 @@ std::vector<TextRaster> TextRasterizer::rasterize(
   };
   auto lock = std::lock_guard(m_backend->m_mutex);
   for(auto& glyph : layout.m_glyphs) {
-    if(is_outlined(glyph, transform)) {
+    if(is_outlined(glyph, transform) ||
+        !glyph.m_typeface->get_color_layers(glyph.m_index).empty()) {
       continue;
     }
-    auto origin = transform.map(glyph.m_origin);
-    auto x = std::floor(origin.m_x * SUBPIXELS + 0.5) / SUBPIXELS;
-    if(is_vertical) {
-      x = std::floor(origin.m_x + 0.5);
-    }
-    auto y = std::floor(origin.m_y * SUBPIXELS + 0.5) / SUBPIXELS;
-    if(is_horizontal) {
-      y = std::floor(origin.m_y + 0.5);
-    }
-    auto column = std::floor(x);
-    auto row = std::floor(y);
+    auto origin = get_origin(glyph, transform);
+    auto column = std::floor(origin.m_x);
+    auto row = std::floor(origin.m_y);
     auto offset = residual;
-    offset.m_tx = x - column;
-    offset.m_ty = y - row;
+    offset.m_tx = origin.m_x - column;
+    offset.m_ty = origin.m_y - row;
     auto& mask = m_backend->get(glyph, glyph.m_size * scale, offset);
     get_placements(0, glyph.m_color).push_back(Placement(
       &mask, static_cast<int>(column), static_cast<int>(row)));
@@ -310,10 +376,18 @@ std::vector<TextRaster> TextRasterizer::rasterize(
     get_placements(first, layout.m_decorations[i].m_color).push_back(
       Placement(&decorations[i], 0, 0));
   }
-  for(auto& color : colors) {
-    auto mask = combine(color.second);
-    if(!mask.m_coverage.empty()) {
-      rasters.push_back(TextRaster(std::move(mask), color.first));
+  for(auto i = std::size_t(0); i != colors.size(); ++i) {
+    auto layers = std::vector<std::vector<Placement>>();
+    if(i < first) {
+      layers = separate(colors[i].second);
+    } else {
+      layers.push_back(std::move(colors[i].second));
+    }
+    for(auto& layer : layers) {
+      auto mask = combine(layer);
+      if(!mask.m_coverage.empty()) {
+        rasters.push_back(TextRaster(std::move(mask), colors[i].first));
+      }
     }
   }
   return rasters;

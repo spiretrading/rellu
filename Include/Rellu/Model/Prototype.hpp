@@ -3,6 +3,7 @@
 #include <string>
 #include <variant>
 #include <vector>
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Model/NodeId.hpp"
 
@@ -29,7 +30,7 @@ namespace Rellu {
     /** The delay in seconds. */
     double m_delay = 0;
 
-    bool operator ==(const TimeTrigger&) const = default;
+    bool operator ==(const TimeTrigger& trigger) const;
   };
 
   /** Lists the devices a key trigger listens to. */
@@ -96,7 +97,7 @@ namespace Rellu {
     /** The duration in seconds. */
     double m_duration = 0;
 
-    bool operator ==(const Animation&) const = default;
+    bool operator ==(const Animation& animation) const;
   };
 
   /** Navigates to another artboard. */
@@ -222,6 +223,16 @@ namespace Rellu {
 
     bool operator ==(const Prototype&) const = default;
   };
+
+  inline bool TimeTrigger::operator ==(const TimeTrigger& trigger) const {
+    return equals(m_delay, trigger.m_delay);
+  }
+
+  inline bool Animation::operator ==(const Animation& animation) const {
+    return m_transition == animation.m_transition &&
+      m_easing == animation.m_easing &&
+      equals(m_duration, animation.m_duration);
+  }
 }
 
 #endif

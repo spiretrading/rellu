@@ -1,8 +1,9 @@
 #ifndef RELLU_MODEL_NODE_STORE_HPP
 #define RELLU_MODEL_NODE_STORE_HPP
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <memory>
-#include <unordered_map>
 #include <vector>
 #include "Rellu/Model/Node.hpp"
 #include "Rellu/Model/NodeId.hpp"
@@ -16,6 +17,9 @@ namespace Rellu {
    */
   class NodeStore {
     public:
+
+      /** Constructs an empty NodeStore. */
+      NodeStore() noexcept;
 
       /** Returns the number of nodes. */
       std::size_t get_size() const;
@@ -80,15 +84,32 @@ namespace Rellu {
       Node& edit(const NodeId& id);
 
     private:
+      friend class Transaction;
+      static constexpr auto NONE = std::numeric_limits<std::size_t>::max();
       struct Slot {
         std::shared_ptr<const Node> m_record;
+        std::uint64_t m_mark;
         bool m_is_mutable;
+      };
+      struct Bucket {
+        std::uint32_t m_slot;
+        std::uint32_t m_tag;
       };
       std::vector<Slot> m_slots;
       std::vector<std::size_t> m_free;
-      std::unordered_map<NodeId, std::size_t> m_index;
+      std::vector<Bucket> m_buckets;
+      std::size_t m_size;
+      int m_shift;
 
+      std::size_t find_slot(const NodeId& id) const;
+      std::size_t add(std::shared_ptr<const Node> record, bool is_mutable);
+      Node& edit_slot(std::size_t slot);
+      std::shared_ptr<const Node> remove_slot(std::size_t slot);
       std::size_t allocate();
+      std::size_t find_bucket(const NodeId& id) const;
+      void place(std::uint32_t tag, std::uint32_t slot);
+      void erase_bucket(std::size_t bucket);
+      void rehash(std::size_t capacity);
   };
 
   void NodeStore::for_each(auto f) const {

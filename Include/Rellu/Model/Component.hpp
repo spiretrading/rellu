@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Model/NodeId.hpp"
 
 namespace Rellu {
@@ -59,7 +60,7 @@ namespace Rellu {
     /** The modification time of the linked element, in milliseconds. */
     double m_last_modified = 0;
 
-    bool operator ==(const ComponentLink&) const = default;
+    bool operator ==(const ComponentLink& link) const;
   };
 
   /** A reusable master design with states. */
@@ -85,6 +86,12 @@ namespace Rellu {
 
     bool operator ==(const Component&) const = default;
   };
+
+  inline bool ComponentLink::operator ==(const ComponentLink& link) const {
+    return m_reference == link.m_reference &&
+      m_source_name == link.m_source_name &&
+      equals(m_last_modified, link.m_last_modified);
+  }
 }
 
 #endif

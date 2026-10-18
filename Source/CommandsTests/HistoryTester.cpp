@@ -125,9 +125,14 @@ TEST_SUITE("History") {
     auto scene = build_scene(document);
     auto history = History(document);
     auto before = take_snapshot(document);
+    auto count = 0;
+    auto subscription = document.subscribe([&] (const auto&) {
+      ++count;
+    });
     for(auto i = 0; i != 10; ++i) {
       REQUIRE(history.merge(make_move(scene.m_rectangle, Point(1, 2))));
     }
+    REQUIRE(count == 10);
     REQUIRE(history.get_undo_count() == 1);
     REQUIRE(history.get_undo_label() == "Move");
     REQUIRE(get_world_transform(document, scene.m_rectangle) ==
@@ -170,6 +175,7 @@ TEST_SUITE("History") {
     REQUIRE(history.get_undo_label() == "Name");
     REQUIRE(!history.is_dirty());
     REQUIRE(take_snapshot(document) == clean);
+    REQUIRE(!document.can_redo());
     REQUIRE(history.merge(make_move(scene.m_rectangle, Point(1, 0))));
     REQUIRE(history.get_undo_count() == 2);
   }
@@ -243,6 +249,59 @@ TEST_SUITE("History") {
     REQUIRE(document.get(scene.m_loose).m_header.m_name == "Loose");
     REQUIRE(get_world_transform(document, scene.m_rectangle) ==
       make_translation(111, 60));
+  }
+
+  TEST_CASE("execution_in_observer") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto history = History(document);
+    auto is_executed = false;
+    auto subscription = document.subscribe([&] (const auto&) {
+      if(!is_executed) {
+        is_executed = true;
+        REQUIRE(history.execute(make_rename(scene.m_rectangle, "Box")));
+      }
+    });
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(scene.m_loose).m_header;
+      header.m_name = "External";
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    REQUIRE(history.get_undo_count() == 2);
+    REQUIRE(history.get_undo_label() == "Name");
+    REQUIRE(history.undo());
+    REQUIRE(document.get(scene.m_rectangle).m_header.m_name == "Rectangle");
+    REQUIRE(history.get_undo_label().empty());
+    REQUIRE(history.undo());
+    REQUIRE(document.get(scene.m_loose).m_header.m_name == "Loose");
+  }
+
+  TEST_CASE("commit_in_observer") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto history = History(document);
+    auto is_committed = false;
+    auto subscription = document.subscribe([&] (const auto&) {
+      if(!is_committed) {
+        is_committed = true;
+        auto transaction = Transaction(document);
+        auto header = document.get(scene.m_loose).m_header;
+        header.m_name = "External";
+        transaction.replace_header(header);
+        transaction.commit();
+      }
+    });
+    REQUIRE(history.execute(make_move(scene.m_rectangle, Point(1, 0))));
+    REQUIRE(history.get_undo_count() == 2);
+    REQUIRE(history.get_undo_label().empty());
+    REQUIRE(history.undo());
+    REQUIRE(document.get(scene.m_loose).m_header.m_name == "Loose");
+    REQUIRE(history.get_undo_label() == "Move");
+    REQUIRE(history.undo());
+    REQUIRE(get_world_transform(document, scene.m_rectangle) ==
+      make_translation(110, 60));
   }
 
   TEST_CASE("annotation") {

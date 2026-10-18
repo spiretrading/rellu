@@ -2,6 +2,7 @@
 #define RELLU_MODEL_SHAPE_GEOMETRY_HPP
 #include <variant>
 #include <vector>
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
@@ -35,7 +36,7 @@ namespace Rellu {
     /** The vertical radius. */
     double m_y_radius = 0;
 
-    bool operator ==(const EllipseShape&) const = default;
+    bool operator ==(const EllipseShape& ellipse) const;
   };
 
   /** A straight line segment. */
@@ -68,7 +69,7 @@ namespace Rellu {
      */
     std::vector<Point> m_vertices;
 
-    bool operator ==(const PolygonShape&) const = default;
+    bool operator ==(const PolygonShape& polygon) const;
   };
 
   /** An arbitrary outline. */
@@ -124,6 +125,19 @@ namespace Rellu {
    * @return The outline, which for a CompoundShape is its stored result.
    */
   Path to_path(const ShapeGeometry& geometry);
+
+  inline bool EllipseShape::operator ==(const EllipseShape& ellipse) const {
+    return m_center == ellipse.m_center &&
+      equals(m_x_radius, ellipse.m_x_radius) &&
+      equals(m_y_radius, ellipse.m_y_radius);
+  }
+
+  inline bool PolygonShape::operator ==(const PolygonShape& polygon) const {
+    return m_corner_count == polygon.m_corner_count &&
+      m_size == polygon.m_size &&
+      equals(m_corner_radius, polygon.m_corner_radius) &&
+      m_vertices == polygon.m_vertices;
+  }
 }
 
 #endif

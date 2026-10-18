@@ -1,5 +1,5 @@
-#ifndef RELLU_FORMAT_DOCUMENT_COMPARISON_HPP
-#define RELLU_FORMAT_DOCUMENT_COMPARISON_HPP
+#ifndef RELLU_MODEL_DOCUMENT_COMPARISON_HPP
+#define RELLU_MODEL_DOCUMENT_COMPARISON_HPP
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -9,7 +9,8 @@ namespace Rellu {
 
   /**
    * Compares two documents structurally: the canvas, every node by id, the
-   * resources and the prototype. Undo history and observers are ignored.
+   * resources, the prototype and the opaque data. Undo history and
+   * observers are ignored.
    * @param left The first document.
    * @param right The second document.
    * @param limit The largest number of differences reported.

@@ -186,9 +186,13 @@ TEST_SUITE("Undo") {
       transaction.commit();
     }
     auto edited = take_snapshot(document);
+    REQUIRE(document.get_undo_count() == 3);
+    REQUIRE(document.get_redo_count() == 0);
     REQUIRE(document.undo());
     REQUIRE(take_snapshot(document) == removed);
     REQUIRE(document.undo());
+    REQUIRE(document.get_undo_count() == 1);
+    REQUIRE(document.get_redo_count() == 2);
     REQUIRE(take_snapshot(document) == built);
     REQUIRE(document.undo());
     REQUIRE(take_snapshot(document) == empty);
@@ -209,6 +213,117 @@ TEST_SUITE("Undo") {
     document.clear_history();
     REQUIRE(!document.can_undo());
     REQUIRE(!document.can_redo());
+  }
+
+  TEST_CASE("reinsertion") {
+    auto document = Document();
+    auto sample = build_sample(document);
+    require_undoable(document, [&] (auto& transaction) {
+      auto header = document.get(sample.m_rectangle).m_header;
+      transaction.remove(sample.m_stack);
+      header.m_name = "Reinserted";
+      transaction.append(sample.m_artboard, header, Group());
+      transaction.append(
+        sample.m_rectangle, make_header("Child"), make_rectangle_shape(1, 1));
+    });
+  }
+
+  TEST_CASE("amend") {
+    auto document = Document();
+    auto sample = build_sample(document);
+    auto before = take_snapshot(document);
+    auto changes = std::vector<ChangeSet>();
+    auto subscription = document.subscribe([&] (const auto& change) {
+      changes.push_back(change);
+    });
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(sample.m_text).m_header;
+      header.m_name = "First";
+      transaction.replace_header(header);
+      REQUIRE(transaction.commit());
+    }
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(sample.m_text).m_header;
+      header.m_name = "Second";
+      transaction.replace_header(header);
+      transaction.remove(sample.m_stack);
+      transaction.append(sample.m_artboard, make_header("Added"), Group());
+      REQUIRE(transaction.amend());
+    }
+    auto after = take_snapshot(document);
+    REQUIRE(document.get_undo_count() == 2);
+    REQUIRE(changes.size() == 2);
+    REQUIRE(changes[1].m_removed.front() == sample.m_stack);
+    REQUIRE(changes[1].m_inserted.size() == 1);
+    REQUIRE(changes[1].m_modified.size() == 2);
+    REQUIRE(document.undo());
+    REQUIRE(take_snapshot(document) == before);
+    REQUIRE(changes.back().m_inserted.front() == sample.m_stack);
+    REQUIRE(changes.back().m_removed.size() == 1);
+    REQUIRE(document.get_undo_count() == 1);
+    REQUIRE(document.redo());
+    REQUIRE(take_snapshot(document) == after);
+  }
+
+  TEST_CASE("cancelled_amend") {
+    auto document = Document();
+    auto sample = build_sample(document);
+    auto before = take_snapshot(document);
+    auto count = 0;
+    auto subscription = document.subscribe([&] (const auto&) {
+      ++count;
+    });
+    auto rename = [&] (const std::string& name) {
+      auto transaction = Transaction(document);
+      auto header = document.get(sample.m_text).m_header;
+      header.m_name = name;
+      transaction.replace_header(header);
+      return transaction.amend();
+    };
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(sample.m_text).m_header;
+      header.m_name = "Renamed";
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    REQUIRE(document.get_undo_count() == 2);
+    REQUIRE(!rename("Text"));
+    REQUIRE(count == 2);
+    REQUIRE(document.get_undo_count() == 1);
+    REQUIRE(take_snapshot(document) == before);
+    REQUIRE(rename("Text"));
+    REQUIRE(count == 2);
+    REQUIRE(document.get_undo_count() == 1);
+  }
+
+  TEST_CASE("amend_history") {
+    auto document = Document();
+    auto sample = build_sample(document);
+    auto rename = [&] (const std::string& name) {
+      auto transaction = Transaction(document);
+      auto header = document.get(sample.m_text).m_header;
+      header.m_name = name;
+      transaction.replace_header(header);
+      return transaction.amend();
+    };
+    {
+      auto transaction = Transaction(document);
+      transaction.move(sample.m_loose, NodeId(), 0);
+      transaction.commit();
+    }
+    REQUIRE(document.undo());
+    REQUIRE(document.can_redo());
+    REQUIRE(rename("Renamed"));
+    REQUIRE(!document.can_redo());
+    REQUIRE(document.get_undo_count() == 1);
+    document.clear_history();
+    REQUIRE(rename("Again"));
+    REQUIRE(document.get_undo_count() == 1);
+    REQUIRE(document.undo());
+    REQUIRE(document.get(sample.m_text).m_header.m_name == "Renamed");
   }
 
   TEST_CASE("published") {

@@ -43,7 +43,7 @@ TEST_SUITE("Transaction") {
       make_rectangle_shape(1, 1));
     REQUIRE(document.get(child).m_parent == second);
     REQUIRE(document.get_children(second) == std::vector<NodeId>({child}));
-    transaction.commit();
+    REQUIRE(transaction.commit());
     REQUIRE(document.get_nodes().get_size() == 4);
     REQUIRE(document.can_undo());
   }
@@ -177,6 +177,16 @@ TEST_SUITE("Transaction") {
     recolored.m_style.m_fill = SolidFill(make_color(0, 255, 0));
     transaction.replace_payload(id, recolored);
     REQUIRE(document.get(id).get_text()->m_layout);
+    auto restyled = recolored;
+    restyled.m_runs[0].m_style.m_color = make_color(0, 0, 255);
+    restyled.m_runs[0].m_style.m_is_underlined = true;
+    restyled.m_runs[0].m_character_style = generate_node_id();
+    transaction.replace_payload(id, restyled);
+    REQUIRE(document.get(id).get_text()->m_layout == text.m_layout);
+    auto respaced = restyled;
+    respaced.m_runs[0].m_style.m_letter_spacing = 50;
+    transaction.replace_payload(id, respaced);
+    REQUIRE(!document.get(id).get_text()->m_layout);
     auto relaid = make_text(u"Goodbye");
     auto replacement = layout;
     replacement.m_paragraphs[0].m_lines[0].m_runs[0].m_to = 7;
@@ -187,6 +197,32 @@ TEST_SUITE("Transaction") {
     edited.m_frame = AutoHeightFrame(100);
     transaction.replace_payload(id, edited);
     REQUIRE(!document.get(id).get_text()->m_layout);
+    transaction.commit();
+  }
+
+  TEST_CASE("stored_layout_colors") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto text = make_text(u"Hello World");
+    text.m_runs[0].m_length = 5;
+    text.m_runs.push_back(TextRun(6, text.m_base_style));
+    auto layout = StoredLayout();
+    layout.m_paragraphs.emplace_back();
+    layout.m_paragraphs.back().m_lines.emplace_back();
+    auto& runs = layout.m_paragraphs.back().m_lines.back().m_runs;
+    runs.push_back(
+      StoredRun(0, 5, Point(0, 14), std::nullopt, make_color(1, 2, 3)));
+    runs.push_back(
+      StoredRun(5, 11, Point(30, 14), std::nullopt, make_color(4, 5, 6)));
+    text.m_layout = Shared(layout);
+    auto id = transaction.append(NodeId(), make_header("Text"), text);
+    auto recolored = text;
+    recolored.m_runs[1].m_style.m_color = make_color(0, 255, 0);
+    transaction.replace_payload(id, recolored);
+    auto& stored = **document.get(id).get_text()->m_layout;
+    auto& line = stored.m_paragraphs[0].m_lines[0];
+    REQUIRE(line.m_runs[0] == runs[0]);
+    REQUIRE(line.m_runs[1] == StoredRun(5, 11, Point(30, 14)));
     transaction.commit();
   }
 
@@ -576,7 +612,7 @@ TEST_SUITE("Transaction") {
       ++count;
     });
     auto transaction = Transaction(document);
-    transaction.commit();
+    REQUIRE(!transaction.commit());
     REQUIRE(count == 0);
     REQUIRE(!document.can_undo());
   }

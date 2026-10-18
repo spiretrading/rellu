@@ -1,6 +1,7 @@
 #ifndef RELLU_GEOMETRY_SIZE_HPP
 #define RELLU_GEOMETRY_SIZE_HPP
 #include <ostream>
+#include "Rellu/Geometry/Equality.hpp"
 
 namespace Rellu {
 
@@ -16,7 +17,7 @@ namespace Rellu {
     /** Returns <code>true</code> iff either dimension is not positive. */
     constexpr bool is_empty() const;
 
-    bool operator ==(const Size&) const = default;
+    constexpr bool operator ==(const Size& size) const;
   };
 
   constexpr bool Size::is_empty() const {
@@ -25,6 +26,10 @@ namespace Rellu {
 
   inline std::ostream& operator <<(std::ostream& out, Size size) {
     return out << '(' << size.m_width << ", " << size.m_height << ')';
+  }
+
+  constexpr bool Size::operator ==(const Size& size) const {
+    return equals(m_width, size.m_width) && equals(m_height, size.m_height);
   }
 }
 

@@ -16,6 +16,7 @@
 #include "Rellu/Model/Node.hpp"
 #include "Rellu/Model/NodeHeader.hpp"
 #include "Rellu/Model/NodeId.hpp"
+#include "Rellu/Model/OpaqueData.hpp"
 #include "Rellu/Model/Transaction.hpp"
 
 namespace Rellu {
@@ -73,7 +74,10 @@ namespace Rellu {
     CANVAS,
 
     /** Data linking nodes once every node exists, such as interactions. */
-    LINKS
+    LINKS,
+
+    /** The data the model does not represent, once the document is complete. */
+    PRESERVATION
   };
 
   /** A node being imported. */
@@ -111,6 +115,22 @@ namespace Rellu {
 
     /** The data importers keep for the node. */
     XdStates m_states;
+  };
+
+  /** A node an import inserted and the JSON it was read from. */
+  struct XdNodeRecord {
+
+    /** The node's id. */
+    NodeId m_id;
+
+    /** The node's JSON. */
+    QJsonObject m_json;
+
+    /**
+     * The children whose import failed, each with the id of the imported
+     * child it precedes, nil if no imported child follows it.
+     */
+    std::vector<std::pair<NodeId, QJsonObject>> m_orphans;
   };
 
   /**
@@ -261,6 +281,18 @@ namespace Rellu {
        */
       void warn(std::string_view message);
 
+      /** Returns the nodes inserted so far, with their JSON. */
+      const std::vector<XdNodeRecord>& get_records() const;
+
+      /** Returns the opaque data set for the document. */
+      const OpaqueData& get_opaque() const;
+
+      /**
+       * Sets the opaque data given to the document once the import commits.
+       * @param opaque The data.
+       */
+      void set_opaque(OpaqueData opaque);
+
     private:
       const XdImporter* m_importer;
       const XdPackage* m_package;
@@ -272,6 +304,8 @@ namespace Rellu {
       std::unique_ptr<XdObject> m_pasteboard;
       std::vector<std::unique_ptr<XdObject>> m_artboards;
       std::unique_ptr<XdObject> m_interactions;
+      std::vector<XdNodeRecord> m_records;
+      OpaqueData m_opaque;
 
       XdImport(const XdImport&) = delete;
       XdImport& operator =(const XdImport&) = delete;

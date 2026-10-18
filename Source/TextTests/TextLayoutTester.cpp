@@ -248,6 +248,51 @@ TEST_SUITE("TextLayout") {
       doctest::Approx(metrics.m_superscript_size * FONT.m_size));
   }
 
+  TEST_CASE("fallback_emboldening") {
+    auto text = make_text(u"a➔b");
+    auto regular = lay_out(text, get_library());
+    text.m_base_style.m_font = Font("Arial", "Bold", "Arial-BoldMT", 20);
+    auto bold = lay_out(text, get_library());
+    REQUIRE(regular.m_glyphs.size() == 3);
+    REQUIRE(bold.m_glyphs.size() == 3);
+    auto& typeface = *bold.m_glyphs[1].m_typeface;
+    REQUIRE(&typeface == regular.m_glyphs[1].m_typeface.get());
+    auto advance = typeface.shape(u"➔", 0, 1).front().m_advance;
+    auto units = typeface.get_units_per_em();
+    auto get_advance = [] (const TextLayout& layout) {
+      return layout.m_glyphs[2].m_origin.m_x - layout.m_glyphs[1].m_origin.m_x;
+    };
+    REQUIRE(get_advance(regular) == doctest::Approx(advance * 20));
+    REQUIRE(get_advance(bold) ==
+      doctest::Approx((advance + std::round(units / 50.0) / units) * 20));
+  }
+
+  TEST_CASE("color_glyph") {
+    auto layout = lay_out(make_text(u"✅"), get_library());
+    REQUIRE(layout.m_glyphs.size() == 1);
+    auto& glyph = layout.m_glyphs.front();
+    REQUIRE(!glyph.m_typeface->get_color_layers(glyph.m_index).empty());
+    auto fills = outline(layout);
+    REQUIRE(fills.size() > 1);
+    for(auto& fill : fills) {
+      REQUIRE(!fill.m_path.is_empty());
+    }
+    REQUIRE(fills.front().m_color != Color(0, 0, 0, 1));
+  }
+
+  TEST_CASE("fallback_line_metrics") {
+    auto plain = make_text(u"a");
+    plain.m_frame = AutoHeightFrame(200);
+    auto fallback = make_text(u"a✅");
+    fallback.m_frame = AutoHeightFrame(200);
+    auto emoji = lay_out(fallback, get_library());
+    auto& typeface = *emoji.m_glyphs[1].m_typeface;
+    REQUIRE(emoji.m_glyphs[0].m_origin.m_y == std::max(get_ascent(),
+      std::floor(typeface.get_metrics().m_line_ascent * FONT.m_size + 0.5)));
+    REQUIRE(emoji.m_glyphs[0].m_origin.m_y >
+      lay_out(plain, get_library()).m_glyphs[0].m_origin.m_y);
+  }
+
   TEST_CASE("runs") {
     auto text = make_text(u"redblue");
     text.m_runs.push_back(TextRun(3, text.m_base_style));

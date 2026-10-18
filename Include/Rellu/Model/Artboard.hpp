@@ -3,6 +3,7 @@
 #include <optional>
 #include <vector>
 #include "Rellu/Geometry/Color.hpp"
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Rect.hpp"
 #include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/Layout.hpp"
@@ -56,7 +57,7 @@ namespace Rellu {
     /** The color of the square grid's horizontal lines. */
     Color m_square_row_color = Color(0, 0, 0, 0);
 
-    bool operator ==(const LayoutGrid&) const = default;
+    bool operator ==(const LayoutGrid& grid) const;
   };
 
   /** A guide line on an artboard. */
@@ -68,7 +69,7 @@ namespace Rellu {
     /** The offset of the guide from the artboard's origin. */
     double m_position = 0;
 
-    bool operator ==(const Guide&) const = default;
+    bool operator ==(const Guide& guide) const;
   };
 
   /**
@@ -92,8 +93,33 @@ namespace Rellu {
     /** The guides. */
     std::vector<Guide> m_guides;
 
-    bool operator ==(const Artboard&) const = default;
+    bool operator ==(const Artboard& artboard) const;
   };
+
+  inline bool LayoutGrid::operator ==(const LayoutGrid& grid) const {
+    return m_type == grid.m_type && m_is_visible == grid.m_is_visible &&
+      m_column_count == grid.m_column_count &&
+      equals(m_gutter, grid.m_gutter) &&
+      equals(m_default_width, grid.m_default_width) &&
+      m_margins == grid.m_margins && m_column_color == grid.m_column_color &&
+      m_row_color == grid.m_row_color &&
+      m_square_size == grid.m_square_size &&
+      m_square_column_color == grid.m_square_column_color &&
+      m_square_row_color == grid.m_square_row_color;
+  }
+
+  inline bool Guide::operator ==(const Guide& guide) const {
+    return m_orientation == guide.m_orientation &&
+      equals(m_position, guide.m_position);
+  }
+
+  inline bool Artboard::operator ==(const Artboard& artboard) const {
+    return m_frame == artboard.m_frame &&
+      m_background == artboard.m_background &&
+      equals(m_viewport_height, artboard.m_viewport_height) &&
+      m_layout_grid == artboard.m_layout_grid &&
+      m_guides == artboard.m_guides;
+  }
 }
 
 #endif

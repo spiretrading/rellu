@@ -4,6 +4,7 @@
 #include <cmath>
 #include <optional>
 #include <ostream>
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
 
@@ -45,7 +46,7 @@ namespace Rellu {
      */
     constexpr Rect map(const Rect& rect) const;
 
-    bool operator ==(const Matrix&) const = default;
+    constexpr bool operator ==(const Matrix& matrix) const;
   };
 
   /**
@@ -173,6 +174,12 @@ namespace Rellu {
     return out << '(' << matrix.m_a << ", " << matrix.m_b << ", " <<
       matrix.m_c << ", " << matrix.m_d << ", " << matrix.m_tx << ", " <<
       matrix.m_ty << ')';
+  }
+
+  constexpr bool Matrix::operator ==(const Matrix& matrix) const {
+    return equals(m_a, matrix.m_a) && equals(m_b, matrix.m_b) &&
+      equals(m_c, matrix.m_c) && equals(m_d, matrix.m_d) &&
+      equals(m_tx, matrix.m_tx) && equals(m_ty, matrix.m_ty);
   }
 }
 

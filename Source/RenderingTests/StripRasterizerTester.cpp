@@ -127,17 +127,22 @@ TEST_SUITE("StripRasterizer") {
       }
       return 0.0;
     }) < 0.5 / 255);
+  }
+
+  TEST_CASE("short_path") {
+    auto size = QSize(8, 8);
     auto shallow = Path();
     shallow.move_to(Point(0, 1));
     shallow.line_to(Point(8, 1));
     shallow.line_to(Point(8, 2));
     shallow.close();
-    auto shallow_coverage = get_coverage(rasterize(shallow, size), size);
-    REQUIRE(get_maximum_error(shallow_coverage, size, [] (int x, int y) {
+    auto coverage = get_coverage(rasterize(shallow, size), size);
+    REQUIRE(get_maximum_error(coverage, size, [] (int x, int y) {
       if(y != 1) {
         return 0.0;
       }
-      return (2 * x + 1) / 16.0;
+      auto samples = 4 * ((x + 1) / 2);
+      return std::min(16.0 * samples, 255.0) / 255;
     }) < 0.5 / 255);
   }
 
@@ -297,6 +302,32 @@ TEST_SUITE("StripRasterizer") {
     auto thick = draw(Point(1, 2.5), Point(15, 2.5), 3);
     REQUIRE(thick[16 + 8] == 1);
     REQUIRE(thick[3 * 16 + 8] == 1);
+  }
+
+  TEST_CASE("stroke_outline") {
+    auto size = QSize(16, 16);
+    auto draw = [&] (const Path& line, double width) {
+      auto list = DrawList();
+      auto fill = FillCommand(share(outline_stroke(line, StrokeGeometry(width,
+        StrokeAlignment::CENTER, StrokeCap::BUTT, StrokeJoin::MITER, 4, {}, 0),
+        0.01)), Matrix(), SolidPaint(make_color(0, 0, 0)));
+      fill.m_stroke = StrokeLine(share(line), width, StrokeCap::BUTT);
+      list.push_back(fill);
+      auto scene = StripScene();
+      auto rasterizer = StripRasterizer();
+      rasterizer.rasterize(list, Matrix(), size, scene);
+      return get_coverage(scene, size);
+    };
+    auto snapped = draw(make_line(Point(1, 4.07), Point(15, 4.07)), 2);
+    for(auto x = 2; x != 14; ++x) {
+      REQUIRE(snapped[3 * 16 + x] == 1);
+      REQUIRE(snapped[4 * 16 + x] == 1);
+      REQUIRE(snapped[5 * 16 + x] == 0);
+    }
+    auto diagonal = draw(make_line(Point(2, 2), Point(4, 4)), 2);
+    for(auto value : diagonal) {
+      REQUIRE((std::lround(value * 255) + 1) % 16 <= 1);
+    }
   }
 
   TEST_CASE("view") {

@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include "Rellu/Geometry/Color.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Geometry/Point.hpp"
 
@@ -99,6 +100,16 @@ namespace Rellu {
     Point m_offset;
   };
 
+  /** A layer of a color glyph. */
+  struct ColorLayer {
+
+    /** The index of the glyph whose outline the layer fills. */
+    std::uint32_t m_index = 0;
+
+    /** The color of the layer, or none for the color of the text. */
+    std::optional<Color> m_color;
+  };
+
   /** Lists the properties identifying a font face. */
   struct TypefaceNames {
 
@@ -183,6 +194,9 @@ namespace Rellu {
       /** Returns the vertical metrics. */
       const TypefaceMetrics& get_metrics() const;
 
+      /** Returns the number of design units in an em. */
+      int get_units_per_em() const;
+
       /**
        * Returns whether this face maps a character to a glyph.
        * @param character The Unicode code point.
@@ -207,6 +221,14 @@ namespace Rellu {
        */
       const Path& get_outline(std::uint32_t index) const;
 
+      /**
+       * Returns the layers of a color glyph from the bottom up, empty if the
+       * glyph is not a color glyph.
+       * @param index The glyph's index.
+       */
+      const std::vector<ColorLayer>& get_color_layers(
+        std::uint32_t index) const;
+
     private:
       std::shared_ptr<const void> m_data;
       std::filesystem::path m_path;
@@ -215,11 +237,14 @@ namespace Rellu {
       hb_blob_t* m_blob;
       hb_face_t* m_face;
       hb_font_t* m_font;
+      int m_units_per_em;
       double m_scale;
       TypefaceNames m_names;
       TypefaceMetrics m_metrics;
       mutable std::mutex m_mutex;
       mutable std::unordered_map<std::uint32_t, Path> m_outlines;
+      mutable std::unordered_map<std::uint32_t, std::vector<ColorLayer>>
+        m_color_layers;
 
       Typeface(std::shared_ptr<const void> data, std::filesystem::path path,
         hb_blob_t* blob, unsigned int index,

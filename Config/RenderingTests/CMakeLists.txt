@@ -1,5 +1,7 @@
 file(GLOB source_files ${RELLU_SOURCE_PATH}/RenderingTests/*.cpp)
 add_executable(RenderingTests ${source_files})
+target_include_directories(
+  RenderingTests PRIVATE ${RELLU_SOURCE_PATH}/Rendering)
 target_link_libraries(RenderingTests PRIVATE RelluRendering)
 rellu_link_dependencies(RenderingTests PRIVATE DOCTEST QT_OFFSCREEN QT_WINDOWS)
 add_custom_command(TARGET RenderingTests POST_BUILD COMMAND RenderingTests)

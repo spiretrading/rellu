@@ -28,9 +28,9 @@ namespace {
 History::History(Document& document)
     : m_document(&document),
       m_clean(0),
+      m_base(document.get_undo_count()),
       m_is_open(false),
-      m_is_applying(false),
-      m_publications(0) {
+      m_is_applying(false) {
   m_subscription = document.subscribe([this] (const ChangeSet&) {
     on_change();
   });
@@ -41,11 +41,15 @@ Document& History::get_document() const {
 }
 
 const Command* History::execute(std::unique_ptr<Command> command) {
+  synchronize();
   auto is_changed = [&] {
     auto guard = Guard(m_is_applying);
-    return apply(*command);
+    auto transaction = Transaction(*m_document);
+    command->apply(*m_document, transaction);
+    return transaction.commit();
   }();
   if(!is_changed) {
+    synchronize();
     return nullptr;
   }
   auto label = command->get_label();
@@ -53,39 +57,41 @@ const Command* History::execute(std::unique_ptr<Command> command) {
   push(Step(std::move(label), std::move(command), std::any()));
   m_is_open = true;
   m_signal();
+  synchronize();
   return result;
 }
 
 const Command* History::merge(std::unique_ptr<Command> command) {
+  synchronize();
   if(!m_is_open || m_undo.empty() || !m_undo.back().m_command ||
       !m_undo.back().m_command->merge(*command)) {
     return execute(std::move(command));
   }
-  auto& step = m_undo.back();
-  auto is_changed = false;
-  {
+  auto is_recorded = [&] {
     auto guard = Guard(m_is_applying);
-    m_document->undo();
     try {
-      is_changed = apply(*step.m_command);
+      auto transaction = Transaction(*m_document);
+      command->apply(*m_document, transaction);
+      return transaction.amend();
     } catch(...) {
-      m_document->redo();
       m_is_open = false;
       throw;
     }
-  }
+  }();
   if(m_clean == m_undo.size()) {
     m_clean = std::nullopt;
   }
-  if(!is_changed) {
+  auto result = static_cast<const Command*>(nullptr);
+  if(is_recorded) {
+    auto& step = m_undo.back();
+    step.m_label = step.m_command->get_label();
+    result = step.m_command.get();
+  } else {
     m_undo.pop_back();
     m_is_open = false;
-    m_signal();
-    return nullptr;
   }
-  step.m_label = step.m_command->get_label();
-  auto result = step.m_command.get();
   m_signal();
+  synchronize();
   return result;
 }
 
@@ -138,6 +144,7 @@ std::any* History::get_redo_annotation() {
 }
 
 bool History::undo() {
+  synchronize();
   if(m_undo.empty()) {
     return false;
   }
@@ -153,6 +160,7 @@ bool History::undo() {
 }
 
 bool History::redo() {
+  synchronize();
   if(m_redo.empty()) {
     return false;
   }
@@ -182,6 +190,7 @@ void History::mark_clean() {
 void History::clear() {
   auto is_clean = !is_dirty();
   m_document->clear_history();
+  m_base = 0;
   m_undo.clear();
   m_redo.clear();
   if(is_clean) {
@@ -197,16 +206,6 @@ Subscription History::subscribe(std::function<void ()> observer) {
   return m_signal.subscribe(std::move(observer));
 }
 
-bool History::apply(Command& command) {
-  auto publications = m_publications;
-  {
-    auto transaction = Transaction(*m_document);
-    command.apply(*m_document, transaction);
-    transaction.commit();
-  }
-  return m_publications != publications;
-}
-
 void History::push(Step step) {
   if(m_clean && *m_clean > m_undo.size()) {
     m_clean = std::nullopt;
@@ -215,12 +214,20 @@ void History::push(Step step) {
   m_undo.push_back(std::move(step));
 }
 
-void History::on_change() {
-  if(m_is_applying) {
-    ++m_publications;
+void History::synchronize() {
+  auto count = m_document->get_undo_count();
+  if(m_base + m_undo.size() >= count) {
     return;
   }
-  push(Step(std::string(), nullptr, std::any()));
+  while(m_base + m_undo.size() < count) {
+    push(Step(std::string(), nullptr, std::any()));
+  }
   m_is_open = false;
   m_signal();
+}
+
+void History::on_change() {
+  if(!m_is_applying) {
+    synchronize();
+  }
 }

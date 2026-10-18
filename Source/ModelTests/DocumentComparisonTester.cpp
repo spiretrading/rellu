@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <string>
 #include <doctest/doctest.h>
-#include "Rellu/Format/DocumentComparison.hpp"
+#include "Rellu/Model/DocumentComparison.hpp"
 #include "Rellu/Model/Transaction.hpp"
 
 using namespace Rellu;
@@ -111,6 +111,26 @@ TEST_SUITE("DocumentComparison") {
     REQUIRE(differences.size() == 2);
     REQUIRE(contains(differences, "swatch 0"));
     REQUIRE(contains(differences, "home artboard differs"));
+  }
+
+  TEST_CASE("opaque_difference") {
+    auto left = Document();
+    build(left);
+    auto right = Document();
+    build(right);
+    {
+      auto transaction = Transaction(right);
+      auto header = right.get(make_id(2)).m_header;
+      header.m_opaque = OpaqueData(std::string("kept"));
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    right.set_opaque(OpaqueData(std::string("package")));
+    auto differences = find_differences(left, right);
+    REQUIRE(differences.size() == 2);
+    REQUIRE(differences.front() ==
+      "node " + to_string(make_id(2)) + ": opaque data differs");
+    REQUIRE(differences.back() == "document opaque data differs");
   }
 
   TEST_CASE("limit") {

@@ -100,6 +100,45 @@ TEST_SUITE("TextRasterizer") {
     REQUIRE(quarter[0].m_mask.m_coverage != base[0].m_mask.m_coverage);
   }
 
+  TEST_CASE("overlapping_glyphs") {
+    auto layout = make_layout(u"H", Color(0, 0, 0, 1));
+    layout.m_glyphs.push_back(layout.m_glyphs.front());
+    auto rasters =
+      get_default_text_rasterizer().rasterize(layout, make_translation(0, 20));
+    REQUIRE(rasters.size() == 2);
+    REQUIRE(rasters[0].m_mask.m_coverage == rasters[1].m_mask.m_coverage);
+    REQUIRE(rasters[0].m_mask.m_left == rasters[1].m_mask.m_left);
+    auto apart = make_layout(u"H H", Color(0, 0, 0, 1));
+    REQUIRE(get_default_text_rasterizer().rasterize(
+      apart, make_translation(0, 20)).size() == 1);
+  }
+
+  TEST_CASE("origin") {
+    auto glyph = make_layout(u"H", Color(0, 0, 0, 1)).m_glyphs.front();
+    glyph.m_origin = Point(10.3, 20.4);
+    REQUIRE(TextRasterizer::get_origin(glyph, Matrix()) == Point(10.25, 20));
+    auto vertical = Matrix(0, -1, 1, 0, 0, 0);
+    glyph.m_origin = Point(-14.458, 9.3);
+    REQUIRE(TextRasterizer::get_origin(glyph, vertical) == Point(9, 15));
+    glyph.m_origin = Point(-14.3, 9.6);
+    REQUIRE(TextRasterizer::get_origin(glyph, vertical) == Point(10, 14));
+    auto rotated = make_rotation(0.5);
+    glyph.m_origin = Point(3, 4);
+    auto origin = rotated.map(glyph.m_origin);
+    auto quarter = [] (double value) {
+      return std::floor(value * 4 + 0.5) / 4;
+    };
+    REQUIRE(TextRasterizer::get_origin(glyph, rotated) ==
+      Point(quarter(origin.m_x), quarter(origin.m_y)));
+  }
+
+  TEST_CASE("color_glyphs") {
+    auto layout = make_layout(u"✅", Color(0, 0, 0, 1));
+    REQUIRE(layout.m_glyphs.size() == 1);
+    REQUIRE(get_default_text_rasterizer().rasterize(
+      layout, make_translation(0, 20)).empty());
+  }
+
   TEST_CASE("colors") {
     auto text = Text();
     text.m_content = Shared(std::u16string(u"ab"));

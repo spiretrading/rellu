@@ -46,6 +46,7 @@ namespace {
 
 Document::Document()
   : m_observers(std::make_shared<Observers>()),
+    m_transactions(0),
     m_is_publishing(false),
     m_has_transaction(false) {}
 
@@ -96,6 +97,14 @@ bool Document::can_redo() const {
   return !m_redo.empty();
 }
 
+std::size_t Document::get_undo_count() const {
+  return m_undo.size();
+}
+
+std::size_t Document::get_redo_count() const {
+  return m_redo.size();
+}
+
 bool Document::undo() {
   if(m_has_transaction) {
     throw std::logic_error("Undo while a transaction is open.");
@@ -106,9 +115,8 @@ bool Document::undo() {
   auto revision = std::move(m_undo.back());
   m_undo.pop_back();
   swap(revision);
-  auto changes = reverse(revision.m_changes);
   m_redo.push_back(std::move(revision));
-  publish(std::move(changes));
+  publish(reverse(m_redo.back().m_changes));
   return true;
 }
 
@@ -122,9 +130,8 @@ bool Document::redo() {
   auto revision = std::move(m_redo.back());
   m_redo.pop_back();
   swap(revision);
-  auto changes = revision.m_changes;
   m_undo.push_back(std::move(revision));
-  publish(std::move(changes));
+  publish(m_undo.back().m_changes);
   return true;
 }
 
@@ -170,11 +177,14 @@ void Document::swap(Revision& revision) {
   swap_value(m_prototype.m_flows, revision.m_flows);
 }
 
-void Document::publish(ChangeSet changes) {
-  m_pending.push_back(std::move(changes));
+void Document::publish(const ChangeSet& changes) {
   if(m_is_publishing) {
+    m_pending.push_back(changes);
+    return;
+  } else if(m_observers->m_entries.empty()) {
     return;
   }
+  m_pending.push_back(changes);
   m_is_publishing = true;
   struct Guard {
     bool& m_is_publishing;

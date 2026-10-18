@@ -2,6 +2,7 @@
 #define RELLU_GEOMETRY_COLOR_HPP
 #include <cstdint>
 #include <ostream>
+#include "Rellu/Geometry/Equality.hpp"
 
 namespace Rellu {
 
@@ -23,7 +24,7 @@ namespace Rellu {
     /** The opacity, where 0 is fully transparent and 1 is fully opaque. */
     double m_alpha;
 
-    bool operator ==(const Color&) const = default;
+    constexpr bool operator ==(const Color& color) const;
   };
 
   /**
@@ -52,6 +53,11 @@ namespace Rellu {
   inline std::ostream& operator <<(std::ostream& out, const Color& color) {
     return out << '(' << color.m_red << ", " << color.m_green << ", " <<
       color.m_blue << ", " << color.m_alpha << ')';
+  }
+
+  constexpr bool Color::operator ==(const Color& color) const {
+    return equals(m_red, color.m_red) && equals(m_green, color.m_green) &&
+      equals(m_blue, color.m_blue) && equals(m_alpha, color.m_alpha);
   }
 }
 

@@ -9,6 +9,8 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <map>
 #include <set>
 #include <string>
 #include <string_view>
@@ -38,8 +40,8 @@ using namespace Rellu;
 namespace {
   constexpr auto THRESHOLDS = std::array<int, 6>({2, 4, 8, 16, 32, 64});
   const auto UNSUPPORTED = std::set<std::string>({"broken_reference",
-    "font_substitution", "missing", "not_exported", "scroll_group",
-    "text_effect", "text_paint", "text_stroke"});
+    "font_style_substitution", "missing", "not_exported", "text_effect",
+    "text_paint", "text_stroke"});
 
   struct Options {
     std::filesystem::path m_corpus;
@@ -65,7 +67,15 @@ namespace {
     int m_items = 0;
     int m_matches = 0;
     int m_size_matches = 0;
+    int m_within_16 = 0;
+    int m_within_2 = 0;
+    int m_identical = 0;
   };
+
+  bool is_within(
+      const ImageComparison& comparison, bool is_size_match, int difference) {
+    return is_size_match && comparison.m_maximum_difference <= difference;
+  }
 
   std::vector<Font> get_fonts(const Text& text) {
     auto fonts = std::vector<Font>();
@@ -122,8 +132,9 @@ namespace {
         m_features.insert("text_stroke");
       }
       for(auto& font : get_fonts(text)) {
-        if(!is_exact(get_default_font_library().resolve(font).m_match)) {
-          m_features.insert("font_substitution");
+        auto match = get_default_font_library().resolve(font).m_match;
+        if(match == FontMatch::FAMILY || match == FontMatch::NONE) {
+          m_features.insert("font_style_substitution");
         }
       }
     }
@@ -215,8 +226,17 @@ namespace {
         if(group->m_mask) {
           m_features.insert("mask");
         }
+        if(group->m_repeat_grid) {
+          m_features.insert("repeat_grid");
+        }
         if(group->m_scroll_group) {
           m_features.insert("scroll_group");
+        }
+        if(group->m_stack) {
+          m_features.insert("stack");
+        }
+        if(group->m_padding) {
+          m_features.insert("padding");
         }
       }
       ++m_depth;
@@ -438,7 +458,8 @@ namespace {
     auto summary = std::ofstream(options.m_output / "summary.csv");
     summary << "document,index,guid,name,type,in_scope,features,scale,"
       "expected_width,expected_height,actual_width,actual_height,"
-      "size_match,mismatch_fraction,max_difference,mean_difference,match";
+      "size_match,mismatch_fraction,max_difference,mean_difference,match,"
+      "within_16,within_2,identical";
     for(auto threshold : THRESHOLDS) {
       summary << ",over_" << threshold;
     }
@@ -449,6 +470,7 @@ namespace {
     auto tallies = std::array<std::array<Tally, 3>, 2>();
     auto all = std::array<Tally, 3>();
     auto item_counts = std::array<int, 2>();
+    auto reasons = std::map<std::string, std::array<int, 2>>();
     for(auto& path : documents) {
       if(!options.m_filter.empty() &&
           to_string(path).find(options.m_filter) == std::string::npos) {
@@ -500,6 +522,14 @@ namespace {
           dump(document, *id, Matrix(), 0);
         }
         ++item_counts[static_cast<int>(scope)];
+        auto unsupported = std::vector<std::string>();
+        std::ranges::set_intersection(collector.m_features, UNSUPPORTED,
+          std::back_inserter(unsupported));
+        for(auto& name : unsupported) {
+          auto& count = reasons[name];
+          ++count[0];
+          count[1] += unsupported.size() == 1;
+        }
         for(auto& image : item.m_images) {
           auto scale = image.first;
           auto expected = QImage(image.second);
@@ -538,21 +568,28 @@ namespace {
             compare_images(actual, expected, options.m_tolerance);
           auto difference = measure(actual, expected);
           auto is_size_match = actual.size() == expected.size();
+          auto is_within_16 = is_within(comparison, is_size_match, 16);
+          auto is_within_2 = is_within(comparison, is_size_match, 2);
+          auto is_identical = is_within(comparison, is_size_match, 0);
           for(auto& tally : {&all, &tallies[static_cast<int>(scope)]}) {
             auto& entry = (*tally)[scale];
             ++entry.m_items;
             entry.m_matches += comparison.m_is_match;
             entry.m_size_matches += is_size_match;
+            entry.m_within_16 += is_within_16;
+            entry.m_within_2 += is_within_2;
+            entry.m_identical += is_identical;
           }
           summary << std::format("{},{},{},{},{},{},{},{},{},{},{},{},{},"
-            "{:.6f},{},{:.4f},{}", escape(to_string(path)), item.m_index,
-            to_string(item.m_guid), escape(to_string(item.m_name)),
-            to_string(item.m_type), to_name(scope),
-            join(collector.m_features), scale, expected.width(),
-            expected.height(), actual.width(), actual.height(),
-            is_size_match ? 1 : 0, comparison.m_fraction,
+            "{:.6f},{},{:.4f},{},{},{},{}", escape(to_string(path)),
+            item.m_index, to_string(item.m_guid),
+            escape(to_string(item.m_name)), to_string(item.m_type),
+            to_name(scope), join(collector.m_features), scale,
+            expected.width(), expected.height(), actual.width(),
+            actual.height(), is_size_match ? 1 : 0, comparison.m_fraction,
             comparison.m_maximum_difference, comparison.m_mean_difference,
-            comparison.m_is_match ? 1 : 0);
+            comparison.m_is_match ? 1 : 0, is_within_16 ? 1 : 0,
+            is_within_2 ? 1 : 0, is_identical ? 1 : 0);
           for(auto count : difference.m_counts) {
             summary << ',' << count;
           }
@@ -572,13 +609,19 @@ namespace {
     }
     std::cout << std::format("\n{} items: {} in scope, {} out of scope\n",
       item_counts[0] + item_counts[1], item_counts[1], item_counts[0]);
+    for(auto& reason : reasons) {
+      std::cout << std::format("out of scope for {}: {} ({} for it alone)\n",
+        reason.first, reason.second[0], reason.second[1]);
+    }
     for(auto scope : {Scope::FULL, Scope::EXCLUDED}) {
       for(auto scale = 1; scale <= 2; ++scale) {
         auto& tally = scope == Scope::EXCLUDED ? all[scale] :
           tallies[static_cast<int>(scope)][scale];
-        std::cout << std::format("{} {}x: {} of {} match, {} sizes match\n",
+        std::cout << std::format("{} {}x: {} of {} match, {} sizes match, {} "
+          "within 16, {} within 2, {} identical\n",
           scope == Scope::EXCLUDED ? "all" : to_name(scope), scale,
-          tally.m_matches, tally.m_items, tally.m_size_matches);
+          tally.m_matches, tally.m_items, tally.m_size_matches,
+          tally.m_within_16, tally.m_within_2, tally.m_identical);
       }
     }
     return 0;

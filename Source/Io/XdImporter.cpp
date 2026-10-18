@@ -97,18 +97,23 @@ ImportReport XdImporter::import(
     const XdPackage& package, Document& document) const {
   auto report = ImportReport();
   auto start = std::chrono::steady_clock::now();
+  auto opaque = OpaqueData();
   {
     auto transaction = Transaction(document);
     auto import = XdImport(*this, package, document, transaction, report);
     for(auto phase : {XdPhase::RESOURCES, XdPhase::COMPONENTS,
-        XdPhase::CANVAS, XdPhase::LINKS}) {
+        XdPhase::CANVAS, XdPhase::LINKS, XdPhase::PRESERVATION}) {
       for(auto& importer : m_document_importers) {
         if(importer.first == phase) {
           importer.second(import);
         }
       }
     }
+    opaque = import.get_opaque();
     transaction.commit();
+  }
+  if(!opaque.is_empty()) {
+    document.set_opaque(std::move(opaque));
   }
   document.clear_history();
   report.m_build_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -248,18 +253,46 @@ NodeId XdImport::import_node(
   node.m_payload = std::nullopt;
   node.m_is_inserted = true;
   ++m_report->m_node_count;
+  auto record = XdNodeRecord(node.m_header.m_id, json.get_json(),
+    std::vector<std::pair<NodeId, QJsonObject>>());
   if(node.m_children) {
+    auto pending = std::vector<QJsonObject>();
     for(auto child : node.m_children->get_json()) {
       if(child.isObject()) {
-        auto child_json = make_node_json(child.toObject());
-        import_node(*child_json, &node, XdNodeRole::NODE);
+        auto object = child.toObject();
+        auto child_json = make_node_json(object);
+        auto id = import_node(*child_json, &node, XdNodeRole::NODE);
+        if(id.is_nil()) {
+          pending.push_back(std::move(object));
+        } else {
+          for(auto& orphan : pending) {
+            record.m_orphans.emplace_back(id, std::move(orphan));
+          }
+          pending.clear();
+        }
       }
+    }
+    for(auto& orphan : pending) {
+      record.m_orphans.emplace_back(NodeId(), std::move(orphan));
     }
   }
   for(auto& finisher : m_importer->m_finishers) {
     finisher(node);
   }
+  m_records.push_back(std::move(record));
   return node.m_header.m_id;
+}
+
+const std::vector<XdNodeRecord>& XdImport::get_records() const {
+  return m_records;
+}
+
+const OpaqueData& XdImport::get_opaque() const {
+  return m_opaque;
+}
+
+void XdImport::set_opaque(OpaqueData opaque) {
+  m_opaque = std::move(opaque);
 }
 
 void XdImport::warn(std::string_view message) {

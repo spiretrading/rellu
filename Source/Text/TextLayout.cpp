@@ -4,12 +4,14 @@
 #include <QChar>
 #include <QString>
 #include <QTextBoundaryFinder>
+#include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Text/TextLayout.hpp"
 
 using namespace Rellu;
 
 namespace {
   constexpr auto TAB_INTERVAL = 4.0;
+  constexpr auto EMBOLDENING_DIVISOR = 50.0;
 
   struct Span {
     std::size_t m_start;
@@ -18,7 +20,7 @@ namespace {
   };
 
   struct Item {
-    std::shared_ptr<const Typeface> m_typeface;
+    FontFallback m_face;
     std::size_t m_start;
     std::size_t m_length;
   };
@@ -56,6 +58,24 @@ namespace {
     return category == QChar::Mark_NonSpacing ||
       category == QChar::Mark_SpacingCombining ||
       category == QChar::Mark_Enclosing;
+  }
+
+  void append(Path& path, const Path& outline, const Matrix& transform) {
+    for(auto& segment : outline.get_segments()) {
+      auto& points = segment.m_points;
+      if(segment.m_type == SegmentType::MOVE) {
+        path.move_to(transform.map(points[0]));
+      } else if(segment.m_type == SegmentType::LINE) {
+        path.line_to(transform.map(points[0]));
+      } else if(segment.m_type == SegmentType::QUADRATIC) {
+        path.quadratic_to(transform.map(points[0]), transform.map(points[1]));
+      } else if(segment.m_type == SegmentType::CUBIC) {
+        path.cubic_to(transform.map(points[0]), transform.map(points[1]),
+          transform.map(points[2]));
+      } else {
+        path.close();
+      }
+    }
   }
 
   QString to_qstring(std::u16string_view text) {
@@ -114,16 +134,20 @@ namespace {
         character = QChar::surrogateToUcs4(text[i], text[i + 1]);
         length = 2;
       }
-      auto typeface = primary;
+      auto face = FontFallback(primary, false);
       if(is_mark(character) && !items.empty()) {
-        typeface = items.back().m_typeface;
+        face = items.back().m_face;
       } else if(!is_invisible(character) && !primary->has_glyph(character)) {
-        if(auto fallback = library.find_fallback(character)) {
-          typeface = std::move(fallback);
+        if(auto fallback =
+            library.find_fallback(character, primary->get_names());
+            fallback.m_typeface) {
+          face = std::move(fallback);
         }
       }
-      if(items.empty() || items.back().m_typeface != typeface) {
-        items.push_back(Item(std::move(typeface), i, length));
+      if(items.empty() ||
+          items.back().m_face.m_typeface != face.m_typeface ||
+          items.back().m_face.m_is_emboldened != face.m_is_emboldened) {
+        items.push_back(Item(std::move(face), i, length));
       } else {
         items.back().m_length += length;
       }
@@ -156,17 +180,25 @@ namespace {
     auto flush = [&] {
       display = apply_transform(display, style.m_transform);
       for(auto& item : itemize(display, resolution.m_typeface, library)) {
-        auto glyphs =
-          item.m_typeface->shape(display, item.m_start, item.m_length);
+        auto& typeface = item.m_face.m_typeface;
+        auto glyphs = typeface->shape(display, item.m_start, item.m_length);
+        auto emboldening = 0.0;
+        if(item.m_face.m_is_emboldened) {
+          auto units = typeface->get_units_per_em();
+          emboldening = std::round(units / EMBOLDENING_DIVISOR) / units;
+        }
         for(auto i = std::size_t(0); i != glyphs.size(); ++i) {
           auto& glyph = glyphs[i];
-          if(layout &&
-              !item.m_typeface->get_outline(glyph.m_index).is_empty()) {
-            layout->m_glyphs.push_back(PlacedGlyph(item.m_typeface,
-              glyph.m_index, Point(x + glyph.m_offset.m_x * size,
+          if(layout && (!typeface->get_outline(glyph.m_index).is_empty() ||
+              !typeface->get_color_layers(glyph.m_index).empty())) {
+            layout->m_glyphs.push_back(PlacedGlyph(typeface, glyph.m_index,
+              Point(x + glyph.m_offset.m_x * size,
                 baseline + glyph.m_offset.m_y * size), size, color));
           }
           x += glyph.m_advance * size;
+          if(glyph.m_advance != 0) {
+            x += emboldening * size;
+          }
           if(i + 1 == glyphs.size() ||
               glyphs[i + 1].m_cluster != glyph.m_cluster) {
             x += spacing;
@@ -361,23 +393,36 @@ namespace {
   LineMetrics measure_line(const Line& line, const std::vector<Span>& spans,
       const Text& text, const FontLibrary& library) {
     auto metrics = LineMetrics(0, 0);
-    auto add = [&] (const Font& font) {
+    auto add_face = [&] (const Typeface& typeface, double size) {
+      auto& face = typeface.get_metrics();
+      auto ascent = std::floor(face.m_line_ascent * size + 0.5);
+      auto descent = std::floor(face.m_line_descent * size + 0.5);
+      metrics.m_ascent = std::max(metrics.m_ascent, ascent);
+      metrics.m_descent = std::max(metrics.m_descent, descent);
+    };
+    auto add = [&] (const Font& font, std::size_t start, std::size_t end) {
       auto resolution = library.resolve(font);
       if(!resolution.m_typeface) {
         return;
       }
-      auto& face = resolution.m_typeface->get_metrics();
-      auto ascent = std::floor(face.m_line_ascent * font.m_size + 0.5);
-      auto descent = std::floor(face.m_line_descent * font.m_size + 0.5);
-      metrics.m_ascent = std::max(metrics.m_ascent, ascent);
-      metrics.m_descent = std::max(metrics.m_descent, descent);
+      add_face(*resolution.m_typeface, font.m_size);
+      auto content = std::u16string_view(*text.m_content).substr(
+        start, end - start);
+      for(auto& item :
+          itemize(std::u16string(content), resolution.m_typeface, library)) {
+        if(item.m_face.m_typeface != resolution.m_typeface) {
+          add_face(*item.m_face.m_typeface, font.m_size);
+        }
+      }
     };
     auto is_found = false;
     for(auto& segment : line.m_segments) {
       for(auto& span : spans) {
-        if(std::max(segment.m_start, span.m_start) <
-            std::min(segment.m_end, span.m_end)) {
-          add(segment.m_font ? *segment.m_font : span.m_style->m_font);
+        auto start = std::max(segment.m_start, span.m_start);
+        auto end = std::min(segment.m_end, span.m_end);
+        if(start < end) {
+          add(segment.m_font ? *segment.m_font : span.m_style->m_font, start,
+            end);
           is_found = true;
         }
       }
@@ -385,7 +430,7 @@ namespace {
     if(!is_found && !line.m_segments.empty()) {
       auto& segment = line.m_segments.front();
       add(segment.m_font ? *segment.m_font :
-        find_style(spans, text, segment.m_start).m_font);
+        find_style(spans, text, segment.m_start).m_font, 0, 0);
     }
     return metrics;
   }
@@ -494,25 +539,25 @@ std::vector<TextFill> Rellu::outline(const TextLayout& layout) {
     return fills.emplace_back(Path(), color);
   };
   for(auto& glyph : layout.m_glyphs) {
-    auto& path = get_fill(0, glyph.m_color).m_path;
-    auto map = [&] (Point point) {
-      return Point(glyph.m_origin.m_x + point.m_x * glyph.m_size,
-        glyph.m_origin.m_y + point.m_y * glyph.m_size);
-    };
-    for(auto& segment : glyph.m_typeface->get_outline(glyph.m_index).
-        get_segments()) {
-      auto& points = segment.m_points;
-      if(segment.m_type == SegmentType::MOVE) {
-        path.move_to(map(points[0]));
-      } else if(segment.m_type == SegmentType::LINE) {
-        path.line_to(map(points[0]));
-      } else if(segment.m_type == SegmentType::QUADRATIC) {
-        path.quadratic_to(map(points[0]), map(points[1]));
-      } else if(segment.m_type == SegmentType::CUBIC) {
-        path.cubic_to(map(points[0]), map(points[1]), map(points[2]));
-      } else {
-        path.close();
+    auto transform = Matrix(glyph.m_size, 0, 0, glyph.m_size,
+      glyph.m_origin.m_x, glyph.m_origin.m_y);
+    auto& layers = glyph.m_typeface->get_color_layers(glyph.m_index);
+    if(layers.empty()) {
+      append(get_fill(0, glyph.m_color).m_path,
+        glyph.m_typeface->get_outline(glyph.m_index), transform);
+      continue;
+    }
+    for(auto& layer : layers) {
+      auto color = glyph.m_color;
+      if(layer.m_color) {
+        color = *layer.m_color;
+        color.m_alpha *= glyph.m_color.m_alpha;
       }
+      if(fills.empty() || fills.back().m_color != color) {
+        fills.emplace_back(Path(), color);
+      }
+      append(fills.back().m_path,
+        glyph.m_typeface->get_outline(layer.m_index), transform);
     }
   }
   auto first = fills.size();

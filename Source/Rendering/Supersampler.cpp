@@ -260,6 +260,9 @@ namespace {
     Antialiasing get_antialiasing() const {
       auto width = m_right - m_left;
       auto height = m_bottom - m_top;
+      if(!(static_cast<float>(m_count) < height)) {
+        return Antialiasing::SUPERSAMPLED;
+      }
       if(m_count < COMPLEXITY_SAMPLES || !(width > 0 && height > 0)) {
         return Antialiasing::ANALYTIC;
       }
@@ -327,11 +330,6 @@ namespace {
     return x + y / 2;
   }
 
-  double get_scale(double width, const Matrix& matrix) {
-    return (std::hypot(matrix.m_a, matrix.m_b) +
-      std::hypot(matrix.m_c, matrix.m_d)) / 2 * width;
-  }
-
   bool is_rectangle(const Path& path, const Matrix& matrix) {
     auto corners = std::vector<Vector>();
     auto is_closed = false;
@@ -390,6 +388,25 @@ namespace {
       }
     }
     return true;
+  }
+
+  bool is_rectangle(const CurveOutline& outline) {
+    auto path = Path();
+    auto index = std::size_t(0);
+    for(auto verb : outline.m_verbs) {
+      if(verb == CurveOutline::Verb::MOVE) {
+        auto& point = outline.m_points[index++];
+        path.move_to(Point(point.m_x, point.m_y));
+      } else if(verb == CurveOutline::Verb::LINE) {
+        auto& point = outline.m_points[index++];
+        path.line_to(Point(point.m_x, point.m_y));
+      } else if(verb == CurveOutline::Verb::CLOSE) {
+        path.close();
+      } else {
+        return false;
+      }
+    }
+    return is_rectangle(path, Matrix());
   }
 
   std::int64_t snap_y(std::int64_t y) {
@@ -685,6 +702,8 @@ struct Supersampler::Buffers {
   std::vector<Line>* m_lines = nullptr;
 
   void add_curves(const Path& path, const Matrix& matrix);
+  void add_curves(const CurveOutline& outline);
+  void rasterize(const QRect& clip, bool is_clip, FillRule rule);
   void add_edges();
   void walk(bool is_mask, FillRule rule);
   void blit(int x, int y, int width, bool is_mask);
@@ -709,26 +728,10 @@ Antialiasing Supersampler::get_antialiasing(
   return measure.get_antialiasing();
 }
 
-Antialiasing Supersampler::get_antialiasing(const Path& outline,
-    const Path& line, double width, const Matrix& matrix) {
-  auto measure = measure_points(line, matrix);
-  if(!measure.is_bounded()) {
-    return Antialiasing::EXACT;
-  }
-  auto outline_measure = measure_points(outline, matrix);
-  if(outline_measure.m_count <= 2 * measure.m_count + 2) {
-    if(!outline_measure.is_bounded()) {
-      return Antialiasing::EXACT;
-    }
-    return outline_measure.get_antialiasing();
-  }
-  auto outset = static_cast<float>(get_scale(width, matrix) / 2);
-  measure.m_left -= outset;
-  measure.m_top -= outset;
-  measure.m_right += outset;
-  measure.m_bottom += outset;
-  measure.m_count = 2 * measure.m_count + 2;
-  return measure.get_antialiasing();
+bool Supersampler::is_frame(const Path& line, StrokeJoin join,
+    double miter_limit, const Matrix& matrix) {
+  return join == StrokeJoin::MITER && miter_limit >= std::numbers::sqrt2 &&
+    is_rectangle(line, matrix);
 }
 
 bool Supersampler::is_hairline(
@@ -742,22 +745,60 @@ bool Supersampler::is_hairline(
   return false;
 }
 
+Antialiasing Supersampler::get_antialiasing(const CurveOutline& outline) {
+  auto measure = Measure();
+  auto previous = Vector(0, 0);
+  for(auto& point : outline.m_points) {
+    auto mapped = Vector(point.m_x, point.m_y);
+    measure.m_left = std::min(measure.m_left, mapped.m_x);
+    measure.m_top = std::min(measure.m_top, mapped.m_y);
+    measure.m_right = std::max(measure.m_right, mapped.m_x);
+    measure.m_bottom = std::max(measure.m_bottom, mapped.m_y);
+    if(measure.m_count != 0 && measure.m_count < COMPLEXITY_SAMPLES) {
+      measure.m_length += std::hypot(
+        mapped.m_x - previous.m_x, mapped.m_y - previous.m_y);
+    }
+    previous = mapped;
+    ++measure.m_count;
+  }
+  if(!measure.is_bounded()) {
+    return Antialiasing::EXACT;
+  }
+  if(is_rectangle(outline)) {
+    return Antialiasing::ANALYTIC;
+  }
+  return measure.get_antialiasing();
+}
+
 void Supersampler::rasterize(const Path& path, const Matrix& matrix,
     const QRect& clip, bool is_clip) {
   auto& buffers = *m_buffers;
   buffers.m_curves.clear();
-  buffers.m_edges.clear();
-  buffers.m_coverage.clear();
-  buffers.m_bounds = QRect();
   buffers.add_curves(path, matrix);
-  if(buffers.m_curves.empty()) {
+  buffers.rasterize(clip, is_clip, path.get_fill_rule());
+}
+
+void Supersampler::rasterize(
+    const CurveOutline& outline, const QRect& clip, bool is_clip) {
+  auto& buffers = *m_buffers;
+  buffers.m_curves.clear();
+  buffers.add_curves(outline);
+  buffers.rasterize(clip, is_clip, FillRule::NON_ZERO);
+}
+
+void Supersampler::Buffers::rasterize(
+    const QRect& clip, bool is_clip, FillRule rule) {
+  m_edges.clear();
+  m_coverage.clear();
+  m_bounds = QRect();
+  if(m_curves.empty()) {
     return;
   }
   auto left = std::numeric_limits<float>::infinity();
   auto top = left;
   auto right = -left;
   auto bottom = -left;
-  for(auto& curve : buffers.m_curves) {
+  for(auto& curve : m_curves) {
     auto count = curve.m_type == CurveType::LINE ? 2 :
       curve.m_type == CurveType::CUBIC ? 4 : 3;
     for(auto i = 0; i != count; ++i) {
@@ -780,15 +821,15 @@ void Supersampler::rasterize(const Path& path, const Matrix& matrix,
   }
   auto is_mask = !is_clip && bounds.width() <= MASK_WIDTH &&
     ((bounds.width() + 3) & ~3) * bounds.height() <= MASK_STORAGE;
-  buffers.m_bounds = bounds & clip;
-  if(buffers.m_bounds.isEmpty()) {
-    buffers.m_bounds = QRect();
+  m_bounds = bounds & clip;
+  if(m_bounds.isEmpty()) {
+    m_bounds = QRect();
     return;
   }
-  buffers.m_coverage.assign(static_cast<std::size_t>(
-    buffers.m_bounds.width()) * buffers.m_bounds.height(), 0);
-  buffers.add_edges();
-  buffers.walk(is_mask, path.get_fill_rule());
+  m_coverage.assign(
+    static_cast<std::size_t>(m_bounds.width()) * m_bounds.height(), 0);
+  add_edges();
+  walk(is_mask, rule);
 }
 
 void Supersampler::trace(
@@ -800,6 +841,76 @@ void Supersampler::trace(
   buffers.m_lines = &lines;
   buffers.add_edges();
   buffers.m_lines = nullptr;
+}
+
+void Supersampler::trace(
+    const CurveOutline& outline, std::vector<Line>& lines) {
+  auto& buffers = *m_buffers;
+  lines.clear();
+  buffers.m_curves.clear();
+  buffers.add_curves(outline);
+  buffers.m_lines = &lines;
+  buffers.add_edges();
+  buffers.m_lines = nullptr;
+}
+
+void Supersampler::Buffers::add_curves(const CurveOutline& outline) {
+  auto start = Vector(0, 0);
+  auto current = start;
+  auto is_open = false;
+  auto close = [&] {
+    if(is_open && (current.m_x != start.m_x || current.m_y != start.m_y)) {
+      m_curves.push_back(Curve(CurveType::LINE, current, start));
+    }
+    current = start;
+    is_open = false;
+  };
+  auto& points = outline.m_points;
+  auto point = [&] (std::size_t index) {
+    return Vector(points[index].m_x, points[index].m_y);
+  };
+  auto index = std::size_t(0);
+  auto weight = std::size_t(0);
+  for(auto verb : outline.m_verbs) {
+    if(verb == CurveOutline::Verb::MOVE) {
+      close();
+      start = point(index++);
+      current = start;
+      is_open = true;
+    } else if(verb == CurveOutline::Verb::LINE) {
+      auto end = point(index++);
+      m_curves.push_back(Curve(CurveType::LINE, current, end));
+      current = end;
+      is_open = true;
+    } else if(verb == CurveOutline::Verb::QUADRATIC) {
+      auto control = point(index);
+      auto end = point(index + 1);
+      index += 2;
+      m_curves.push_back(Curve(CurveType::QUADRATIC, current, control, end));
+      current = end;
+      is_open = true;
+    } else if(verb == CurveOutline::Verb::CONIC) {
+      auto control = point(index);
+      auto end = point(index + 1);
+      index += 2;
+      m_curves.push_back(Curve(CurveType::CONIC, current, control, end,
+        Vector(), outline.m_weights[weight++]));
+      current = end;
+      is_open = true;
+    } else if(verb == CurveOutline::Verb::CUBIC) {
+      auto first = point(index);
+      auto second = point(index + 1);
+      auto end = point(index + 2);
+      index += 3;
+      m_curves.push_back(
+        Curve(CurveType::CUBIC, current, first, second, end));
+      current = end;
+      is_open = true;
+    } else {
+      close();
+    }
+  }
+  close();
 }
 
 const QRect& Supersampler::get_bounds() const {

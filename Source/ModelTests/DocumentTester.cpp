@@ -1,3 +1,4 @@
+#include <limits>
 #include <stdexcept>
 #include <doctest/doctest.h>
 #include "Rellu/Model/Document.hpp"
@@ -94,6 +95,77 @@ TEST_SUITE("Document") {
     REQUIRE(reference.get_kind() == NodeKind::REFERENCE);
     REQUIRE(reference.get_reference()->m_source == sample.m_master_shape);
     REQUIRE(!reference.get_shape());
+  }
+
+  TEST_CASE("not_a_number") {
+    constexpr auto NAN_VALUE = std::numeric_limits<double>::quiet_NaN();
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto header = make_header("Artboard");
+    header.m_opacity = NAN_VALUE;
+    header.m_transform = Matrix(NAN_VALUE, 0, 0, 1, NAN_VALUE, 0);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(NAN_VALUE, 0, 10, 10);
+    artboard.m_viewport_height = NAN_VALUE;
+    artboard.m_layout_grid = LayoutGrid();
+    artboard.m_layout_grid->m_gutter = NAN_VALUE;
+    artboard.m_layout_grid->m_margins.m_left = NAN_VALUE;
+    artboard.m_guides.push_back(Guide(Orientation::VERTICAL, NAN_VALUE));
+    artboard.m_background = SolidFill(Color(NAN_VALUE, 0, 0, 1));
+    auto artboard_id = transaction.append(NodeId(), header, artboard);
+    auto group = Group();
+    group.m_repeat_grid = RepeatGrid(Size(NAN_VALUE, 1), NAN_VALUE);
+    group.m_stack = Stack(Orientation::HORIZONTAL);
+    group.m_stack->m_spacing.emplace(generate_node_id(), NAN_VALUE);
+    auto group_id =
+      transaction.append(artboard_id, make_header("Group"), group);
+    auto shape = Shape();
+    shape.m_geometry = PolygonShape(5, Size(1, 1), NAN_VALUE,
+      std::vector<Point>({Point(NAN_VALUE, 0)}));
+    shape.m_style.m_stroke = Stroke(Color(0, 0, 0, 1), NAN_VALUE);
+    shape.m_style.m_stroke->m_dashes.push_back(NAN_VALUE);
+    shape.m_style.m_effects.push_back(
+      DropShadow(Point(0, 0), NAN_VALUE));
+    shape.m_style.m_effects.push_back(Blur(NAN_VALUE));
+    auto gradient = GradientFill();
+    gradient.m_stops.push_back(GradientStop(NAN_VALUE));
+    gradient.m_geometry = RadialGradient(Point(0, 0), NAN_VALUE);
+    shape.m_style.m_fill = gradient;
+    transaction.append(group_id, make_header("Polygon"), shape);
+    auto ellipse = Shape();
+    ellipse.m_geometry = EllipseShape(Point(0, 0), NAN_VALUE, NAN_VALUE);
+    auto image = ImageFill();
+    image.m_scale = NAN_VALUE;
+    ellipse.m_style.m_fill = image;
+    transaction.append(group_id, make_header("Ellipse"), ellipse);
+    auto text = make_text(u"Hello");
+    text.m_frame = AutoHeightFrame(NAN_VALUE);
+    text.m_runs[0].m_style.m_font.m_size = NAN_VALUE;
+    text.m_runs[0].m_style.m_letter_spacing = NAN_VALUE;
+    text.m_paragraph_style.m_line_height = NAN_VALUE;
+    text.m_paragraph_style.m_paragraph_spacing = NAN_VALUE;
+    auto text_id = transaction.append(artboard_id, make_header("Text"), text);
+    auto style = CharacterStyle(NodeId(), "Style", text.m_runs[0].m_style);
+    style.m_line_height = NAN_VALUE;
+    transaction.add_character_style(style);
+    auto master = transaction.insert_root(make_header("Master"), Group());
+    auto component = Component();
+    component.m_master = master;
+    component.m_link = ComponentLink("reference", "source", NAN_VALUE);
+    transaction.add_component(component);
+    transaction.add_interaction(Interaction(NodeId(), text_id,
+      TimeTrigger(NAN_VALUE), Overlay(artboard_id, Point(NAN_VALUE, 0),
+        Animation(Transition::DISSOLVE, Easing::LINEAR, NAN_VALUE))));
+    REQUIRE(transaction.commit());
+    auto snapshot = take_snapshot(document);
+    REQUIRE(snapshot == take_snapshot(document));
+    for(auto& entry : snapshot.m_nodes) {
+      REQUIRE(entry.second == Node(entry.second));
+    }
+    auto replacement = Transaction(document);
+    replacement.replace_header(document.get(artboard_id).m_header);
+    replacement.replace_payload(text_id, *document.get(text_id).get_text());
+    REQUIRE(!replacement.commit());
   }
 
   TEST_CASE("resources") {

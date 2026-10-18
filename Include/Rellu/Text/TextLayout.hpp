@@ -88,9 +88,10 @@ namespace Rellu {
 
   /**
    * Converts a TextLayout into filled regions, merging the glyphs and
-   * decorations of each color.
+   * decorations of each color, with each layer of a color glyph filled in
+   * its own color.
    * @param layout The layout to convert.
-   * @return The regions in order of each color's first appearance.
+   * @return The regions in the order they are drawn.
    */
   std::vector<TextFill> outline(const TextLayout& layout);
 }

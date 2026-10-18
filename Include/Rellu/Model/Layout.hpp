@@ -1,5 +1,6 @@
 #ifndef RELLU_MODEL_LAYOUT_HPP
 #define RELLU_MODEL_LAYOUT_HPP
+#include "Rellu/Geometry/Equality.hpp"
 
 namespace Rellu {
 
@@ -28,8 +29,14 @@ namespace Rellu {
     /** The space to the left. */
     double m_left = 0;
 
-    bool operator ==(const Margins&) const = default;
+    constexpr bool operator ==(const Margins& margins) const;
   };
+
+  constexpr bool Margins::operator ==(const Margins& margins) const {
+    return equals(m_top, margins.m_top) &&
+      equals(m_right, margins.m_right) &&
+      equals(m_bottom, margins.m_bottom) && equals(m_left, margins.m_left);
+  }
 }
 
 #endif

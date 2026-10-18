@@ -111,6 +111,26 @@ TEST_SUITE("ChangeSet") {
       std::vector<NodeId>({sample.m_interaction}));
   }
 
+  TEST_CASE("removal_order") {
+    auto document = Document();
+    auto sample = build_sample(document);
+    auto recorder = Recorder(document);
+    auto transaction = Transaction(document);
+    transaction.remove(sample.m_line);
+    transaction.remove(sample.m_rectangle);
+    transaction.remove(sample.m_artboard);
+    transaction.commit();
+    auto& changes = recorder.m_changes.back();
+    REQUIRE(changes.m_removed.front() == sample.m_artboard);
+    auto position = [&] (const NodeId& id) {
+      return std::ranges::find(changes.m_removed, id) -
+        changes.m_removed.begin();
+    };
+    REQUIRE(position(sample.m_stack) < position(sample.m_rectangle));
+    REQUIRE(position(sample.m_repeat_grid) < position(sample.m_line));
+    REQUIRE(position(sample.m_compound) < position(sample.m_first_operand));
+  }
+
   TEST_CASE("transient") {
     auto document = Document();
     auto recorder = Recorder(document);

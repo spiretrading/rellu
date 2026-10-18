@@ -1,6 +1,7 @@
 #include <memory>
 #include <set>
 #include <stdexcept>
+#include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Model/NodeStore.hpp"
 
@@ -84,6 +85,30 @@ TEST_SUITE("NodeStore") {
     shared.reset();
     store.edit(node.get_id()).m_header.m_name = "Copied";
     REQUIRE(store.get(node.get_id()).m_header.m_name == "Copied");
+  }
+
+  TEST_CASE("growth") {
+    auto store = NodeStore();
+    auto ids = std::vector<NodeId>();
+    for(auto i = 0; i != 5000; ++i) {
+      auto node = make_node("Node");
+      ids.push_back(node.get_id());
+      store.insert(node);
+    }
+    for(auto i = std::size_t(0); i < ids.size(); i += 2) {
+      REQUIRE(store.erase(ids[i]));
+    }
+    REQUIRE(store.get_size() == 2500);
+    for(auto i = std::size_t(0); i != ids.size(); ++i) {
+      REQUIRE(store.contains(ids[i]) == (i % 2 == 1));
+    }
+    for(auto i = std::size_t(0); i < ids.size(); i += 2) {
+      store.insert(make_node("Again"));
+    }
+    REQUIRE(store.get_size() == 5000);
+    for(auto i = std::size_t(1); i < ids.size(); i += 2) {
+      REQUIRE(store.get(ids[i]).get_id() == ids[i]);
+    }
   }
 
   TEST_CASE("for_each") {

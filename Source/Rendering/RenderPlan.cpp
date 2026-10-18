@@ -332,7 +332,7 @@ namespace {
       static_cast<float>(matrix.m_tx / width), to_float(PaintKind::TEXTURE)});
     record[1] = Texel({static_cast<float>(matrix.m_b / height),
       static_cast<float>(matrix.m_d / height),
-      static_cast<float>(matrix.m_ty / height), 0});
+      static_cast<float>(matrix.m_ty / height), 1});
     auto image_bounds = paint.m_transform.map(Rect(0, 0, width, height));
     auto margin = 1e-3 * std::max(image_bounds.m_width, image_bounds.m_height);
     auto path_bounds = Rellu::get_bounds(*command.m_path);

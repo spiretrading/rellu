@@ -1,11 +1,13 @@
+#include <cmath>
 #include <format>
+#include <optional>
 #include <map>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
-#include "Rellu/Format/DocumentComparison.hpp"
+#include "Rellu/Model/DocumentComparison.hpp"
 
 using namespace Rellu;
 
@@ -49,6 +51,18 @@ namespace {
     return std::move(m_differences);
   }
 
+  bool is_same(double left, double right) {
+    return left == right || (std::isnan(left) && std::isnan(right));
+  }
+
+  bool is_same(
+      const std::optional<double>& left, const std::optional<double>& right) {
+    if(!left || !right) {
+      return !left == !right;
+    }
+    return is_same(*left, *right);
+  }
+
   void compare(const NodeHeader& left, const NodeHeader& right,
       const std::string& subject, Collector& collector) {
     collector.check(left.m_name == right.m_name, subject, "name");
@@ -57,7 +71,8 @@ namespace {
     collector.check(left.m_is_locked == right.m_is_locked, subject, "lock");
     collector.check(
       left.m_transform == right.m_transform, subject, "transform");
-    collector.check(left.m_opacity == right.m_opacity, subject, "opacity");
+    collector.check(
+      is_same(left.m_opacity, right.m_opacity), subject, "opacity");
     collector.check(
       left.m_blend_mode == right.m_blend_mode, subject, "blend mode");
     collector.check(
@@ -66,6 +81,7 @@ namespace {
       left.m_constraints == right.m_constraints, subject, "constraints");
     collector.check(left.m_is_marked_for_export ==
       right.m_is_marked_for_export, subject, "export marking");
+    collector.check(left.m_opaque == right.m_opaque, subject, "opaque data");
   }
 
   void compare(const Style& left, const Style& right,
@@ -80,7 +96,7 @@ namespace {
     collector.check(left.m_frame == right.m_frame, subject, "frame");
     collector.check(
       left.m_background == right.m_background, subject, "background");
-    collector.check(left.m_viewport_height == right.m_viewport_height,
+    collector.check(is_same(left.m_viewport_height, right.m_viewport_height),
       subject, "viewport height");
     collector.check(
       left.m_layout_grid == right.m_layout_grid, subject, "layout grid");
@@ -276,6 +292,9 @@ std::vector<std::string> Rellu::find_differences(
   }
   if(left_prototype.m_flows != right_prototype.m_flows) {
     collector.add("flows differ");
+  }
+  if(left.get_opaque() != right.get_opaque()) {
+    collector.add("document opaque data differs");
   }
   return collector.release();
 }

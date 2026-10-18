@@ -4,6 +4,7 @@
 #include <variant>
 #include <vector>
 #include "Rellu/Geometry/Color.hpp"
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Gradient.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
@@ -98,7 +99,7 @@ namespace Rellu {
     /** Whether the image is mirrored vertically. */
     bool m_is_flipped_vertically = false;
 
-    bool operator ==(const ImageFill&) const = default;
+    bool operator ==(const ImageFill& fill) const;
   };
 
   /** The paint filling the interior of a node. */
@@ -131,7 +132,7 @@ namespace Rellu {
     /** Whether the stroke is drawn. */
     bool m_is_enabled = true;
 
-    bool operator ==(const Stroke&) const = default;
+    bool operator ==(const Stroke& stroke) const;
   };
 
   /** A shadow cast outside a node's outline. */
@@ -149,7 +150,7 @@ namespace Rellu {
     /** Whether the shadow is drawn. */
     bool m_is_visible = true;
 
-    bool operator ==(const DropShadow&) const = default;
+    bool operator ==(const DropShadow& shadow) const;
   };
 
   /** A shadow cast inside a node's outline. */
@@ -167,7 +168,7 @@ namespace Rellu {
     /** Whether the shadow is drawn. */
     bool m_is_visible = true;
 
-    bool operator ==(const InnerShadow&) const = default;
+    bool operator ==(const InnerShadow& shadow) const;
   };
 
   /** A blur of a node or of what lies behind it. */
@@ -188,7 +189,7 @@ namespace Rellu {
     /** Whether the blur is applied. */
     bool m_is_visible = true;
 
-    bool operator ==(const Blur&) const = default;
+    bool operator ==(const Blur& blur) const;
   };
 
   /** A visual effect applied to a node. */
@@ -208,6 +209,43 @@ namespace Rellu {
 
     bool operator ==(const Style&) const = default;
   };
+
+  inline bool ImageFill::operator ==(const ImageFill& fill) const {
+    return m_image == fill.m_image && m_size == fill.m_size &&
+      m_scale_behavior == fill.m_scale_behavior &&
+      m_offset == fill.m_offset && equals(m_scale, fill.m_scale) &&
+      equals(m_horizontal_scale, fill.m_horizontal_scale) &&
+      equals(m_vertical_scale, fill.m_vertical_scale) &&
+      m_is_flipped_horizontally == fill.m_is_flipped_horizontally &&
+      m_is_flipped_vertically == fill.m_is_flipped_vertically;
+  }
+
+  inline bool Stroke::operator ==(const Stroke& stroke) const {
+    return m_color == stroke.m_color && equals(m_width, stroke.m_width) &&
+      m_alignment == stroke.m_alignment && m_cap == stroke.m_cap &&
+      m_join == stroke.m_join &&
+      equals(m_miter_limit, stroke.m_miter_limit) &&
+      equals(m_dashes, stroke.m_dashes) &&
+      m_is_enabled == stroke.m_is_enabled;
+  }
+
+  inline bool DropShadow::operator ==(const DropShadow& shadow) const {
+    return m_offset == shadow.m_offset && equals(m_blur, shadow.m_blur) &&
+      m_color == shadow.m_color && m_is_visible == shadow.m_is_visible;
+  }
+
+  inline bool InnerShadow::operator ==(const InnerShadow& shadow) const {
+    return m_offset == shadow.m_offset && equals(m_blur, shadow.m_blur) &&
+      m_color == shadow.m_color && m_is_visible == shadow.m_is_visible;
+  }
+
+  inline bool Blur::operator ==(const Blur& blur) const {
+    return equals(m_amount, blur.m_amount) &&
+      equals(m_brightness, blur.m_brightness) &&
+      equals(m_fill_opacity, blur.m_fill_opacity) &&
+      m_is_background == blur.m_is_background &&
+      m_is_visible == blur.m_is_visible;
+  }
 }
 
 #endif

@@ -1,6 +1,7 @@
 #ifndef RELLU_MODEL_TRANSACTION_HPP
 #define RELLU_MODEL_TRANSACTION_HPP
 #include <cstddef>
+#include <cstdint>
 #include <unordered_set>
 #include <vector>
 #include "Rellu/Model/Component.hpp"
@@ -17,9 +18,9 @@ namespace Rellu {
    * A group of changes to a Document that is committed as a whole. Changes
    * apply to the document as they are made, so the transaction's owner reads
    * them back through the document, but they are published to observers and
-   * recorded for undo only on commit. A transaction destroyed without being
-   * committed reverts every change it made. Only one transaction may be open
-   * on a document at a time.
+   * recorded for undo only on commit or amend. A transaction destroyed
+   * without being committed reverts every change it made. Only one
+   * transaction may be open on a document at a time.
    *
    * An operation that fails validation throws std::invalid_argument and
    * leaves the document unchanged; an operation on a transaction that is no
@@ -91,9 +92,11 @@ namespace Rellu {
       void replace_header(NodeHeader header);
 
       /**
-       * Replaces a node's payload with one of the same kind. A text node's
-       * stored layout is discarded when its content, frame, character or
-       * paragraph styles change and the new payload keeps the old layout.
+       * Replaces a node's payload with one of the same kind. When the new
+       * payload keeps a text node's stored layout, the layout is discarded
+       * if the content, frame, paragraph style or the fonts, spacing, case or
+       * script of the character styles change, and the color it stores for a
+       * span is dropped if the span's color changes.
        * @param id The node's id.
        * @param payload The new payload.
        */
@@ -201,15 +204,29 @@ namespace Rellu {
       void set_flows(std::vector<Flow> flows);
 
       /**
-       * Commits the changes, recording them for undo and publishing them to
-       * the document's observers if there are any.
+       * Commits the changes as a new revision, recording them for undo and
+       * publishing them to the document's observers if there are any.
+       * @return <code>true</code> iff there were changes to record.
        */
-      void commit();
+      bool commit();
+
+      /**
+       * Commits the changes into the most recent revision, so that a single
+       * undo reverts both, and publishes them to the document's observers if
+       * there are any. The amended revision is discarded if it is left
+       * without any change, and the changes are committed as a new revision
+       * if there is no revision to amend.
+       * @return <code>true</code> iff a revision holding the changes remains.
+       */
+      bool amend();
 
     private:
       Document* m_document;
       Document::Revision m_revision;
-      std::unordered_set<NodeId> m_touched;
+      std::uint64_t m_mark;
+      std::vector<NodeId> m_removed;
+      std::unordered_set<NodeId> m_removed_index;
+      std::size_t m_indexed_count;
       std::vector<NodeId> m_moved;
       std::unordered_set<NodeId> m_touched_components;
       std::unordered_set<NodeId> m_touched_images;
@@ -218,7 +235,11 @@ namespace Rellu {
       Transaction(const Transaction&) = delete;
       Transaction& operator =(const Transaction&) = delete;
       void check_open() const;
-      void touch(const NodeId& id);
+      NodeId add(const NodeId& parent, std::size_t index, NodeHeader header,
+        Payload payload);
+      std::size_t find_slot(const NodeId& id) const;
+      void touch(std::size_t slot);
+      void touch_insertion(const NodeId& id, std::size_t slot);
       void touch_canvas();
       void touch_component(const ComponentId& id);
       void touch_image(const ImageId& id);
@@ -227,13 +248,13 @@ namespace Rellu {
       void touch_interactions();
       void touch_flows();
       std::vector<NodeId>& edit_children(const NodeId& parent);
+      std::vector<NodeId>& edit_children(
+        const NodeId& parent, std::size_t slot);
       bool is_used_tree(const NodeId& root, const ComponentId& owner) const;
-      void validate_node(const NodeHeader& header, const Payload& payload,
-        const NodeId& parent) const;
       void validate_component(
         const Component& component, const ComponentId& owner) const;
       void remove_subtree(const NodeId& id);
-      ChangeSet make_change_set() const;
+      void finish();
   };
 }
 

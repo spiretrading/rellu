@@ -1,6 +1,7 @@
 #ifndef RELLU_GEOMETRY_SHAPES_HPP
 #define RELLU_GEOMETRY_SHAPES_HPP
 #include <span>
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
@@ -26,7 +27,7 @@ namespace Rellu {
     /** The radius of the bottom left corner. */
     double m_bottom_left;
 
-    bool operator ==(const CornerRadii&) const = default;
+    constexpr bool operator ==(const CornerRadii& radii) const;
   };
 
   /**
@@ -102,6 +103,13 @@ namespace Rellu {
    * @param corner_radius The radius rounding each vertex.
    */
   Path make_polygon(int corner_count, const Rect& bounds, double corner_radius);
+
+  constexpr bool CornerRadii::operator ==(const CornerRadii& radii) const {
+    return equals(m_top_left, radii.m_top_left) &&
+      equals(m_top_right, radii.m_top_right) &&
+      equals(m_bottom_right, radii.m_bottom_right) &&
+      equals(m_bottom_left, radii.m_bottom_left);
+  }
 }
 
 #endif

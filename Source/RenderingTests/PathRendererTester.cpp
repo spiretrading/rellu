@@ -744,9 +744,21 @@ TEST_SUITE("PathRenderer") {
       require_pixel(result, x, y, to_pixel(colors[i], 1), 1);
       require_pixel(result, 35 - x, 18 + y, to_pixel(colors[i], 0.5), 1);
     }
-    auto weight = 9.5 / 9 - 0.5;
-    require_pixel(
-      result, 9, 4, Pixel({1 - weight, weight, 0, 1}), 2);
+    require_pixel(result, 9, 4, Pixel({0, 1, 0, 1}), 1);
+    require_pixel(result, 8, 4, Pixel({1, 0, 0, 1}), 1);
+  }
+
+  TEST_CASE("image_magnification") {
+    auto source = QImage(2, 1, QImage::Format_RGBA8888);
+    source.setPixelColor(0, 0, QColor(255, 0, 0));
+    source.setPixelColor(1, 0, QColor(0, 255, 0));
+    auto renderer = TestRenderer();
+    renderer.m_list.push_back(FillCommand(
+      share(make_rectangle(Rect(0, 0, 4, 2))), Matrix(),
+      ImagePaint(std::make_shared<const QImage>(source), make_scale(2, 2))));
+    auto image = render(renderer, QSize(4, 2));
+    require_pixel(image, 1, 0, Pixel({0.75, 0.25, 0, 1}), 2);
+    require_pixel(image, 2, 0, Pixel({0.25, 0.75, 0, 1}), 2);
   }
 
   TEST_CASE("image_minification") {

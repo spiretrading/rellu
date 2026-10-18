@@ -182,8 +182,9 @@ Typeface::Typeface(std::shared_ptr<const void> data,
       m_index(index),
       m_blob(blob),
       m_face(hb_face_create(blob, index)),
-      m_font(hb_font_create(m_face)) {
-  auto units = static_cast<int>(hb_face_get_upem(m_face));
+      m_font(hb_font_create(m_face)),
+      m_units_per_em(static_cast<int>(hb_face_get_upem(m_face))) {
+  auto units = m_units_per_em;
   hb_font_set_scale(m_font, units * SUBUNITS, units * SUBUNITS);
   if(instance &&
       *instance < hb_ot_var_get_named_instance_count(m_face)) {
@@ -248,6 +249,10 @@ const TypefaceMetrics& Typeface::get_metrics() const {
   return m_metrics;
 }
 
+int Typeface::get_units_per_em() const {
+  return m_units_per_em;
+}
+
 bool Typeface::has_glyph(char32_t character) const {
   auto glyph = hb_codepoint_t(0);
   return hb_font_get_nominal_glyph(m_font, character, &glyph) && glyph != 0;
@@ -288,4 +293,34 @@ const Path& Typeface::get_outline(std::uint32_t index) const {
   auto outliner = Outliner(&path, m_scale);
   hb_font_draw_glyph(m_font, index, get_draw_funcs(), &outliner);
   return m_outlines.emplace(index, std::move(path)).first->second;
+}
+
+const std::vector<ColorLayer>& Typeface::get_color_layers(
+    std::uint32_t index) const {
+  auto lock = std::lock_guard(m_mutex);
+  auto layers = m_color_layers.find(index);
+  if(layers != m_color_layers.end()) {
+    return layers->second;
+  }
+  auto result = std::vector<ColorLayer>();
+  if(hb_ot_color_has_layers(m_face)) {
+    auto count = hb_ot_color_glyph_get_layers(
+      m_face, index, 0, nullptr, nullptr);
+    auto entries = std::vector<hb_ot_color_layer_t>(count);
+    hb_ot_color_glyph_get_layers(m_face, index, 0, &count, entries.data());
+    auto size = hb_ot_color_palette_get_colors(m_face, 0, 0, nullptr, nullptr);
+    auto palette = std::vector<hb_color_t>(size);
+    hb_ot_color_palette_get_colors(m_face, 0, 0, &size, palette.data());
+    for(auto i = 0u; i != count; ++i) {
+      auto layer = ColorLayer(entries[i].glyph, std::nullopt);
+      if(entries[i].color_index < size) {
+        auto color = palette[entries[i].color_index];
+        layer.m_color = make_color(hb_color_get_red(color),
+          hb_color_get_green(color), hb_color_get_blue(color),
+          hb_color_get_alpha(color) / 255.0);
+      }
+      result.push_back(layer);
+    }
+  }
+  return m_color_layers.emplace(index, std::move(result)).first->second;
 }

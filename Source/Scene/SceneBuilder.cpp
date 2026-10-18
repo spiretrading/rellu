@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <variant>
 #include "Rellu/Geometry/BooleanOperation.hpp"
 #include "Rellu/Geometry/Shapes.hpp"
@@ -80,9 +81,72 @@ namespace {
     });
   }
 
+  bool is_axis_aligned(const Matrix& matrix) {
+    return matrix.m_b == 0 && matrix.m_c == 0;
+  }
+
+  void clip_to(std::optional<Rect>& clip, const Rect& rectangle) {
+    if(clip) {
+      clip = intersect(*clip, rectangle);
+    } else {
+      clip = rectangle;
+    }
+  }
+
+  std::optional<Rect> get_viewport(const Group& group) {
+    constexpr auto EXTENT = 1e9;
+    auto viewport = std::optional<Rect>();
+    if(auto& scroll = group.m_scroll_group) {
+      viewport.emplace(-EXTENT, -EXTENT, 2 * EXTENT, 2 * EXTENT);
+      if(scroll->m_direction != ScrollDirection::VERTICAL) {
+        viewport->m_x = scroll->m_offset.m_x;
+        viewport->m_width = scroll->m_viewport.m_width;
+      }
+      if(scroll->m_direction != ScrollDirection::HORIZONTAL) {
+        viewport->m_y = scroll->m_offset.m_y;
+        viewport->m_height = scroll->m_viewport.m_height;
+      }
+    }
+    if(auto& grid = group.m_repeat_grid) {
+      clip_to(viewport,
+        Rect(0, 0, grid->m_size.m_width, grid->m_size.m_height));
+    }
+    return viewport;
+  }
+
   StrokeGeometry to_geometry(const Stroke& stroke) {
     return StrokeGeometry(stroke.m_width, stroke.m_alignment, stroke.m_cap,
       stroke.m_join, stroke.m_miter_limit, stroke.m_dashes, 0);
+  }
+
+  std::optional<Path> offset(const ShapeGeometry& geometry, double distance) {
+    if(auto ellipse = std::get_if<EllipseShape>(&geometry)) {
+      auto x_radius = ellipse->m_x_radius - distance;
+      auto y_radius = ellipse->m_y_radius - distance;
+      if(!(x_radius > 0) || !(y_radius > 0)) {
+        return std::nullopt;
+      }
+      return make_ellipse(ellipse->m_center, x_radius, y_radius);
+    } else if(auto rectangle = std::get_if<RectangleShape>(&geometry)) {
+      auto& bounds = rectangle->m_bounds;
+      auto width = bounds.m_width - 2 * distance;
+      auto height = bounds.m_height - 2 * distance;
+      if(!(width > 0) || !(height > 0)) {
+        return std::nullopt;
+      }
+      auto radii = clamp_corner_radii(rectangle->m_radii, bounds.get_size());
+      auto shrink = [&] (double radius) {
+        if(radius > 0) {
+          return std::max(0.0, radius - distance);
+        }
+        return 0.0;
+      };
+      return make_rectangle(
+        Rect(bounds.m_x + distance, bounds.m_y + distance, width, height),
+        CornerRadii(shrink(radii.m_top_left), shrink(radii.m_top_right),
+          shrink(radii.m_bottom_right), shrink(radii.m_bottom_left)));
+    }
+    return std::nullopt;
   }
 }
 
@@ -188,6 +252,11 @@ std::optional<SceneBuilder::Entry> SceneBuilder::enter(
       clip = intersect(*parent.m_clip, clip);
     }
     placement.m_clip = clip;
+  } else if(auto group = source->get_group()) {
+    if(auto viewport = get_viewport(*group);
+        viewport && is_axis_aligned(placement.m_transform)) {
+      clip_to(placement.m_clip, placement.m_transform.map(*viewport));
+    }
   }
   return Entry(source, children, placement);
 }
@@ -241,6 +310,14 @@ void SceneBuilder::add_node(const NodeId& id, const Placement& parent,
   if(!source.get_shape() && !source.get_text()) {
     for(auto& child : *entry->m_children) {
       add_node(child, placement, depth + 1, list);
+    }
+  }
+  if(auto group = source.get_group()) {
+    if(auto viewport = get_viewport(*group);
+        viewport && !is_axis_aligned(placement.m_transform)) {
+      add_composite(list, first, NodeHeader(), LayerMask(
+        std::make_shared<const Path>(make_rectangle(*viewport)),
+        placement.m_transform), placement.m_clip);
     }
   }
   add_composite(list, first, source.m_header, std::move(mask),
@@ -359,15 +436,25 @@ void SceneBuilder::add_shape(
     stroke.emplace(outline.m_stroke, placement.m_transform,
       make_paint(style.m_stroke->m_color, placement.m_opacity),
       placement.m_clip);
-    if(style.m_stroke->m_dashes.empty() &&
-        (style.m_stroke->m_alignment == StrokeAlignment::CENTER ||
+    if(style.m_stroke->m_dashes.empty() && (outline.m_line ||
+        style.m_stroke->m_alignment == StrokeAlignment::CENTER ||
           is_open(*outline.m_path))) {
-      stroke->m_stroke = StrokeLine(
-        outline.m_path, style.m_stroke->m_width, style.m_stroke->m_cap);
+      auto& line = outline.m_line ? outline.m_line : outline.m_path;
+      stroke->m_stroke = StrokeLine(line, style.m_stroke->m_width,
+        style.m_stroke->m_cap, style.m_stroke->m_join,
+        style.m_stroke->m_miter_limit);
     }
   }
   auto is_inside = style.m_stroke &&
     style.m_stroke->m_alignment == StrokeAlignment::INSIDE;
+  if(stroke && outline.m_line) {
+    if(fill && style.m_stroke->m_color.m_alpha >= 1 &&
+        !is_inward(style.m_effects)) {
+      fill->m_path = outline.m_line;
+    }
+    add_styled(list, std::move(fill), std::move(stroke), style.m_effects);
+    return;
+  }
   if(fill && stroke && outline.m_layered && is_opaque(style.m_fill) &&
       placement.m_opacity >= 1 && !is_inward(style.m_effects) &&
       (!is_inside || style.m_stroke->m_color.m_alpha >= 1)) {
@@ -390,6 +477,7 @@ SceneBuilder::Outline& SceneBuilder::get_outline(
   if(outline.m_record.get() != &node) {
     outline.m_record = m_document->get_nodes().get_record(node.get_id());
     outline.m_path = std::make_shared<const Path>(to_path(shape.m_geometry));
+    outline.m_line = nullptr;
     outline.m_stroke = nullptr;
     outline.m_layered = nullptr;
     outline.m_tolerance = 0;
@@ -403,10 +491,28 @@ SceneBuilder::Outline& SceneBuilder::get_outline(
   auto tolerance = m_tolerance / divisor;
   if(!(outline.m_tolerance > 0 && outline.m_tolerance <= tolerance &&
       4 * outline.m_tolerance >= tolerance)) {
-    outline.m_stroke = std::make_shared<const Path>(
-      outline_stroke(*outline.m_path, to_geometry(*stroke), tolerance));
+    outline.m_line = nullptr;
     outline.m_layered = nullptr;
+    auto geometry = to_geometry(*stroke);
     if(stroke->m_alignment != StrokeAlignment::CENTER &&
+        stroke->m_dashes.empty()) {
+      auto distance = stroke->m_width / 2;
+      if(stroke->m_alignment == StrokeAlignment::OUTSIDE) {
+        distance = -distance;
+      }
+      if(auto line = offset(shape.m_geometry, distance)) {
+        outline.m_line = std::make_shared<const Path>(std::move(*line));
+        geometry.m_alignment = StrokeAlignment::CENTER;
+      }
+    }
+    if(outline.m_line) {
+      outline.m_stroke = std::make_shared<const Path>(
+        outline_stroke(*outline.m_line, geometry, tolerance));
+    } else {
+      outline.m_stroke = std::make_shared<const Path>(
+        outline_stroke(*outline.m_path, geometry, tolerance));
+    }
+    if(!outline.m_line && stroke->m_alignment != StrokeAlignment::CENTER &&
         stroke->m_dashes.empty() && is_closed(*outline.m_path)) {
       auto operation = BooleanOperation::ADD;
       if(stroke->m_alignment == StrokeAlignment::INSIDE) {

@@ -100,4 +100,25 @@ TEST_SUITE("Typeface") {
     REQUIRE(typeface->has_glyph(U'a'));
     REQUIRE(!typeface->has_glyph(U'\U0001F600'));
   }
+
+  TEST_CASE("units_per_em") {
+    REQUIRE(get_arial()->get_units_per_em() == 2048);
+  }
+
+  TEST_CASE("color_layers") {
+    auto library = FontLibrary(get_system_font_directories());
+    auto emoji = library.resolve(
+      Font("Segoe UI Emoji", "Regular", "SegoeUIEmoji", 16)).m_typeface;
+    auto text = std::u16string(u"✅");
+    auto glyph = emoji->shape(text, 0, 1).front().m_index;
+    auto& layers = emoji->get_color_layers(glyph);
+    REQUIRE(layers.size() > 1);
+    for(auto& layer : layers) {
+      REQUIRE(!emoji->get_outline(layer.m_index).is_empty());
+    }
+    REQUIRE(layers.front().m_color);
+    REQUIRE(&emoji->get_color_layers(glyph) == &layers);
+    auto letter = get_arial()->shape(std::u16string(u"a"), 0, 1).front();
+    REQUIRE(get_arial()->get_color_layers(letter.m_index).empty());
+  }
 }

@@ -3,6 +3,7 @@
 #include <map>
 #include <optional>
 #include <vector>
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Size.hpp"
@@ -55,7 +56,7 @@ namespace Rellu {
     /** The overall size of the grid. */
     Size m_size = Size(0, 0);
 
-    bool operator ==(const RepeatGrid&) const = default;
+    bool operator ==(const RepeatGrid& grid) const;
   };
 
   /** Lists the directions a scroll group scrolls in. */
@@ -101,7 +102,7 @@ namespace Rellu {
     /** Whether the first child is a background spanning the others. */
     bool m_has_background = false;
 
-    bool operator ==(const Stack&) const = default;
+    bool operator ==(const Stack& stack) const;
   };
 
   /** The group role keeping padding around its content. */
@@ -166,6 +167,20 @@ namespace Rellu {
 
     bool operator ==(const Group&) const = default;
   };
+
+  inline bool RepeatGrid::operator ==(const RepeatGrid& grid) const {
+    return m_cell_size == grid.m_cell_size &&
+      equals(m_column_spacing, grid.m_column_spacing) &&
+      equals(m_row_spacing, grid.m_row_spacing) &&
+      m_column_count == grid.m_column_count &&
+      m_row_count == grid.m_row_count && m_size == grid.m_size;
+  }
+
+  inline bool Stack::operator ==(const Stack& stack) const {
+    return m_orientation == stack.m_orientation &&
+      equals(m_spacing, stack.m_spacing) && m_padding == stack.m_padding &&
+      m_has_background == stack.m_has_background;
+  }
 }
 
 #endif

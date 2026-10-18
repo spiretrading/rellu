@@ -119,24 +119,20 @@ Path Rellu::make_rectangle(const Rect& bounds, const CornerRadii& radii) {
       path.line_to(end);
     }
   };
-  auto add_corner = [&] (double radius, Point corner, Point end) {
-    if(radius > 0) {
-      path.arc_to(corner, end);
-    }
+  auto add_corner = [&] (Point corner, Point end) {
+    path.arc_to(corner, end);
   };
   path.move_to(Point(left, bottom - effective.m_bottom_left));
   add_side(Point(left, top + effective.m_top_left));
-  add_corner(effective.m_top_left, Point(left, top),
-    Point(left + effective.m_top_left, top));
+  add_corner(Point(left, top), Point(left + effective.m_top_left, top));
   add_side(Point(right - effective.m_top_right, top));
-  add_corner(effective.m_top_right, Point(right, top),
-    Point(right, top + effective.m_top_right));
+  add_corner(Point(right, top), Point(right, top + effective.m_top_right));
   add_side(Point(right, bottom - effective.m_bottom_right));
-  add_corner(effective.m_bottom_right, Point(right, bottom),
-    Point(right - effective.m_bottom_right, bottom));
+  add_corner(
+    Point(right, bottom), Point(right - effective.m_bottom_right, bottom));
   add_side(Point(left + effective.m_bottom_left, bottom));
-  add_corner(effective.m_bottom_left, Point(left, bottom),
-    Point(left, bottom - effective.m_bottom_left));
+  add_corner(
+    Point(left, bottom), Point(left, bottom - effective.m_bottom_left));
   path.close();
   return path;
 }

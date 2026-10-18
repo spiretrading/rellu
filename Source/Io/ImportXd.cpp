@@ -20,6 +20,7 @@ XdImporter Rellu::make_xd_importer() {
   add_prototype_importer(importer);
   add_resource_importer(importer);
   add_canvas_importer(importer);
+  add_preservation_importer(importer);
   return importer;
 }
 

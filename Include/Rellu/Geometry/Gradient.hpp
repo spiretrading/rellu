@@ -2,6 +2,7 @@
 #define RELLU_GEOMETRY_GRADIENT_HPP
 #include <variant>
 #include "Rellu/Geometry/Color.hpp"
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Point.hpp"
 
 namespace Rellu {
@@ -15,7 +16,7 @@ namespace Rellu {
     /** The color at the position. */
     Color m_color = Color(0, 0, 0, 1);
 
-    bool operator ==(const GradientStop&) const = default;
+    constexpr bool operator ==(const GradientStop& stop) const;
   };
 
   /** The geometry of a gradient varying along a line. */
@@ -42,11 +43,21 @@ namespace Rellu {
     /** The point where the offset is 0. */
     Point m_focus = Point(0.5, 0.5);
 
-    bool operator ==(const RadialGradient&) const = default;
+    constexpr bool operator ==(const RadialGradient& gradient) const;
   };
 
   /** The geometry of a gradient, whose alternative gives its kind. */
   using GradientGeometry = std::variant<LinearGradient, RadialGradient>;
+
+  constexpr bool GradientStop::operator ==(const GradientStop& stop) const {
+    return equals(m_offset, stop.m_offset) && m_color == stop.m_color;
+  }
+
+  constexpr bool RadialGradient::operator ==(
+      const RadialGradient& gradient) const {
+    return m_center == gradient.m_center &&
+      equals(m_radius, gradient.m_radius) && m_focus == gradient.m_focus;
+  }
 }
 
 #endif

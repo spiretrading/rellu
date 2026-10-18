@@ -17,12 +17,18 @@ std::optional<Paint> PaintConverter::convert(
       return std::nullopt;
     }
     auto transform = gradient->m_transform;
+    auto geometry = gradient->m_geometry;
     if(gradient->m_units == GradientUnits::OBJECT_BOUNDING_BOX) {
       auto bounds = get_bounds(outline);
       transform = make_translation(bounds.m_x, bounds.m_y) *
         make_scale(bounds.m_width, bounds.m_height) * transform;
+      if(auto linear = std::get_if<LinearGradient>(&geometry)) {
+        linear->m_start = transform.map(linear->m_start);
+        linear->m_end = transform.map(linear->m_end);
+        transform = Matrix();
+      }
     }
-    return GradientPaint(gradient->m_geometry, gradient->m_stops, transform);
+    return GradientPaint(std::move(geometry), gradient->m_stops, transform);
   } else if(auto image_fill = std::get_if<ImageFill>(&fill)) {
     auto image = get_image(image_fill->m_image);
     if(!image) {

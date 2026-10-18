@@ -1,4 +1,5 @@
 #include <variant>
+#include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Scene/SceneBuilder.hpp"
@@ -93,6 +94,58 @@ TEST_SUITE("SceneBuilder") {
     auto& fill = get_fill(list, 0);
     REQUIRE(fill.m_transform == make_translation(5, 30));
     REQUIRE(get_color(fill) == make_color(255, 0, 0));
+  }
+
+  TEST_CASE("single_precision_text") {
+    auto build = [] (double y) {
+      auto document = Document();
+      auto transaction = Transaction(document);
+      transaction.append(NodeId(), make_header(make_translation(0, y)),
+        make_text(make_color(0, 0, 0)));
+      transaction.commit();
+      auto builder = SceneBuilder(document, TOLERANCE);
+      builder.set_device_transform(make_translation(0, -4455.5));
+      auto paths = std::vector<Path>();
+      for(auto& command : builder.build()) {
+        paths.push_back(*std::get<FillCommand>(command).m_path);
+      }
+      return paths;
+    };
+    REQUIRE(build(4567.999889373779) == build(4568));
+    REQUIRE(build(4567.9) != build(4568));
+  }
+
+  TEST_CASE("text_effects") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto text = make_text(make_color(0, 0, 0));
+    auto shadow = DropShadow();
+    shadow.m_offset = Point(0, 2);
+    shadow.m_blur = 3;
+    shadow.m_color = Color(0, 0, 0, 0.5);
+    text.m_style.m_effects.push_back(shadow);
+    auto inner = InnerShadow();
+    inner.m_offset = Point(1, 0);
+    inner.m_blur = 1;
+    inner.m_color = Color(1, 0, 0, 1);
+    text.m_style.m_effects.push_back(inner);
+    transaction.append(NodeId(), make_header(make_scale(2, 2)), text);
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto list = builder.build();
+    REQUIRE(list.size() == 5);
+    auto& outer = std::get<BeginLayerCommand>(list[0]);
+    REQUIRE(outer.m_drop_shadows.size() == 1);
+    REQUIRE(outer.m_drop_shadows[0].m_offset == Point(0, 4));
+    REQUIRE(outer.m_drop_shadows[0].m_radius == 6);
+    REQUIRE(outer.m_inner_shadows.empty());
+    auto& layer = std::get<BeginLayerCommand>(list[1]);
+    REQUIRE(layer.m_inner_shadows.size() == 1);
+    REQUIRE(layer.m_inner_shadows[0].m_offset == Point(2, 0));
+    REQUIRE(layer.m_drop_shadows.empty());
+    REQUIRE(std::holds_alternative<FillCommand>(list[2]));
+    REQUIRE(std::holds_alternative<EndLayerCommand>(list[3]));
+    REQUIRE(std::holds_alternative<EndLayerCommand>(list[4]));
   }
 
   TEST_CASE("text_clip") {

@@ -99,6 +99,7 @@ TEST_SUITE("Shapes") {
     expected.cubic_to(Point(80 + 20 * KAPPA, 0), Point(100, 20 - 20 * KAPPA),
       Point(100, 20));
     expected.line_to(Point(100, 50));
+    expected.cubic_to(Point(100, 50), Point(100, 50), Point(100, 50));
     expected.line_to(Point(5, 50));
     expected.cubic_to(Point(5 - 5 * KAPPA, 50), Point(0, 45 + 5 * KAPPA),
       Point(0, 45));

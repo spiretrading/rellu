@@ -1,6 +1,7 @@
 #ifndef RELLU_GEOMETRY_STROKE_HPP
 #define RELLU_GEOMETRY_STROKE_HPP
 #include <vector>
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Path.hpp"
 
 namespace Rellu {
@@ -89,7 +90,7 @@ namespace Rellu {
      */
     double m_dash_offset;
 
-    bool operator ==(const StrokeGeometry&) const = default;
+    bool operator ==(const StrokeGeometry& stroke) const;
   };
 
   /**
@@ -111,6 +112,15 @@ namespace Rellu {
    */
   Path outline_stroke(
     const Path& path, const StrokeGeometry& stroke, double tolerance);
+
+  inline bool StrokeGeometry::operator ==(const StrokeGeometry& stroke) const {
+    return equals(m_width, stroke.m_width) &&
+      m_alignment == stroke.m_alignment && m_cap == stroke.m_cap &&
+      m_join == stroke.m_join &&
+      equals(m_miter_limit, stroke.m_miter_limit) &&
+      equals(m_dashes, stroke.m_dashes) &&
+      equals(m_dash_offset, stroke.m_dash_offset);
+  }
 }
 
 #endif

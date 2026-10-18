@@ -159,6 +159,7 @@ namespace {
 
     private:
       Supersampler m_supersampler;
+      CurveOutline m_outline;
       std::vector<Supersampler::Line> m_traced;
       QSize m_size;
       Box m_box;
@@ -276,18 +277,31 @@ namespace {
     m_paint = paint;
     m_output = &output;
     auto antialiasing = Antialiasing::EXACT;
-    if(stroke) {
+    auto outline = static_cast<const CurveOutline*>(nullptr);
+    if(stroke && Supersampler::is_frame(
+        *stroke->m_path, stroke->m_join, stroke->m_miter_limit, matrix)) {
+      antialiasing = Antialiasing::EXACT;
+    } else if(stroke) {
       auto coverage = 1.0;
       if(Supersampler::is_hairline(stroke->m_width, matrix, coverage)) {
         draw_hairline(*stroke, matrix, coverage);
         return;
       }
-      antialiasing = Supersampler::get_antialiasing(
-        path, *stroke->m_path, stroke->m_width, matrix);
+      m_outline = stroke_outline(*stroke->m_path, matrix, stroke->m_width,
+        stroke->m_cap, stroke->m_join, stroke->m_miter_limit);
+      outline = &m_outline;
+      antialiasing = Supersampler::get_antialiasing(m_outline);
     } else {
       antialiasing = Supersampler::get_antialiasing(path, matrix);
     }
     if(antialiasing == Antialiasing::SUPERSAMPLED) {
+      if(outline) {
+        if(auto clip = get_pixel_clip()) {
+          m_supersampler.rasterize(*outline, *clip, is_clip);
+          add_coverage(256);
+        }
+        return;
+      }
       supersample(path, matrix, is_clip);
       return;
     }
@@ -296,7 +310,11 @@ namespace {
     m_start = Point(0, 0);
     m_current = m_start;
     if(antialiasing == Antialiasing::ANALYTIC) {
-      m_supersampler.trace(path, matrix, m_traced);
+      if(outline) {
+        m_supersampler.trace(*outline, m_traced);
+      } else {
+        m_supersampler.trace(path, matrix, m_traced);
+      }
       for(auto& line : m_traced) {
         add_line(line.m_start, line.m_end);
       }

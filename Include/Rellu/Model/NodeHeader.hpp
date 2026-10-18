@@ -2,8 +2,10 @@
 #define RELLU_MODEL_NODE_HEADER_HPP
 #include <string>
 #include "Rellu/Geometry/BlendMode.hpp"
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Model/NodeId.hpp"
+#include "Rellu/Model/OpaqueData.hpp"
 
 namespace Rellu {
 
@@ -73,8 +75,24 @@ namespace Rellu {
     /** Whether the node is marked for batch export. */
     bool m_is_marked_for_export = false;
 
-    bool operator ==(const NodeHeader&) const = default;
+    /** The data a document format keeps for the node. */
+    OpaqueData m_opaque;
+
+    bool operator ==(const NodeHeader& header) const;
   };
+
+  inline bool NodeHeader::operator ==(const NodeHeader& header) const {
+    return m_id == header.m_id && m_name == header.m_name &&
+      m_is_visible == header.m_is_visible &&
+      m_is_locked == header.m_is_locked &&
+      m_transform == header.m_transform &&
+      equals(m_opacity, header.m_opacity) &&
+      m_blend_mode == header.m_blend_mode &&
+      m_is_isolated == header.m_is_isolated &&
+      m_constraints == header.m_constraints &&
+      m_is_marked_for_export == header.m_is_marked_for_export &&
+      m_opaque == header.m_opaque;
+  }
 }
 
 #endif

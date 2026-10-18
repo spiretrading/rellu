@@ -128,6 +128,7 @@ namespace Rellu {
       struct Outline {
         std::shared_ptr<const Node> m_record;
         std::shared_ptr<const Path> m_path;
+        std::shared_ptr<const Path> m_line;
         std::shared_ptr<const Path> m_stroke;
         std::shared_ptr<const Path> m_layered;
         double m_tolerance;

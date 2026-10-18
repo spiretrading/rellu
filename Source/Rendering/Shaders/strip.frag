@@ -107,6 +107,10 @@ float get_radial_offset() {
 vec4 sample_texture() {
   float footprint = max(length(gradient.xy * extra.zw),
     length(gradient.zw * extra.zw));
+  if(paint.w > 0.5 && footprint < 0.4995) {
+    vec2 texel = (floor(paint.xy * extra.zw) + 0.5) / extra.zw;
+    return textureLod(source, texel, 0.0);
+  }
   return textureLod(source, paint.xy, floor(log2(max(footprint, 1.0))));
 }
 

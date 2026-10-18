@@ -59,7 +59,21 @@ TEST_SUITE("PaintConverter") {
     auto outline = make_rectangle(Rect(10, 20, 40, 8));
     auto bounding = std::get<GradientPaint>(*converter.convert(fill, outline));
     REQUIRE(bounding.m_stops == fill.m_stops);
-    REQUIRE(bounding.m_transform == make_translation(10, 20) *
+    REQUIRE(bounding.m_geometry ==
+      GradientGeometry(LinearGradient(Point(20, 24), Point(60, 24))));
+    REQUIRE(bounding.m_transform == Matrix());
+    auto diagonal = fill;
+    diagonal.m_geometry = LinearGradient(Point(1, 0), Point(0, 1));
+    diagonal.m_transform = Matrix();
+    auto slanted =
+      std::get<GradientPaint>(*converter.convert(diagonal, outline));
+    REQUIRE(slanted.m_geometry ==
+      GradientGeometry(LinearGradient(Point(50, 20), Point(10, 28))));
+    auto radial = fill;
+    radial.m_geometry = RadialGradient();
+    auto circular =
+      std::get<GradientPaint>(*converter.convert(radial, outline));
+    REQUIRE(circular.m_transform == make_translation(10, 20) *
       make_scale(40, 8) * make_translation(0.25, 0));
     fill.m_units = GradientUnits::USER_SPACE;
     auto user = std::get<GradientPaint>(*converter.convert(fill, outline));

@@ -7,6 +7,7 @@
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Geometry/Stroke.hpp"
+#include "CurveOutline.hpp"
 
 namespace Rellu {
 
@@ -57,17 +58,22 @@ namespace Rellu {
         const Path& path, const Matrix& matrix);
 
       /**
-       * Returns how XD's renderer antialiases the outline of a stroke. An
-       * outline with no more points than XD's own is measured directly;
-       * otherwise the points of XD's outline are estimated from the points
-       * of the line.
-       * @param outline The outline of the stroke.
+       * Returns how XD's renderer antialiases an outline in pixels.
+       * @param outline The outline.
+       */
+      static Antialiasing get_antialiasing(const CurveOutline& outline);
+
+      /**
+       * Returns whether XD's renderer draws a stroke along a line as a frame
+       * whose exact area it covers, which is when the line is an axis aligned
+       * rectangle with mitered corners.
        * @param line The line the stroke follows.
-       * @param width The width of the stroke.
+       * @param join The shape joining the line's segments.
+       * @param miter_limit The largest ratio of a miter's length to the width.
        * @param matrix The transform from the line's coordinates to pixels.
        */
-      static Antialiasing get_antialiasing(const Path& outline,
-        const Path& line, double width, const Matrix& matrix);
+      static bool is_frame(const Path& line, StrokeJoin join,
+        double miter_limit, const Matrix& matrix);
 
       /**
        * Returns whether XD's renderer draws a stroke as a hairline, which is
@@ -92,6 +98,16 @@ namespace Rellu {
         bool is_clip);
 
       /**
+       * Rasterizes an outline in pixels, replacing the coverage of a previous
+       * path.
+       * @param outline The outline.
+       * @param clip The pixels coverage is computed for.
+       * @param is_clip Whether the coverage clips other content.
+       */
+      void rasterize(
+        const CurveOutline& outline, const QRect& clip, bool is_clip);
+
+      /**
        * Rasterizes a hairline along a line, replacing the coverage of a
        * previous path: one pixel wide, its coverage split between the two
        * pixels nearest the line along each row or column it crosses.
@@ -114,6 +130,14 @@ namespace Rellu {
        */
       void trace(const Path& path, const Matrix& matrix,
         std::vector<Line>& lines);
+
+      /**
+       * Traces the lines XD's renderer approximates an outline in pixels with
+       * when it computes the outline's exact area.
+       * @param outline The outline.
+       * @param lines Receives the lines, replacing its contents.
+       */
+      void trace(const CurveOutline& outline, std::vector<Line>& lines);
 
       /** Returns the pixels the coverage spans. */
       const QRect& get_bounds() const;

@@ -78,6 +78,15 @@ namespace Rellu {
 
     /** The shape ending the line's open subpaths. */
     StrokeCap m_cap;
+
+    /** The shape joining the line's segments at corners. */
+    StrokeJoin m_join = StrokeJoin::MITER;
+
+    /**
+     * The largest ratio of a miter's length to the width of the stroke,
+     * beyond which a MITER join is drawn as a BEVEL.
+     */
+    double m_miter_limit = 4;
   };
 
   /** Fills the region enclosed by a path under the path's fill rule. */

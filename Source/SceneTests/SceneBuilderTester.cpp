@@ -146,17 +146,23 @@ TEST_SUITE("SceneBuilder") {
     auto builder = SceneBuilder(document, TOLERANCE);
     auto list = builder.build();
     REQUIRE(list.size() == 4);
-    auto& outline = get_fill(list, 0);
-    REQUIRE(*outline.m_path == make_rectangle(Rect(0, 0, 10, 10)));
-    REQUIRE(outline.m_transform == make_scale(2, 2));
+    auto& fill = get_fill(list, 0);
+    REQUIRE(*fill.m_path == make_rectangle(Rect(1, 1, 8, 8)));
+    REQUIRE(fill.m_transform == make_scale(2, 2));
+    REQUIRE(get_color(fill) == make_color(255, 0, 0));
+    auto& outline = get_fill(list, 1);
     REQUIRE(get_color(outline) == make_color(0, 0, 0));
-    REQUIRE(!outline.m_stroke);
-    auto& inner = get_fill(list, 1);
-    REQUIRE(get_color(inner) == make_color(255, 0, 0));
-    REQUIRE(inner.m_transform == make_scale(2, 2));
-    REQUIRE(contains(*inner.m_path, Point(5, 5)));
-    REQUIRE(contains(*inner.m_path, Point(2.5, 5)));
-    REQUIRE(!contains(*inner.m_path, Point(1.5, 5)));
+    REQUIRE(outline.m_transform == make_scale(2, 2));
+    REQUIRE(outline.m_stroke);
+    REQUIRE(*outline.m_stroke->m_path == make_rectangle(Rect(1, 1, 8, 8)));
+    REQUIRE(outline.m_stroke->m_width == 2);
+    REQUIRE(outline.m_stroke->m_cap == StrokeCap::ROUND);
+    REQUIRE(outline.m_stroke->m_join == StrokeJoin::BEVEL);
+    REQUIRE(outline.m_stroke->m_miter_limit == 3);
+    REQUIRE(contains(*outline.m_path, Point(0.5, 5)));
+    REQUIRE(contains(*outline.m_path, Point(1.5, 5)));
+    REQUIRE(!contains(*outline.m_path, Point(2.5, 5)));
+    REQUIRE(!contains(*outline.m_path, Point(-0.5, 5)));
     REQUIRE(get_color(get_fill(list, 2)) == make_color(255, 0, 0));
     auto& line_stroke = get_fill(list, 3);
     REQUIRE(get_color(line_stroke) == make_color(0, 255, 0));
@@ -181,22 +187,49 @@ TEST_SUITE("SceneBuilder") {
     auto translucent = shape;
     translucent.m_style.m_fill = SolidFill(make_color(255, 0, 0, 0.5));
     transaction.append(NodeId(), make_header(), translucent);
+    auto faint = shape;
+    faint.m_style.m_stroke->m_color = make_color(0, 0, 0, 0.5);
+    transaction.append(NodeId(), make_header(), faint);
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto list = builder.build();
+    REQUIRE(list.size() == 6);
+    auto& fill = get_fill(list, 0);
+    REQUIRE(get_color(fill) == make_color(255, 0, 0));
+    REQUIRE(*fill.m_path == make_rectangle(Rect(-1, -1, 12, 12)));
+    auto& ring = get_fill(list, 1);
+    REQUIRE(get_color(ring) == make_color(0, 0, 0));
+    REQUIRE(*ring.m_stroke->m_path == make_rectangle(Rect(-1, -1, 12, 12)));
+    REQUIRE(contains(*ring.m_path, Point(-1, 5)));
+    REQUIRE(!contains(*ring.m_path, Point(5, 5)));
+    REQUIRE(!contains(*ring.m_path, Point(-3, 5)));
+    REQUIRE(get_color(get_fill(list, 2)) == make_color(255, 0, 0, 0.5));
+    REQUIRE(*get_fill(list, 2).m_path == make_rectangle(Rect(-1, -1, 12, 12)));
+    REQUIRE(*get_fill(list, 4).m_path == make_rectangle(Rect(0, 0, 10, 10)));
+    REQUIRE(get_color(get_fill(list, 5)) == make_color(0, 0, 0, 0.5));
+  }
+
+  TEST_CASE("ellipse_stroke") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto shape = Shape();
+    shape.m_geometry = EllipseShape(Point(5, 5), 5, 3);
+    shape.m_style.m_fill = SolidFill(make_color(255, 0, 0));
+    shape.m_style.m_stroke = Stroke(make_color(0, 0, 0), 2,
+      StrokeAlignment::INSIDE, StrokeCap::BUTT, StrokeJoin::MITER, 4);
+    transaction.append(NodeId(), make_header(), shape);
+    auto thick = shape;
+    thick.m_style.m_stroke->m_width = 8;
+    transaction.append(NodeId(), make_header(), thick);
     transaction.commit();
     auto builder = SceneBuilder(document, TOLERANCE);
     auto list = builder.build();
     REQUIRE(list.size() == 4);
-    auto& beneath = get_fill(list, 0);
-    REQUIRE(get_color(beneath) == make_color(0, 0, 0));
-    REQUIRE(contains(*beneath.m_path, Point(-1, 5)));
-    REQUIRE(contains(*beneath.m_path, Point(5, 5)));
-    REQUIRE(!contains(*beneath.m_path, Point(-3, 5)));
-    REQUIRE(get_color(get_fill(list, 1)) == make_color(255, 0, 0));
-    REQUIRE(*get_fill(list, 1).m_path == make_rectangle(Rect(0, 0, 10, 10)));
-    REQUIRE(get_color(get_fill(list, 2)) == make_color(255, 0, 0, 0.5));
-    auto& ring = get_fill(list, 3);
-    REQUIRE(get_color(ring) == make_color(0, 0, 0));
-    REQUIRE(contains(*ring.m_path, Point(-1, 5)));
-    REQUIRE(!contains(*ring.m_path, Point(5, 5)));
+    auto inset = make_ellipse(Point(5, 5), 4, 2);
+    REQUIRE(*get_fill(list, 0).m_path == inset);
+    REQUIRE(*get_fill(list, 1).m_stroke->m_path == inset);
+    REQUIRE(*get_fill(list, 2).m_path == make_ellipse(Point(5, 5), 5, 3));
+    REQUIRE(!get_fill(list, 2).m_stroke);
   }
 
   TEST_CASE("dashes") {
@@ -245,6 +278,87 @@ TEST_SUITE("SceneBuilder") {
     REQUIRE(get_fill(single, 0).m_transform == make_translation(101, 202));
     REQUIRE(get_fill(single, 0).m_clip == Rect(100, 200, 50, 60));
     REQUIRE(builder.build(id).size() == 2);
+  }
+
+  TEST_CASE("scroll_group") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 100, 100);
+    auto id = transaction.append(NodeId(), make_header(), artboard);
+    auto add = [&] (ScrollDirection direction) {
+      auto group = Group();
+      group.m_scroll_group =
+        ScrollGroup(direction, Size(30, 20), Point(5, 10));
+      auto scroll =
+        transaction.append(id, make_header(make_translation(10, 0)), group);
+      return transaction.append(scroll, make_header(),
+        make_shape(Rect(0, 0, 200, 200), make_color(255, 0, 0)));
+    };
+    auto vertical = add(ScrollDirection::VERTICAL);
+    auto horizontal = add(ScrollDirection::HORIZONTAL);
+    auto panning = add(ScrollDirection::PANNING);
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto list = builder.build();
+    REQUIRE(list.size() == 3);
+    REQUIRE(get_fill(list, 0).m_clip == Rect(0, 10, 100, 20));
+    REQUIRE(get_fill(list, 0).m_transform == make_translation(10, 0));
+    REQUIRE(get_fill(list, 1).m_clip == Rect(15, 0, 30, 100));
+    REQUIRE(get_fill(list, 2).m_clip == Rect(15, 10, 30, 20));
+    auto single = builder.build(panning);
+    REQUIRE(single.size() == 1);
+    REQUIRE(get_fill(single, 0).m_clip == Rect(15, 10, 30, 20));
+    REQUIRE(get_fill(builder.build(vertical), 0).m_clip ==
+      Rect(0, 10, 100, 20));
+    REQUIRE(get_fill(builder.build(horizontal), 0).m_clip ==
+      Rect(15, 0, 30, 100));
+  }
+
+  TEST_CASE("rotated_scroll_group") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto group = Group();
+    group.m_scroll_group =
+      ScrollGroup(ScrollDirection::PANNING, Size(30, 20), Point(5, 10));
+    auto rotation = make_rotation(0.5);
+    auto id = transaction.append(NodeId(), make_header(rotation), group);
+    transaction.append(id, make_header(),
+      make_shape(Rect(0, 0, 200, 200), make_color(255, 0, 0)));
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto list = builder.build();
+    REQUIRE(list.size() == 3);
+    auto& layer = std::get<BeginLayerCommand>(list[0]);
+    REQUIRE(layer.m_mask);
+    REQUIRE(*layer.m_mask->m_path == make_rectangle(Rect(5, 10, 30, 20)));
+    REQUIRE(layer.m_mask->m_transform == rotation);
+    REQUIRE(layer.m_opacity == 1);
+    REQUIRE(!get_fill(list, 1).m_clip);
+    REQUIRE(std::holds_alternative<EndLayerCommand>(list[2]));
+  }
+
+  TEST_CASE("repeat_grid") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto group = Group();
+    auto grid = RepeatGrid();
+    grid.m_cell_size = Size(10, 10);
+    grid.m_row_count = 2;
+    grid.m_size = Size(10, 15);
+    group.m_repeat_grid = grid;
+    auto id =
+      transaction.append(NodeId(), make_header(make_translation(3, 4)), group);
+    transaction.append(id, make_header(),
+      make_shape(Rect(0, 0, 10, 10), make_color(255, 0, 0)));
+    transaction.append(id, make_header(make_translation(0, 10)),
+      make_shape(Rect(0, 0, 10, 10), make_color(0, 255, 0)));
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto list = builder.build();
+    REQUIRE(list.size() == 2);
+    REQUIRE(get_fill(list, 0).m_clip == Rect(3, 4, 10, 15));
+    REQUIRE(get_fill(list, 1).m_clip == Rect(3, 4, 10, 15));
   }
 
   TEST_CASE("reference") {

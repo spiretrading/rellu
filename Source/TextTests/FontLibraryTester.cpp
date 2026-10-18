@@ -14,6 +14,14 @@ namespace {
     return Font(std::move(family), std::move(style),
       std::move(postscript_name), 16);
   }
+
+  TypefaceNames make_names(double weight) {
+    auto names = TypefaceNames();
+    names.m_family = "Arial";
+    names.m_typographic_family = "Arial";
+    names.m_weight = weight;
+    return names;
+  }
 }
 
 TEST_SUITE("FontLibrary") {
@@ -62,6 +70,11 @@ TEST_SUITE("FontLibrary") {
       get_library().resolve(make_font("No Such Family", "Regular"));
     REQUIRE(resolution.m_match == FontMatch::FALLBACK);
     REQUIRE(resolution.m_typeface);
+    resolution = get_library().resolve(
+      make_font("SF Mono", "Semibold", "SFMono-Semibold"));
+    REQUIRE(resolution.m_match == FontMatch::FALLBACK);
+    REQUIRE(resolution.m_typeface->get_names().m_postscript_name ==
+      "SegoeUI-Semibold");
   }
 
   TEST_CASE("empty") {
@@ -81,8 +94,26 @@ TEST_SUITE("FontLibrary") {
   }
 
   TEST_CASE("character_fallback") {
-    auto typeface = get_library().find_fallback(U'\u2192');
-    REQUIRE(typeface);
-    REQUIRE(typeface->has_glyph(U'\u2192'));
+    auto fallback = get_library().find_fallback(U'\u2192', make_names(400));
+    REQUIRE(fallback.m_typeface);
+    REQUIRE(fallback.m_typeface->has_glyph(U'\u2192'));
+    REQUIRE(!fallback.m_is_emboldened);
+  }
+
+  TEST_CASE("bold_character_fallback") {
+    auto regular = get_library().find_fallback(U'\u2794', make_names(400));
+    REQUIRE(regular.m_typeface->get_names().m_family == "Segoe UI Symbol");
+    REQUIRE(!regular.m_is_emboldened);
+    auto bold = get_library().find_fallback(U'\u2794', make_names(700));
+    REQUIRE(bold.m_typeface == regular.m_typeface);
+    REQUIRE(bold.m_is_emboldened);
+    auto weighted = get_library().find_fallback(U'\u2192', make_names(700));
+    REQUIRE(weighted.m_typeface->get_names().m_weight == 700);
+    REQUIRE(!weighted.m_is_emboldened);
+  }
+
+  TEST_CASE("emoji_fallback") {
+    auto fallback = get_library().find_fallback(U'\u2705', make_names(400));
+    REQUIRE(fallback.m_typeface->get_names().m_family == "Segoe UI Emoji");
   }
 }

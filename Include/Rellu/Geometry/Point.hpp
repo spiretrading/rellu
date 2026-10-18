@@ -2,6 +2,7 @@
 #define RELLU_GEOMETRY_POINT_HPP
 #include <cmath>
 #include <ostream>
+#include "Rellu/Geometry/Equality.hpp"
 
 namespace Rellu {
 
@@ -14,7 +15,7 @@ namespace Rellu {
     /** The y coordinate. */
     double m_y;
 
-    bool operator ==(const Point&) const = default;
+    constexpr bool operator ==(const Point& point) const;
   };
 
   constexpr Point operator +(Point left, Point right) {
@@ -78,6 +79,10 @@ namespace Rellu {
 
   inline std::ostream& operator <<(std::ostream& out, Point point) {
     return out << '(' << point.m_x << ", " << point.m_y << ')';
+  }
+
+  constexpr bool Point::operator ==(const Point& point) const {
+    return equals(m_x, point.m_x) && equals(m_y, point.m_y);
   }
 }
 

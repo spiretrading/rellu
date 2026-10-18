@@ -218,6 +218,34 @@ TEST_SUITE("Scene") {
     REQUIRE(is_rebuilt_equal(document, scene));
   }
 
+  TEST_CASE("scroll_group") {
+    auto document = Document();
+    auto transaction = std::optional<Transaction>(std::in_place, document);
+    auto group = Group();
+    group.m_scroll_group =
+      ScrollGroup(ScrollDirection::PANNING, Size(5, 5), Point(0, 0));
+    auto master = transaction->insert_root(make_header(), Group());
+    auto source = transaction->append(master, make_header(), group);
+    transaction->append(source, make_header(),
+      make_shape(Rect(0, 0, 20, 20), make_color(255, 0, 0)));
+    auto instance = transaction->append(
+      NodeId(), make_header(make_translation(10, 10)), Group());
+    transaction->append(instance, make_header(), Reference(source));
+    transaction->commit();
+    auto scene = Scene(document, TOLERANCE);
+    scene.update();
+    REQUIRE(is_rebuilt_equal(document, scene));
+    REQUIRE(scene.get_drawing()->get_bounds() == Rect(10, 10, 5, 5));
+    transaction.emplace(document);
+    group.m_scroll_group->m_viewport = Size(8, 6);
+    transaction->replace_payload(source, group);
+    transaction->commit();
+    auto damage = scene.update();
+    REQUIRE(is_rebuilt_equal(document, scene));
+    REQUIRE(scene.get_drawing()->get_bounds() == Rect(10, 10, 8, 6));
+    REQUIRE(is_touching(damage, Rect(16, 11, 1, 4)));
+  }
+
   TEST_CASE("broken_reference") {
     auto document = Document();
     auto transaction = std::optional<Transaction>(std::in_place, document);

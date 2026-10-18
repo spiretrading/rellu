@@ -8,6 +8,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include "Rellu/Model/Text.hpp"
 #include "Rellu/Text/Typeface.hpp"
@@ -65,16 +66,27 @@ namespace Rellu {
     FontMatch m_match = FontMatch::NONE;
   };
 
+  /** A face displaying characters missing from a font. */
+  struct FontFallback {
+
+    /** The face, or a null pointer if no face maps the character. */
+    std::shared_ptr<const Typeface> m_typeface;
+
+    /**
+     * Whether the face stands in for a bold weight its family lacks, which
+     * widens each glyph's advance by a fiftieth of an em.
+     */
+    bool m_is_emboldened = false;
+  };
+
   /**
    * Finds and loads the faces in a list of font directories. A Font resolves
    * by PostScript name first, then by family and style, then by the face of
-   * the same family nearest in weight and slant. A family without faces is
-   * replaced by its designated substitute (Helvetica, Helvetica Neue and
-   * Arial MT by Arial; Lucida Grande, San Francisco and the Apple system font
-   * by Segoe UI; SF Mono by Consolas; PingFang by Microsoft YaHei; Apple
-   * Color Emoji by Segoe UI Emoji; Zapf Dingbats by Segoe UI Symbol), and
-   * otherwise by the first available of Segoe UI, Arial and Roboto, then any
-   * face. A FontLibrary is safe to use from multiple threads.
+   * the same family nearest in weight and slant. As in Adobe XD on Windows, a
+   * family without faces is replaced by Arial if it is a Helvetica family or
+   * Arial MT, and otherwise by the first available of Segoe UI, Arial and
+   * Roboto, then any face. A FontLibrary is safe to use from multiple
+   * threads.
    */
   class FontLibrary {
     public:
@@ -100,12 +112,16 @@ namespace Rellu {
       FontResolution resolve(const Font& font) const;
 
       /**
-       * Finds a face to display a character missing from a font.
+       * Finds a face to display a character missing from a face, the one
+       * the system's font fallback chooses where there is one, as Adobe XD
+       * does on Windows, and otherwise the face nearest in weight and slant
+       * of the first family in a fallback chain mapping the character.
        * @param character The Unicode code point.
-       * @return The first face in the fallback chain mapping the
-       *         <i>character</i>, or a null pointer if none does.
+       * @param names The names of the face missing the <i>character</i>.
+       * @return The face displaying the <i>character</i>.
        */
-      std::shared_ptr<const Typeface> find_fallback(char32_t character) const;
+      FontFallback find_fallback(
+        char32_t character, const TypefaceNames& names) const;
 
     private:
       std::vector<std::filesystem::path> m_directories;
@@ -119,16 +135,25 @@ namespace Rellu {
       mutable std::vector<std::shared_ptr<const Typeface>> m_typefaces;
       mutable std::map<std::tuple<std::string, std::string, std::string>,
         FontResolution> m_resolutions;
-      mutable std::vector<std::shared_ptr<const Typeface>> m_fallbacks;
-      mutable bool m_is_fallback_loaded;
+      mutable std::map<std::pair<double, bool>, std::vector<FontFallback>>
+        m_fallbacks;
+      mutable std::map<std::tuple<char32_t, std::string, double, bool>,
+        FontFallback> m_system_fallbacks;
+      mutable std::map<std::pair<std::filesystem::path, unsigned int>,
+        std::shared_ptr<const Typeface>> m_system_faces;
 
       FontLibrary(const FontLibrary&) = delete;
       FontLibrary& operator =(const FontLibrary&) = delete;
       void scan() const;
       void add(FontFace face) const;
       std::shared_ptr<const Typeface> load(std::size_t index) const;
+      std::shared_ptr<const Typeface> load(
+        const std::filesystem::path& path, unsigned int index) const;
       std::optional<std::size_t> find_face(const std::string& family,
         const std::string& style, bool is_nearest) const;
+      std::optional<std::size_t> find_nearest(
+        const std::vector<std::size_t>& faces, double weight,
+        bool is_italic) const;
       FontResolution find(const Font& font) const;
   };
 

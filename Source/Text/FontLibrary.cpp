@@ -11,6 +11,7 @@
 #include <QStandardPaths>
 #include "Rellu/Text/FontLibrary.hpp"
 #include "HarfBuzz.hpp"
+#include "SystemFontFallback.hpp"
 
 using namespace Rellu;
 using namespace Rellu::Details;
@@ -21,16 +22,13 @@ namespace {
     std::string_view m_family;
   };
 
-  constexpr auto SUBSTITUTES = std::array<Substitute, 12>({
-    {"helveticaneue", "Arial"}, {"helvetica", "Arial"}, {"arialmt", "Arial"},
-    {"lucidagrande", "Segoe UI"}, {".applesystemuifont", "Segoe UI"},
-    {".sfns", "Segoe UI"}, {"sanfrancisco", "Segoe UI"},
-    {"sfmono", "Consolas"}, {"sfpro", "Segoe UI"},
-    {"pingfang", "Microsoft YaHei"}, {"applecoloremoji", "Segoe UI Emoji"},
-    {"zapfdingbats", "Segoe UI Symbol"}});
+  constexpr auto SUBSTITUTES = std::array<Substitute, 2>({
+    {"helvetica", "Arial"}, {"arialmt", "Arial"}});
 
   constexpr auto FALLBACK_FAMILIES =
     std::array<std::string_view, 3>({"Segoe UI", "Arial", "Roboto"});
+
+  constexpr auto MINIMUM_BOLD_WEIGHT = 600.0;
 
   constexpr auto CHARACTER_FALLBACKS = std::array<std::string_view, 7>({
     "Segoe UI", "Segoe UI Symbol", "Segoe UI Emoji", "Segoe MDL2 Assets",
@@ -93,6 +91,16 @@ namespace {
       name.find("oblique") != std::string::npos;
   }
 
+  std::filesystem::path::string_type to_lower(
+      std::filesystem::path::string_type name) {
+    for(auto& c : name) {
+      if(c >= 'A' && c <= 'Z') {
+        c = static_cast<std::filesystem::path::value_type>(c - 'A' + 'a');
+      }
+    }
+    return name;
+  }
+
   bool is_font_file(const std::filesystem::path& path) {
     auto extension = normalize(path.extension().string());
     return extension == ".ttf" || extension == ".otf" ||
@@ -121,8 +129,7 @@ namespace {
 
 FontLibrary::FontLibrary(std::vector<std::filesystem::path> directories)
   : m_directories(std::move(directories)),
-    m_is_scanned(false),
-    m_is_fallback_loaded(false) {}
+    m_is_scanned(false) {}
 
 const std::vector<std::filesystem::path>&
     FontLibrary::get_directories() const {
@@ -147,26 +154,54 @@ FontResolution FontLibrary::resolve(const Font& font) const {
   return m_resolutions.emplace(key, find(font)).first->second;
 }
 
-std::shared_ptr<const Typeface> FontLibrary::find_fallback(
-    char32_t character) const {
+FontFallback FontLibrary::find_fallback(
+    char32_t character, const TypefaceNames& names) const {
   auto lock = std::lock_guard(m_mutex);
   scan();
-  if(!m_is_fallback_loaded) {
-    m_is_fallback_loaded = true;
+  auto weight = names.m_weight;
+  auto is_italic = names.m_is_italic;
+  auto system_key =
+    std::tuple(character, names.m_typographic_family, weight, is_italic);
+  auto system = m_system_fallbacks.find(system_key);
+  if(system == m_system_fallbacks.end()) {
+    auto fallback = FontFallback();
+    if(auto face = find_system_fallback(
+        character, names.m_typographic_family, weight, is_italic)) {
+      if(auto typeface = load(face->m_path, face->m_index);
+          typeface && typeface->has_glyph(character)) {
+        fallback = FontFallback(std::move(typeface), face->m_is_emboldened);
+      }
+    }
+    system = m_system_fallbacks.emplace(system_key, std::move(fallback)).first;
+  }
+  if(system->second.m_typeface) {
+    return system->second;
+  }
+  auto key = std::pair(weight, is_italic);
+  auto fallbacks = m_fallbacks.find(key);
+  if(fallbacks == m_fallbacks.end()) {
+    fallbacks = m_fallbacks.emplace(key, std::vector<FontFallback>()).first;
     for(auto family : CHARACTER_FALLBACKS) {
-      if(auto face = find_face(normalize(family), "regular", true)) {
+      auto faces = m_families.find(normalize(family));
+      if(faces == m_families.end()) {
+        continue;
+      }
+      if(auto face = find_nearest(faces->second, weight, is_italic)) {
         if(auto typeface = load(*face)) {
-          m_fallbacks.push_back(std::move(typeface));
+          auto is_emboldened = weight >= MINIMUM_BOLD_WEIGHT &&
+            typeface->get_names().m_weight < MINIMUM_BOLD_WEIGHT;
+          fallbacks->second.push_back(
+            FontFallback(std::move(typeface), is_emboldened));
         }
       }
     }
   }
-  for(auto& fallback : m_fallbacks) {
-    if(fallback->has_glyph(character)) {
+  for(auto& fallback : fallbacks->second) {
+    if(fallback.m_typeface->has_glyph(character)) {
       return fallback;
     }
   }
-  return nullptr;
+  return FontFallback();
 }
 
 void FontLibrary::scan() const {
@@ -240,6 +275,23 @@ std::shared_ptr<const Typeface> FontLibrary::load(std::size_t index) const {
   return typeface;
 }
 
+std::shared_ptr<const Typeface> FontLibrary::load(
+    const std::filesystem::path& path, unsigned int index) const {
+  auto name = to_lower(path.native());
+  for(auto i = std::size_t(0); i != m_faces.size(); ++i) {
+    auto& face = m_faces[i];
+    if(face.m_index == index && !face.m_instance &&
+        to_lower(face.m_path.native()) == name) {
+      return load(i);
+    }
+  }
+  auto& typeface = m_system_faces[std::pair(path, index)];
+  if(!typeface) {
+    typeface = Typeface::load(path, index);
+  }
+  return typeface;
+}
+
 std::optional<std::size_t> FontLibrary::find_face(const std::string& family,
     const std::string& style, bool is_nearest) const {
   auto faces = m_families.find(family);
@@ -255,14 +307,18 @@ std::optional<std::size_t> FontLibrary::find_face(const std::string& family,
   if(!is_nearest) {
     return std::nullopt;
   }
-  auto weight = to_weight(style);
-  auto italic = is_italic(style);
+  return find_nearest(faces->second, to_weight(style), is_italic(style));
+}
+
+std::optional<std::size_t> FontLibrary::find_nearest(
+    const std::vector<std::size_t>& faces, double weight,
+    bool is_italic) const {
   auto best = std::optional<std::size_t>();
   auto best_score = std::numeric_limits<double>::infinity();
-  for(auto index : faces->second) {
+  for(auto index : faces) {
     auto& names = m_faces[index].m_names;
     auto score = std::abs(names.m_weight - weight) +
-      (names.m_is_italic != italic ? 1000 : 0);
+      (names.m_is_italic != is_italic ? 1000 : 0);
     if(score < best_score) {
       best_score = score;
       best = index;

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <vector>
 #include <QByteArray>
 #include <QMatrix4x4>
 #include "Rellu/Rendering/PathRenderer.hpp"
@@ -98,6 +99,67 @@ namespace {
         Qt::SmoothTransformation);
     }
     return converted;
+  }
+
+  QImage downsample(const QImage& source) {
+    auto width = source.width();
+    auto height = source.height();
+    auto result = QImage(std::max(1, width >> 1), std::max(1, height >> 1),
+      QImage::Format_RGBA8888_Premultiplied);
+    auto get_taps = [] (int size) {
+      if(size == 1) {
+        return 1;
+      } else if(size & 1) {
+        return 3;
+      }
+      return 2;
+    };
+    auto columns = get_taps(width);
+    auto rows = get_taps(height);
+    auto get_weight = [] (int taps, int index) {
+      if(taps == 3 && index == 1) {
+        return 2;
+      }
+      return 1;
+    };
+    auto shift = (columns == 3 ? 2 : columns - 1) + (rows == 3 ? 2 : rows - 1);
+    for(auto y = 0; y != result.height(); ++y) {
+      auto output = result.scanLine(y);
+      for(auto x = 0; x != result.width(); ++x) {
+        auto sum = std::array<int, 4>();
+        for(auto j = 0; j != rows; ++j) {
+          auto input = source.constScanLine(2 * y + j);
+          for(auto i = 0; i != columns; ++i) {
+            auto weight = get_weight(rows, j) * get_weight(columns, i);
+            auto pixel = input + 4 * (2 * x + i);
+            for(auto channel = 0; channel != 4; ++channel) {
+              sum[channel] += weight * pixel[channel];
+            }
+          }
+        }
+        for(auto channel = 0; channel != 4; ++channel) {
+          output[4 * x + channel] = static_cast<uchar>(sum[channel] >> shift);
+        }
+      }
+    }
+    return result;
+  }
+
+  QRhiTextureUploadDescription make_mipmaps(const QImage& image) {
+    auto entries = std::vector<QRhiTextureUploadEntry>();
+    auto level = image;
+    auto index = 0;
+    entries.emplace_back(
+      0, index, QRhiTextureSubresourceUploadDescription(level));
+    while(level.width() > 1 || level.height() > 1) {
+      level = downsample(level);
+      ++index;
+      entries.emplace_back(
+        0, index, QRhiTextureSubresourceUploadDescription(level));
+    }
+    auto description = QRhiTextureUploadDescription();
+    description.setEntries(entries.begin(), entries.end());
+    return description;
   }
 }
 
@@ -539,11 +601,9 @@ void PathRenderer::prepare_images(QRhiResourceUpdateBatch& batch) {
     auto upload = to_upload(*image, limit);
     entry.m_image = image;
     entry.m_texture.reset(m_rhi->newTexture(QRhiTexture::RGBA8,
-      upload.size(), 1,
-      QRhiTexture::MipMapped | QRhiTexture::UsedWithGenerateMips));
+      upload.size(), 1, QRhiTexture::MipMapped));
     create(*entry.m_texture);
-    batch.uploadTexture(entry.m_texture.get(), upload);
-    batch.generateMips(entry.m_texture.get());
+    batch.uploadTexture(entry.m_texture.get(), make_mipmaps(upload));
     entry.m_is_used = true;
   }
   auto is_released = false;

@@ -5,6 +5,7 @@
 #include <vector>
 #include "Rellu/Geometry/Color.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
+#include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Text/TextLayout.hpp"
 
 namespace Rellu {
@@ -56,10 +57,11 @@ namespace Rellu {
 
   /**
    * Rasterizes text into device pixels the way Adobe XD does on Windows:
-   * every glyph positioned to a quarter of a pixel along its baseline and to
-   * a whole pixel across it, hinted vertically and sampled at 4x4 points per
-   * pixel, with the coverage of overlapping glyphs summed. A TextRasterizer
-   * is safe to use from multiple threads.
+   * every glyph positioned to a quarter of a pixel along a horizontal
+   * baseline and to a whole pixel across it, to whole pixels along and
+   * across a vertical baseline, hinted vertically and sampled at 4x4 points
+   * per pixel, and composited over the glyphs before it. A TextRasterizer is
+   * safe to use from multiple threads.
    */
   class TextRasterizer {
     public:
@@ -101,13 +103,23 @@ namespace Rellu {
         const PlacedGlyph& glyph, const Matrix& transform);
 
       /**
-       * Rasterizes a layout's decorations and the glyphs that are not
-       * outlined.
+       * Returns the position in device pixels a glyph's origin is drawn at.
+       * @param glyph The glyph.
+       * @param transform The supported transform from the glyph's space to
+       *        device pixels.
+       */
+      static Point get_origin(const PlacedGlyph& glyph, const Matrix& transform);
+
+      /**
+       * Rasterizes a layout's decorations and the glyphs that are neither
+       * outlined nor color glyphs.
        * @param layout The layout to rasterize.
        * @param transform The supported transform from the layout's space to
        *        device pixels.
-       * @return One raster per color in order of each color's first
-       *         appearance, glyphs before decorations.
+       * @return The rasters in the order they are drawn: those of each color
+       *         in order of the color's first appearance, glyphs before
+       *         decorations, with glyphs overlapping one another in separate
+       *         rasters.
        */
       std::vector<TextRaster> rasterize(
         const TextLayout& layout, const Matrix& transform) const;

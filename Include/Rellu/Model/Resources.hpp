@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "Rellu/Geometry/Color.hpp"
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Model/Component.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Model/Shared.hpp"
@@ -65,7 +66,7 @@ namespace Rellu {
     /** The extra space after each paragraph. */
     double m_paragraph_spacing = 0;
 
-    bool operator ==(const CharacterStyle&) const = default;
+    bool operator ==(const CharacterStyle& style) const;
   };
 
   /** The shared assets of a document. */
@@ -85,6 +86,13 @@ namespace Rellu {
 
     bool operator ==(const Resources&) const = default;
   };
+
+  inline bool CharacterStyle::operator ==(const CharacterStyle& style) const {
+    return m_id == style.m_id && m_name == style.m_name &&
+      m_style == style.m_style &&
+      equals(m_line_height, style.m_line_height) &&
+      equals(m_paragraph_spacing, style.m_paragraph_spacing);
+  }
 }
 
 #endif

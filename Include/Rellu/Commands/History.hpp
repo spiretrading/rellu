@@ -128,16 +128,16 @@ namespace Rellu {
       std::vector<Step> m_undo;
       std::vector<Step> m_redo;
       std::optional<std::size_t> m_clean;
+      std::size_t m_base;
       bool m_is_open;
       bool m_is_applying;
-      std::size_t m_publications;
       Signal m_signal;
       Subscription m_subscription;
 
       History(const History&) = delete;
       History& operator =(const History&) = delete;
-      bool apply(Command& command);
       void push(Step step);
+      void synchronize();
       void on_change();
   };
 }

@@ -133,6 +133,15 @@ namespace Rellu {
    */
   void add_canvas_importer(XdImporter& importer);
 
+  /**
+   * Adds the importer keeping, as opaque data, everything the package holds
+   * beyond the model: for each node the patch turning the JSON the writer
+   * generates into the JSON read, and for the document the entries and
+   * members the model does not represent.
+   * @param importer The importer to add to.
+   */
+  void add_preservation_importer(XdImporter& importer);
+
   /** Returns an XdImporter with every built-in importer added. */
   XdImporter make_xd_importer();
 

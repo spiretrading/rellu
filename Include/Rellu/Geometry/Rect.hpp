@@ -2,6 +2,7 @@
 #define RELLU_GEOMETRY_RECT_HPP
 #include <algorithm>
 #include <ostream>
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Size.hpp"
 
@@ -58,7 +59,7 @@ namespace Rellu {
      */
     constexpr bool intersects(const Rect& rect) const;
 
-    bool operator ==(const Rect&) const = default;
+    constexpr bool operator ==(const Rect& rect) const;
   };
 
   /**
@@ -175,6 +176,11 @@ namespace Rellu {
   inline std::ostream& operator <<(std::ostream& out, const Rect& rect) {
     return out << '(' << rect.m_x << ", " << rect.m_y << ", " << rect.m_width <<
       ", " << rect.m_height << ')';
+  }
+
+  constexpr bool Rect::operator ==(const Rect& rect) const {
+    return equals(m_x, rect.m_x) && equals(m_y, rect.m_y) &&
+      equals(m_width, rect.m_width) && equals(m_height, rect.m_height);
   }
 }
 

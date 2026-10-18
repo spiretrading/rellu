@@ -1,5 +1,7 @@
 #ifndef RELLU_MODEL_DOCUMENT_HPP
 #define RELLU_MODEL_DOCUMENT_HPP
+#include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -10,6 +12,7 @@
 #include "Rellu/Model/Node.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Model/NodeStore.hpp"
+#include "Rellu/Model/OpaqueData.hpp"
 #include "Rellu/Model/Prototype.hpp"
 #include "Rellu/Model/Resources.hpp"
 #include "Rellu/Model/Subscription.hpp"
@@ -74,11 +77,28 @@ namespace Rellu {
       /** Returns the interactions and flows. */
       const Prototype& get_prototype() const;
 
+      /** Returns the data a document format keeps for the whole document. */
+      const OpaqueData& get_opaque() const;
+
+      /**
+       * Replaces the data a document format keeps for the whole document,
+       * outside of any transaction: the change is neither published nor
+       * recorded for undo.
+       * @param opaque The data.
+       */
+      void set_opaque(OpaqueData opaque);
+
       /** Returns <code>true</code> iff there is a change to undo. */
       bool can_undo() const;
 
       /** Returns <code>true</code> iff there is an undone change to redo. */
       bool can_redo() const;
+
+      /** Returns the number of changes that can be undone. */
+      std::size_t get_undo_count() const;
+
+      /** Returns the number of undone changes that can be redone. */
+      std::size_t get_redo_count() const;
 
       /**
        * Reverts the most recent committed or redone change, throwing
@@ -127,18 +147,28 @@ namespace Rellu {
       std::vector<NodeId> m_canvas;
       Resources m_resources;
       Prototype m_prototype;
+      OpaqueData m_opaque;
       std::vector<Revision> m_undo;
       std::vector<Revision> m_redo;
       std::shared_ptr<Observers> m_observers;
       std::deque<ChangeSet> m_pending;
+      std::uint64_t m_transactions;
       bool m_is_publishing;
       bool m_has_transaction;
 
       Document(const Document&) = delete;
       Document& operator =(const Document&) = delete;
       void swap(Revision& revision);
-      void publish(ChangeSet changes);
+      void publish(const ChangeSet& changes);
   };
+
+  inline const OpaqueData& Document::get_opaque() const {
+    return m_opaque;
+  }
+
+  inline void Document::set_opaque(OpaqueData opaque) {
+    m_opaque = std::move(opaque);
+  }
 }
 
 #endif

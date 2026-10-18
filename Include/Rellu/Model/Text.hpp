@@ -6,6 +6,7 @@
 #include <variant>
 #include <vector>
 #include "Rellu/Geometry/Color.hpp"
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/NodeId.hpp"
@@ -29,7 +30,7 @@ namespace Rellu {
     /** The size in document pixels. */
     double m_size = 12;
 
-    bool operator ==(const Font&) const = default;
+    bool operator ==(const Font& font) const;
   };
 
   /** Lists the case conversions applied to text when displayed. */
@@ -85,7 +86,7 @@ namespace Rellu {
     /** The placement relative to the baseline. */
     TextScript m_script = TextScript::NORMAL;
 
-    bool operator ==(const TextStyle&) const = default;
+    bool operator ==(const TextStyle& style) const;
   };
 
   /** A span of text sharing one style. */
@@ -123,7 +124,7 @@ namespace Rellu {
     /** The width at which lines wrap. */
     double m_width = 0;
 
-    bool operator ==(const AutoHeightFrame&) const = default;
+    bool operator ==(const AutoHeightFrame& frame) const;
   };
 
   /** The frame text is laid out in. */
@@ -154,7 +155,7 @@ namespace Rellu {
     /** The extra space after each paragraph. */
     double m_paragraph_spacing = 0;
 
-    bool operator ==(const ParagraphStyle&) const = default;
+    bool operator ==(const ParagraphStyle& style) const;
   };
 
   /** A span of a line placed by a stored layout. */
@@ -234,6 +235,30 @@ namespace Rellu {
 
     bool operator ==(const Text&) const = default;
   };
+
+  inline bool Font::operator ==(const Font& font) const {
+    return m_family == font.m_family && m_style == font.m_style &&
+      m_postscript_name == font.m_postscript_name &&
+      equals(m_size, font.m_size);
+  }
+
+  inline bool TextStyle::operator ==(const TextStyle& style) const {
+    return m_font == style.m_font &&
+      equals(m_letter_spacing, style.m_letter_spacing) &&
+      m_color == style.m_color && m_is_underlined == style.m_is_underlined &&
+      m_is_struck_through == style.m_is_struck_through &&
+      m_transform == style.m_transform && m_script == style.m_script;
+  }
+
+  inline bool AutoHeightFrame::operator ==(const AutoHeightFrame& frame) const {
+    return equals(m_width, frame.m_width);
+  }
+
+  inline bool ParagraphStyle::operator ==(const ParagraphStyle& style) const {
+    return m_alignment == style.m_alignment &&
+      equals(m_line_height, style.m_line_height) &&
+      equals(m_paragraph_spacing, style.m_paragraph_spacing);
+  }
 }
 
 #endif

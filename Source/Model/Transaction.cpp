@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
+#include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Model/Transaction.hpp"
 
 using namespace Rellu;
@@ -10,6 +12,7 @@ namespace {
   constexpr auto PAYLOAD_MASK = ChangeMask::GEOMETRY | ChangeMask::STYLE |
     ChangeMask::TEXT | ChangeMask::ROLES | ChangeMask::ARTBOARD |
     ChangeMask::REFERENCE;
+  constexpr auto END = std::numeric_limits<std::size_t>::max();
 
   std::invalid_argument make_error(std::string message, const NodeId& id) {
     return std::invalid_argument(message + ": " + to_string(id));
@@ -42,12 +45,72 @@ namespace {
     }
   }
 
+  bool is_layout_affected(
+      const TextStyle& previous, const TextStyle& current) {
+    return previous.m_font != current.m_font ||
+      !equals(previous.m_letter_spacing, current.m_letter_spacing) ||
+      previous.m_transform != current.m_transform ||
+      previous.m_script != current.m_script;
+  }
+
   bool is_layout_affected(const Text& previous, const Text& current) {
-    return previous.m_content != current.m_content ||
-      previous.m_frame != current.m_frame ||
-      previous.m_base_style != current.m_base_style ||
-      previous.m_runs != current.m_runs ||
-      previous.m_paragraph_style != current.m_paragraph_style;
+    if(previous.m_content != current.m_content ||
+        previous.m_frame != current.m_frame ||
+        previous.m_paragraph_style != current.m_paragraph_style ||
+        previous.m_runs.size() != current.m_runs.size() ||
+        is_layout_affected(previous.m_base_style, current.m_base_style)) {
+      return true;
+    }
+    for(auto i = std::size_t(0); i != current.m_runs.size(); ++i) {
+      auto& previous_run = previous.m_runs[i];
+      auto& current_run = current.m_runs[i];
+      if(previous_run.m_length != current_run.m_length ||
+          is_layout_affected(previous_run.m_style, current_run.m_style)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool is_recolored(const Text& previous, const Text& current,
+      const StoredRun& run) {
+    if(current.m_runs.empty()) {
+      return previous.m_base_style.m_color != current.m_base_style.m_color;
+    }
+    auto start = std::size_t(0);
+    for(auto i = std::size_t(0); i != current.m_runs.size() &&
+        start < run.m_to; ++i) {
+      auto end = start + current.m_runs[i].m_length;
+      if(end > run.m_from && previous.m_runs[i].m_style.m_color !=
+          current.m_runs[i].m_style.m_color) {
+        return true;
+      }
+      start = end;
+    }
+    return false;
+  }
+
+  void recolor(const Text& previous, Text& current) {
+    auto layout = std::optional<StoredLayout>();
+    auto& stored = **current.m_layout;
+    for(auto i = std::size_t(0); i != stored.m_paragraphs.size(); ++i) {
+      auto& lines = stored.m_paragraphs[i].m_lines;
+      for(auto j = std::size_t(0); j != lines.size(); ++j) {
+        auto& runs = lines[j].m_runs;
+        for(auto k = std::size_t(0); k != runs.size(); ++k) {
+          if(runs[k].m_color && is_recolored(previous, current, runs[k])) {
+            if(!layout) {
+              layout.emplace(stored);
+            }
+            layout->m_paragraphs[i].m_lines[j].m_runs[k].m_color =
+              std::nullopt;
+          }
+        }
+      }
+    }
+    if(layout) {
+      current.m_layout = Shared(std::move(*layout));
+    }
   }
 
   ChangeMask diff(const NodeHeader& previous, const NodeHeader& current) {
@@ -64,7 +127,7 @@ namespace {
     if(previous.m_transform != current.m_transform) {
       mask |= ChangeMask::TRANSFORM;
     }
-    if(previous.m_opacity != current.m_opacity) {
+    if(!equals(previous.m_opacity, current.m_opacity)) {
       mask |= ChangeMask::OPACITY;
     }
     if(previous.m_blend_mode != current.m_blend_mode) {
@@ -90,7 +153,7 @@ namespace {
     if(previous.m_background != current.m_background) {
       mask |= ChangeMask::STYLE;
     }
-    if(previous.m_viewport_height != current.m_viewport_height ||
+    if(!equals(previous.m_viewport_height, current.m_viewport_height) ||
         previous.m_layout_grid != current.m_layout_grid ||
         previous.m_guides != current.m_guides) {
       mask |= ChangeMask::ARTBOARD;
@@ -215,35 +278,172 @@ namespace {
     }
   }
 
-  void sort_by_depth(std::vector<NodeId>& ids, auto get_parent) {
-    auto members = std::unordered_set<NodeId>(ids.begin(), ids.end());
-    auto depths = std::vector<std::pair<std::size_t, NodeId>>();
-    depths.reserve(ids.size());
-    for(auto& id : ids) {
+  void sort_by_depth(
+      std::vector<NodeId>& ids, const std::vector<NodeId>& parents) {
+    if(ids.size() < 2) {
+      return;
+    }
+    struct Member {
+      std::size_t m_index;
+      std::size_t m_depth;
+    };
+    auto members = std::unordered_map<NodeId, Member>();
+    members.reserve(ids.size());
+    for(auto i = std::size_t(0); i != ids.size(); ++i) {
+      members.emplace(ids[i], Member(i, END));
+    }
+    auto depths = std::vector<std::size_t>(ids.size());
+    auto pending = std::vector<Member*>();
+    for(auto i = std::size_t(0); i != ids.size(); ++i) {
+      auto member = &members.find(ids[i])->second;
       auto depth = std::size_t(0);
-      for(auto parent = get_parent(id); members.contains(parent);
-          parent = get_parent(parent)) {
+      while(member->m_depth == END) {
+        pending.push_back(member);
+        auto parent = members.find(parents[member->m_index]);
+        if(parent == members.end()) {
+          member = nullptr;
+          break;
+        }
+        member = &parent->second;
+      }
+      if(member) {
+        depth = member->m_depth + 1;
+      }
+      while(!pending.empty()) {
+        pending.back()->m_depth = depth;
+        pending.pop_back();
         ++depth;
       }
-      depths.emplace_back(depth, id);
+      depths[i] = members.find(ids[i])->second.m_depth;
     }
-    std::stable_sort(depths.begin(), depths.end(),
-      [] (const auto& left, const auto& right) {
-        return left.first < right.first;
+    auto order = std::vector<std::size_t>(ids.size());
+    for(auto i = std::size_t(0); i != order.size(); ++i) {
+      order[i] = i;
+    }
+    std::stable_sort(order.begin(), order.end(),
+      [&] (const auto& left, const auto& right) {
+        return depths[left] < depths[right];
       });
-    for(auto i = std::size_t(0); i != ids.size(); ++i) {
-      ids[i] = depths[i].second;
+    auto sorted = std::vector<NodeId>();
+    sorted.reserve(ids.size());
+    for(auto index : order) {
+      sorted.push_back(ids[index]);
+    }
+    ids = std::move(sorted);
+  }
+
+  ChangeSet make_change_set(const Document& document, const auto& revision,
+      const std::vector<NodeId>& moved, bool has_removals, bool has_moves) {
+    auto changes = ChangeSet();
+    auto& nodes = document.get_nodes();
+    auto parents = std::vector<NodeId>();
+    for(auto& entry : revision.m_nodes) {
+      if(!entry.second) {
+        if(!has_removals || nodes.contains(entry.first)) {
+          changes.m_inserted.push_back(entry.first);
+        }
+      } else if(auto current = nodes.find(entry.first)) {
+        auto mask = diff(*entry.second, *current);
+        if(mask != ChangeMask::NONE) {
+          changes.m_modified.push_back(NodeChange(entry.first, mask));
+        }
+      } else {
+        changes.m_removed.push_back(entry.first);
+        parents.push_back(entry.second->m_parent);
+      }
+    }
+    sort_by_depth(changes.m_removed, parents);
+    if(has_moves && changes.m_inserted.size() > 1) {
+      parents.clear();
+      for(auto& id : changes.m_inserted) {
+        parents.push_back(nodes.get(id).m_parent);
+      }
+      sort_by_depth(changes.m_inserted, parents);
+    }
+    if(!moved.empty()) {
+      auto inserted = std::unordered_set<NodeId>(
+        changes.m_inserted.begin(), changes.m_inserted.end());
+      auto listed = std::unordered_set<NodeId>();
+      for(auto& id : moved) {
+        if(nodes.contains(id) && !inserted.contains(id) &&
+            listed.insert(id).second) {
+          changes.m_moved.push_back(id);
+        }
+      }
+    }
+    auto& resources = document.get_resources();
+    append_differences(
+      resources.m_components, revision.m_components, changes.m_components);
+    append_differences(
+      resources.m_images, revision.m_images, changes.m_images);
+    if(revision.m_swatches) {
+      append_differences(
+        *revision.m_swatches, resources.m_swatches, changes.m_swatches);
+    }
+    if(revision.m_character_styles) {
+      append_differences(*revision.m_character_styles,
+        resources.m_character_styles, changes.m_character_styles);
+    }
+    auto& prototype = document.get_prototype();
+    if(revision.m_interactions) {
+      append_differences(*revision.m_interactions, prototype.m_interactions,
+        changes.m_interactions);
+    }
+    if(revision.m_flows) {
+      changes.m_is_flow_changed =
+        *revision.m_home_artboard != prototype.m_home_artboard ||
+        *revision.m_flows != prototype.m_flows;
+    }
+    return changes;
+  }
+
+  template<typename K, typename V>
+  void merge(std::vector<std::pair<K, V>>& entries,
+      std::vector<std::pair<K, V>>& amendment) {
+    auto ids = std::unordered_set<K>();
+    ids.reserve(entries.size());
+    for(auto& entry : entries) {
+      ids.insert(entry.first);
+    }
+    for(auto& entry : amendment) {
+      if(ids.insert(entry.first).second) {
+        entries.push_back(std::move(entry));
+      }
+    }
+  }
+
+  template<typename T>
+  void merge(std::optional<T>& value, std::optional<T>& amendment) {
+    if(!value) {
+      value = std::move(amendment);
+    }
+  }
+
+  void merge_revisions(auto& revision, auto& amendment) {
+    merge(revision.m_nodes, amendment.m_nodes);
+    merge(revision.m_canvas, amendment.m_canvas);
+    merge(revision.m_components, amendment.m_components);
+    merge(revision.m_images, amendment.m_images);
+    merge(revision.m_swatches, amendment.m_swatches);
+    merge(revision.m_character_styles, amendment.m_character_styles);
+    merge(revision.m_interactions, amendment.m_interactions);
+    if(!revision.m_flows) {
+      revision.m_home_artboard = std::move(amendment.m_home_artboard);
+      revision.m_flows = std::move(amendment.m_flows);
     }
   }
 }
 
 Transaction::Transaction(Document& document)
     : m_document(&document),
+      m_mark(document.m_transactions + 1),
+      m_indexed_count(0),
       m_is_open(true) {
   if(document.m_has_transaction) {
     throw std::logic_error("A transaction is already open.");
   }
   document.m_has_transaction = true;
+  document.m_transactions = m_mark;
 }
 
 Transaction::~Transaction() {
@@ -256,30 +456,15 @@ Transaction::~Transaction() {
 NodeId Transaction::insert(const NodeId& parent, std::size_t index,
     NodeHeader header, Payload payload) {
   check_open();
-  if(header.m_id.is_nil()) {
-    header.m_id = generate_node_id();
-  }
-  validate_node(header, payload, parent);
-  if(index > m_document->get_children(parent).size()) {
+  if(index == END) {
     throw make_error("Index out of range in parent", parent);
   }
-  auto id = header.m_id;
-  touch(id);
-  m_document->m_nodes.insert(Node(std::move(header), std::move(payload),
-    parent, std::vector<NodeId>()));
-  auto& children = edit_children(parent);
-  children.insert(children.begin() + index, id);
-  return id;
+  return add(parent, index, std::move(header), std::move(payload));
 }
 
 NodeId Transaction::append(
     const NodeId& parent, NodeHeader header, Payload payload) {
-  check_open();
-  if(!parent.is_nil() && !m_document->m_nodes.contains(parent)) {
-    throw make_error("Unknown parent", parent);
-  }
-  return insert(parent, m_document->get_children(parent).size(),
-    std::move(header), std::move(payload));
+  return add(parent, END, std::move(header), std::move(payload));
 }
 
 NodeId Transaction::insert_root(NodeHeader header, Payload payload) {
@@ -290,11 +475,15 @@ NodeId Transaction::insert_root(NodeHeader header, Payload payload) {
   if(get_kind(payload) == NodeKind::ARTBOARD) {
     throw make_error("An artboard must be on the canvas", header.m_id);
   }
-  validate_node(header, payload, NodeId());
+  validate_payload(payload);
+  auto& nodes = m_document->m_nodes;
   auto id = header.m_id;
-  touch(id);
-  m_document->m_nodes.insert(Node(std::move(header), std::move(payload),
-    NodeId(), std::vector<NodeId>()));
+  if(nodes.contains(id)) {
+    throw make_error("Duplicate node", id);
+  }
+  auto slot = nodes.add(std::make_shared<Node>(std::move(header),
+    std::move(payload), NodeId(), std::vector<NodeId>()), true);
+  touch_insertion(id, slot);
   return id;
 }
 
@@ -352,29 +541,32 @@ void Transaction::move(
   auto& children = edit_children(parent);
   children.insert(children.begin() + index, id);
   if(previous_parent != parent) {
-    touch(id);
-    nodes.edit(id).m_parent = parent;
+    auto slot = find_slot(id);
+    touch(slot);
+    nodes.edit_slot(slot).m_parent = parent;
   }
   m_moved.push_back(id);
 }
 
 void Transaction::replace_header(NodeHeader header) {
   check_open();
-  auto id = header.m_id;
-  if(!m_document->m_nodes.contains(id)) {
-    throw make_error("Unknown node", id);
+  auto& nodes = m_document->m_nodes;
+  auto slot = nodes.find_slot(header.m_id);
+  if(slot == NodeStore::NONE) {
+    throw make_error("Unknown node", header.m_id);
   }
-  touch(id);
-  m_document->m_nodes.edit(id).m_header = std::move(header);
+  touch(slot);
+  nodes.edit_slot(slot).m_header = std::move(header);
 }
 
 void Transaction::replace_payload(const NodeId& id, Payload payload) {
   check_open();
   auto& nodes = m_document->m_nodes;
-  auto node = nodes.find(id);
-  if(!node) {
+  auto slot = nodes.find_slot(id);
+  if(slot == NodeStore::NONE) {
     throw make_error("Unknown node", id);
   }
+  auto node = nodes.m_slots[slot].m_record.get();
   if(get_kind(payload) != node->get_kind()) {
     throw make_error("Payload kind differs from the node's", id);
   }
@@ -386,13 +578,16 @@ void Transaction::replace_payload(const NodeId& id, Payload payload) {
   }
   if(auto text = std::get_if<Text>(&payload)) {
     auto& previous = *node->get_text();
-    if(text->m_layout == previous.m_layout &&
-        is_layout_affected(previous, *text)) {
-      text->m_layout = std::nullopt;
+    if(text->m_layout && text->m_layout == previous.m_layout) {
+      if(is_layout_affected(previous, *text)) {
+        text->m_layout = std::nullopt;
+      } else {
+        recolor(previous, *text);
+      }
     }
   }
-  touch(id);
-  nodes.edit(id).m_payload = std::move(payload);
+  touch(slot);
+  nodes.edit_slot(slot).m_payload = std::move(payload);
 }
 
 ComponentId Transaction::add_component(Component component) {
@@ -598,18 +793,46 @@ void Transaction::set_flows(std::vector<Flow> flows) {
   m_document->m_prototype.m_flows = std::move(flows);
 }
 
-void Transaction::commit() {
+bool Transaction::commit() {
   check_open();
-  auto changes = make_change_set();
-  m_is_open = false;
-  m_document->m_has_transaction = false;
+  auto changes = make_change_set(*m_document, m_revision, m_moved,
+    !m_removed.empty(), !m_moved.empty());
+  finish();
   if(changes.is_empty()) {
-    return;
+    return false;
   }
-  m_revision.m_changes = changes;
-  m_document->m_undo.push_back(std::move(m_revision));
-  m_document->m_redo.clear();
-  m_document->publish(std::move(changes));
+  auto& document = *m_document;
+  m_revision.m_changes = std::move(changes);
+  document.m_undo.push_back(std::move(m_revision));
+  document.m_redo.clear();
+  document.publish(document.m_undo.back().m_changes);
+  return true;
+}
+
+bool Transaction::amend() {
+  check_open();
+  auto& document = *m_document;
+  if(document.m_undo.empty()) {
+    return commit();
+  }
+  auto changes = make_change_set(document, m_revision, m_moved,
+    !m_removed.empty(), !m_moved.empty());
+  finish();
+  if(changes.is_empty()) {
+    return true;
+  }
+  auto& revision = document.m_undo.back();
+  merge_revisions(revision, m_revision);
+  auto moved = std::move(revision.m_changes.m_moved);
+  moved.insert(moved.end(), m_moved.begin(), m_moved.end());
+  revision.m_changes = make_change_set(document, revision, moved, true, true);
+  auto is_recorded = !revision.m_changes.is_empty();
+  if(!is_recorded) {
+    document.m_undo.pop_back();
+  }
+  document.m_redo.clear();
+  document.publish(changes);
+  return is_recorded;
 }
 
 void Transaction::check_open() const {
@@ -618,10 +841,67 @@ void Transaction::check_open() const {
   }
 }
 
-void Transaction::touch(const NodeId& id) {
-  if(m_touched.insert(id).second) {
-    m_revision.m_nodes.emplace_back(id, m_document->m_nodes.get_record(id));
+NodeId Transaction::add(const NodeId& parent, std::size_t index,
+    NodeHeader header, Payload payload) {
+  check_open();
+  if(header.m_id.is_nil()) {
+    header.m_id = generate_node_id();
   }
+  validate_payload(payload);
+  auto& nodes = m_document->m_nodes;
+  auto parent_slot = NodeStore::NONE;
+  auto count = std::size_t(0);
+  if(parent.is_nil()) {
+    count = m_document->m_canvas.size();
+  } else {
+    parent_slot = nodes.find_slot(parent);
+    if(parent_slot == NodeStore::NONE) {
+      throw make_error("Unknown parent", parent);
+    }
+    auto& parent_node = *nodes.m_slots[parent_slot].m_record;
+    if(!accepts(parent_node.m_payload, get_kind(payload))) {
+      throw make_error("Parent does not accept the node", parent);
+    }
+    count = parent_node.m_children.size();
+  }
+  if(index == END) {
+    index = count;
+  } else if(index > count) {
+    throw make_error("Index out of range in parent", parent);
+  }
+  auto id = header.m_id;
+  if(nodes.contains(id)) {
+    throw make_error("Duplicate node", id);
+  }
+  auto slot = nodes.add(std::make_shared<Node>(
+    std::move(header), std::move(payload), parent, std::vector<NodeId>()),
+    true);
+  touch_insertion(id, slot);
+  auto& children = edit_children(parent, parent_slot);
+  children.insert(children.begin() + index, id);
+  return id;
+}
+
+std::size_t Transaction::find_slot(const NodeId& id) const {
+  return m_document->m_nodes.find_slot(id);
+}
+
+void Transaction::touch(std::size_t slot) {
+  auto& entry = m_document->m_nodes.m_slots[slot];
+  if(entry.m_mark != m_mark) {
+    entry.m_mark = m_mark;
+    m_revision.m_nodes.emplace_back(entry.m_record->get_id(), entry.m_record);
+  }
+}
+
+void Transaction::touch_insertion(const NodeId& id, std::size_t slot) {
+  for(; m_indexed_count != m_removed.size(); ++m_indexed_count) {
+    m_removed_index.insert(m_removed[m_indexed_count]);
+  }
+  if(m_removed.empty() || !m_removed_index.contains(id)) {
+    m_revision.m_nodes.emplace_back(id, nullptr);
+  }
+  m_document->m_nodes.m_slots[slot].m_mark = m_mark;
 }
 
 void Transaction::touch_canvas() {
@@ -684,11 +964,19 @@ void Transaction::touch_flows() {
 
 std::vector<NodeId>& Transaction::edit_children(const NodeId& parent) {
   if(parent.is_nil()) {
+    return edit_children(parent, NodeStore::NONE);
+  }
+  return edit_children(parent, find_slot(parent));
+}
+
+std::vector<NodeId>& Transaction::edit_children(
+    const NodeId& parent, std::size_t slot) {
+  if(parent.is_nil()) {
     touch_canvas();
     return m_document->m_canvas;
   }
-  touch(parent);
-  return m_document->m_nodes.edit(parent).m_children;
+  touch(slot);
+  return m_document->m_nodes.edit_slot(slot).m_children;
 }
 
 bool Transaction::is_used_tree(
@@ -707,25 +995,6 @@ bool Transaction::is_used_tree(
     }
   }
   return false;
-}
-
-void Transaction::validate_node(const NodeHeader& header,
-    const Payload& payload, const NodeId& parent) const {
-  auto& nodes = m_document->m_nodes;
-  if(nodes.contains(header.m_id)) {
-    throw make_error("Duplicate node", header.m_id);
-  }
-  validate_payload(payload);
-  if(parent.is_nil()) {
-    return;
-  }
-  auto parent_node = nodes.find(parent);
-  if(!parent_node) {
-    throw make_error("Unknown parent", parent);
-  }
-  if(!accepts(parent_node->m_payload, get_kind(payload))) {
-    throw make_error("Parent does not accept the node", parent);
-  }
 }
 
 void Transaction::validate_component(
@@ -783,8 +1052,10 @@ void Transaction::remove_subtree(const NodeId& id) {
         }
       }
     }
-    touch(node);
-    nodes.erase(node);
+    auto slot = find_slot(node);
+    touch(slot);
+    nodes.remove_slot(slot);
+    m_removed.push_back(node);
   }
   for(auto& tree : trees) {
     auto root = nodes.find(tree);
@@ -820,63 +1091,7 @@ void Transaction::remove_subtree(const NodeId& id) {
   }
 }
 
-ChangeSet Transaction::make_change_set() const {
-  auto changes = ChangeSet();
-  auto& nodes = m_document->m_nodes;
-  auto inserted = std::unordered_set<NodeId>();
-  auto removed = std::unordered_map<NodeId, const Node*>();
-  for(auto& entry : m_revision.m_nodes) {
-    auto current = nodes.find(entry.first);
-    if(!entry.second) {
-      if(current) {
-        changes.m_inserted.push_back(entry.first);
-        inserted.insert(entry.first);
-      }
-    } else if(!current) {
-      changes.m_removed.push_back(entry.first);
-      removed.emplace(entry.first, entry.second.get());
-    } else {
-      auto mask = diff(*entry.second, *current);
-      if(mask != ChangeMask::NONE) {
-        changes.m_modified.push_back(NodeChange(entry.first, mask));
-      }
-    }
-  }
-  sort_by_depth(changes.m_inserted, [&] (const auto& id) {
-    return nodes.get(id).m_parent;
-  });
-  sort_by_depth(changes.m_removed, [&] (const auto& id) {
-    return removed.at(id)->m_parent;
-  });
-  auto moved = std::unordered_set<NodeId>();
-  for(auto& id : m_moved) {
-    if(nodes.contains(id) && !inserted.contains(id) &&
-        moved.insert(id).second) {
-      changes.m_moved.push_back(id);
-    }
-  }
-  auto& resources = m_document->m_resources;
-  append_differences(
-    resources.m_components, m_revision.m_components, changes.m_components);
-  append_differences(
-    resources.m_images, m_revision.m_images, changes.m_images);
-  if(m_revision.m_swatches) {
-    append_differences(
-      *m_revision.m_swatches, resources.m_swatches, changes.m_swatches);
-  }
-  if(m_revision.m_character_styles) {
-    append_differences(*m_revision.m_character_styles,
-      resources.m_character_styles, changes.m_character_styles);
-  }
-  auto& prototype = m_document->m_prototype;
-  if(m_revision.m_interactions) {
-    append_differences(*m_revision.m_interactions, prototype.m_interactions,
-      changes.m_interactions);
-  }
-  if(m_revision.m_flows) {
-    changes.m_is_flow_changed =
-      *m_revision.m_home_artboard != prototype.m_home_artboard ||
-      *m_revision.m_flows != prototype.m_flows;
-  }
-  return changes;
+void Transaction::finish() {
+  m_is_open = false;
+  m_document->m_has_transaction = false;
 }
