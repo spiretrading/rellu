@@ -32,7 +32,7 @@ namespace {
 }
 
 ImageTolerance::ImageTolerance() noexcept
-  : ImageTolerance(8, 0.01) {}
+  : ImageTolerance(16, 0.005) {}
 
 ImageTolerance::ImageTolerance(int difference, double fraction) noexcept
   : m_difference(difference),

@@ -6,6 +6,10 @@ Canvas::Canvas(QWidget* parent)
   : QRhiWidget(parent),
     m_rhi(nullptr) {}
 
+CanvasRenderer& Canvas::get_renderer() {
+  return m_renderer;
+}
+
 void Canvas::initialize(QRhiCommandBuffer* buffer) {
   if(m_rhi == rhi()) {
     return;

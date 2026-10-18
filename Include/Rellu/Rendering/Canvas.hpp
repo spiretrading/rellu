@@ -15,6 +15,9 @@ namespace Rellu {
        */
       explicit Canvas(QWidget* parent = nullptr);
 
+      /** Returns the renderer drawing the canvas. */
+      CanvasRenderer& get_renderer();
+
     protected:
       void initialize(QRhiCommandBuffer* buffer) override;
       void render(QRhiCommandBuffer* buffer) override;

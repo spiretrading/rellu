@@ -17,8 +17,8 @@ namespace Rellu {
     double m_fraction;
 
     /**
-     * Constructs an ImageTolerance with a difference of 8 and a fraction of
-     * 0.01.
+     * Constructs an ImageTolerance with a difference of 16 and a fraction of
+     * 0.005.
      */
     ImageTolerance() noexcept;
 
