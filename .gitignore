@@ -374,7 +374,7 @@ package-lock.json
 # Generated project outputs
 .qt/
 Application/rellu
-Config/Rellu/rellu
-Config/Rellu/rellu.exe.manifest
-Config/Tests/rellu_tester
-Tests/*/rellu_tester
+Config/*/rellu
+Config/*/rellu.exe.manifest
+Config/*/*Tests
+Tests/*/*Tests

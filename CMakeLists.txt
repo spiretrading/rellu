@@ -70,23 +70,6 @@ if(CYGWIN)
   add_compile_definitions(__USE_W32_SOCKETS)
 endif()
 include_directories(${RELLU_INCLUDE_PATH})
-add_subdirectory(Config/Rellu)
-add_subdirectory(Config/Tests)
-set(clean_outputs)
-foreach(target rellu rellu_tester)
-  list(APPEND clean_outputs
-    "$<TARGET_FILE:${target}>" "$<TARGET_OBJECTS:${target}>")
-  if(MSVC)
-    get_target_property(target_directory ${target} BINARY_DIR)
-    set(compile_pdb_directory "${target_directory}/${target}.dir/$<CONFIG>")
-    set_target_properties(${target} PROPERTIES COMPILE_PDB_NAME "${target}"
-      COMPILE_PDB_OUTPUT_DIRECTORY "${compile_pdb_directory}")
-    list(APPEND clean_outputs "$<TARGET_PDB_FILE:${target}>"
-      "${compile_pdb_directory}/${target}.pdb"
-      "$<TARGET_FILE_DIR:${target}>/$<TARGET_FILE_BASE_NAME:${target}>.ilk")
-  endif()
-endforeach()
-configure_file(Config/clean.cmake CMakeFiles/clean.cmake.in @ONLY)
-file(GENERATE
-  OUTPUT "${PROJECT_BINARY_DIR}/CMakeFiles/rellu_clean_outputs_$<CONFIG>.cmake"
-  INPUT "${PROJECT_BINARY_DIR}/CMakeFiles/clean.cmake.in")
+include(Config/targets.cmake)
+rellu_add_modules("${CMAKE_CURRENT_SOURCE_DIR}/Config")
+rellu_configure_clean()

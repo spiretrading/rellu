@@ -1,5 +1,5 @@
 #include <rhi/qrhi.h>
-#include "Rellu/Canvas.hpp"
+#include "Rellu/Rendering/Canvas.hpp"
 
 using namespace Rellu;
 

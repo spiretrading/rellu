@@ -1,6 +1,6 @@
 #include <QApplication>
 #include <QMainWindow>
-#include "Rellu/Canvas.hpp"
+#include "Rellu/Rendering/Canvas.hpp"
 
 using namespace Rellu;
 

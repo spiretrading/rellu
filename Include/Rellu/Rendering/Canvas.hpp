@@ -1,5 +1,5 @@
-#ifndef RELLU_CANVAS_HPP
-#define RELLU_CANVAS_HPP
+#ifndef RELLU_RENDERING_CANVAS_HPP
+#define RELLU_RENDERING_CANVAS_HPP
 #include <QRhiWidget>
 
 namespace Rellu {
