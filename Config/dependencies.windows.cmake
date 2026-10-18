@@ -61,6 +61,16 @@ set(QT_MODERN_WINDOWS_STYLE_LIBRARY_DEBUG_PATH
   "${QT_PLUGIN_PATH}/styles/qmodernwindowsstyled.lib")
 set(QT_MODERN_WINDOWS_STYLE_LIBRARY_OPTIMIZED_PATH
   "${QT_PLUGIN_PATH}/styles/qmodernwindowsstyle.lib")
+set(QT_IMAGE_FORMATS_LIBRARY_DEBUG_PATH
+  "${QT_PLUGIN_PATH}/imageformats/qjpegd.lib"
+  "${QT_PLUGIN_PATH}/imageformats/qgifd.lib"
+  "${QT_LIBRARY_PATH}/Qt6BundledLibjpegd.lib")
+set(QT_IMAGE_FORMATS_LIBRARY_OPTIMIZED_PATH
+  "${QT_PLUGIN_PATH}/imageformats/qjpeg.lib"
+  "${QT_PLUGIN_PATH}/imageformats/qgif.lib"
+  "${QT_LIBRARY_PATH}/Qt6BundledLibjpeg.lib")
 set(QT_SHADER_COMPILER_PATH "${QT_ROOT}/bin/qsb.exe")
+set(HARFBUZZ_INCLUDE_PATH "${QT_ROOT}/../src/3rdparty/harfbuzz-ng/src")
+set(FREETYPE_INCLUDE_PATH "${QT_ROOT}/include/QtFreetype")
 set(CLIPPER2_LIBRARY_DEBUG_PATH "${CLIPPER2_ROOT}/lib/Clipper2d.lib")
 set(CLIPPER2_LIBRARY_OPTIMIZED_PATH "${CLIPPER2_ROOT}/lib/Clipper2.lib")

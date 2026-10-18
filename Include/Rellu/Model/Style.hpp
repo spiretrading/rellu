@@ -4,6 +4,7 @@
 #include <variant>
 #include <vector>
 #include "Rellu/Geometry/Color.hpp"
+#include "Rellu/Geometry/Gradient.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Size.hpp"
@@ -28,48 +29,6 @@ namespace Rellu {
 
     bool operator ==(const SolidFill&) const = default;
   };
-
-  /** A color at a position along a gradient. */
-  struct GradientStop {
-
-    /** The position along the gradient in the range [0, 1]. */
-    double m_offset = 0;
-
-    /** The color at the position. */
-    Color m_color = Color(0, 0, 0, 1);
-
-    bool operator ==(const GradientStop&) const = default;
-  };
-
-  /** The geometry of a gradient varying along a line. */
-  struct LinearGradient {
-
-    /** The point where the offset is 0. */
-    Point m_start = Point(0, 0);
-
-    /** The point where the offset is 1. */
-    Point m_end = Point(1, 0);
-
-    bool operator ==(const LinearGradient&) const = default;
-  };
-
-  /** The geometry of a gradient varying outward from a focal point. */
-  struct RadialGradient {
-
-    /** The center of the circle where the offset is 1. */
-    Point m_center = Point(0.5, 0.5);
-
-    /** The radius of the circle where the offset is 1. */
-    double m_radius = 0.5;
-
-    /** The point where the offset is 0. */
-    Point m_focus = Point(0.5, 0.5);
-
-    bool operator ==(const RadialGradient&) const = default;
-  };
-
-  /** The geometry of a gradient, whose alternative gives its kind. */
-  using GradientGeometry = std::variant<LinearGradient, RadialGradient>;
 
   /** Lists the coordinate systems a gradient's geometry is expressed in. */
   enum class GradientUnits : unsigned char {

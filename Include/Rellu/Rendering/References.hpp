@@ -68,13 +68,6 @@ namespace Rellu {
   };
 
   /**
-   * Returns the root of the reference images, given by the RELLU_REFERENCES
-   * environment variable, or C:/Users/Kranar/Nextcloud/rellu_references when
-   * it is not set.
-   */
-  QString get_reference_root();
-
-  /**
    * Lists the documents exported to a reference root.
    * @param root The reference root.
    * @return The path of each document listed in the root's exported.txt.

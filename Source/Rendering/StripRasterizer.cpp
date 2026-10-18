@@ -6,8 +6,10 @@
 #include <future>
 #include <initializer_list>
 #include <limits>
+#include <optional>
 #include <thread>
 #include <utility>
+#include <variant>
 #include "Rellu/Rendering/StripRasterizer.hpp"
 
 using namespace Rellu;
@@ -69,14 +71,22 @@ namespace {
       std::clamp(count, 1.0, static_cast<double>(MAXIMUM_SUBDIVISIONS)));
   }
 
-  auto to_premultiplied(const Paint& paint) {
-    auto& color = std::get<SolidPaint>(paint).m_color;
+  auto to_premultiplied(const Color& color) {
     auto alpha = std::clamp(color.m_alpha, 0.0, 1.0);
     return std::array<qfloat16, 4>({
       qfloat16(std::clamp(color.m_red, 0.0, 1.0) * alpha),
       qfloat16(std::clamp(color.m_green, 0.0, 1.0) * alpha),
       qfloat16(std::clamp(color.m_blue, 0.0, 1.0) * alpha),
       qfloat16(alpha)});
+  }
+
+  auto to_premultiplied(const Paint& paint) {
+    if(auto solid = std::get_if<SolidPaint>(&paint)) {
+      return to_premultiplied(solid->m_color);
+    } else if(auto image = std::get_if<ImagePaint>(&paint)) {
+      return to_premultiplied(Color(1, 1, 1, image->m_opacity));
+    }
+    return to_premultiplied(Color(1, 1, 1, 1));
   }
 
   auto is_covered(float area, FillRule rule) {
@@ -102,10 +112,11 @@ namespace {
       bottom <= box.m_top || top >= box.m_bottom;
   }
 
-  auto make_box(const FillCommand& command, const Matrix& view, QSize size) {
+  auto make_box(
+      const std::optional<Rect>& region, const Matrix& view, QSize size) {
     auto box = Box(0, 0, size.width(), size.height());
-    if(command.m_clip) {
-      auto clip = view.map(*command.m_clip);
+    if(region) {
+      auto clip = view.map(*region);
       box.m_left = std::max(box.m_left, clip.get_left());
       box.m_top = std::max(box.m_top, clip.get_top());
       box.m_right = std::min(box.m_right, clip.get_right());
@@ -134,8 +145,9 @@ namespace {
 
   class PathRasterizer {
     public:
-      void rasterize(const FillCommand& command, const Matrix& view,
-        QSize size, Output& output);
+      void rasterize(const Path& path, const Matrix& transform,
+        const std::optional<Rect>& clip, const std::array<qfloat16, 4>& color,
+        float paint, const Matrix& view, QSize size, Output& output);
 
     private:
       QSize m_size;
@@ -153,6 +165,7 @@ namespace {
       std::array<float, STRIP_HEIGHT> m_carry;
       FillRule m_rule;
       std::array<qfloat16, 4> m_color;
+      float m_paint;
       Output* m_output;
       Point m_start;
       Point m_current;
@@ -177,18 +190,18 @@ namespace {
         const std::uint64_t* first, const std::uint64_t* last);
   };
 
-  void PathRasterizer::rasterize(const FillCommand& command,
-      const Matrix& view, QSize size, Output& output) {
-    auto& segments = command.m_path.get_segments();
-    auto color = to_premultiplied(command.m_paint);
+  void PathRasterizer::rasterize(const Path& path, const Matrix& transform,
+      const std::optional<Rect>& clip, const std::array<qfloat16, 4>& color,
+      float paint, const Matrix& view, QSize size, Output& output) {
+    auto& segments = path.get_segments();
     if(segments.empty() || color[3] == qfloat16(0)) {
       return;
     }
-    auto box = make_box(command, view, size);
+    auto box = make_box(clip, view, size);
     if(!(box.m_left < box.m_right) || !(box.m_top < box.m_bottom)) {
       return;
     }
-    auto matrix = view * command.m_transform;
+    auto matrix = view * transform;
     auto top = std::numeric_limits<double>::infinity();
     auto bottom = -top;
     auto left = top;
@@ -222,8 +235,9 @@ namespace {
     m_first_band = first_row / STRIP_HEIGHT;
     m_band_count =
       (last_row + STRIP_HEIGHT - 1) / STRIP_HEIGHT - m_first_band;
-    m_rule = command.m_path.get_fill_rule();
+    m_rule = path.get_fill_rule();
     m_color = color;
+    m_paint = paint;
     m_output = &output;
     m_lines.clear();
     m_left.assign(m_band_count * STRIP_HEIGHT, 0);
@@ -599,7 +613,7 @@ namespace {
     }
     m_current_spans.push_back(strips.size());
     strips.push_back(
-      Strip(x, y, width, static_cast<float>(rows), m_color, -1, 0));
+      Strip(x, y, width, static_cast<float>(rows), m_color, -1, 0, m_paint));
   }
 
   void PathRasterizer::accumulate(
@@ -721,7 +735,7 @@ namespace {
         static_cast<float>(y),
         static_cast<float>(std::min(STRIP_ATLAS_WIDTH, width - column)),
         static_cast<float>(rows), m_color,
-        static_cast<float>(offset + column), 0));
+        static_cast<float>(offset + column), 0, m_paint));
     }
   }
 }
@@ -729,6 +743,7 @@ namespace {
 struct StripRasterizer::Chunk {
   PathRasterizer m_rasterizer;
   Output m_output;
+  std::vector<std::uint32_t> m_offsets;
   std::size_t m_first_strip;
   int m_first_row;
   int m_row_count;
@@ -754,16 +769,45 @@ void StripRasterizer::rasterize(const DrawList& list, const Matrix& view,
   while(m_chunks.size() < chunk_count) {
     m_chunks.push_back(std::make_unique<Chunk>());
   }
+  m_slots.resize(list.size());
+  scene.m_paints.clear();
+  for(auto i = std::size_t(0); i != list.size(); ++i) {
+    auto fill = std::get_if<FillCommand>(&list[i]);
+    if(std::holds_alternative<EndLayerCommand>(list[i]) ||
+        (fill && std::holds_alternative<SolidPaint>(fill->m_paint))) {
+      m_slots[i] = -1;
+    } else {
+      m_slots[i] = static_cast<float>(scene.m_paints.size());
+      scene.m_paints.push_back(static_cast<std::uint32_t>(i));
+    }
+  }
   run(chunk_count, m_thread_count, [&] (auto index) {
     auto& chunk = *m_chunks[index];
     auto& output = chunk.m_output;
     output.m_strips.clear();
     output.m_texels.clear();
+    chunk.m_offsets.clear();
     auto first = list.size() * index / chunk_count;
     auto last = list.size() * (index + 1) / chunk_count;
     for(auto i = first; i != last; ++i) {
-      chunk.m_rasterizer.rasterize(
-        std::get<FillCommand>(list[i]), view, size, output);
+      chunk.m_offsets.push_back(
+        static_cast<std::uint32_t>(output.m_strips.size()));
+      auto& rasterizer = chunk.m_rasterizer;
+      if(auto fill = std::get_if<FillCommand>(&list[i])) {
+        rasterizer.rasterize(fill->m_path, fill->m_transform, fill->m_clip,
+          to_premultiplied(fill->m_paint), m_slots[i], view, size, output);
+      } else if(auto layer = std::get_if<BeginLayerCommand>(&list[i])) {
+        if(layer->m_mask) {
+          rasterizer.rasterize(layer->m_mask->m_path,
+            layer->m_mask->m_transform, layer->m_clip,
+            to_premultiplied(Color(1, 1, 1, layer->m_opacity)), m_slots[i],
+            view, size, output);
+        }
+      } else if(auto blur = std::get_if<BackdropBlurCommand>(&list[i])) {
+        rasterizer.rasterize(blur->m_path, blur->m_transform, blur->m_clip,
+          to_premultiplied(Color(1, 1, 1, 1)), m_slots[i], view, size,
+          output);
+      }
     }
     auto column = 0;
     auto row = 0;
@@ -793,8 +837,15 @@ void StripRasterizer::rasterize(const DrawList& list, const Matrix& view,
   scene.m_strips.resize(strip_count);
   scene.m_atlas.resize(
     static_cast<std::size_t>(row_count) * STRIP_ATLAS_WIDTH);
+  scene.m_offsets.resize(list.size() + 1);
+  scene.m_offsets.back() = static_cast<std::uint32_t>(strip_count);
   run(chunk_count, m_thread_count, [&] (auto index) {
     auto& chunk = *m_chunks[index];
+    auto first = list.size() * index / chunk_count;
+    for(auto i = std::size_t(0); i != chunk.m_offsets.size(); ++i) {
+      scene.m_offsets[first + i] = static_cast<std::uint32_t>(
+        chunk.m_first_strip + chunk.m_offsets[i]);
+    }
     auto texel = chunk.m_output.m_texels.data();
     auto destination = scene.m_strips.data() + chunk.m_first_strip;
     for(auto strip : chunk.m_output.m_strips) {

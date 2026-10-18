@@ -159,10 +159,14 @@ Opacity and blend mode live in the node header because groups have them too.
 - `paragraph_style`: alignment (left, center, right), line height (absent
   means automatic), paragraph spacing after.
 - `layout`: optional stored layout from XD: per paragraph, per line, the runs
-  `{from, to, x, y}`. When present the renderer draws glyph runs at these
-  positions instead of breaking lines itself, which reproduces XD's line
-  breaks exactly. Any edit to content, styles or frame discards it, and
-  Rellu's own layout takes over.
+  `{from, to, x, y}`. When present the renderer keeps these line breaks and
+  runs instead of breaking lines itself, which reproduces XD's line breaks
+  exactly. The stored positions are not used as given: XD recomputes them
+  when it loads a document (documents saved with older font versions store
+  stale baselines), so Rellu recomputes x (line start, from alignment) and
+  the baselines from font metrics the same way XD does. Any edit to content,
+  styles or frame discards the stored layout, and Rellu's own layout takes
+  over.
 
 ### Artboards
 
@@ -271,6 +275,9 @@ refinements:
 
 - Geometry, fill and stroke type names carry suffixes (`RectangleShape`,
   `NoFill`, `StrokeCap`, ...) to avoid clashes with Windows and renderer names.
+- `BlendMode` and the gradient geometry (`GradientStop`, `LinearGradient`,
+  `RadialGradient`) live in `RelluGeometry`, like the stroke enums, because
+  the renderer's draw lists use them too.
 - Parent and children belong to the node record managed by the `NodeStore`,
   not to payloads.
 - A transaction applies its edits immediately, so its owner reads them back

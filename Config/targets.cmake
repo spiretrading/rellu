@@ -9,6 +9,29 @@ function(rellu_install_target target directory)
     "${directory}/$<TARGET_FILE_NAME:${target}>")
 endfunction()
 
+function(rellu_install_files directory)
+  install(FILES ${ARGN} DESTINATION "${directory}")
+  foreach(file IN LISTS ARGN)
+    cmake_path(GET file FILENAME name)
+    set_property(GLOBAL APPEND PROPERTY RELLU_INSTALLED_OUTPUTS
+      "${directory}/${name}")
+  endforeach()
+endfunction()
+
+function(rellu_copy_files target directory)
+  set(outputs)
+  foreach(file IN LISTS ARGN)
+    cmake_path(GET file FILENAME name)
+    set(output "${directory}/${name}")
+    add_custom_command(OUTPUT "${output}"
+      COMMAND "${CMAKE_COMMAND}" -E copy "${file}" "${output}"
+      DEPENDS "${file}" VERBATIM)
+    list(APPEND outputs "${output}")
+  endforeach()
+  add_custom_target(${target} ALL DEPENDS ${outputs})
+  set_property(GLOBAL APPEND PROPERTY RELLU_INSTALLED_OUTPUTS ${outputs})
+endfunction()
+
 function(rellu_link_dependencies target scope)
   foreach(dependency IN LISTS ARGN)
     if(DEFINED ${dependency}_INCLUDE_PATH)

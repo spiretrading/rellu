@@ -18,11 +18,12 @@ namespace Rellu {
   inline constexpr auto STRIP_ATLAS_WIDTH = 4096;
 
   /**
-   * A rectangle of pixels composited with a premultiplied color scaled by
-   * each pixel's coverage. A strip is at most STRIP_HEIGHT pixels tall and
-   * takes its coverage from consecutive texels of one row of the atlas, each
-   * texel holding a column of the strip with its top pixel in the red
-   * channel. A span has full coverage and any height.
+   * A rectangle of pixels composited with a premultiplied color, multiplied
+   * by a paint unless it is solid, and scaled by each pixel's coverage. A
+   * strip is at most STRIP_HEIGHT pixels tall and takes its coverage from
+   * consecutive texels of one row of the atlas, each texel holding a column
+   * of the strip with its top pixel in the red channel. A span has full
+   * coverage and any height.
    */
   struct Strip {
 
@@ -49,6 +50,9 @@ namespace Rellu {
 
     /** The atlas row holding the strip's texels. */
     float m_row;
+
+    /** The index of the strip's paint, or a negative value for a solid. */
+    float m_paint;
   };
 
   /** A draw list rasterized into strips, ready to upload. */
@@ -56,6 +60,20 @@ namespace Rellu {
 
     /** The strips in drawing order. */
     std::vector<Strip> m_strips;
+
+    /**
+     * The index of the first strip of each command followed by the number
+     * of strips, so that command <i>i</i> rasterized the strips in
+     * [m_offsets[i], m_offsets[i + 1]).
+     */
+    std::vector<std::uint32_t> m_offsets;
+
+    /**
+     * The index of the command owning each paint: the non-solid paint of a
+     * FillCommand, the composite of a BeginLayerCommand or the blurred
+     * backdrop of a BackdropBlurCommand.
+     */
+    std::vector<std::uint32_t> m_paints;
 
     /**
      * The RGBA8 coverage atlas, STRIP_ATLAS_WIDTH texels per row, each
@@ -70,7 +88,9 @@ namespace Rellu {
 
   /**
    * Rasterizes draw lists into strips on the CPU, computing the exact area
-   * each path covers in every pixel along its edges.
+   * each path covers in every pixel along its edges. Fills, layer masks and
+   * backdrop blur regions are rasterized; a mask's strips carry the layer's
+   * opacity as their color.
    */
   class StripRasterizer {
     public:
@@ -105,6 +125,7 @@ namespace Rellu {
       struct Chunk;
       int m_thread_count;
       std::vector<std::unique_ptr<Chunk>> m_chunks;
+      std::vector<float> m_slots;
 
       StripRasterizer(const StripRasterizer&) = delete;
       StripRasterizer& operator =(const StripRasterizer&) = delete;

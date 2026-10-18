@@ -61,8 +61,5 @@ void CanvasRenderer::render(
     m_size = size;
     m_scale = scale;
   }
-  buffer.beginPass(
-    &target, m_background, QRhiDepthStencilClearValue(1, 0), batch);
-  m_paths.draw(buffer);
-  buffer.endPass();
+  m_paths.render(buffer, target, m_background, batch);
 }

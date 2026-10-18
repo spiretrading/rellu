@@ -16,7 +16,6 @@
 #include <vector>
 #include <QGuiApplication>
 #include <QImage>
-#include <QPainter>
 #include <QtPlugin>
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
@@ -26,7 +25,10 @@
 #include "Rellu/Rendering/References.hpp"
 #include "Rellu/Rendering/StripRasterizer.hpp"
 #include "Rellu/Scene/SceneBuilder.hpp"
+#include "Rellu/Text/FontLibrary.hpp"
 
+Q_IMPORT_PLUGIN(QGifPlugin)
+Q_IMPORT_PLUGIN(QJpegPlugin)
 Q_IMPORT_PLUGIN(QOffscreenIntegrationPlugin)
 Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)
 
@@ -34,10 +36,15 @@ using namespace Rellu;
 
 namespace {
   constexpr auto THRESHOLDS = std::array<int, 6>({2, 4, 8, 16, 32, 64});
+  const auto UNSUPPORTED = std::set<std::string>({"broken_reference",
+    "font_substitution", "missing", "scroll_group", "text_effect",
+    "text_paint", "text_stroke"});
 
   struct Options {
     std::filesystem::path m_corpus;
     std::filesystem::path m_output;
+    std::filesystem::path m_references;
+    std::vector<std::filesystem::path> m_fonts;
     std::string m_filter;
     bool m_is_writing_all = false;
     std::string m_dump;
@@ -50,8 +57,7 @@ namespace {
 
   enum class Scope {
     EXCLUDED,
-    FULL,
-    MASKED
+    FULL
   };
 
   struct Tally {
@@ -60,57 +66,64 @@ namespace {
     int m_size_matches = 0;
   };
 
-  const TextStyle& get_style(const Text& text, std::size_t index) {
-    auto end = std::size_t(0);
-    for(auto& run : text.m_runs) {
-      end += run.m_length;
-      if(index < end) {
-        return run.m_style;
+  std::vector<Font> get_fonts(const Text& text) {
+    auto fonts = std::vector<Font>();
+    auto add = [&] (const Font& font) {
+      if(std::find(fonts.begin(), fonts.end(), font) == fonts.end()) {
+        fonts.push_back(font);
       }
+    };
+    if(text.m_runs.empty()) {
+      add(text.m_base_style.m_font);
     }
-    return text.m_base_style;
-  }
-
-  Rect get_text_bounds(const Text& text) {
-    auto bounds = Rect(0, 0, 0, 0);
-    for(auto& paragraph : (*text.m_layout)->m_paragraphs) {
-      for(auto& line : paragraph.m_lines) {
-        for(auto& run : line.m_runs) {
-          auto& style = get_style(text, run.m_from);
-          auto& font = run.m_font ? *run.m_font : style.m_font;
-          auto size = font.m_size;
-          auto& content = *text.m_content;
-          auto from = std::min(run.m_from, content.size());
-          auto to = std::clamp(run.m_to, from, content.size());
-          auto advance = 0.62;
-          if(style.m_transform != TextTransform::NONE) {
-            advance = 0.75;
+    for(auto& run : text.m_runs) {
+      add(run.m_style.m_font);
+    }
+    if(text.m_layout) {
+      for(auto& paragraph : (*text.m_layout)->m_paragraphs) {
+        for(auto& line : paragraph.m_lines) {
+          for(auto& run : line.m_runs) {
+            if(run.m_font) {
+              add(*run.m_font);
+            }
           }
-          auto width = static_cast<double>(to - from) * size *
-            (advance + std::abs(style.m_letter_spacing) / 1000);
-          bounds = unite(bounds, Rect(run.m_position.m_x - size / 4,
-            run.m_position.m_y - 1.2 * size, width + size / 2, 1.6 * size));
         }
       }
     }
-    return bounds;
+    return fonts;
+  }
+
+  bool is_exact(FontMatch match) {
+    return match == FontMatch::POSTSCRIPT_NAME ||
+      match == FontMatch::FAMILY_AND_STYLE;
   }
 
   struct FeatureCollector {
     const Document* m_document;
     std::set<std::string> m_features;
-    std::vector<Rect> m_text;
     int m_depth = 0;
 
-    void add_text(const Text& text, const Matrix& transform) {
-      add_effects(text.m_style.m_effects);
-      if(text.m_layout) {
-        m_text.push_back(inflate(transform.map(get_text_bounds(text)), 2));
-      } else if(auto area = std::get_if<AreaFrame>(&text.m_frame)) {
-        m_text.push_back(inflate(transform.map(
-          Rect(0, 0, area->m_size.m_width, area->m_size.m_height)), 2));
-      } else {
-        m_features.insert("unbounded_text");
+    void add_text(const Text& text) {
+      auto& fill = text.m_style.m_fill;
+      if(!std::holds_alternative<NoFill>(fill) &&
+          !std::holds_alternative<SolidFill>(fill)) {
+        m_features.insert("text_paint");
+      }
+      for(auto& effect : text.m_style.m_effects) {
+        if(std::visit([] (const auto& value) {
+            return value.m_is_visible;
+          }, effect)) {
+          m_features.insert("text_effect");
+        }
+      }
+      auto& stroke = text.m_style.m_stroke;
+      if(stroke && stroke->m_is_enabled && stroke->m_width > 0) {
+        m_features.insert("text_stroke");
+      }
+      for(auto& font : get_fonts(text)) {
+        if(!is_exact(get_default_font_library().resolve(font).m_match)) {
+          m_features.insert("font_substitution");
+        }
       }
     }
 
@@ -186,8 +199,7 @@ namespace {
         }
         return count;
       } else if(auto text = source->get_text()) {
-        m_features.insert("text");
-        add_text(*text, transform);
+        add_text(*text);
         return 1;
       }
       auto count = 0;
@@ -219,74 +231,23 @@ namespace {
   };
 
   Scope get_scope(const std::set<std::string>& features) {
-    if(features.empty()) {
-      return Scope::FULL;
-    } else if(features.size() == 1 && features.contains("text")) {
-      return Scope::MASKED;
+    if(std::any_of(features.begin(), features.end(), [] (const auto& name) {
+        return UNSUPPORTED.contains(name);
+      })) {
+      return Scope::EXCLUDED;
     }
-    return Scope::EXCLUDED;
+    return Scope::FULL;
   }
 
   std::string to_name(Scope scope) {
     if(scope == Scope::FULL) {
       return "in";
-    } else if(scope == Scope::MASKED) {
-      return "masked";
     }
     return "out";
   }
 
   double to_milliseconds(std::chrono::steady_clock::duration duration) {
     return std::chrono::duration<double, std::milli>(duration).count();
-  }
-
-  QImage make_mask(const std::vector<Rect>& regions, const QRectF& bounds,
-      int scale, QSize size) {
-    auto mask = QImage(size, QImage::Format_Grayscale8);
-    mask.fill(0);
-    auto painter = QPainter(&mask);
-    for(auto& region : regions) {
-      auto left = std::floor((region.m_x - bounds.x()) * scale);
-      auto top = std::floor((region.m_y - bounds.y()) * scale);
-      auto right = std::ceil((region.get_right() - bounds.x()) * scale);
-      auto bottom = std::ceil((region.get_bottom() - bounds.y()) * scale);
-      painter.fillRect(QRectF(left, top, right - left, bottom - top),
-        QColor(255, 255, 255));
-    }
-    return mask;
-  }
-
-  double get_coverage(const QImage& mask) {
-    if(mask.isNull() || mask.width() * mask.height() == 0) {
-      return 0;
-    }
-    auto count = std::int64_t(0);
-    for(auto y = 0; y != mask.height(); ++y) {
-      auto line = mask.constScanLine(y);
-      for(auto x = 0; x != mask.width(); ++x) {
-        count += line[x] != 0;
-      }
-    }
-    return double(count) / (double(mask.width()) * mask.height());
-  }
-
-  QImage apply_mask(const QImage& image, const QImage& mask) {
-    if(image.isNull()) {
-      return image;
-    }
-    auto result = image.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
-    auto height = std::min(result.height(), mask.height());
-    auto width = std::min(result.width(), mask.width());
-    for(auto y = 0; y != height; ++y) {
-      auto line = result.scanLine(y);
-      auto flags = mask.constScanLine(y);
-      for(auto x = 0; x != width; ++x) {
-        if(flags[x]) {
-          std::fill(line + 4 * x, line + 4 * x + 4, uchar(0));
-        }
-      }
-    }
-    return result;
   }
 
   void dump(const Document& document, const NodeId& id, const Matrix& parent,
@@ -362,6 +323,40 @@ namespace {
     return result;
   }
 
+  void report_fonts(const Document& document) {
+    auto fonts = std::vector<Font>();
+    document.get_nodes().for_each([&] (const Node& node) {
+      if(auto text = node.get_text()) {
+        for(auto font : get_fonts(*text)) {
+          font.m_size = 0;
+          if(std::find(fonts.begin(), fonts.end(), font) == fonts.end()) {
+            fonts.push_back(font);
+          }
+        }
+      }
+    });
+    auto faces = std::set<std::string>();
+    auto substitutions = std::string();
+    for(auto& font : fonts) {
+      auto resolution = get_default_font_library().resolve(font);
+      auto name = std::string("none");
+      if(resolution.m_typeface) {
+        name = resolution.m_typeface->get_names().m_postscript_name;
+        faces.insert(name);
+      }
+      if(!is_exact(resolution.m_match)) {
+        substitutions += std::format(" {}/{}/{} -> {} ({});", font.m_family,
+          font.m_style, font.m_postscript_name, name,
+          to_string(resolution.m_match));
+      }
+    }
+    std::cout << "  fonts: " << join(faces);
+    if(!substitutions.empty()) {
+      std::cout << "; substituted:" << substitutions;
+    }
+    std::cout << '\n';
+  }
+
   QSize get_pixel_size(const QRectF& bounds, int scale) {
     return QSize(static_cast<int>(std::ceil(bounds.width() * scale - 0.01)),
       static_cast<int>(std::ceil(bounds.height() * scale - 0.01)));
@@ -423,7 +418,9 @@ namespace {
     auto refined = std::chrono::steady_clock::now();
     auto segments = std::size_t(0);
     for(auto& command : list) {
-      segments += std::get<FillCommand>(command).m_path.get_segments().size();
+      if(auto fill = std::get_if<FillCommand>(&command)) {
+        segments += fill->m_path.get_segments().size();
+      }
     }
     std::cout << std::format("{}: {} nodes, {} commands, {} segments; import "
       "{:.1f} ms, build {:.1f} ms, rebuild {:.1f} ms, rebuild at 8x {:.1f} "
@@ -434,7 +431,7 @@ namespace {
   }
 
   int run(const Options& options) {
-    auto root = get_reference_root();
+    auto root = to_path(options.m_references);
     auto documents = list_reference_documents(root);
     std::filesystem::create_directories(options.m_output);
     auto summary = std::ofstream(options.m_output / "summary.csv");
@@ -444,13 +441,13 @@ namespace {
     for(auto threshold : THRESHOLDS) {
       summary << ",over_" << threshold;
     }
-    summary << ",build_ms,render_ms,masked_fraction\n";
+    summary << ",build_ms,render_ms\n";
     auto renderer = CanvasRenderer();
     renderer.set_background(QColor(0, 0, 0, 0));
     auto offscreen = OffscreenRenderer(renderer);
-    auto tallies = std::array<std::array<Tally, 3>, 3>();
+    auto tallies = std::array<std::array<Tally, 3>, 2>();
     auto all = std::array<Tally, 3>();
-    auto item_counts = std::array<int, 3>();
+    auto item_counts = std::array<int, 2>();
     for(auto& path : documents) {
       if(!options.m_filter.empty() &&
           to_string(path).find(options.m_filter) == std::string::npos) {
@@ -481,6 +478,7 @@ namespace {
         "ms ({} commands), rebuild {:.1f} ms\n", to_string(path),
         document.get_nodes().get_size(), import_time, full_time, full.size(),
         rebuild_time);
+      report_fonts(document);
       auto directory = options.m_output / to_filesystem(path);
       for(auto& item : reference.m_items) {
         auto id = parse_node_id(to_string(item.m_guid));
@@ -493,10 +491,6 @@ namespace {
         auto scope = get_scope(collector.m_features);
         if(id && to_string(item.m_guid) == options.m_dump) {
           dump(document, *id, Matrix(), 0);
-          for(auto& region : collector.m_text) {
-            std::cout << std::format("text ({} {} {} {})\n", region.m_x,
-              region.m_y, region.m_width, region.m_height);
-          }
         }
         ++item_counts[static_cast<int>(scope)];
         for(auto& image : item.m_images) {
@@ -510,6 +504,9 @@ namespace {
           if(id && !size.isEmpty()) {
             auto start = std::chrono::steady_clock::now();
             builder.set_tolerance(StripRasterizer::TOLERANCE / scale);
+            builder.set_device_transform(make_scale(scale, scale) *
+              make_translation(
+                -item.m_draw_bounds.x(), -item.m_draw_bounds.y()));
             auto list = std::make_shared<DrawList>(builder.build(*id));
             auto built = std::chrono::steady_clock::now();
             renderer.set_draw_list(list);
@@ -526,19 +523,9 @@ namespace {
             render_time =
               to_milliseconds(std::chrono::steady_clock::now() - built);
           }
-          auto masked_actual = actual;
-          auto masked_expected = expected;
-          auto masked_fraction = 0.0;
-          if(scope == Scope::MASKED) {
-            auto mask = make_mask(collector.m_text, item.m_draw_bounds, scale,
-              expected.size());
-            masked_fraction = get_coverage(mask);
-            masked_actual = apply_mask(actual, mask);
-            masked_expected = apply_mask(expected, mask);
-          }
-          auto comparison = compare_images(
-            masked_actual, masked_expected, options.m_tolerance);
-          auto difference = measure(masked_actual, masked_expected);
+          auto comparison =
+            compare_images(actual, expected, options.m_tolerance);
+          auto difference = measure(actual, expected);
           auto is_size_match = actual.size() == expected.size();
           for(auto& tally : {&all, &tallies[static_cast<int>(scope)]}) {
             auto& entry = (*tally)[scale];
@@ -558,8 +545,8 @@ namespace {
           for(auto count : difference.m_counts) {
             summary << ',' << count;
           }
-          summary << std::format(",{:.2f},{:.2f},{:.4f}\n", build_time,
-            render_time, masked_fraction);
+          summary << std::format(",{:.2f},{:.2f}\n", build_time,
+            render_time);
           if(options.m_is_writing_all ||
               (scope != Scope::EXCLUDED && !comparison.m_is_match)) {
             std::filesystem::create_directories(directory);
@@ -572,10 +559,9 @@ namespace {
       }
       summary.flush();
     }
-    std::cout << std::format("\n{} items: {} in scope, {} in scope with "
-      "text masked, {} out of scope\n", item_counts[0] + item_counts[1] +
-      item_counts[2], item_counts[1], item_counts[2], item_counts[0]);
-    for(auto scope : {Scope::FULL, Scope::MASKED, Scope::EXCLUDED}) {
+    std::cout << std::format("\n{} items: {} in scope, {} out of scope\n",
+      item_counts[0] + item_counts[1], item_counts[1], item_counts[0]);
+    for(auto scope : {Scope::FULL, Scope::EXCLUDED}) {
       for(auto scale = 1; scale <= 2; ++scale) {
         auto& tally = scope == Scope::EXCLUDED ? all[scale] :
           tallies[static_cast<int>(scope)][scale];
@@ -589,6 +575,14 @@ namespace {
 }
 
 int main(int argc, char** argv) {
+  auto platform = std::string("-platform");
+  auto offscreen = std::string("offscreen");
+  auto arguments = std::vector<char*>(argv, argv + argc);
+  arguments.insert(arguments.begin() + 1, {platform.data(), offscreen.data()});
+  argc = static_cast<int>(arguments.size());
+  arguments.push_back(nullptr);
+  argv = arguments.data();
+  auto application = QGuiApplication(argc, argv);
   if(argc >= 3 && std::string_view(argv[1]) == "--time") {
     try {
       for(auto i = 2; i < argc; ++i) {
@@ -602,21 +596,21 @@ int main(int argc, char** argv) {
   }
   if(argc < 3) {
     std::cerr << "Usage: GoldenReport <corpus directory> <output directory> "
-      "[--filter <text>] [--all] [--dump <guid>] "
-      "[--tolerance <difference> <fraction>]\n"
+      "--references <directory> [--fonts <directory>]... [--filter <text>] "
+      "[--all] [--dump <guid>] [--tolerance <difference> <fraction>]\n"
       "       GoldenReport --time <xd file>...\n";
     return 2;
   }
-  if(!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
-    qputenv("QT_QPA_PLATFORM", "offscreen");
-  }
-  auto application = QGuiApplication(argc, argv);
   auto options = Options();
   options.m_corpus = std::filesystem::path(argv[1]);
   options.m_output = std::filesystem::path(argv[2]);
   for(auto i = 3; i < argc; ++i) {
     auto argument = std::string_view(argv[i]);
-    if(argument == "--filter" && i + 1 < argc) {
+    if(argument == "--references" && i + 1 < argc) {
+      options.m_references = std::filesystem::path(argv[++i]);
+    } else if(argument == "--fonts" && i + 1 < argc) {
+      options.m_fonts.push_back(std::filesystem::path(argv[++i]));
+    } else if(argument == "--filter" && i + 1 < argc) {
       options.m_filter = argv[++i];
     } else if(argument == "--dump" && i + 1 < argc) {
       options.m_dump = argv[++i];
@@ -630,6 +624,13 @@ int main(int argc, char** argv) {
       std::cerr << "Unknown argument " << argument << '\n';
       return 2;
     }
+  }
+  if(options.m_references.empty()) {
+    std::cerr << "Missing --references <directory>.\n";
+    return 2;
+  }
+  if(!options.m_fonts.empty()) {
+    set_default_font_directories(options.m_fonts);
   }
   try {
     return run(options);

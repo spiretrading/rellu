@@ -1,30 +1,11 @@
 #ifndef RELLU_MODEL_NODE_HEADER_HPP
 #define RELLU_MODEL_NODE_HEADER_HPP
 #include <string>
+#include "Rellu/Geometry/BlendMode.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Model/NodeId.hpp"
 
 namespace Rellu {
-
-  /** Lists the ways a node's pixels combine with what lies beneath them. */
-  enum class BlendMode : unsigned char {
-    NORMAL,
-    MULTIPLY,
-    SCREEN,
-    OVERLAY,
-    DARKEN,
-    LIGHTEN,
-    COLOR_DODGE,
-    COLOR_BURN,
-    HARD_LIGHT,
-    SOFT_LIGHT,
-    DIFFERENCE,
-    EXCLUSION,
-    HUE,
-    SATURATION,
-    COLOR,
-    LUMINOSITY
-  };
 
   /**
    * Specifies how a node responds when its parent is resized, as Adobe XD's

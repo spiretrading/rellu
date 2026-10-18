@@ -59,13 +59,6 @@ namespace {
   }
 }
 
-QString Rellu::get_reference_root() {
-  if(auto root = qEnvironmentVariable("RELLU_REFERENCES"); !root.isEmpty()) {
-    return root;
-  }
-  return "C:/Users/Kranar/Nextcloud/rellu_references";
-}
-
 std::vector<QString> Rellu::list_reference_documents(const QString& root) {
   auto data = read(QDir(root).filePath("exported.txt"));
   auto stream = QTextStream(data);

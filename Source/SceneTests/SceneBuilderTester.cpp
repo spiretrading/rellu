@@ -107,12 +107,23 @@ TEST_SUITE("SceneBuilder") {
     auto shape = make_shape(Rect(0, 0, 1, 1), make_color(255, 0, 0, 0.5));
     shape.m_style.m_stroke = Stroke(make_color(0, 0, 255), 1);
     transaction.append(group, translucent, shape);
+    auto single = make_shape(Rect(0, 0, 1, 1), make_color(0, 255, 0, 0.5));
+    transaction.append(group, translucent, single);
     transaction.commit();
     auto builder = SceneBuilder(document, TOLERANCE);
     auto list = builder.build();
-    REQUIRE(list.size() == 2);
-    REQUIRE(get_color(get_fill(list, 0)) == make_color(255, 0, 0, 0.125));
-    REQUIRE(get_color(get_fill(list, 1)) == make_color(0, 0, 255, 0.25));
+    REQUIRE(list.size() == 7);
+    auto& group_layer = std::get<BeginLayerCommand>(list[0]);
+    REQUIRE(group_layer.m_opacity == 0.5);
+    REQUIRE(group_layer.m_blend_mode == BlendMode::NORMAL);
+    REQUIRE(!group_layer.m_mask);
+    auto& shape_layer = std::get<BeginLayerCommand>(list[1]);
+    REQUIRE(shape_layer.m_opacity == 0.5);
+    REQUIRE(get_color(get_fill(list, 2)) == make_color(255, 0, 0, 0.5));
+    REQUIRE(get_color(get_fill(list, 3)) == make_color(0, 0, 255));
+    REQUIRE(std::holds_alternative<EndLayerCommand>(list[4]));
+    REQUIRE(get_color(get_fill(list, 5)) == make_color(0, 255, 0, 0.25));
+    REQUIRE(std::holds_alternative<EndLayerCommand>(list[6]));
   }
 
   TEST_CASE("stroke") {
@@ -247,9 +258,6 @@ TEST_SUITE("SceneBuilder") {
     auto gradient = make_shape(Rect(0, 0, 1, 1), make_color(0, 0, 0));
     gradient.m_style.m_fill = GradientFill();
     transaction.append(NodeId(), make_header(), gradient);
-    auto text = Text();
-    text.m_content = Shared(std::u16string(u"Text"));
-    transaction.append(NodeId(), make_header(), text);
     transaction.commit();
     auto builder = SceneBuilder(document, TOLERANCE);
     REQUIRE(builder.build().empty());

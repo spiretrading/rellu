@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
+#include <memory>
 #include <numbers>
 #include <utility>
 #include <vector>
@@ -9,6 +11,7 @@
 #include "Rellu/Rendering/ImageComparison.hpp"
 #include "Rellu/Rendering/OffscreenRenderer.hpp"
 #include "Rellu/Rendering/PathRenderer.hpp"
+#include "Rellu/Rendering/RenderPlan.hpp"
 
 using namespace Rellu;
 
@@ -41,10 +44,7 @@ namespace {
         auto batch = m_rhi->nextResourceUpdateBatch();
         m_paths.prepare(*batch, m_list, make_scale(scale, scale) * m_view,
           target.pixelSize());
-        buffer.beginPass(
-          &target, m_background, QRhiDepthStencilClearValue(1, 0), batch);
-        m_paths.draw(buffer);
-        buffer.endPass();
+        m_paths.render(buffer, target, m_background, batch);
       }
 
       const StripScene& get_scene() const {
@@ -133,6 +133,162 @@ namespace {
     CAPTURE(comparison.m_maximum_difference);
     CAPTURE(comparison.m_mean_difference);
     REQUIRE(comparison.m_is_match);
+  }
+  using Pixel = std::array<double, 4>;
+
+  Pixel get_pixel(const QImage& image, int x, int y) {
+    auto line = image.constScanLine(y) + 4 * x;
+    return Pixel({line[0] / 255.0, line[1] / 255.0, line[2] / 255.0,
+      line[3] / 255.0});
+  }
+
+  Pixel premultiply(const Color& color) {
+    return Pixel({color.m_red * color.m_alpha, color.m_green * color.m_alpha,
+      color.m_blue * color.m_alpha, color.m_alpha});
+  }
+
+  void require_pixel(const QImage& image, int x, int y, const Pixel& expected,
+      double tolerance) {
+    auto actual = get_pixel(image, x, y);
+    CAPTURE(x);
+    CAPTURE(y);
+    for(auto channel = 0; channel != 4; ++channel) {
+      CAPTURE(channel);
+      CAPTURE(actual[channel] * 255);
+      CAPTURE(expected[channel] * 255);
+      REQUIRE(std::abs(actual[channel] - expected[channel]) <=
+        tolerance / 255);
+    }
+  }
+
+  double get_luminosity(const std::array<double, 3>& c) {
+    return 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+  }
+
+  std::array<double, 3> set_luminosity(std::array<double, 3> c, double l) {
+    auto d = l - get_luminosity(c);
+    for(auto& value : c) {
+      value += d;
+    }
+    auto luminosity = get_luminosity(c);
+    auto low = std::min({c[0], c[1], c[2]});
+    auto high = std::max({c[0], c[1], c[2]});
+    for(auto& value : c) {
+      if(low < 0) {
+        value = luminosity +
+          (value - luminosity) * luminosity / (luminosity - low);
+      }
+      if(high > 1) {
+        value = luminosity +
+          (value - luminosity) * (1 - luminosity) / (high - luminosity);
+      }
+    }
+    return c;
+  }
+
+  std::array<double, 3> set_saturation(std::array<double, 3> c, double s) {
+    auto low = std::min({c[0], c[1], c[2]});
+    auto high = std::max({c[0], c[1], c[2]});
+    for(auto& value : c) {
+      value = high > low ? (value - low) * s / (high - low) : 0;
+    }
+    return c;
+  }
+
+  double get_saturation(const std::array<double, 3>& c) {
+    return std::max({c[0], c[1], c[2]}) - std::min({c[0], c[1], c[2]});
+  }
+
+  double blend_channel(BlendMode mode, double b, double s) {
+    auto hard_light = [] (double b, double s) {
+      if(s <= 0.5) {
+        return b * 2 * s;
+      }
+      return b + (2 * s - 1) - b * (2 * s - 1);
+    };
+    if(mode == BlendMode::MULTIPLY) {
+      return b * s;
+    } else if(mode == BlendMode::SCREEN) {
+      return b + s - b * s;
+    } else if(mode == BlendMode::OVERLAY) {
+      return hard_light(s, b);
+    } else if(mode == BlendMode::DARKEN) {
+      return std::min(b, s);
+    } else if(mode == BlendMode::LIGHTEN) {
+      return std::max(b, s);
+    } else if(mode == BlendMode::COLOR_DODGE) {
+      if(b == 0) {
+        return 0;
+      } else if(s == 1) {
+        return 1;
+      }
+      return std::min(1.0, b / (1 - s));
+    } else if(mode == BlendMode::COLOR_BURN) {
+      if(b == 1) {
+        return 1;
+      } else if(s == 0) {
+        return 0;
+      }
+      return 1 - std::min(1.0, (1 - b) / s);
+    } else if(mode == BlendMode::HARD_LIGHT) {
+      return hard_light(b, s);
+    } else if(mode == BlendMode::SOFT_LIGHT) {
+      if(s <= 0.5) {
+        return b - (1 - 2 * s) * b * (1 - b);
+      }
+      auto d = b <= 0.25 ? ((16 * b - 12) * b + 4) * b : std::sqrt(b);
+      return b + (2 * s - 1) * (d - b);
+    } else if(mode == BlendMode::DIFFERENCE) {
+      return std::abs(b - s);
+    } else if(mode == BlendMode::EXCLUSION) {
+      return b + s - 2 * b * s;
+    }
+    return s;
+  }
+
+  std::array<double, 3> blend(BlendMode mode, const std::array<double, 3>& b,
+      const std::array<double, 3>& s) {
+    if(mode == BlendMode::HUE) {
+      return set_luminosity(
+        set_saturation(s, get_saturation(b)), get_luminosity(b));
+    } else if(mode == BlendMode::SATURATION) {
+      return set_luminosity(
+        set_saturation(b, get_saturation(s)), get_luminosity(b));
+    } else if(mode == BlendMode::COLOR) {
+      return set_luminosity(s, get_luminosity(b));
+    } else if(mode == BlendMode::LUMINOSITY) {
+      return set_luminosity(b, get_luminosity(s));
+    }
+    return std::array<double, 3>({blend_channel(mode, b[0], s[0]),
+      blend_channel(mode, b[1], s[1]), blend_channel(mode, b[2], s[2])});
+  }
+
+  Pixel composite(BlendMode mode, const Color& backdrop, const Color& source) {
+    auto b = std::array<double, 3>(
+      {backdrop.m_red, backdrop.m_green, backdrop.m_blue});
+    auto s = std::array<double, 3>(
+      {source.m_red, source.m_green, source.m_blue});
+    auto mixed = blend(mode, b, s);
+    auto ab = backdrop.m_alpha;
+    auto as = source.m_alpha;
+    auto result = Pixel();
+    for(auto channel = 0; channel != 3; ++channel) {
+      result[channel] = as * (1 - ab) * s[channel] +
+        ab * (1 - as) * b[channel] + as * ab * mixed[channel];
+    }
+    result[3] = as + ab - as * ab;
+    return result;
+  }
+
+  double get_normal_cdf(double x) {
+    return 0.5 * std::erfc(-x / std::numbers::sqrt2);
+  }
+
+  auto begin_layer(double opacity = 1, BlendMode mode = BlendMode::NORMAL) {
+    auto layer = BeginLayerCommand();
+    layer.m_opacity = opacity;
+    layer.m_blend_mode = mode;
+    return layer;
   }
 }
 
@@ -375,5 +531,285 @@ TEST_SUITE("PathRenderer") {
     auto expected = make_image(
       QSize(640, 640), QColor(0, 0, 0, 0), {Layer(coverage, color)});
     require_match(image, expected, ImageTolerance(1, 0));
+  }
+
+  TEST_CASE("blend_modes") {
+    auto pairs = std::vector<std::array<Color, 2>>({
+      {make_color(204, 77, 128), make_color(51, 153, 230, 0.75)},
+      {make_color(26, 230, 102), make_color(179, 51, 153)},
+      {make_color(240, 200, 30), make_color(20, 40, 220, 0.5)}});
+    for(auto mode : {BlendMode::MULTIPLY, BlendMode::SCREEN,
+        BlendMode::OVERLAY, BlendMode::DARKEN, BlendMode::LIGHTEN,
+        BlendMode::COLOR_DODGE, BlendMode::COLOR_BURN, BlendMode::HARD_LIGHT,
+        BlendMode::SOFT_LIGHT, BlendMode::DIFFERENCE, BlendMode::EXCLUSION,
+        BlendMode::HUE, BlendMode::SATURATION, BlendMode::COLOR,
+        BlendMode::LUMINOSITY}) {
+      for(auto& pair : pairs) {
+        CAPTURE(static_cast<int>(mode));
+        auto backdrop = pair[0];
+        auto translucent = backdrop;
+        translucent.m_alpha = 0.5;
+        auto renderer = TestRenderer();
+        renderer.m_list.push_back(
+          fill(make_rectangle(Rect(0, 0, 4, 4)), backdrop));
+        renderer.m_list.push_back(
+          fill(make_rectangle(Rect(4, 0, 4, 4)), translucent));
+        renderer.m_list.push_back(begin_layer(1, mode));
+        renderer.m_list.push_back(
+          fill(make_rectangle(Rect(0, 0, 12, 4)), pair[1]));
+        renderer.m_list.push_back(EndLayerCommand());
+        auto image = render(renderer, QSize(12, 4));
+        require_pixel(image, 1, 1, composite(mode, backdrop, pair[1]), 3);
+        require_pixel(image, 5, 1, composite(mode, translucent, pair[1]), 3);
+        require_pixel(image, 9, 1, premultiply(pair[1]), 1);
+      }
+    }
+  }
+
+  TEST_CASE("layer_opacity") {
+    auto renderer = TestRenderer();
+    auto red = make_color(255, 0, 0);
+    auto blue = make_color(0, 0, 255);
+    renderer.m_list.push_back(begin_layer(0.5));
+    renderer.m_list.push_back(fill(make_rectangle(Rect(0, 0, 8, 4)), red));
+    renderer.m_list.push_back(fill(make_rectangle(Rect(4, 0, 8, 4)), blue));
+    renderer.m_list.push_back(EndLayerCommand());
+    renderer.m_list.push_back(begin_layer(0.5));
+    renderer.m_list.push_back(begin_layer(0.5));
+    renderer.m_list.push_back(fill(make_rectangle(Rect(0, 4, 12, 4)), red));
+    renderer.m_list.push_back(EndLayerCommand());
+    renderer.m_list.push_back(EndLayerCommand());
+    auto image = render(renderer, QSize(12, 8));
+    require_pixel(image, 1, 1, Pixel({0.5, 0, 0, 0.5}), 1);
+    require_pixel(image, 6, 1, Pixel({0, 0, 0.5, 0.5}), 1);
+    require_pixel(image, 10, 1, Pixel({0, 0, 0.5, 0.5}), 1);
+    require_pixel(image, 6, 5, Pixel({0.25, 0, 0, 0.25}), 1);
+    auto scaled = render(renderer, QSize(24, 16), 2);
+    require_pixel(scaled, 12, 2, Pixel({0, 0, 0.5, 0.5}), 1);
+  }
+
+  TEST_CASE("mask") {
+    auto renderer = TestRenderer();
+    auto color = make_color(20, 160, 60);
+    auto circle = make_circle(Point(16.3, 15.6), 10.4);
+    auto layer = begin_layer(0.8);
+    layer.m_mask = LayerMask(circle, Matrix());
+    renderer.m_list.push_back(layer);
+    renderer.m_list.push_back(
+      fill(make_rectangle(Rect(0, 0, 40, 32)), color));
+    renderer.m_list.push_back(EndLayerCommand());
+    auto translucent = color;
+    translucent.m_alpha = 0.8;
+    auto expected = make_image(QSize(32, 32), QColor(0, 0, 0, 0),
+      {Layer(make_path_coverage(circle, Matrix()), translucent)});
+    require_match(
+      render(renderer, QSize(32, 32)), expected, ImageTolerance(6, 0));
+  }
+
+  TEST_CASE("linear_gradient") {
+    auto renderer = TestRenderer();
+    auto stops = std::vector<GradientStop>({
+      GradientStop(0, make_color(255, 0, 0)),
+      GradientStop(0.5, make_color(0, 0, 255, 0.5)),
+      GradientStop(1, make_color(0, 255, 0))});
+    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 0, 64, 8)),
+      Matrix(), GradientPaint(
+        LinearGradient(Point(8, 0), Point(56, 0)), stops, Matrix())));
+    auto transform = make_translation(32, 8) *
+      make_rotation(std::numbers::pi / 2) * make_scale(16, 16);
+    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 8, 64, 24)),
+      Matrix(), GradientPaint(
+        LinearGradient(Point(0, 0), Point(1, 0)), stops, transform)));
+    auto image = render(renderer, QSize(64, 32));
+    for(auto x = 0; x != 64; ++x) {
+      auto offset = (x + 0.5 - 8) / 48;
+      require_pixel(
+        image, x, 4, premultiply(evaluate_gradient(stops, offset)), 3);
+    }
+    for(auto y = 8; y != 32; ++y) {
+      auto offset = (y + 0.5 - 8) / 16;
+      require_pixel(
+        image, 20, y, premultiply(evaluate_gradient(stops, offset)), 3);
+    }
+  }
+
+  TEST_CASE("mixed_paints") {
+    auto renderer = TestRenderer();
+    auto stops = std::vector<GradientStop>({
+      GradientStop(0, make_color(0, 0, 255)),
+      GradientStop(1, make_color(0, 0, 255))});
+    for(auto pass = 0; pass != 3; ++pass) {
+      for(auto i = 0; i != 300; ++i) {
+        renderer.m_list.push_back(fill(make_rectangle(
+          Rect(i % 30, 10 * pass + i / 30, 1, 1)), make_color(255, 0, 0)));
+      }
+      renderer.m_list.push_back(FillCommand(
+        make_rectangle(Rect(32, 10 * pass, 4, 4)), Matrix(), GradientPaint(
+          LinearGradient(Point(0, 0), Point(1, 0)), stops, Matrix())));
+    }
+    auto image = render(renderer, QSize(40, 30));
+    for(auto pass = 0; pass != 3; ++pass) {
+      require_pixel(image, 33, 10 * pass + 1, Pixel({0, 0, 1, 1}), 1);
+      require_pixel(image, 5, 10 * pass + 5, Pixel({1, 0, 0, 1}), 0);
+    }
+  }
+
+  TEST_CASE("radial_gradient") {
+    auto renderer = TestRenderer();
+    auto stops = std::vector<GradientStop>({
+      GradientStop(0, make_color(255, 255, 255)),
+      GradientStop(1, make_color(0, 0, 0))});
+    auto gradient = RadialGradient(Point(32, 32), 24, Point(42, 30));
+    auto transform = make_translation(0, 64) * make_scale(1, 0.5);
+    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 0, 64, 64)),
+      Matrix(), GradientPaint(gradient, stops, Matrix())));
+    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 64, 64, 32)),
+      Matrix(), GradientPaint(gradient, stops, transform)));
+    auto image = render(renderer, QSize(64, 96));
+    auto inverse = *invert(transform);
+    for(auto y = 0; y < 96; y += 3) {
+      for(auto x = 0; x < 64; x += 3) {
+        auto point = Point(x + 0.5, y + 0.5);
+        if(y >= 64) {
+          point = inverse.map(point);
+        }
+        auto offset =
+          std::clamp(get_radial_offset(gradient, point), 0.0, 1.0);
+        require_pixel(
+          image, x, y, premultiply(evaluate_gradient(stops, offset)), 3);
+      }
+    }
+  }
+
+  TEST_CASE("image_fill") {
+    auto colors = std::array<QColor, 8>({QColor(255, 0, 0), QColor(0, 255, 0),
+      QColor(0, 0, 255), QColor(255, 255, 0), QColor(0, 255, 255),
+      QColor(255, 0, 255), QColor(128, 64, 32), QColor(255, 255, 255, 128)});
+    auto source = QImage(4, 2, QImage::Format_RGBA8888);
+    for(auto i = 0; i != 8; ++i) {
+      source.setPixelColor(i % 4, i / 4, colors[i]);
+    }
+    auto image = std::make_shared<const QImage>(source);
+    auto renderer = TestRenderer();
+    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 0, 36, 18)),
+      Matrix(), ImagePaint(image, make_scale(9, 9))));
+    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 18, 36, 18)),
+      Matrix(), ImagePaint(image,
+        make_translation(36, 18) * make_scale(-9, 9), 0.5)));
+    auto result = render(renderer, QSize(36, 36));
+    auto to_pixel = [] (const QColor& color, double opacity) {
+      return premultiply(Color(color.redF(), color.greenF(), color.blueF(),
+        color.alphaF() * opacity));
+    };
+    for(auto i = 0; i != 8; ++i) {
+      auto x = 9 * (i % 4) + 4;
+      auto y = 9 * (i / 4) + 4;
+      require_pixel(result, x, y, to_pixel(colors[i], 1), 1);
+      require_pixel(result, 35 - x, 18 + y, to_pixel(colors[i], 0.5), 1);
+    }
+    auto weight = 9.5 / 9 - 0.5;
+    require_pixel(
+      result, 9, 4, Pixel({1 - weight, weight, 0, 1}), 2);
+  }
+
+  TEST_CASE("image_minification") {
+    auto source = QImage(64, 64, QImage::Format_RGBA8888);
+    for(auto y = 0; y != 64; ++y) {
+      for(auto x = 0; x != 64; ++x) {
+        source.setPixelColor(
+          x, y, (x + y) % 2 ? QColor(255, 255, 255) : QColor(0, 0, 0));
+      }
+    }
+    auto renderer = TestRenderer();
+    renderer.m_list.push_back(FillCommand(make_rectangle(Rect(0, 0, 10, 10)),
+      Matrix(), ImagePaint(std::make_shared<const QImage>(source),
+        make_scale(10.0 / 64, 10.0 / 64))));
+    auto image = render(renderer, QSize(10, 10));
+    for(auto y = 0; y != 10; ++y) {
+      for(auto x = 0; x != 10; ++x) {
+        require_pixel(image, x, y, Pixel({0.5, 0.5, 0.5, 1}), 2);
+      }
+    }
+  }
+
+  TEST_CASE("drop_shadow") {
+    for(auto [radius, scale] : {std::pair(3.0, 1.0), std::pair(3.0, 2.0),
+        std::pair(12.0, 1.0)}) {
+      CAPTURE(radius);
+      CAPTURE(scale);
+      auto renderer = TestRenderer();
+      auto layer = begin_layer();
+      layer.m_drop_shadows.push_back(
+        Shadow(Point(-4, 2), radius, make_color(0, 0, 255, 0.5)));
+      renderer.m_list.push_back(layer);
+      renderer.m_list.push_back(fill(
+        make_rectangle(Rect(64, -100, 200, 300)), make_color(255, 0, 0)));
+      renderer.m_list.push_back(EndLayerCommand());
+      auto size = static_cast<int>(64 * scale);
+      auto image = render(renderer, QSize(size + size / 2, 4), scale);
+      for(auto x = 0; x != size; ++x) {
+        auto distance = (x + 0.5) / scale - 60;
+        auto alpha = 0.5 * get_normal_cdf(distance / radius);
+        require_pixel(image, x, 1, Pixel({0, 0, alpha, alpha}), 3);
+      }
+    }
+  }
+
+  TEST_CASE("inner_shadow") {
+    auto renderer = TestRenderer();
+    auto layer = begin_layer();
+    layer.m_inner_shadows.push_back(
+      Shadow(Point(0, 4), 0, make_color(0, 0, 0)));
+    layer.m_inner_shadows.push_back(
+      Shadow(Point(0, -40), 3, make_color(0, 0, 0)));
+    renderer.m_list.push_back(layer);
+    renderer.m_list.push_back(
+      fill(make_rectangle(Rect(8, 8, 16, 60)), make_color(255, 255, 255)));
+    renderer.m_list.push_back(EndLayerCommand());
+    auto image = render(renderer, QSize(32, 76));
+    for(auto y = 0; y != 76; ++y) {
+      auto expected = Pixel({0, 0, 0, 0});
+      if(y >= 8 && y < 12) {
+        expected = Pixel({0, 0, 0, 1});
+      } else if(y >= 12 && y < 68) {
+        auto shadow = get_normal_cdf((y + 0.5 - 28) / 3);
+        expected = Pixel({1 - shadow, 1 - shadow, 1 - shadow, 1});
+      }
+      require_pixel(image, 16, y, expected, 3);
+      require_pixel(image, 4, y, Pixel({0, 0, 0, 0}), 0);
+    }
+  }
+
+  TEST_CASE("blur") {
+    auto renderer = TestRenderer();
+    auto layer = begin_layer();
+    layer.m_blur = 5;
+    renderer.m_list.push_back(layer);
+    renderer.m_list.push_back(
+      fill(make_rectangle(Rect(32, -50, 100, 100)), make_color(0, 255, 0)));
+    renderer.m_list.push_back(EndLayerCommand());
+    auto image = render(renderer, QSize(64, 4));
+    for(auto x = 0; x != 64; ++x) {
+      auto alpha = get_normal_cdf((x + 0.5 - 32) / 5);
+      require_pixel(image, x, 1, Pixel({0, alpha, 0, alpha}), 3);
+    }
+  }
+
+  TEST_CASE("backdrop_blur") {
+    auto renderer = TestRenderer();
+    for(auto x = 0; x < 64; x += 2) {
+      renderer.m_list.push_back(fill(
+        make_rectangle(Rect(x, 0, 1, 32)), make_color(255, 255, 255)));
+      renderer.m_list.push_back(
+        fill(make_rectangle(Rect(x + 1, 0, 1, 32)), make_color(0, 0, 0)));
+    }
+    renderer.m_list.push_back(BackdropBlurCommand(
+      make_rectangle(Rect(16, 8, 32, 16)), Matrix(), 4, 0.2, std::nullopt));
+    auto image = render(renderer, QSize(64, 32));
+    for(auto x = 20; x != 44; ++x) {
+      require_pixel(image, x, 16, Pixel({0.7, 0.7, 0.7, 1}), 3);
+    }
+    require_pixel(image, 10, 16, Pixel({1, 1, 1, 1}), 0);
+    require_pixel(image, 11, 4, Pixel({0, 0, 0, 1}), 0);
   }
 }

@@ -21,10 +21,13 @@ namespace {
   Rect get_draw_bounds(const DrawList& list) {
     auto bounds = Rect(0, 0, 0, 0);
     for(auto& command : list) {
-      auto& fill = std::get<FillCommand>(command);
-      auto box = get_bounds(fill.m_path, fill.m_transform);
-      if(fill.m_clip) {
-        box = intersect(box, *fill.m_clip);
+      auto fill = std::get_if<FillCommand>(&command);
+      if(!fill) {
+        continue;
+      }
+      auto box = get_bounds(fill->m_path, fill->m_transform);
+      if(fill->m_clip) {
+        box = intersect(box, *fill->m_clip);
       }
       bounds = unite(bounds, box);
     }

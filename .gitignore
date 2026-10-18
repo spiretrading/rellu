@@ -377,6 +377,9 @@ package-lock.json
 # Generated project outputs
 .qt/
 Application/rellu
+Application/Fonts/
+Tests/Fonts/
+Tools/*/Fonts/
 Config/*/rellu
 Config/*/*.exe.manifest
 Config/*/*Tests

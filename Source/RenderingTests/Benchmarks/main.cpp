@@ -129,6 +129,34 @@ namespace {
     return list;
   }
 
+  auto make_effects_scene(const DrawList& list) {
+    auto result = std::make_shared<DrawList>();
+    for(auto i = std::size_t(0); i != list.size(); ++i) {
+      auto& command = list[i];
+      if(i % 20 == 0) {
+        auto layer = BeginLayerCommand();
+        layer.m_drop_shadows.push_back(
+          Shadow(Point(0, 3), 6, make_color(0, 0, 0, 0.16)));
+        result->push_back(layer);
+        result->push_back(command);
+        result->push_back(EndLayerCommand());
+      } else if(i % 20 == 10 && i + 1 != list.size()) {
+        auto layer = BeginLayerCommand();
+        layer.m_opacity = 0.5;
+        if(i % 100 == 10) {
+          layer.m_blend_mode = BlendMode::MULTIPLY;
+        }
+        result->push_back(layer);
+        result->push_back(command);
+        result->push_back(list[++i]);
+        result->push_back(EndLayerCommand());
+      } else {
+        result->push_back(command);
+      }
+    }
+    return result;
+  }
+
   auto measure(int iterations, auto operation) {
     auto times = std::vector<double>();
     for(auto i = 0; i != iterations; ++i) {
@@ -223,7 +251,8 @@ namespace {
 
   void benchmark_frames(const Options& options, RenderBackend backend,
       const std::string& backend_name,
-      const std::shared_ptr<const DrawList>& list, double scale) {
+      const std::shared_ptr<const DrawList>& list,
+      const std::shared_ptr<const DrawList>& effects_list, double scale) {
     auto size = DOCUMENT_SIZE * scale;
     auto empty = CanvasRenderer();
     auto empty_offscreen = OffscreenRenderer(empty, backend);
@@ -260,6 +289,11 @@ namespace {
     strips.set_draw_list(list);
     run("strips", strips, [&] {
       strips.set_view(Matrix());
+    });
+    auto effects = CanvasRenderer();
+    effects.set_draw_list(effects_list);
+    run("strips_effects", effects, [&] {
+      effects.set_view(Matrix());
     });
     for(auto samples : {4, 8}) {
       auto stencil = PrototypeRenderer(Approach::STENCIL, samples);
@@ -319,12 +353,17 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-  if(!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
-    qputenv("QT_QPA_PLATFORM", "offscreen");
-  }
+  auto platform = std::string("-platform");
+  auto offscreen = std::string("offscreen");
+  auto arguments = std::vector<char*>(argv, argv + argc);
+  arguments.insert(arguments.begin() + 1, {platform.data(), offscreen.data()});
+  argc = static_cast<int>(arguments.size());
+  arguments.push_back(nullptr);
+  argv = arguments.data();
   auto application = QGuiApplication(argc, argv);
   auto options = parse(argc, argv);
   auto list = make_scene(options.m_paths);
+  auto effects_list = make_effects_scene(*list);
   std::printf("%d paths, %d iterations, median times\n", options.m_paths,
     options.m_iterations);
   std::printf("CPU preparation\n");
@@ -343,7 +382,7 @@ int main(int argc, char** argv) {
     auto tag = std::string(QRhi::backendName(backend.m_implementation)) +
       (backend.m_is_software ? "_software" : "_hardware");
     for(auto scale : {1.0, 2.0}) {
-      benchmark_frames(options, backend, tag, list, scale);
+      benchmark_frames(options, backend, tag, list, effects_list, scale);
     }
   }
   return 0;

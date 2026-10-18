@@ -57,19 +57,6 @@ namespace {
 }
 
 TEST_SUITE("References") {
-  TEST_CASE("reference_root") {
-    auto previous = qgetenv("RELLU_REFERENCES");
-    auto is_set = qEnvironmentVariableIsSet("RELLU_REFERENCES");
-    qputenv("RELLU_REFERENCES", "D:/references");
-    REQUIRE(get_reference_root() == "D:/references");
-    qunsetenv("RELLU_REFERENCES");
-    REQUIRE(
-      get_reference_root() == "C:/Users/Kranar/Nextcloud/rellu_references");
-    if(is_set) {
-      qputenv("RELLU_REFERENCES", previous);
-    }
-  }
-
   TEST_CASE("load") {
     auto directory = QTemporaryDir();
     REQUIRE(directory.isValid());
@@ -130,23 +117,5 @@ TEST_SUITE("References") {
     write(root.filePath("broken/nodes.json"), "{\"nodes\": [");
     REQUIRE_THROWS_AS(
       load_reference_document(root.path(), "broken"), std::runtime_error);
-  }
-
-  TEST_CASE("reference_set") {
-    auto root = get_reference_root();
-    if(!QFileInfo::exists(QDir(root).filePath("exported.txt"))) {
-      MESSAGE("Skipped, no reference set at " << root.toStdString());
-      return;
-    }
-    auto documents = load_reference_documents(root);
-    REQUIRE(!documents.empty());
-    for(const auto& document : documents) {
-      for(const auto& item : document.m_items) {
-        REQUIRE(!item.m_guid.isEmpty());
-        for(const auto& image : item.m_images) {
-          REQUIRE(QFileInfo::exists(image.second));
-        }
-      }
-    }
   }
 }
