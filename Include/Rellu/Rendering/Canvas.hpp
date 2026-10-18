@@ -1,6 +1,7 @@
 #ifndef RELLU_RENDERING_CANVAS_HPP
 #define RELLU_RENDERING_CANVAS_HPP
 #include <QRhiWidget>
+#include "Rellu/Rendering/CanvasRenderer.hpp"
 
 namespace Rellu {
 
@@ -15,7 +16,13 @@ namespace Rellu {
       explicit Canvas(QWidget* parent = nullptr);
 
     protected:
+      void initialize(QRhiCommandBuffer* buffer) override;
       void render(QRhiCommandBuffer* buffer) override;
+      void releaseResources() override;
+
+    private:
+      CanvasRenderer m_renderer;
+      QRhi* m_rhi;
   };
 }
 

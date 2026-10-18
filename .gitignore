@@ -375,6 +375,6 @@ package-lock.json
 .qt/
 Application/rellu
 Config/*/rellu
-Config/*/rellu.exe.manifest
+Config/*/*.exe.manifest
 Config/*/*Tests
 Tests/*/*Tests

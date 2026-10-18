@@ -1,13 +1,26 @@
-#include <rhi/qrhi.h>
 #include "Rellu/Rendering/Canvas.hpp"
 
 using namespace Rellu;
 
 Canvas::Canvas(QWidget* parent)
-  : QRhiWidget(parent) {}
+  : QRhiWidget(parent),
+    m_rhi(nullptr) {}
+
+void Canvas::initialize(QRhiCommandBuffer* buffer) {
+  if(m_rhi == rhi()) {
+    return;
+  }
+  m_renderer.release();
+  m_rhi = rhi();
+  m_renderer.initialize(
+    *m_rhi, *renderTarget()->renderPassDescriptor(), sampleCount());
+}
 
 void Canvas::render(QRhiCommandBuffer* buffer) {
-  buffer->beginPass(
-    renderTarget(), QColor(232, 232, 232), QRhiDepthStencilClearValue(1, 0));
-  buffer->endPass();
+  m_renderer.render(*buffer, *renderTarget(), devicePixelRatio());
+}
+
+void Canvas::releaseResources() {
+  m_renderer.release();
+  m_rhi = nullptr;
 }
