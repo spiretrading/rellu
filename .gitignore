@@ -371,6 +371,9 @@ ASALocalRun/
 package-lock.json
 .vscode/
 
+# Claude Code worktrees and local settings
+.claude/
+
 # Generated project outputs
 .qt/
 Application/rellu
@@ -378,3 +381,4 @@ Config/*/rellu
 Config/*/*.exe.manifest
 Config/*/*Tests
 Tests/*/*Tests
+Config/*/*Shaders/
