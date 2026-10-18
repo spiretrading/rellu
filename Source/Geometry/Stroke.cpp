@@ -8,8 +8,10 @@
 #include <clipper2/clipper.h>
 #include "Rellu/Geometry/Polyline.hpp"
 #include "Rellu/Geometry/Stroke.hpp"
+#include "Precision.hpp"
 
 using namespace Rellu;
+using namespace Rellu::Details;
 
 namespace {
   struct Vertex {
@@ -36,12 +38,6 @@ namespace {
     Clipper2Lib::Paths64 m_closed;
     Clipper2Lib::Paths64 m_shapes;
   };
-
-  int get_precision(double tolerance) {
-    return std::clamp(
-      2 - static_cast<int>(std::floor(std::log10(tolerance))), 2,
-      Clipper2Lib::CLIPPER2_MAX_DEC_PRECISION);
-  }
 
   Point snap(Point point) {
     return Point(std::round(point.m_x), std::round(point.m_y));
@@ -205,7 +201,7 @@ namespace {
       pattern.push_back(entry * scale);
       total += entry;
     }
-    if(!(total > 0)) {
+    if(!(total > 0) || !std::isfinite(total * scale)) {
       return std::vector<double>();
     }
     if(pattern.size() % 2 == 1) {
@@ -234,7 +230,6 @@ namespace {
     }
     auto remaining = pattern[index] - phase;
     auto is_on = index % 2 == 0;
-    auto is_initially_on = is_on;
     auto is_split = false;
     auto& vertices = contour.m_vertices;
     auto dashes = std::vector<Contour>();
@@ -274,22 +269,14 @@ namespace {
         add_vertex(current, end.m_point, end.m_continuity);
       }
     }
-    if(!is_split) {
+    if(!is_split && !contour.m_is_closed) {
       if(is_on) {
         return std::vector{contour};
       }
       return std::vector<Contour>();
     }
-    if(is_on) {
-      if(contour.m_is_closed && is_initially_on) {
-        auto& front = dashes.front().m_vertices;
-        for(auto i = std::size_t(1); i < front.size(); ++i) {
-          add_vertex(current, front[i].m_point, front[i].m_continuity);
-        }
-        dashes.front() = std::move(current);
-      } else if(current.m_vertices.size() > 1) {
-        dashes.push_back(std::move(current));
-      }
+    if(is_on && current.m_vertices.size() > 1) {
+      dashes.push_back(std::move(current));
     }
     return dashes;
   }
@@ -361,7 +348,10 @@ namespace {
     if(pen.m_join == StrokeJoin::MITER &&
         pen.m_miter_limit * pen.m_miter_limit * (1 + cosine) >= 2) {
       auto tip = vertex + (first + second) * (side / (1 + cosine));
-      shape.emplace_back(tip.m_x, tip.m_y);
+      if(std::max(std::abs(tip.m_x), std::abs(tip.m_y)) <=
+          Clipper2Lib::max_coord) {
+        shape.emplace_back(tip.m_x, tip.m_y);
+      }
     }
     shape.emplace_back(end.m_x, end.m_y);
     add_shape(outline, std::move(shape));
@@ -473,15 +463,26 @@ namespace {
 
 Path Rellu::outline_stroke(
     const Path& path, const StrokeGeometry& stroke, double tolerance) {
-  auto scale = std::pow(10.0, get_precision(tolerance));
+  auto extent = get_extent(path);
+  if(!(extent <= MAXIMUM_COORDINATE)) {
+    return outline_stroke(drop_unrepresentable(path), stroke, tolerance);
+  }
+  if(!(stroke.m_width <= MAXIMUM_COORDINATE)) {
+    return Path();
+  }
+  auto precision = get_precision(tolerance, extent + 2 * stroke.m_width);
+  auto scale = std::pow(10.0, precision.m_digits);
   if(!(stroke.m_width * scale >= 2)) {
     return Path();
   }
-  auto contours = make_contours(path, tolerance, scale);
+  auto contours = make_contours(path, precision.m_tolerance, scale);
   auto pattern = make_pattern(stroke, scale);
   auto offset = stroke.m_dash_offset * scale;
-  auto pen = Pen(stroke.m_width * scale / 2, tolerance * scale, stroke.m_cap,
-    stroke.m_join, std::max(1.0, stroke.m_miter_limit));
+  if(!std::isfinite(offset)) {
+    offset = 0;
+  }
+  auto pen = Pen(stroke.m_width * scale / 2, precision.m_tolerance * scale,
+    stroke.m_cap, stroke.m_join, std::max(1.0, stroke.m_miter_limit));
   if(stroke.m_alignment == StrokeAlignment::CENTER) {
     return to_path(trace(contours, pattern, offset, pen), scale);
   }

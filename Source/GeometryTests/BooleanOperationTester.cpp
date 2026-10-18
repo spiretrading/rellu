@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <span>
 #include <string_view>
@@ -262,6 +263,41 @@ TEST_SUITE("BooleanOperation") {
     for(auto& polyline : flatten(result, 0.1)) {
       REQUIRE(get_area(polyline) == doctest::Approx(25));
     }
+  }
+
+  TEST_CASE("unrepresentable_coordinates") {
+    auto square = make_rectangle(Rect(0, 0, 10, 10));
+    auto path = square;
+    path.move_to(Point(std::numeric_limits<double>::quiet_NaN(), 0));
+    path.line_to(Point(5, 5));
+    path.line_to(Point(0, 5));
+    path.move_to(Point(0, 0));
+    path.cubic_to(Point(std::numeric_limits<double>::infinity(), 0),
+      Point(5, 5), Point(0, 5));
+    path.move_to(Point(0, 0));
+    path.line_to(Point(1e21, 0));
+    path.line_to(Point(0, 5));
+    auto expected = combine(square, Path(), BooleanOperation::ADD, 0.1);
+    REQUIRE(combine(path, Path(), BooleanOperation::ADD, 0.1) == expected);
+    REQUIRE(combine(Path(), path, BooleanOperation::ADD, 0.1) == expected);
+    REQUIRE(
+      combine(square, path, BooleanOperation::SUBTRACT, 0.1).is_empty());
+    auto operands = std::array{path, square, path};
+    REQUIRE(combine(operands, BooleanOperation::INTERSECT, 0.1) == expected);
+  }
+
+  TEST_CASE("large_coordinates") {
+    auto origin = std::ldexp(1.0, 53);
+    auto size = std::ldexp(1.0, 24);
+    auto left = make_rectangle(Rect(origin, 0, size, size));
+    auto right =
+      make_rectangle(Rect(origin + size / 2, size / 2, size, size));
+    auto sum = combine(left, right, BooleanOperation::ADD, 0.1);
+    REQUIRE(get_area(sum) == doctest::Approx(7 * std::ldexp(1.0, 46)));
+    REQUIRE(get_bounds(sum) == Rect(origin, 0, 1.5 * size, 1.5 * size));
+    auto operands = std::array{left, right};
+    REQUIRE(get_area(combine(operands, BooleanOperation::INTERSECT, 0.1)) ==
+      doctest::Approx(std::ldexp(1.0, 46)));
   }
 
   TEST_CASE("tolerance") {

@@ -29,7 +29,9 @@ namespace Rellu {
 
   /**
    * Combines the regions two paths fill, each under its own fill rule and
-   * treating every subpath as closed.
+   * treating every subpath as closed. Subpaths having a coordinate that is
+   * not finite or whose magnitude exceeds 10^20 are ignored, and the
+   * approximation coarsens as needed to represent large coordinates.
    * @param left The first operand.
    * @param right The second operand.
    * @param operation The operation to apply.
@@ -46,7 +48,9 @@ namespace Rellu {
    * Combines the regions a sequence of paths fill, applying an operation to
    * the first two operands and then to that result and each subsequent
    * operand in turn, the way Adobe XD combines the children of a compound
-   * shape.
+   * shape. Subpaths having a coordinate that is not finite or whose
+   * magnitude exceeds 10^20 are ignored, and the approximation coarsens as
+   * needed to represent large coordinates.
    * @param operands The paths to combine, each under its own fill rule and
    *        treating every subpath as closed.
    * @param operation The operation to apply.

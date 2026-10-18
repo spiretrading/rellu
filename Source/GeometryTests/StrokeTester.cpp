@@ -1,4 +1,5 @@
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <vector>
 #include <doctest/doctest.h>
@@ -10,6 +11,8 @@ using namespace Rellu;
 
 namespace {
   constexpr auto PI = std::numbers::pi;
+  constexpr auto INFINITE = std::numeric_limits<double>::infinity();
+  constexpr auto NOT_A_NUMBER = std::numeric_limits<double>::quiet_NaN();
 
   StrokeGeometry make_stroke(double width, StrokeAlignment alignment,
       StrokeCap cap, StrokeJoin join, double miter_limit = 10) {
@@ -205,6 +208,9 @@ TEST_SUITE("StrokeGeometry") {
       wedge, make_stroke(2, StrokeJoin::MITER, 2.5), 0.01)).m_y ==
         doctest::Approx(-2).epsilon(1e-3));
     REQUIRE(get_bounds(outline_stroke(
+      wedge, make_stroke(2, StrokeJoin::MITER, INFINITE), 0.01)).m_y ==
+        doctest::Approx(-2).epsilon(1e-3));
+    REQUIRE(get_bounds(outline_stroke(
       wedge, make_stroke(2, StrokeJoin::MITER, 1.9), 0.01)).m_y ==
         doctest::Approx(-0.5).epsilon(1e-3));
     REQUIRE(get_bounds(outline_stroke(
@@ -220,6 +226,11 @@ TEST_SUITE("StrokeGeometry") {
     REQUIRE(get_area(outline_stroke(
       rectangle, make_stroke(2, StrokeJoin::MITER, 1.4), 0.01)) ==
         doctest::Approx(78));
+    auto spike =
+      make_path({Point(0, 0), Point(1e7, 0), Point(0, 0.2)}, false);
+    REQUIRE(outline_stroke(
+      spike, make_stroke(3e7, StrokeJoin::MITER, INFINITE), 0.01) ==
+        outline_stroke(spike, make_stroke(3e7, StrokeJoin::BEVEL), 0.01));
   }
 
   TEST_CASE("smooth_vertices") {
@@ -253,6 +264,10 @@ TEST_SUITE("StrokeGeometry") {
     REQUIRE(outline_stroke(line,
       make_dashed_stroke(2, StrokeCap::BUTT, {10, 5}, -10), 0.01) ==
         offset);
+    REQUIRE(outline_stroke(line, make_dashed_stroke(
+      2, StrokeCap::BUTT, {10, 5}, NOT_A_NUMBER), 0.01) == dashed);
+    REQUIRE(outline_stroke(line, make_dashed_stroke(
+      2, StrokeCap::BUTT, {10, 5}, -INFINITE), 0.01) == dashed);
     auto odd = outline_stroke(
       line, make_dashed_stroke(2, StrokeCap::BUTT, {10}, 0), 0.01);
     REQUIRE(count_subpaths(odd) == 5);
@@ -268,6 +283,8 @@ TEST_SUITE("StrokeGeometry") {
       make_dashed_stroke(2, StrokeCap::BUTT, {0, 0}, 0), 0.01) == solid);
     REQUIRE(outline_stroke(line,
       make_dashed_stroke(2, StrokeCap::BUTT, {10, -5}, 0), 0.01) == solid);
+    REQUIRE(outline_stroke(line, make_dashed_stroke(
+      2, StrokeCap::BUTT, {10, INFINITE}, 0), 0.01) == solid);
   }
 
   TEST_CASE("zero_length_dashes") {
@@ -289,16 +306,39 @@ TEST_SUITE("StrokeGeometry") {
     auto dashed = outline_stroke(rectangle,
       make_dashed_stroke(2, StrokeCap::BUTT, {10, 10}, 5), 0.01);
     REQUIRE(count_subpaths(dashed) == 2);
-    REQUIRE(get_area(dashed) == doctest::Approx(40));
-    REQUIRE(contains(dashed, Point(-0.5, -0.5)));
+    REQUIRE(get_area(dashed) == doctest::Approx(39));
+    REQUIRE(contains(dashed, Point(0.5, -0.5)));
+    REQUIRE(contains(dashed, Point(-0.5, 0.5)));
+    REQUIRE(!contains(dashed, Point(-0.5, -0.5)));
+    REQUIRE(contains(dashed, Point(10.5, 10.5)));
     REQUIRE(!contains(dashed, Point(10.5, -0.5)));
-    REQUIRE(outline_stroke(rectangle,
-      make_dashed_stroke(2, StrokeCap::BUTT, {100, 10}, 0), 0.01) ==
-        outline_stroke(rectangle, make_stroke(2, StrokeCap::BUTT), 0.01));
+    auto open = make_path({Point(0, 0), Point(10, 0), Point(10, 10),
+      Point(0, 10), Point(0, 0)}, false);
+    for(auto cap : {StrokeCap::BUTT, StrokeCap::ROUND, StrokeCap::SQUARE}) {
+      for(auto dashes : {std::vector<double>{10, 10},
+          std::vector<double>{100, 10}, std::vector<double>{0, 10}}) {
+        auto stroke = make_dashed_stroke(2, cap, dashes, 5);
+        REQUIRE(outline_stroke(rectangle, stroke, 0.01) ==
+          outline_stroke(open, stroke, 0.01));
+      }
+    }
+    REQUIRE(get_area(outline_stroke(rectangle,
+      make_dashed_stroke(2, StrokeCap::BUTT, {100, 10}, 0), 0.01)) ==
+        doctest::Approx(79));
     auto inside = make_dashed_stroke(2, StrokeCap::BUTT, {10, 10}, 5);
     inside.m_alignment = StrokeAlignment::INSIDE;
-    REQUIRE(get_area(outline_stroke(rectangle, inside, 0.01)) ==
-      doctest::Approx(32));
+    auto inside_outline = outline_stroke(rectangle, inside, 0.01);
+    REQUIRE(get_area(inside_outline) == doctest::Approx(32));
+    REQUIRE(contains(inside_outline, Point(0.5, 0.5)));
+    REQUIRE(!contains(inside_outline, Point(-0.5, 0.5)));
+    auto outside = inside;
+    outside.m_alignment = StrokeAlignment::OUTSIDE;
+    auto outside_outline = outline_stroke(rectangle, outside, 0.01);
+    REQUIRE(get_area(outside_outline) == doctest::Approx(44));
+    REQUIRE(contains(outside_outline, Point(-1, 1)));
+    REQUIRE(!contains(outside_outline, Point(-1, -1)));
+    REQUIRE(contains(outside_outline, Point(11, 11)));
+    REQUIRE(!contains(outside_outline, Point(0.5, 0.5)));
   }
 
   TEST_CASE("open_alignment") {
@@ -346,6 +386,10 @@ TEST_SUITE("StrokeGeometry") {
       is_empty());
     REQUIRE(outline_stroke(line, make_stroke(-1, StrokeCap::ROUND), 0.01).
       is_empty());
+    REQUIRE(outline_stroke(
+      line, make_stroke(INFINITE, StrokeCap::ROUND), 0.01).is_empty());
+    REQUIRE(outline_stroke(
+      line, make_stroke(NOT_A_NUMBER, StrokeCap::ROUND), 0.01).is_empty());
     REQUIRE(outline_stroke(Path(), make_stroke(2, StrokeCap::ROUND), 0.01).
       is_empty());
     auto move = Path();
@@ -366,6 +410,36 @@ TEST_SUITE("StrokeGeometry") {
     REQUIRE(get_bounds(square) == Rect(4, 4, 2, 2));
     REQUIRE(outline_stroke(segment, make_stroke(2, StrokeCap::BUTT), 0.01).
       is_empty());
+  }
+
+  TEST_CASE("unrepresentable_coordinates") {
+    auto line = make_line(Point(0, 0), Point(10, 0));
+    auto path = line;
+    path.move_to(Point(NOT_A_NUMBER, 0));
+    path.line_to(Point(5, 5));
+    path.move_to(Point(0, 0));
+    path.cubic_to(Point(INFINITE, 0), Point(1, 1), Point(2, 2));
+    path.close();
+    path.move_to(Point(0, 0));
+    path.line_to(Point(0, -1e21));
+    for(auto alignment : {StrokeAlignment::CENTER, StrokeAlignment::INSIDE}) {
+      auto stroke = make_stroke(
+        2, alignment, StrokeCap::ROUND, StrokeJoin::MITER);
+      REQUIRE(outline_stroke(path, stroke, 0.01) ==
+        outline_stroke(line, stroke, 0.01));
+    }
+    auto invalid = make_path({Point(0, NOT_A_NUMBER), Point(1, 1)}, false);
+    REQUIRE(outline_stroke(invalid, make_stroke(2, StrokeCap::ROUND), 0.01).
+      is_empty());
+  }
+
+  TEST_CASE("large_coordinates") {
+    auto line = make_line(Point(1e16, 0), Point(1e16 + 1e7, 0));
+    auto stroke =
+      outline_stroke(line, make_stroke(1e6, StrokeCap::BUTT), 0.01);
+    REQUIRE(count_subpaths(stroke) == 1);
+    REQUIRE(get_area(stroke) == doctest::Approx(1e13));
+    REQUIRE(is_near(get_bounds(stroke), Rect(1e16, -5e5, 1e7, 1e6), 10));
   }
 
   TEST_CASE("tolerance") {

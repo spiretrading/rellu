@@ -76,11 +76,17 @@ namespace Rellu {
 
     /**
      * The alternating lengths of dashes and gaps, repeated twice if odd in
-     * count; empty, negative or all zero lengths draw a solid stroke.
+     * count, laid out from the start of each subpath to its end, which for
+     * a closed subpath is its start, so that its last dash ends there with
+     * a cap rather than joining its first; empty, negative, non-finite or
+     * all zero lengths draw a solid stroke.
      */
     std::vector<double> m_dashes;
 
-    /** The distance into the dash pattern at which each subpath starts. */
+    /**
+     * The distance into the dash pattern at which each subpath starts,
+     * treated as zero if not finite.
+     */
     double m_dash_offset;
 
     bool operator ==(const StrokeGeometry&) const = default;
@@ -89,7 +95,9 @@ namespace Rellu {
   /**
    * Returns the region a stroke covers, so that it can be drawn by filling.
    * Subpaths consisting of a single point are drawn as their caps, oriented
-   * along the x axis.
+   * along the x axis. Subpaths having a coordinate that is not finite or
+   * whose magnitude exceeds 10^20 are ignored, and the approximation
+   * coarsens as needed to represent large coordinates.
    * @param path The path to stroke, whose fill rule decides the region
    *        INSIDE and OUTSIDE strokes are aligned to.
    * @param stroke The stroke to outline.
@@ -99,7 +107,7 @@ namespace Rellu {
    * @return A Path using the non-zero fill rule whose closed polygonal
    *         subpaths do not overlap, with outer boundaries running clockwise
    *         on screen and holes running counterclockwise, or an empty Path
-   *         if the <i>stroke</i>'s width is not positive.
+   *         if the <i>stroke</i>'s width is not positive or exceeds 10^20.
    */
   Path outline_stroke(
     const Path& path, const StrokeGeometry& stroke, double tolerance);

@@ -1,18 +1,14 @@
 #include <algorithm>
-#include <cmath>
+#include <vector>
 #include <clipper2/clipper.h>
 #include "Rellu/Geometry/BooleanOperation.hpp"
 #include "Rellu/Geometry/Polyline.hpp"
+#include "Precision.hpp"
 
 using namespace Rellu;
+using namespace Rellu::Details;
 
 namespace {
-  int get_precision(double tolerance) {
-    return std::clamp(
-      2 - static_cast<int>(std::floor(std::log10(tolerance))), 2,
-      Clipper2Lib::CLIPPER2_MAX_DEC_PRECISION);
-  }
-
   Clipper2Lib::FillRule to_clipper(FillRule rule) {
     if(rule == FillRule::EVEN_ODD) {
       return Clipper2Lib::FillRule::EvenOdd;
@@ -55,26 +51,29 @@ namespace {
     return path;
   }
 
-  Clipper2Lib::PathsD normalize(
-      const Path& path, double tolerance, int precision) {
-    return Clipper2Lib::Union(to_clipper(path, tolerance),
-      to_clipper(path.get_fill_rule()), precision);
+  Clipper2Lib::PathsD normalize(const Path& path, Precision precision) {
+    return Clipper2Lib::Union(to_clipper(path, precision.m_tolerance),
+      to_clipper(path.get_fill_rule()), precision.m_digits);
   }
 
   Clipper2Lib::PathsD apply(const Clipper2Lib::PathsD& region,
-      const Path& operand, BooleanOperation operation, double tolerance,
-      int precision) {
+      const Path& operand, BooleanOperation operation, Precision precision) {
     return Clipper2Lib::BooleanOp(to_clipper(operation),
       to_clipper(operand.get_fill_rule()), region,
-      to_clipper(operand, tolerance), precision);
+      to_clipper(operand, precision.m_tolerance), precision.m_digits);
   }
 }
 
 Path Rellu::combine(const Path& left, const Path& right,
     BooleanOperation operation, double tolerance) {
-  auto precision = get_precision(tolerance);
-  return to_path(apply(normalize(left, tolerance, precision), right,
-    operation, tolerance, precision));
+  auto extent = std::max(get_extent(left), get_extent(right));
+  if(!(extent <= MAXIMUM_COORDINATE)) {
+    return combine(drop_unrepresentable(left), drop_unrepresentable(right),
+      operation, tolerance);
+  }
+  auto precision = get_precision(tolerance, extent);
+  return to_path(
+    apply(normalize(left, precision), right, operation, precision));
 }
 
 Path Rellu::combine(std::span<const Path> operands,
@@ -82,10 +81,22 @@ Path Rellu::combine(std::span<const Path> operands,
   if(operands.empty()) {
     return Path();
   }
-  auto precision = get_precision(tolerance);
-  auto region = normalize(operands.front(), tolerance, precision);
+  auto extent = 0.0;
+  for(auto& operand : operands) {
+    extent = std::max(extent, get_extent(operand));
+  }
+  if(!(extent <= MAXIMUM_COORDINATE)) {
+    auto representable = std::vector<Path>();
+    representable.reserve(operands.size());
+    for(auto& operand : operands) {
+      representable.push_back(drop_unrepresentable(operand));
+    }
+    return combine(representable, operation, tolerance);
+  }
+  auto precision = get_precision(tolerance, extent);
+  auto region = normalize(operands.front(), precision);
   for(auto& operand : operands.subspan(1)) {
-    region = apply(region, operand, operation, tolerance, precision);
+    region = apply(region, operand, operation, precision);
   }
   return to_path(region);
 }
