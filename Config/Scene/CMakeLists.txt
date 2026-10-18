@@ -1,0 +1,6 @@
+file(GLOB_RECURSE header_files ${RELLU_INCLUDE_PATH}/Rellu/Scene/*.hpp)
+file(GLOB_RECURSE source_files ${RELLU_SOURCE_PATH}/Scene/*.cpp)
+add_library(RelluScene STATIC ${header_files} ${source_files})
+source_group("Header Files" FILES ${header_files})
+target_link_libraries(RelluScene PUBLIC RelluModel RelluRendering)
+rellu_track_target(RelluScene)
