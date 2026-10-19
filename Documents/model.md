@@ -336,6 +336,12 @@ refinements:
 - `resolve_reference` (ReferenceResolution.hpp) is the single rule for what a
   reference renders: the final non-reference source, with the nearest
   transform and children overrides.
+- The model stores compound results as given. The commands layer recomputes
+  them (`refresh_compounds`, Commands/Compounds.hpp): each command's step
+  also recomputes the compound shapes whose operands it moved, reshaped,
+  added or removed, nested ones first, so that one undo reverts both. The XD
+  session skips compound shapes with children the importer could not
+  represent, as the writer does.
 
 ## Open questions
 

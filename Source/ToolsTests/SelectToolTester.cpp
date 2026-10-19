@@ -425,6 +425,39 @@ TEST_SUITE("SelectTool") {
     REQUIRE(get_bounds(document, board.m_group) == Rect(150, 150, 100, 40));
   }
 
+  TEST_CASE("corner_radius") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto get_radii = [&] {
+      return std::get<RectangleShape>(
+        document.get(board.m_rectangle).get_shape()->m_geometry).m_radii;
+    };
+    click(tools, Point(420, 170));
+    drag(tools, Point(414, 164), Point(424, 174));
+    REQUIRE(get_radii() == CornerRadii(10, 10, 10, 10));
+    REQUIRE(editor.get_history().get_undo_count() == 1);
+    REQUIRE(editor.get_history().get_undo_label() == "Change Corner Radius");
+    REQUIRE(editor.get_selection().get_nodes() ==
+      std::vector{board.m_rectangle});
+    drag(tools, Point(486, 186), Point(476, 176), Qt::AltModifier);
+    REQUIRE(get_radii() == CornerRadii(10, 10, 20, 10));
+    REQUIRE(editor.get_history().get_undo_count() == 2);
+    drag(tools, Point(410, 160), Point(300, 100));
+    REQUIRE(get_radii() == CornerRadii(0, 0, 0, 0));
+    drag(tools, Point(414, 164), Point(600, 400));
+    REQUIRE(get_radii() == CornerRadii(25, 25, 25, 25));
+    tools.press(make_event(
+      Point(425, 175), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
+    drag_to(tools, Point(425, 175), Point(415, 165));
+    REQUIRE(get_radii() == CornerRadii(15, 15, 15, 15));
+    REQUIRE(tools.key_press(KeyEvent(Qt::Key_Escape, Qt::NoModifier)));
+    REQUIRE(get_radii() == CornerRadii(25, 25, 25, 25));
+    editor.get_selection().select(board.m_locked);
+    REQUIRE(get_handle_centers(tools.draw()).empty());
+  }
   TEST_CASE("locked") {
     auto document = Document();
     auto board = build_board(document);
@@ -453,13 +486,18 @@ TEST_SUITE("SelectTool") {
     editor.get_selection().select(board.m_rectangle);
     overlay = tools.draw();
     auto centers = get_handle_centers(overlay);
-    REQUIRE(centers.size() == 8);
+    REQUIRE(centers.size() == 12);
     require_near(centers[0], Point(400, 150));
     require_near(centers[1], Point(450, 150));
     require_near(centers[4], Point(500, 200));
-    REQUIRE(overlay.m_shapes.size() == 12);
+    require_near(centers[8], Point(414, 164));
+    require_near(centers[10], Point(486, 186));
+    REQUIRE(overlay.m_shapes.size() == 16);
     for(auto& shape : overlay.m_shapes) {
-      if(shape.m_radius > 0) {
+      if(shape.m_radius == SelectTool::RADIUS_HANDLE_RADIUS) {
+        REQUIRE(shape.m_size == Size(2 * SelectTool::RADIUS_HANDLE_RADIUS,
+          2 * SelectTool::RADIUS_HANDLE_RADIUS));
+      } else if(shape.m_radius > 0) {
         REQUIRE(shape.m_size == Size(2 * SelectTool::HANDLE_RADIUS,
           2 * SelectTool::HANDLE_RADIUS));
       } else {
@@ -472,12 +510,16 @@ TEST_SUITE("SelectTool") {
     centers = get_handle_centers(overlay);
     require_near(centers[0], Point(810, 300));
     require_near(centers[4], Point(1010, 400));
+    require_near(centers[8], Point(824, 314));
     require_near(overlay.m_images.front().m_position,
       Point(210, 200 - ArtboardTitles::GAP - ArtboardTitles::HEIGHT));
     REQUIRE(overlay.m_images.front().m_image->height() ==
       2 * ArtboardTitles::HEIGHT);
     for(auto& shape : overlay.m_shapes) {
-      if(shape.m_radius > 0) {
+      if(shape.m_radius == SelectTool::RADIUS_HANDLE_RADIUS) {
+        REQUIRE(shape.m_size == Size(2 * SelectTool::RADIUS_HANDLE_RADIUS,
+          2 * SelectTool::RADIUS_HANDLE_RADIUS));
+      } else if(shape.m_radius > 0) {
         REQUIRE(shape.m_size == Size(2 * SelectTool::HANDLE_RADIUS,
           2 * SelectTool::HANDLE_RADIUS));
       } else {
@@ -490,7 +532,7 @@ TEST_SUITE("SelectTool") {
     tools.set_view(Matrix(), 1, Size(1000, 800));
     hover(tools, Point(160, 160));
     overlay = tools.draw();
-    REQUIRE(overlay.m_shapes.size() == 16);
+    REQUIRE(overlay.m_shapes.size() == 20);
     tools.press(make_event(
       Point(160, 160), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
     drag_to(tools, Point(160, 160), Point(170, 160));

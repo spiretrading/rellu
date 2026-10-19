@@ -435,15 +435,29 @@ DrawRegion Drawing::get_region(std::size_t index) const {
 std::vector<DrawRegion> Drawing::set_lists(
     std::vector<std::shared_ptr<const DrawList>> lists) {
   auto previous = std::move(m_entries);
-  auto indices = std::unordered_map<const DrawList*, std::size_t>();
-  for(auto i = std::size_t(0); i != previous.size(); ++i) {
-    indices.emplace(previous[i]->m_list.get(), i);
-  }
   auto none = std::numeric_limits<std::size_t>::max();
   auto matches = std::vector<std::size_t>(lists.size(), none);
   auto is_kept = std::vector<bool>(previous.size(), false);
   auto entries = std::vector<std::unique_ptr<Entry>>(lists.size());
-  for(auto i = std::size_t(0); i != lists.size(); ++i) {
+  auto common = std::min(lists.size(), previous.size());
+  auto head = std::size_t(0);
+  while(head != common && lists[head] == previous[head]->m_list) {
+    matches[head] = head;
+    is_kept[head] = true;
+    ++head;
+  }
+  auto tail = std::size_t(0);
+  while(tail != common - head && lists[lists.size() - 1 - tail] ==
+      previous[previous.size() - 1 - tail]->m_list) {
+    matches[lists.size() - 1 - tail] = previous.size() - 1 - tail;
+    is_kept[previous.size() - 1 - tail] = true;
+    ++tail;
+  }
+  auto indices = std::unordered_map<const DrawList*, std::size_t>();
+  for(auto i = head; i != previous.size() - tail; ++i) {
+    indices.emplace(previous[i]->m_list.get(), i);
+  }
+  for(auto i = head; i != lists.size() - tail; ++i) {
     auto index = indices.find(lists[i].get());
     if(index != indices.end() && !is_kept[index->second]) {
       matches[i] = index->second;

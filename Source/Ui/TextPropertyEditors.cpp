@@ -1,0 +1,326 @@
+#include <algorithm>
+#include <cmath>
+#include <memory>
+#include <optional>
+#include <set>
+#include <utility>
+#include <variant>
+#include "Rellu/Text/TextLayout.hpp"
+#include "Rellu/Ui/TextPropertyEditors.hpp"
+
+using namespace Rellu;
+
+namespace {
+  std::optional<double> get_number(const PropertyValue& value) {
+    if(auto number = std::get_if<double>(&value); number &&
+        std::isfinite(*number)) {
+      return *number;
+    } else if(auto integer = std::get_if<int>(&value)) {
+      return static_cast<double>(*integer);
+    }
+    return std::nullopt;
+  }
+
+  std::optional<int> get_index(const PropertyValue& value, int count) {
+    auto choice = std::get_if<Choice>(&value);
+    if(!choice || choice->m_index < 0 || choice->m_index >= count) {
+      return std::nullopt;
+    }
+    return choice->m_index;
+  }
+
+  std::optional<TextRange> find_range(const TextSelectionSource& source,
+      const std::vector<NodeId>& nodes) {
+    if(!source || nodes.size() != 1) {
+      return std::nullopt;
+    }
+    auto selection = source();
+    if(!selection || !selection->is_editing() ||
+        selection->get_node() != nodes.front()) {
+      return std::nullopt;
+    }
+    auto range = selection->get_range();
+    if(range.m_start == range.m_end) {
+      return std::nullopt;
+    }
+    return range;
+  }
+
+  std::optional<TextStyle> find_style(const Document& document,
+      const std::vector<NodeId>& nodes, const std::optional<TextRange>& range) {
+    for(auto& id : nodes) {
+      if(auto node = document.find(id); node && node->get_text()) {
+        auto& text = *node->get_text();
+        return get_style(
+          text, range.value_or(TextRange(0, text.m_content->size())));
+      }
+    }
+    return std::nullopt;
+  }
+
+  bool is_found(FontMatch match) {
+    return match == FontMatch::POSTSCRIPT_NAME ||
+      match == FontMatch::FAMILY_AND_STYLE || match == FontMatch::FAMILY;
+  }
+
+  TextStyleEdit make_font_edit(const FontLibrary& library, Font font) {
+    auto edit = TextStyleEdit();
+    font.m_postscript_name.clear();
+    auto resolution = library.resolve(font);
+    if(resolution.m_typeface && is_found(resolution.m_match)) {
+      auto& names = resolution.m_typeface->get_names();
+      edit.m_family = names.m_typographic_family;
+      edit.m_style = names.m_typographic_style;
+      edit.m_postscript_name = names.m_postscript_name;
+    } else {
+      edit.m_family = font.m_family;
+      edit.m_style = font.m_style;
+    }
+    return edit;
+  }
+
+  PropertySetter make_style_setter(TextSelectionSource source,
+      TextLayouter layouter, auto make_edit) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      if(nodes.empty()) {
+        return nullptr;
+      }
+      auto range = find_range(source, nodes);
+      auto edit = make_edit(document, nodes, range, value);
+      if(!edit) {
+        return nullptr;
+      }
+      if(range) {
+        return std::make_unique<SetTextStyleCommand>(
+          nodes.front(), *range, std::move(*edit), layouter);
+      }
+      return std::make_unique<SetTextStyleCommand>(
+        nodes, std::move(*edit), layouter);
+    };
+  }
+
+  PropertySetter make_simple_style_setter(TextSelectionSource source,
+      TextLayouter layouter, auto make_edit) {
+    return make_style_setter(std::move(source), std::move(layouter),
+      [=] (const Document&, const std::vector<NodeId>&,
+          const std::optional<TextRange>&, const PropertyValue& value) {
+        return make_edit(value);
+      });
+  }
+
+  PropertySetter make_paragraph_setter(TextLayouter layouter, auto make_edit) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      if(nodes.empty()) {
+        return nullptr;
+      }
+      auto edit = make_edit(value);
+      if(!edit) {
+        return nullptr;
+      }
+      return std::make_unique<SetParagraphStyleCommand>(
+        nodes, std::move(*edit), layouter);
+    };
+  }
+
+  PropertyEditor make_editor(PropertySetter setter,
+      std::optional<double> minimum = std::nullopt) {
+    auto editor = PropertyEditor();
+    editor.m_setter = std::move(setter);
+    editor.m_minimum = minimum;
+    return editor;
+  }
+}
+
+void Rellu::add_text_property_editors(PropertyEditors& editors,
+    const FontLibrary& library, TextMeasurer measurer,
+    TextSelectionSource selection) {
+  auto layouter = make_text_layouter(library);
+  editors.add("text.family", make_editor(make_style_setter(selection,
+    layouter, [library = &library] (const Document& document,
+        const std::vector<NodeId>& nodes,
+        const std::optional<TextRange>& range,
+        const PropertyValue& value) -> std::optional<TextStyleEdit> {
+      auto family = std::get_if<QString>(&value);
+      auto style = find_style(document, nodes, range);
+      if(!family || family->trimmed().isEmpty() || !style) {
+        return std::nullopt;
+      }
+      auto font = style->m_font;
+      font.m_family = family->trimmed().toStdString();
+      return make_font_edit(*library, std::move(font));
+    })));
+  editors.add("text.style", make_editor(make_style_setter(selection,
+    layouter, [library = &library] (const Document& document,
+        const std::vector<NodeId>& nodes,
+        const std::optional<TextRange>& range,
+        const PropertyValue& value) -> std::optional<TextStyleEdit> {
+      auto name = std::get_if<QString>(&value);
+      auto style = find_style(document, nodes, range);
+      if(!name || name->trimmed().isEmpty() || !style) {
+        return std::nullopt;
+      }
+      auto font = style->m_font;
+      font.m_style = name->trimmed().toStdString();
+      return make_font_edit(*library, std::move(font));
+    })));
+  editors.add("text.size", make_editor(make_simple_style_setter(selection,
+    layouter, [] (const PropertyValue& value) -> std::optional<TextStyleEdit> {
+      auto size = get_number(value);
+      if(!size || !(*size > 0)) {
+        return std::nullopt;
+      }
+      auto edit = TextStyleEdit();
+      edit.m_size = *size;
+      return edit;
+    }), 1.0));
+  editors.add("text.letter_spacing", make_editor(make_simple_style_setter(
+    selection, layouter,
+    [] (const PropertyValue& value) -> std::optional<TextStyleEdit> {
+      auto spacing = get_number(value);
+      if(!spacing) {
+        return std::nullopt;
+      }
+      auto edit = TextStyleEdit();
+      edit.m_letter_spacing = std::round(*spacing);
+      return edit;
+    })));
+  editors.add("text.color", make_editor(make_simple_style_setter(selection,
+    layouter, [] (const PropertyValue& value) -> std::optional<TextStyleEdit> {
+      auto color = std::get_if<Color>(&value);
+      if(!color) {
+        return std::nullopt;
+      }
+      auto edit = TextStyleEdit();
+      edit.m_color = *color;
+      return edit;
+    })));
+  editors.add("text.underline", make_editor(make_simple_style_setter(
+    selection, layouter,
+    [] (const PropertyValue& value) -> std::optional<TextStyleEdit> {
+      auto is_set = std::get_if<bool>(&value);
+      if(!is_set) {
+        return std::nullopt;
+      }
+      auto edit = TextStyleEdit();
+      edit.m_is_underlined = *is_set;
+      return edit;
+    })));
+  editors.add("text.strikethrough", make_editor(make_simple_style_setter(
+    selection, layouter,
+    [] (const PropertyValue& value) -> std::optional<TextStyleEdit> {
+      auto is_set = std::get_if<bool>(&value);
+      if(!is_set) {
+        return std::nullopt;
+      }
+      auto edit = TextStyleEdit();
+      edit.m_is_struck_through = *is_set;
+      return edit;
+    })));
+  editors.add("text.transform", make_editor(make_simple_style_setter(
+    selection, layouter,
+    [] (const PropertyValue& value) -> std::optional<TextStyleEdit> {
+      auto index = get_index(value, 4);
+      if(!index) {
+        return std::nullopt;
+      }
+      auto edit = TextStyleEdit();
+      edit.m_transform = static_cast<TextTransform>(*index);
+      return edit;
+    })));
+  editors.add("text.script", make_editor(make_simple_style_setter(selection,
+    layouter, [] (const PropertyValue& value) -> std::optional<TextStyleEdit> {
+      auto index = get_index(value, 3);
+      if(!index) {
+        return std::nullopt;
+      }
+      auto edit = TextStyleEdit();
+      edit.m_script = static_cast<TextScript>(*index);
+      return edit;
+    })));
+  editors.add("text.alignment", make_editor(make_paragraph_setter(layouter,
+    [] (const PropertyValue& value) -> std::optional<ParagraphStyleEdit> {
+      auto index = get_index(value, 3);
+      if(!index) {
+        return std::nullopt;
+      }
+      auto edit = ParagraphStyleEdit();
+      edit.m_alignment = static_cast<TextAlignment>(*index);
+      return edit;
+    })));
+  editors.add("text.line_height", make_editor(make_paragraph_setter(layouter,
+    [] (const PropertyValue& value) -> std::optional<ParagraphStyleEdit> {
+      auto height = get_number(value);
+      if(!height) {
+        return std::nullopt;
+      }
+      auto edit = ParagraphStyleEdit();
+      if(*height > 0) {
+        edit.m_line_height = std::optional<double>(*height);
+      } else {
+        edit.m_line_height = std::optional<double>();
+      }
+      return edit;
+    }), 0.0));
+  editors.add("text.paragraph_spacing", make_editor(make_paragraph_setter(
+    layouter,
+    [] (const PropertyValue& value) -> std::optional<ParagraphStyleEdit> {
+      auto spacing = get_number(value);
+      if(!spacing || *spacing < 0) {
+        return std::nullopt;
+      }
+      auto edit = ParagraphStyleEdit();
+      edit.m_paragraph_spacing = *spacing;
+      return edit;
+    }), 0.0));
+  editors.add("text.frame", make_editor(
+    [measurer = std::move(measurer)] (const Document& document,
+        const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      auto index = get_index(value, 3);
+      if(!index || nodes.empty()) {
+        return nullptr;
+      }
+      auto kind = TextFrameKind::AUTO_WIDTH;
+      if(*index == 1) {
+        kind = TextFrameKind::AUTO_HEIGHT;
+      } else if(*index == 2) {
+        kind = TextFrameKind::FIXED_SIZE;
+      }
+      return std::make_unique<SetTextFrameCommand>(nodes, kind, measurer);
+    }));
+}
+
+TextLayouter Rellu::make_text_layouter(const FontLibrary& library) {
+  return [library = &library] (const Text& text) {
+    return store_layout(text, *library);
+  };
+}
+
+QStringList Rellu::list_font_families(const FontLibrary& library) {
+  auto families = std::set<QString>();
+  for(auto& face : library.get_faces()) {
+    families.insert(QString::fromStdString(face.m_names.m_typographic_family));
+  }
+  auto list = QStringList(families.begin(), families.end());
+  std::sort(list.begin(), list.end(), [] (const auto& left, const auto& right) {
+    return QString::compare(left, right, Qt::CaseInsensitive) < 0;
+  });
+  return list;
+}
+
+QStringList Rellu::list_font_styles(
+    const FontLibrary& library, const QString& family) {
+  auto styles = QStringList();
+  auto name = family.toStdString();
+  for(auto& face : library.get_faces()) {
+    if(face.m_names.m_typographic_family == name) {
+      auto style = QString::fromStdString(face.m_names.m_typographic_style);
+      if(!styles.contains(style)) {
+        styles.push_back(style);
+      }
+    }
+  }
+  return styles;
+}

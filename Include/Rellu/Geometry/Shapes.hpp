@@ -1,6 +1,7 @@
 #ifndef RELLU_GEOMETRY_SHAPES_HPP
 #define RELLU_GEOMETRY_SHAPES_HPP
 #include <span>
+#include <vector>
 #include "Rellu/Geometry/Equality.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Geometry/Point.hpp"
@@ -94,9 +95,20 @@ namespace Rellu {
   Path make_polygon(std::span<const Point> vertices, double corner_radius);
 
   /**
-   * Makes the regular polygon Adobe XD draws for a corner count, starting
-   * from a vertex at the top and running clockwise on screen, stretched so
-   * its vertices span the bounds.
+   * Returns the vertices of the regular polygon Adobe XD draws for a corner
+   * count: resting on a horizontal bottom edge, running clockwise on screen
+   * from the first vertex at or after the top, and stretched so that the
+   * vertices span the bounds.
+   * @param corner_count The number of vertices, at least 3; fewer produce no
+   *        vertices.
+   * @param bounds The rect the vertices span.
+   */
+  std::vector<Point> make_polygon_vertices(
+    int corner_count, const Rect& bounds);
+
+  /**
+   * Makes the regular polygon Adobe XD draws for a corner count, through the
+   * vertices of make_polygon_vertices.
    * @param corner_count The number of vertices, at least 3; fewer produce an
    *        empty Path.
    * @param bounds The rect the vertices span.

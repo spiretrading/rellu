@@ -1,6 +1,8 @@
 #ifndef RELLU_UI_LAYERS_PANEL_HPP
 #define RELLU_UI_LAYERS_PANEL_HPP
 #include <functional>
+#include <QLabel>
+#include <QToolButton>
 #include <QTreeView>
 #include <QWidget>
 #include "Rellu/Editor/Editor.hpp"
@@ -12,9 +14,12 @@
 namespace Rellu {
 
   /**
-   * Lists a document's layers as a tree and tracks the current layer. With
-   * an editor, the layers selected in the tree are the editor's selection,
-   * the current layer being its primary node.
+   * The Layers panel, listing a document's layers as Adobe XD does: the
+   * artboards while the current layer is not inside one, otherwise the
+   * layers of the artboard holding the current layer under a heading
+   * naming it. With an editor, the layers selected are the editor's
+   * selection, the current layer being its primary node, and layers are
+   * renamed in place.
    */
   class LayersPanel : public QWidget {
     public:
@@ -67,6 +72,22 @@ namespace Rellu {
       void set_current(const NodeId& id);
 
       /**
+       * Returns the artboard whose layers are listed, or nil while the
+       * artboards are listed.
+       */
+      const NodeId& get_scope() const;
+
+      /** Returns the heading above the layers listed. */
+      QString get_heading() const;
+
+      /**
+       * Starts renaming a layer in place.
+       * @param id The layer's id.
+       * @return <code>true</code> iff the layer can be renamed.
+       */
+      bool rename(const NodeId& id);
+
+      /**
        * Sets the function called whenever the current layer changes.
        * @param handler The function to call.
        */
@@ -82,9 +103,13 @@ namespace Rellu {
     private:
       LayersModel* m_model;
       QTreeView* m_view;
+      QToolButton* m_back;
+      QLabel* m_heading;
       Editor* m_editor;
       Subscription m_subscription;
+      Subscription m_document_subscription;
       NodeId m_current;
+      NodeId m_scope;
       bool m_is_synchronizing;
       CurrentHandler m_current_handler;
       CurrentHandler m_activation_handler;
@@ -92,6 +117,8 @@ namespace Rellu {
       void synchronize();
       void on_selection();
       void on_current(const QModelIndex& index);
+      void update_scope();
+      void show_artboards();
   };
 }
 

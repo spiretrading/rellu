@@ -7,6 +7,7 @@
 #include "Rellu/Commands/History.hpp"
 #include "Rellu/Editor/EditContext.hpp"
 #include "Rellu/Editor/Selection.hpp"
+#include "Rellu/Editor/TextSelection.hpp"
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/Subscription.hpp"
 
@@ -38,6 +39,9 @@ namespace Rellu {
 
       /** Returns the edit context. */
       auto& get_context(this auto& self);
+
+      /** Returns the text being edited in place. */
+      auto& get_text_selection(this auto& self);
 
       /**
        * Applies a command as a new step, then selects what it produces.
@@ -88,6 +92,7 @@ namespace Rellu {
       History m_history;
       Selection m_selection;
       EditContext m_context;
+      TextSelection m_text_selection;
       bool m_is_updating;
       Subscription m_subscription;
 
@@ -107,6 +112,10 @@ namespace Rellu {
 
   auto& Editor::get_context(this auto& self) {
     return self.m_context;
+  }
+
+  auto& Editor::get_text_selection(this auto& self) {
+    return self.m_text_selection;
   }
 }
 

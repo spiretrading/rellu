@@ -1,5 +1,6 @@
 #ifndef RELLU_TEXT_TEXT_LAYOUT_HPP
 #define RELLU_TEXT_TEXT_LAYOUT_HPP
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -68,6 +69,37 @@ namespace Rellu {
     Color m_color = Color(0, 0, 0, 1);
   };
 
+  /** A line of a text node laid out as by lay_out, with its caret positions. */
+  struct LineGeometry {
+
+    /** The index of the line's first UTF-16 code unit. */
+    std::size_t m_start = 0;
+
+    /**
+     * The index one past the line's last UTF-16 code unit, before any line
+     * separator ending it.
+     */
+    std::size_t m_end = 0;
+
+    /** Whether the line ends its paragraph. */
+    bool m_is_paragraph_end = false;
+
+    /** The y of the baseline in the node's local space. */
+    double m_baseline = 0;
+
+    /** The distance from the baseline to the top of the line. */
+    double m_ascent = 0;
+
+    /** The distance from the baseline to the bottom of the line. */
+    double m_descent = 0;
+
+    /**
+     * The x in the node's local space of the caret before each UTF-16 code
+     * unit from m_start through m_end.
+     */
+    std::vector<double> m_carets;
+  };
+
   /**
    * Applies a case conversion to text.
    * @param text The text to convert.
@@ -104,6 +136,15 @@ namespace Rellu {
    * @return The layout to store, the text's own if it has one.
    */
   StoredLayout store_layout(const Text& text, const FontLibrary& library);
+
+  /**
+   * Measures the lines of a text node laid out as by lay_out.
+   * @param text The text node's payload.
+   * @param library The fonts to resolve the text's fonts with.
+   * @return The lines in order, at least one.
+   */
+  std::vector<LineGeometry> measure_lines(
+    const Text& text, const FontLibrary& library);
 
   /**
    * Converts a TextLayout into filled regions, merging the glyphs and

@@ -79,6 +79,58 @@ TEST_SUITE("LayersPanel") {
     REQUIRE(model.rowCount() == 0);
   }
 
+  TEST_CASE("scope") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto panel = LayersPanel();
+    panel.set_editor(&editor);
+    auto& model = panel.get_model();
+    auto& view = panel.get_view();
+    REQUIRE(panel.get_scope().is_nil());
+    REQUIRE(panel.get_heading() == "ARTBOARDS");
+    REQUIRE(!view.rootIndex().isValid());
+    editor.get_selection().select(ids.m_artboard);
+    REQUIRE(panel.get_scope().is_nil());
+    editor.get_selection().select(ids.m_label);
+    REQUIRE(panel.get_scope() == ids.m_artboard);
+    REQUIRE(panel.get_heading() == "HOME");
+    REQUIRE(view.rootIndex() == model.find(ids.m_artboard));
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(ids.m_artboard).m_header;
+      header.m_name = "Start";
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    REQUIRE(panel.get_heading() == "START");
+    editor.get_selection().select(ids.m_loose);
+    REQUIRE(panel.get_scope().is_nil());
+    REQUIRE(panel.get_heading() == "ARTBOARDS");
+    REQUIRE(!view.rootIndex().isValid());
+  }
+
+  TEST_CASE("rename") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto panel = LayersPanel();
+    auto& model = panel.get_model();
+    REQUIRE(!model.flags(model.find(ids.m_card)).testFlag(
+      Qt::ItemIsEditable));
+    REQUIRE(!panel.rename(ids.m_card));
+    panel.set_editor(&editor);
+    auto index = model.find(ids.m_card);
+    REQUIRE(model.flags(index).testFlag(Qt::ItemIsEditable));
+    REQUIRE(!model.flags(model.find(ids.m_card, LayersModel::LOCK)).testFlag(
+      Qt::ItemIsEditable));
+    REQUIRE(model.setData(index, QString("Panel"), Qt::EditRole));
+    REQUIRE(document.get(ids.m_card).m_header.m_name == "Panel");
+    REQUIRE(editor.get_history().get_undo_label() == "Rename");
+    REQUIRE(!model.setData(index, QString(" "), Qt::EditRole));
+    REQUIRE(document.get(ids.m_card).m_header.m_name == "Panel");
+  }
+
   TEST_CASE("tree_selection") {
     auto document = Document();
     auto ids = build_test_document(document);

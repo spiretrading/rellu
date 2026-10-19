@@ -124,6 +124,9 @@ const std::optional<Matrix>& SceneBuilder::get_device_transform() const {
 
 void SceneBuilder::set_device_transform(
     const std::optional<Matrix>& transform) {
+  if(transform != m_device_transform) {
+    clear_retained();
+  }
   m_device_transform = transform;
 }
 

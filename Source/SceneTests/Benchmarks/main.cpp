@@ -32,6 +32,7 @@ using namespace Rellu;
 namespace {
   constexpr auto FIT_MARGIN = 24.0;
   constexpr auto MAXIMUM_FRAMES = 2000;
+  constexpr auto DRAG_FRAMES = 60;
 
   struct Options {
     std::vector<std::filesystem::path> m_paths;
@@ -155,6 +156,106 @@ namespace {
     transaction.commit();
   }
 
+  std::size_t count_nodes(const Document& document, const NodeId& id) {
+    auto count = std::size_t(1);
+    for(auto& child : document.get(id).m_children) {
+      count += count_nodes(document, child);
+    }
+    return count;
+  }
+
+  std::optional<NodeId> find_deep_shape(
+      const Document& document, const NodeId& id, int depth) {
+    auto node = document.find(id);
+    if(!node || depth > 64 || !node->m_header.m_is_visible ||
+        node->get_reference()) {
+      return std::nullopt;
+    }
+    if(node->get_shape()) {
+      return id;
+    }
+    auto children = std::vector<std::pair<std::size_t, NodeId>>();
+    for(auto& child : node->m_children) {
+      children.emplace_back(count_nodes(document, child), child);
+    }
+    std::stable_sort(children.begin(), children.end(),
+      [] (const auto& left, const auto& right) {
+        return left.first > right.first;
+      });
+    for(auto& child : children) {
+      if(auto shape = find_deep_shape(document, child.second, depth + 1)) {
+        return shape;
+      }
+    }
+    return std::nullopt;
+  }
+
+  void drag(Document& document, Scene& scene, const NodeId& id,
+      const char* name) {
+    auto header = document.get(id).m_header;
+    auto times = std::vector<double>();
+    auto areas = std::vector<double>();
+    for(auto i = 0; i != DRAG_FRAMES; ++i) {
+      header.m_transform = make_translation(3, 2) * header.m_transform;
+      auto transaction = Transaction(document);
+      transaction.replace_header(header);
+      if(i == 0) {
+        transaction.commit();
+      } else {
+        transaction.amend();
+      }
+      auto start = Clock::now();
+      auto damage = scene.update();
+      times.push_back(to_milliseconds(Clock::now() - start));
+      auto area = 0.0;
+      for(auto& region : damage) {
+        area += region.m_bounds.m_width * region.m_bounds.m_height;
+      }
+      areas.push_back(area);
+    }
+    document.undo();
+    scene.update();
+    std::printf("    drag %s (%zu nodes): frame median %.2f ms, max %.2f ms, "
+      "damage median %.0f square units\n", name, count_nodes(document, id),
+      get_median(times), get_maximum(times), get_median(areas));
+  }
+
+  void drag(Document& document, Scene& scene) {
+    auto& canvas = document.get_canvas();
+    auto largest = NodeId();
+    auto largest_size = std::size_t(0);
+    for(auto& id : canvas) {
+      if(auto size = count_nodes(document, id); size > largest_size) {
+        largest = id;
+        largest_size = size;
+      }
+    }
+    auto shape = find_deep_shape(document, largest, 0);
+    if(!shape) {
+      return;
+    }
+    auto builder = SceneBuilder(document, scene.get_tolerance());
+    builder.build(largest);
+    auto start = Clock::now();
+    auto list = builder.build(largest);
+    std::printf("  largest top-level node (%zu nodes, %zu commands): full "
+      "rebuild %.2f ms; %zu draw lists in the scene\n", largest_size,
+      list.size(), to_milliseconds(Clock::now() - start),
+      scene.get_drawing()->get_lists().size());
+    drag(document, scene, *shape, "a shape in it");
+    auto child = NodeId();
+    auto child_size = std::size_t(0);
+    for(auto& id : document.get(largest).m_children) {
+      if(auto size = count_nodes(document, id); size > child_size) {
+        child = id;
+        child_size = size;
+      }
+    }
+    if(!child.is_nil() && child != *shape) {
+      drag(document, scene, child, "its largest child");
+    }
+  }
+
   Matrix make_view(Point center, double zoom, QSize size) {
     return make_translation(size.width() / 2.0 - zoom * center.m_x,
       size.height() / 2.0 - zoom * center.m_y) * make_scale(zoom, zoom);
@@ -268,6 +369,7 @@ namespace {
       edit(document, *shape);
       scene.update();
     }
+    drag(document, scene);
     auto& drawing = *scene.get_drawing();
     auto bounds = drawing.get_bounds();
     if(bounds.is_empty()) {

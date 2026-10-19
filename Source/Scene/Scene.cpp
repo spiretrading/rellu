@@ -76,13 +76,16 @@ void Scene::on_change(const ChangeSet& changes) {
   for(auto& id : changes.m_removed) {
     m_removed.push_back(id);
     mark_dependents(id);
+    m_builder.invalidate(id);
   }
   for(auto& id : changes.m_images) {
     mark_dependents(id);
+    m_builder.invalidate(id);
   }
 }
 
 void Scene::mark(const NodeId& id) {
+  m_builder.invalidate(id);
   mark_dependents(id);
   auto node = m_document->find(id);
   if(!node) {
@@ -150,39 +153,42 @@ std::vector<DrawRegion> Scene::update(
     }
     for(auto& id : canvas) {
       if(!m_fragments.contains(id)) {
-        m_fragments.emplace(
-          id, Fragment(nullptr, SceneDependencies(), true));
+        m_fragments.emplace(id, Fragment(
+          std::vector<std::shared_ptr<const DrawList>>(), SceneDependencies(),
+          true));
       }
     }
   }
   auto dirty = std::vector<std::pair<int, NodeId>>();
-  auto indices = std::unordered_map<const DrawList*, std::size_t>();
-  if(region) {
+  for(auto& id : canvas) {
+    if(m_fragments.at(id).m_is_dirty) {
+      dirty.emplace_back(0, id);
+    }
+  }
+  if(region && dirty.size() > 1) {
+    auto indices = std::unordered_map<const DrawList*, std::size_t>();
     auto& lists = m_drawing->get_lists();
     for(auto i = std::size_t(0); i != lists.size(); ++i) {
       indices.emplace(lists[i].get(), i);
     }
-  }
-  for(auto& id : canvas) {
-    auto& fragment = m_fragments.at(id);
-    if(!fragment.m_is_dirty) {
-      continue;
-    }
-    auto priority = 0;
-    if(region && fragment.m_list) {
-      auto index = indices.find(fragment.m_list.get());
-      if(index != indices.end() &&
-          !m_drawing->get_region(index->second).m_bounds.intersects(
-            *region)) {
-        priority = 1;
+    for(auto& entry : dirty) {
+      auto& fragment = m_fragments.at(entry.second);
+      entry.first = fragment.m_lists.empty() ? 0 : 1;
+      for(auto& list : fragment.m_lists) {
+        auto index = indices.find(list.get());
+        if(index == indices.end() ||
+            m_drawing->get_region(index->second).m_bounds.intersects(
+              *region)) {
+          entry.first = 0;
+          break;
+        }
       }
     }
-    dirty.emplace_back(priority, id);
+    std::stable_sort(dirty.begin(), dirty.end(),
+      [] (const auto& left, const auto& right) {
+        return left.first < right.first;
+      });
   }
-  std::stable_sort(dirty.begin(), dirty.end(),
-    [] (const auto& left, const auto& right) {
-      return left.first < right.first;
-    });
   auto start = std::chrono::steady_clock::now();
   auto count = std::size_t(0);
   for(auto& entry : dirty) {
@@ -192,8 +198,7 @@ std::vector<DrawRegion> Scene::update(
     auto& id = entry.second;
     auto& fragment = m_fragments.at(id);
     forget(id, fragment);
-    fragment.m_list = std::make_shared<const DrawList>(
-      m_builder.build(id, fragment.m_dependencies));
+    fragment.m_lists = m_builder.build_lists(id, fragment.m_dependencies);
     fragment.m_is_dirty = false;
     for(auto& key : fragment.m_dependencies.m_keys) {
       m_dependents[key].insert(id);
@@ -205,11 +210,10 @@ std::vector<DrawRegion> Scene::update(
     return {};
   }
   auto lists = std::vector<std::shared_ptr<const DrawList>>();
-  lists.reserve(canvas.size());
+  lists.reserve(m_drawing->get_lists().size() + count);
   for(auto& id : canvas) {
-    if(auto& list = m_fragments.at(id).m_list) {
-      lists.push_back(list);
-    }
+    auto& fragment = m_fragments.at(id).m_lists;
+    lists.insert(lists.end(), fragment.begin(), fragment.end());
   }
   m_canvas = canvas;
   return m_drawing->set_lists(std::move(lists));

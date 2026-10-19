@@ -8,6 +8,7 @@
 #include <QString>
 #include <QStringList>
 #include "Rellu/Commands/Bounds.hpp"
+#include "Rellu/Geometry/BlendMode.hpp"
 #include "Rellu/Geometry/Color.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
@@ -56,12 +57,20 @@ namespace Rellu {
 
     /** Whether the value differs among the nodes described. */
     bool m_is_mixed = false;
+
+    /**
+     * Whether the value is shown without being editable, as the size of
+     * text that sizes itself is.
+     */
+    bool m_is_read_only = false;
   };
 
   /**
-   * Describes the properties of a node, grouped into top-level sections. A
-   * reference is described by what it displays, along with a section
-   * describing the reference itself.
+   * Describes the properties of a node the way Adobe XD's property inspector
+   * shows them, grouped into top-level sections in XD's order: align,
+   * boolean, component, transform, layout, text, appearance, geometry,
+   * fill, stroke, grid, effects and export, each present only for the kinds
+   * of node XD shows it for. A reference is described by what it displays.
    * @param document The document containing the node.
    * @param id The node's id.
    * @param measurer The function measuring text.
@@ -113,6 +122,15 @@ namespace Rellu {
    * @param value The value to format.
    */
   QString to_text(const PropertyValue& value);
+
+  /**
+   * Returns the blend mode chosen among the options of a blend mode
+   * property, Pass Through choosing BlendMode::NORMAL.
+   * @param choice The choice.
+   * @return The blend mode, or <code>std::nullopt</code> if the choice
+   *         names none.
+   */
+  std::optional<BlendMode> get_blend_mode(const Choice& choice);
 }
 
 #endif

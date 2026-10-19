@@ -21,7 +21,10 @@ namespace Rellu {
     /** The header's lock. */
     LOCK = 1 << 2,
 
-    /** The header's transform, or a reference's transform override. */
+    /**
+     * The header's transform or 3D transform, or a reference's transform
+     * override.
+     */
     TRANSFORM = 1 << 3,
 
     /** The header's opacity. */

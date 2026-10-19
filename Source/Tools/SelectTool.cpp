@@ -3,9 +3,11 @@
 #include <numbers>
 #include <unordered_set>
 #include <variant>
+#include "Rellu/Commands/CornerRadiusCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Tools/SelectTool.hpp"
+#include "Rellu/Tools/TextTool.hpp"
 
 using namespace Rellu;
 
@@ -133,6 +135,39 @@ namespace {
   double get_angle(Point from, Point to) {
     return std::atan2(to.m_y - from.m_y, to.m_x - from.m_x);
   }
+
+  double get_corner_radius(const CornerRadii& radii, std::size_t corner) {
+    if(corner == 0) {
+      return radii.m_top_left;
+    } else if(corner == 1) {
+      return radii.m_top_right;
+    } else if(corner == 2) {
+      return radii.m_bottom_right;
+    }
+    return radii.m_bottom_left;
+  }
+
+  Point get_corner_point(const Rect& rect, std::size_t corner) {
+    if(corner == 0) {
+      return rect.get_top_left();
+    } else if(corner == 1) {
+      return Point(rect.get_right(), rect.get_top());
+    } else if(corner == 2) {
+      return rect.get_bottom_right();
+    }
+    return Point(rect.get_left(), rect.get_bottom());
+  }
+
+  Point get_inward(std::size_t corner) {
+    if(corner == 0) {
+      return Point(1, 1);
+    } else if(corner == 1) {
+      return Point(-1, 1);
+    } else if(corner == 2) {
+      return Point(-1, -1);
+    }
+    return Point(1, -1);
+  }
 }
 
 SelectTool::SelectTool()
@@ -149,7 +184,10 @@ SelectTool::SelectTool()
     m_raw_angle(0),
     m_is_applied(false),
     m_marquee(0, 0, 0, 0),
-    m_nudge_key(0) {}
+    m_nudge_key(0),
+    m_corner(0),
+    m_radius(0),
+    m_inset(0) {}
 
 void SelectTool::press(ToolContext& context, const PointerEvent& event) {
   if(event.m_button != Qt::LeftButton) {
@@ -190,6 +228,16 @@ void SelectTool::press(ToolContext& context, const PointerEvent& event) {
       }
       editor.get_history().seal();
       context.get_snap_service().begin(m_nodes);
+      return;
+    }
+    if(auto corner = find_radius_handle(context, m_press)) {
+      m_radius_handles = get_radius_handles(context);
+      m_corner = *corner;
+      m_radius = get_corner_radius(m_radius_handles->m_radii, m_corner);
+      m_inset = get_inset(context, m_press);
+      m_gesture = Gesture::RADIUS;
+      m_cursor = get_cursor();
+      editor.get_history().seal();
       return;
     }
   }
@@ -292,6 +340,8 @@ void SelectTool::move(ToolContext& context, const PointerEvent& event) {
     update_rotate(context, event);
   } else if(m_gesture == Gesture::MARQUEE) {
     update_marquee(context, event);
+  } else if(m_gesture == Gesture::RADIUS) {
+    update_radius(context, event);
   }
 }
 
@@ -322,6 +372,14 @@ void SelectTool::double_click(
   auto& edit = editor.get_context();
   auto target = edit.resolve(hit);
   auto node = document.find(target);
+  if(node && node->get_text()) {
+    editor.get_selection().select(target);
+    auto caret = find_text_caret(
+      context, target, event.m_position, get_default_font_library());
+    editor.get_text_selection().set(target, caret, caret);
+    context.request_tool("text");
+    return;
+  }
   if(!node || !is_enterable(*node) || target == hit) {
     return;
   }
@@ -404,7 +462,8 @@ bool SelectTool::key_release(ToolContext& context, const KeyEvent& event) {
 void SelectTool::cancel(ToolContext& context) {
   auto& editor = context.get_editor();
   if((m_gesture == Gesture::MOVE || m_gesture == Gesture::RESIZE ||
-      m_gesture == Gesture::ROTATE) && m_is_applied) {
+      m_gesture == Gesture::ROTATE || m_gesture == Gesture::RADIUS) &&
+      m_is_applied) {
     editor.undo();
   } else if(m_gesture == Gesture::MARQUEE) {
     editor.get_selection().select(m_base);
@@ -460,6 +519,21 @@ void SelectTool::draw(
   if(box) {
     draw_box(context, *box, overlay, m_gesture != Gesture::MOVE &&
       !get_movable(context).empty());
+  }
+  if(!is_dragging && m_gesture != Gesture::MARQUEE) {
+    if(auto handles = get_radius_handles(context)) {
+      for(auto& point : handles->m_points) {
+        auto shape = OverlayShape();
+        shape.m_center = point;
+        shape.m_size =
+          Size(2 * RADIUS_HANDLE_RADIUS, 2 * RADIUS_HANDLE_RADIUS);
+        shape.m_radius = RADIUS_HANDLE_RADIUS;
+        shape.m_fill = HANDLE_FILL;
+        shape.m_stroke = SELECTION_COLOR;
+        shape.m_stroke_width = LINE_WIDTH;
+        overlay.m_shapes.push_back(shape);
+      }
+    }
   }
   if(m_gesture == Gesture::MARQUEE) {
     auto corners = std::array<Point, 4>({m_marquee.get_top_left(),
@@ -572,6 +646,66 @@ std::optional<SelectTool::Grab> SelectTool::find_grab(
     }
   }
   return std::nullopt;
+}
+
+std::optional<SelectTool::RadiusHandles> SelectTool::get_radius_handles(
+    const ToolContext& context) const {
+  auto& document = context.get_document();
+  auto& nodes = context.get_editor().get_selection().get_nodes();
+  if(nodes.size() != 1 || get_movable(context).size() != 1) {
+    return std::nullopt;
+  }
+  auto node = document.find(nodes.front());
+  auto shape = node ? node->get_shape() : nullptr;
+  auto rectangle =
+    shape ? std::get_if<RectangleShape>(&shape->m_geometry) : nullptr;
+  if(!rectangle) {
+    return std::nullopt;
+  }
+  auto& rect = rectangle->m_bounds;
+  auto transform = get_world_transform(document, node->get_id());
+  auto& view = context.get_view();
+  auto scale = std::sqrt(std::abs((view * transform).get_determinant()));
+  if(!(rect.m_width * scale >= RADIUS_HANDLE_SIDE) ||
+      !(rect.m_height * scale >= RADIUS_HANDLE_SIDE)) {
+    return std::nullopt;
+  }
+  auto handles = RadiusHandles(node->get_id(), rect, transform,
+    clamp_corner_radii(rectangle->m_radii, rect.get_size()),
+    std::min(rect.m_width, rect.m_height) / 2, std::array<Point, 4>());
+  auto minimum = RADIUS_HANDLE_INSET / scale;
+  for(auto i = std::size_t(0); i != handles.m_points.size(); ++i) {
+    auto inset = std::min(std::max(get_corner_radius(handles.m_radii, i),
+      minimum), handles.m_limit);
+    handles.m_points[i] = context.to_view(transform.map(
+      get_corner_point(rect, i) + get_inward(i) * inset));
+  }
+  return handles;
+}
+
+std::optional<std::size_t> SelectTool::find_radius_handle(
+    const ToolContext& context, Point position) const {
+  auto handles = get_radius_handles(context);
+  if(!handles) {
+    return std::nullopt;
+  }
+  for(auto i = std::size_t(0); i != handles->m_points.size(); ++i) {
+    if(distance(handles->m_points[i], position) <= HANDLE_REACH) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
+double SelectTool::get_inset(const ToolContext& context, Point position) const {
+  auto inverse = invert(m_radius_handles->m_transform);
+  if(!inverse) {
+    return 0;
+  }
+  auto offset = inverse->map(context.to_document(position)) -
+    get_corner_point(m_radius_handles->m_rect, m_corner);
+  auto inward = get_inward(m_corner);
+  return (offset.m_x * inward.m_x + offset.m_y * inward.m_y) / 2;
 }
 
 NodeId SelectTool::resolve_target(ToolContext& context, const NodeId& hit,
@@ -701,6 +835,22 @@ void SelectTool::update_rotate(
   m_is_applied = true;
 }
 
+void SelectTool::update_radius(
+    ToolContext& context, const PointerEvent& event) {
+  auto radius = std::clamp(
+    std::round(m_radius + get_inset(context, event.m_position) - m_inset),
+    0.0, m_radius_handles->m_limit);
+  auto nodes = std::vector{m_radius_handles->m_id};
+  if(is_alt(event.m_modifiers)) {
+    context.get_editor().merge(std::make_unique<SetCornerRadiusCommand>(
+      std::move(nodes), static_cast<Corner>(m_corner), radius));
+  } else {
+    context.get_editor().merge(
+      std::make_unique<SetCornerRadiusCommand>(std::move(nodes), radius));
+  }
+  m_is_applied = true;
+}
+
 void SelectTool::update_marquee(
     ToolContext& context, const PointerEvent& event) {
   auto& document = context.get_document();
@@ -759,8 +909,11 @@ void SelectTool::finish(ToolContext& context) {
       m_gesture == Gesture::ROTATE) {
     context.get_editor().get_history().seal();
     context.get_snap_service().end();
+  } else if(m_gesture == Gesture::RADIUS) {
+    context.get_editor().get_history().seal();
   }
   m_gesture = Gesture::NONE;
+  m_radius_handles = std::nullopt;
   m_is_marquee_pending = false;
   m_marquee = Rect(0, 0, 0, 0);
   m_nodes.clear();

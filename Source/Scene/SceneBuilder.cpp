@@ -1,7 +1,10 @@
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <optional>
+#include <unordered_set>
+#include <utility>
 #include <variant>
 #include "Rellu/Geometry/BooleanOperation.hpp"
 #include "Rellu/Geometry/Shapes.hpp"
@@ -16,6 +19,35 @@ using namespace Rellu;
 namespace {
   constexpr auto MAXIMUM_DEPTH = 256;
   constexpr auto TOLERANCE_MARGIN = 1e-9;
+  constexpr auto SEGMENT_SIZE = std::size_t(256);
+  constexpr auto POPULATION = 2 * SEGMENT_SIZE;
+
+  SceneDependencies make_dependencies() {
+    return SceneDependencies(
+      std::vector<NodeId>(), 0, std::numeric_limits<double>::infinity());
+  }
+
+  void normalize(SceneDependencies& dependencies) {
+    auto& keys = dependencies.m_keys;
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+  }
+
+  void merge(SceneDependencies& target, const SceneDependencies& source) {
+    target.m_keys.insert(
+      target.m_keys.end(), source.m_keys.begin(), source.m_keys.end());
+    target.m_minimum_tolerance =
+      std::max(target.m_minimum_tolerance, source.m_minimum_tolerance);
+    target.m_maximum_tolerance =
+      std::min(target.m_maximum_tolerance, source.m_maximum_tolerance);
+  }
+
+  bool is_reusable(const SceneDependencies& dependencies, double built,
+      double tolerance) {
+    return tolerance == built ||
+      (tolerance >= dependencies.m_minimum_tolerance &&
+        tolerance <= dependencies.m_maximum_tolerance);
+  }
 
   double get_scale(const Matrix& matrix) {
     auto sum = (matrix.m_a * matrix.m_a + matrix.m_b * matrix.m_b +
@@ -220,6 +252,57 @@ namespace {
     }
     return std::nullopt;
   }
+
+  bool is_populous(const Document& document, const NodeId& id) {
+    auto count = std::size_t(0);
+    auto pending = std::vector<const NodeId*>(1, &id);
+    while(!pending.empty()) {
+      auto node = document.find(*pending.back());
+      pending.pop_back();
+      if(!node) {
+        continue;
+      }
+      if(++count >= POPULATION) {
+        return true;
+      }
+      for(auto& child : node->m_children) {
+        pending.push_back(&child);
+      }
+    }
+    return false;
+  }
+
+  bool is_spanning(const auto& segments, std::size_t count) {
+    if(segments.empty()) {
+      return count == 0;
+    }
+    return segments.back().m_end == count;
+  }
+
+  bool is_blending(const std::vector<std::shared_ptr<const DrawList>>& lists) {
+    return std::any_of(lists.begin(), lists.end(), [] (const auto& list) {
+      return std::any_of(list->begin(), list->end(), [] (const auto& command) {
+        if(auto layer = std::get_if<BeginLayerCommand>(&command)) {
+          return layer->m_blend_mode != BlendMode::NORMAL;
+        }
+        return std::holds_alternative<BackdropBlurCommand>(command);
+      });
+    });
+  }
+
+  bool is_exposed(const Node& source, const auto& placement, bool is_masked,
+      const std::vector<std::shared_ptr<const DrawList>>& lists) {
+    if(auto group = source.get_group()) {
+      if(get_viewport(*group) && (placement.m_projection ||
+          !is_axis_aligned(placement.m_transform))) {
+        return false;
+      }
+    }
+    auto& header = source.m_header;
+    return !is_masked && header.m_blend_mode == BlendMode::NORMAL &&
+      std::clamp(header.m_opacity, 0.0, 1.0) >= 1 &&
+      !(header.m_is_isolated && is_blending(lists));
+  }
 }
 
 SceneBuilder::SceneBuilder(const Document& document, double tolerance)
@@ -227,7 +310,8 @@ SceneBuilder::SceneBuilder(const Document& document, double tolerance)
     m_tolerance(tolerance),
     m_generation(0),
     m_paints(document),
-    m_dependencies(nullptr) {}
+    m_dependencies(nullptr),
+    m_is_retaining(false) {}
 
 double SceneBuilder::get_tolerance() const {
   return m_tolerance;
@@ -271,7 +355,7 @@ DrawList SceneBuilder::build(
   dependencies.m_minimum_tolerance = 0;
   dependencies.m_maximum_tolerance = std::numeric_limits<double>::infinity();
   m_dependencies = &dependencies;
-  m_sources.clear();
+  m_roots.clear();
   auto list = DrawList();
   try {
     list = build(id);
@@ -286,11 +370,65 @@ DrawList SceneBuilder::build(
   return list;
 }
 
+std::vector<std::shared_ptr<const DrawList>> SceneBuilder::build_lists(
+    const NodeId& id, SceneDependencies& dependencies) {
+  ++m_generation;
+  dependencies = make_dependencies();
+  m_dependencies = &dependencies;
+  m_roots.clear();
+  m_is_retaining = true;
+  auto segment = Segment(0, 1, true, false);
+  try {
+    if(auto node = m_document->find(id)) {
+      if(auto placement = get_placement(node->m_parent, 0)) {
+        retain(id, *placement, 0, segment);
+      }
+    }
+  } catch(...) {
+    clear_retained();
+    m_dependencies = nullptr;
+    m_is_retaining = false;
+    throw;
+  }
+  m_dependencies = nullptr;
+  m_is_retaining = false;
+  merge(dependencies, segment.m_dependencies);
+  normalize(dependencies);
+  return std::move(segment.m_lists);
+}
+
+void SceneBuilder::invalidate(const NodeId& id) {
+  if(m_subtrees.empty()) {
+    return;
+  }
+  invalidate_dependents(id);
+  auto node = m_document->find(id);
+  if(!node) {
+    return;
+  }
+  forget(id);
+  mark_ancestors(*node);
+  auto root = node;
+  for(auto depth = 0; depth != MAXIMUM_DEPTH && !root->m_parent.is_nil();
+      ++depth) {
+    auto parent = m_document->find(root->m_parent);
+    if(!parent) {
+      break;
+    }
+    root = parent;
+  }
+  if(root != node) {
+    invalidate_dependents(root->get_id());
+  }
+}
+
 void SceneBuilder::discard(const NodeId& id) {
   m_outlines.erase(id);
   m_backgrounds.erase(id);
   m_masks.erase(id);
   m_texts.erase(id);
+  m_large.erase(id);
+  forget(id);
 }
 
 std::optional<SceneBuilder::Entry> SceneBuilder::enter(
@@ -371,21 +509,17 @@ void SceneBuilder::add_node(const NodeId& id, const Placement& parent,
   if(!node) {
     return;
   }
-  auto entry = enter(*node, parent);
-  if(!entry) {
-    return;
+  if(auto entry = enter(*node, parent)) {
+    add_entry(*node, *entry, depth, list);
   }
-  auto& source = *entry->m_source;
-  auto placement = entry->m_placement;
+}
+
+void SceneBuilder::add_entry(
+    const Node& node, const Entry& entry, int depth, DrawList& list) {
+  auto& source = *entry.m_source;
+  auto placement = entry.m_placement;
   auto first = list.size();
-  auto mask = std::optional<LayerMask>();
-  if(auto group = source.get_group(); group && group->m_mask) {
-    if(placement.m_projection) {
-      mask = get_mask(*group->m_mask, placement);
-    } else {
-      mask = get_mask(source, placement.m_transform, placement.m_clip);
-    }
-  }
+  auto mask = get_group_mask(source, placement);
   if(source.get_artboard()) {
     add_artboard(source, placement, list);
   } else if(source.get_shape()) {
@@ -397,10 +531,31 @@ void SceneBuilder::add_node(const NodeId& id, const Placement& parent,
     project(list, first, *placement.m_projection);
   }
   if(!source.get_shape() && !source.get_text()) {
-    for(auto& child : *entry->m_children) {
+    for(auto& child : *entry.m_children) {
       add_node(child, placement, depth + 1, list);
     }
+    if(m_is_retaining && list.size() - first >= SEGMENT_SIZE) {
+      m_large.insert(node.get_id());
+    }
   }
+  add_composites(source, placement, entry.m_placement.m_clip,
+    std::move(mask), first, list);
+}
+
+std::optional<LayerMask> SceneBuilder::get_group_mask(
+    const Node& source, Placement& placement) {
+  auto group = source.get_group();
+  if(!group || !group->m_mask) {
+    return std::nullopt;
+  } else if(placement.m_projection) {
+    return get_mask(*group->m_mask, placement);
+  }
+  return get_mask(source, placement.m_transform, placement.m_clip);
+}
+
+void SceneBuilder::add_composites(const Node& source,
+    const Placement& placement, const std::optional<Rect>& clip,
+    std::optional<LayerMask> mask, std::size_t first, DrawList& list) {
   if(auto group = source.get_group()) {
     if(auto viewport = get_viewport(*group); viewport &&
         placement.m_projection) {
@@ -413,8 +568,259 @@ void SceneBuilder::add_node(const NodeId& id, const Placement& parent,
         placement.m_transform), placement.m_clip);
     }
   }
-  add_composite(list, first, source.m_header, std::move(mask),
-    entry->m_placement.m_clip);
+  add_composite(list, first, source.m_header, std::move(mask), clip);
+}
+
+void SceneBuilder::retain(const NodeId& id, const Placement& parent,
+    int depth, Segment& segment) {
+  if(auto subtree = m_subtrees.find(id); subtree != m_subtrees.end()) {
+    auto& tree = subtree->second;
+    if(tree.m_parent != parent || tree.m_depth != depth) {
+      forget(id);
+    } else if(!tree.m_is_stale &&
+        is_reusable(tree.m_total, tree.m_tolerance, m_tolerance)) {
+      segment.m_lists = tree.m_lists;
+      segment.m_size = tree.m_size;
+      segment.m_dependencies = tree.m_total;
+      segment.m_tolerance = tree.m_tolerance;
+      return;
+    }
+  }
+  auto own = make_dependencies();
+  auto outer = std::exchange(m_dependencies, &own);
+  auto node = static_cast<const Node*>(nullptr);
+  if(depth <= MAXIMUM_DEPTH) {
+    node = m_document->find(id);
+  }
+  auto entry = std::optional<Entry>();
+  if(node) {
+    entry = enter(*node, parent);
+  }
+  if(!entry || entry->m_source->get_shape() || entry->m_source->get_text()) {
+    forget(id);
+    auto list = DrawList();
+    if(entry) {
+      add_entry(*node, *entry, depth, list);
+    }
+    segment.m_size = list.size();
+    segment.m_lists.clear();
+    if(!list.empty()) {
+      segment.m_lists.push_back(
+        std::make_shared<const DrawList>(std::move(list)));
+    }
+    normalize(own);
+    segment.m_dependencies = std::move(own);
+    segment.m_tolerance = m_tolerance;
+    m_dependencies = outer;
+    return;
+  }
+  auto& source = *entry->m_source;
+  auto placement = entry->m_placement;
+  auto mask = get_group_mask(source, placement);
+  auto& children = *entry->m_children;
+  auto is_own = entry->m_children == &node->m_children;
+  auto [subtree, is_fresh] = m_subtrees.try_emplace(id);
+  auto& tree = subtree->second;
+  if(is_fresh || !is_spanning(tree.m_segments, children.size())) {
+    tree.m_parent = parent;
+    tree.m_depth = depth;
+    tree.m_segments.clear();
+    add_segments(source, children, is_own, 0, children.size(), SEGMENT_SIZE,
+      placement, depth, tree.m_segments);
+  } else {
+    auto segments = std::vector<Segment>();
+    segments.reserve(tree.m_segments.size());
+    for(auto& previous : tree.m_segments) {
+      if(!previous.m_is_stale && is_reusable(
+          previous.m_dependencies, previous.m_tolerance, m_tolerance)) {
+        segments.push_back(std::move(previous));
+      } else if(previous.m_is_retained) {
+        auto& refreshed = segments.emplace_back(previous.m_begin,
+          previous.m_end, true, false);
+        retain(children[previous.m_begin], placement, depth + 1, refreshed);
+      } else {
+        add_segments(source, children, is_own, previous.m_begin,
+          previous.m_end, 2 * SEGMENT_SIZE, placement, depth, segments);
+      }
+    }
+    tree.m_segments = std::move(segments);
+  }
+  auto lists = std::vector<std::shared_ptr<const DrawList>>();
+  auto total = own;
+  auto size = std::size_t(0);
+  for(auto& part : tree.m_segments) {
+    lists.insert(lists.end(), part.m_lists.begin(), part.m_lists.end());
+    size += part.m_size;
+    merge(total, part.m_dependencies);
+  }
+  normalize(total);
+  if(!is_exposed(source, placement, static_cast<bool>(mask), lists)) {
+    auto list = DrawList();
+    list.reserve(size + 4);
+    for(auto& part : lists) {
+      list.insert(list.end(), part->begin(), part->end());
+    }
+    add_composites(source, placement, entry->m_placement.m_clip,
+      std::move(mask), 0, list);
+    lists.clear();
+    if(!list.empty()) {
+      lists.push_back(std::make_shared<const DrawList>(std::move(list)));
+    }
+  }
+  for(auto& key : tree.m_total.m_keys) {
+    if(auto dependents = m_dependents.find(key);
+        dependents != m_dependents.end()) {
+      dependents->second.erase(id);
+      if(dependents->second.empty()) {
+        m_dependents.erase(dependents);
+      }
+    }
+  }
+  for(auto& key : total.m_keys) {
+    m_dependents[key].insert(id);
+  }
+  normalize(own);
+  tree.m_dependencies = std::move(own);
+  tree.m_total = std::move(total);
+  tree.m_lists = std::move(lists);
+  tree.m_size = size;
+  tree.m_is_stale = false;
+  tree.m_tolerance = m_tolerance;
+  segment.m_lists = tree.m_lists;
+  segment.m_size = tree.m_size;
+  segment.m_dependencies = tree.m_total;
+  segment.m_tolerance = m_tolerance;
+  m_dependencies = outer;
+}
+
+void SceneBuilder::add_segments(const Node& source,
+    const std::vector<NodeId>& children, bool is_own, std::size_t begin,
+    std::size_t end, std::size_t limit, const Placement& placement, int depth,
+    std::vector<Segment>& segments) {
+  auto run = Segment(begin, begin, false, false);
+  run.m_dependencies = make_dependencies();
+  auto list = DrawList();
+  auto outer = std::exchange(m_dependencies, &run.m_dependencies);
+  auto flush = [&] (std::size_t position) {
+    if(position != run.m_begin || !list.empty()) {
+      run.m_end = position;
+      run.m_size = list.size();
+      if(!list.empty()) {
+        run.m_lists.push_back(
+          std::make_shared<const DrawList>(std::move(list)));
+        list = DrawList();
+      }
+      normalize(run.m_dependencies);
+      run.m_tolerance = m_tolerance;
+      segments.push_back(std::move(run));
+    }
+    run = Segment(position, position, false, false);
+    run.m_dependencies = make_dependencies();
+    m_dependencies = &run.m_dependencies;
+  };
+  if(begin == 0 && source.get_artboard()) {
+    add_artboard(source, placement, list);
+  }
+  for(auto i = begin; i != end; ++i) {
+    auto& child = children[i];
+    if(is_own && (m_subtrees.contains(child) || m_large.contains(child) ||
+        is_populous(*m_document, child))) {
+      flush(i);
+      auto& retained = segments.emplace_back(i, i + 1, true, false);
+      retain(child, placement, depth + 1, retained);
+      run.m_begin = i + 1;
+      run.m_end = i + 1;
+    } else {
+      add_node(child, placement, depth + 1, list);
+      if(list.size() >= limit) {
+        flush(i + 1);
+      }
+    }
+  }
+  flush(end);
+  m_dependencies = outer;
+}
+
+void SceneBuilder::forget(const NodeId& id) {
+  auto subtree = m_subtrees.find(id);
+  if(subtree == m_subtrees.end()) {
+    return;
+  }
+  for(auto& key : subtree->second.m_total.m_keys) {
+    if(auto dependents = m_dependents.find(key);
+        dependents != m_dependents.end()) {
+      dependents->second.erase(id);
+      if(dependents->second.empty()) {
+        m_dependents.erase(dependents);
+      }
+    }
+  }
+  m_subtrees.erase(subtree);
+}
+
+void SceneBuilder::mark_ancestors(const Node& node) {
+  auto child = &node;
+  for(auto depth = 0; depth != MAXIMUM_DEPTH && !child->m_parent.is_nil();
+      ++depth) {
+    auto parent = m_document->find(child->m_parent);
+    if(!parent) {
+      return;
+    }
+    if(auto subtree = m_subtrees.find(parent->get_id());
+        subtree != m_subtrees.end()) {
+      auto& tree = subtree->second;
+      tree.m_is_stale = true;
+      auto& siblings = parent->m_children;
+      auto index = static_cast<std::size_t>(std::distance(siblings.begin(),
+        std::find(siblings.begin(), siblings.end(), child->get_id())));
+      auto segment = std::find_if(tree.m_segments.begin(),
+        tree.m_segments.end(), [&] (const auto& segment) {
+          return segment.m_begin <= index && index < segment.m_end;
+        });
+      if(segment == tree.m_segments.end()) {
+        forget(parent->get_id());
+      } else {
+        segment->m_is_stale = true;
+      }
+    }
+    child = parent;
+  }
+}
+
+void SceneBuilder::invalidate_dependents(const NodeId& key) {
+  auto dependents = m_dependents.find(key);
+  if(dependents == m_dependents.end()) {
+    return;
+  }
+  auto ids = std::vector<NodeId>(
+    dependents->second.begin(), dependents->second.end());
+  for(auto& id : ids) {
+    auto subtree = m_subtrees.find(id);
+    if(subtree == m_subtrees.end()) {
+      continue;
+    }
+    auto& tree = subtree->second;
+    if(std::binary_search(tree.m_dependencies.m_keys.begin(),
+        tree.m_dependencies.m_keys.end(), key)) {
+      forget(id);
+    } else {
+      tree.m_is_stale = true;
+      for(auto& segment : tree.m_segments) {
+        if(std::binary_search(segment.m_dependencies.m_keys.begin(),
+            segment.m_dependencies.m_keys.end(), key)) {
+          segment.m_is_stale = true;
+        }
+      }
+    }
+    if(auto node = m_document->find(id)) {
+      mark_ancestors(*node);
+    }
+  }
+}
+
+void SceneBuilder::clear_retained() {
+  m_subtrees.clear();
+  m_dependents.clear();
 }
 
 void SceneBuilder::add_dependencies(const Node& reference) {
@@ -429,24 +835,25 @@ void SceneBuilder::add_dependencies(const Node& reference) {
     if(!payload) {
       return;
     }
-    if(!m_sources.insert(payload->m_source).second) {
-      return;
-    }
     auto next = nodes.find(payload->m_source);
     if(!next) {
       keys.push_back(payload->m_source);
       return;
     }
-    auto root = next;
-    for(auto depth = 0; depth != MAXIMUM_DEPTH && !root->m_parent.is_nil();
-        ++depth) {
-      auto parent = nodes.find(root->m_parent);
-      if(!parent) {
-        break;
+    auto [root, is_new] = m_roots.try_emplace(payload->m_source);
+    if(is_new) {
+      auto top = next;
+      for(auto depth = 0; depth != MAXIMUM_DEPTH && !top->m_parent.is_nil();
+          ++depth) {
+        auto parent = nodes.find(top->m_parent);
+        if(!parent) {
+          break;
+        }
+        top = parent;
       }
-      root = parent;
+      root->second = top->get_id();
     }
-    keys.push_back(root->get_id());
+    keys.push_back(root->second);
     current = next;
   }
 }

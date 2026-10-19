@@ -8,7 +8,9 @@
 #include <string>
 #include <vector>
 #include "Rellu/Commands/Command.hpp"
+#include "Rellu/Commands/Compounds.hpp"
 #include "Rellu/Commands/Signal.hpp"
+#include "Rellu/Model/ChangeSet.hpp"
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/Subscription.hpp"
 
@@ -17,9 +19,11 @@ namespace Rellu {
   /**
    * The labelled undo and redo history of a document. Each step is one
    * command, or one transaction committed on the document by other means.
-   * The most recent step stays open to merging until it is sealed, undone
-   * or followed by another step. Once a History is attached, the document
-   * must be undone, redone and cleared only through it.
+   * A command's step also holds the recomputed results of the compound
+   * shapes whose operands it changed, as refresh_compounds makes them. The
+   * most recent step stays open to merging until it is sealed, undone or
+   * followed by another step. Once a History is attached, the document must
+   * be undone, redone and cleared only through it.
    */
   class History {
     public:
@@ -33,6 +37,13 @@ namespace Rellu {
 
       /** Returns the document tracked. */
       Document& get_document() const;
+
+      /**
+       * Sets the test of the compound shapes whose results commands'
+       * steps recompute, by default accepting all of them.
+       * @param filter The test, or empty to accept every compound shape.
+       */
+      void set_compound_filter(CompoundFilter filter);
 
       /**
        * Applies a command as a new step, propagating any exception it throws
@@ -131,6 +142,9 @@ namespace Rellu {
       std::size_t m_base;
       bool m_is_open;
       bool m_is_applying;
+      bool m_is_recording;
+      CompoundFilter m_filter;
+      ChangeSet m_changes;
       Signal m_signal;
       Subscription m_subscription;
 
@@ -138,7 +152,8 @@ namespace Rellu {
       History& operator =(const History&) = delete;
       void push(Step step);
       void synchronize();
-      void on_change();
+      void refresh();
+      void on_change(const ChangeSet& changes);
   };
 }
 

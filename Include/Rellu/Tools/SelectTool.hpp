@@ -1,11 +1,14 @@
 #ifndef RELLU_TOOLS_SELECT_TOOL_HPP
 #define RELLU_TOOLS_SELECT_TOOL_HPP
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
+#include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Tools/SelectionBox.hpp"
 #include "Rellu/Tools/Tool.hpp"
@@ -15,10 +18,13 @@ namespace Rellu {
   /**
    * Selects, moves, resizes and rotates nodes as Adobe XD's select tool
    * does. A click selects what lies under the pointer at the level of the
-   * edit context, a double click enters a group, Ctrl selects the deepest
-   * node, Shift toggles, and a drag over empty canvas draws a marquee. The
+   * edit context, a double click enters a group or hands the text clicked
+   * to the tool named text for editing, Ctrl selects the deepest node,
+   * Shift toggles, and a drag over empty canvas draws a marquee. The
    * selection's box resizes by its handles and rotates from just outside
-   * its corners. Each drag is one undoable step.
+   * its corners. A single selected rectangle also shows a corner radius
+   * handle inside each corner, which rounds every corner alike, or only
+   * its own corner while Alt is held. Each drag is one undoable step.
    */
   class SelectTool : public Tool {
     public:
@@ -50,6 +56,21 @@ namespace Rellu {
       /** The distance in document units a nudge with Shift moves. */
       static constexpr auto LARGE_NUDGE = 10.0;
 
+      /** The radius in logical units of a corner radius handle. */
+      static constexpr auto RADIUS_HANDLE_RADIUS = 3.0;
+
+      /**
+       * The smallest distance in logical units between a corner radius
+       * handle and the sides meeting at its corner.
+       */
+      static constexpr auto RADIUS_HANDLE_INSET = 14.0;
+
+      /**
+       * The length in logical units both sides of a rectangle must reach
+       * for its corner radius handles to show.
+       */
+      static constexpr auto RADIUS_HANDLE_SIDE = 40.0;
+
       /** Constructs a SelectTool. */
       SelectTool();
 
@@ -74,7 +95,8 @@ namespace Rellu {
         MARQUEE,
         MOVE,
         RESIZE,
-        ROTATE
+        ROTATE,
+        RADIUS
       };
       enum class Target : unsigned char {
         NONE,
@@ -84,6 +106,14 @@ namespace Rellu {
       struct Grab {
         Target m_target;
         Handle m_handle;
+      };
+      struct RadiusHandles {
+        NodeId m_id;
+        Rect m_rect;
+        Matrix m_transform;
+        CornerRadii m_radii;
+        double m_limit;
+        std::array<Point, 4> m_points;
       };
       struct CachedBox {
         NodeId m_id;
@@ -109,6 +139,10 @@ namespace Rellu {
       std::vector<NodeId> m_base;
       Rect m_marquee;
       int m_nudge_key;
+      std::optional<RadiusHandles> m_radius_handles;
+      std::size_t m_corner;
+      double m_radius;
+      double m_inset;
       ToolCursor m_cursor;
       mutable std::optional<std::uint64_t> m_revision;
       mutable std::vector<NodeId> m_cached_nodes;
@@ -125,12 +159,18 @@ namespace Rellu {
       bool is_rotatable(const ToolContext& context) const;
       std::optional<Grab> find_grab(
         const ToolContext& context, Point position) const;
+      std::optional<RadiusHandles> get_radius_handles(
+        const ToolContext& context) const;
+      std::optional<std::size_t> find_radius_handle(
+        const ToolContext& context, Point position) const;
+      double get_inset(const ToolContext& context, Point position) const;
       NodeId resolve_target(ToolContext& context, const NodeId& hit,
         Qt::KeyboardModifiers modifiers, bool is_entering) const;
       void begin_drag(ToolContext& context, const PointerEvent& event);
       void update_move(ToolContext& context, const PointerEvent& event);
       void update_resize(ToolContext& context, const PointerEvent& event);
       void update_rotate(ToolContext& context, const PointerEvent& event);
+      void update_radius(ToolContext& context, const PointerEvent& event);
       void update_marquee(ToolContext& context, const PointerEvent& event);
       void update_hover(ToolContext& context, const PointerEvent& event);
       void finish(ToolContext& context);

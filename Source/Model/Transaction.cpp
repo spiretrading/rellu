@@ -115,7 +115,8 @@ namespace {
     if(previous.m_is_locked != current.m_is_locked) {
       mask |= ChangeMask::LOCK;
     }
-    if(previous.m_transform != current.m_transform) {
+    if(previous.m_transform != current.m_transform ||
+        previous.m_transform_3d != current.m_transform_3d) {
       mask |= ChangeMask::TRANSFORM;
     }
     if(!equals(previous.m_opacity, current.m_opacity)) {

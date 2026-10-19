@@ -1,10 +1,14 @@
 #ifndef RELLU_TOOLS_TOOL_CONTEXT_HPP
 #define RELLU_TOOLS_TOOL_CONTEXT_HPP
 #include <cstdint>
+#include <functional>
+#include <optional>
+#include <string>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
+#include "Rellu/Geometry/Rect.hpp"
 #include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/Subscription.hpp"
 #include "Rellu/Tools/ArtboardTitles.hpp"
@@ -12,6 +16,16 @@
 #include "Rellu/Tools/SnapService.hpp"
 
 namespace Rellu {
+
+  /** Changes the view of the canvas at the request of a tool. */
+  struct ViewNavigator {
+
+    /** Zooms by a factor about a point given in logical units. */
+    std::function<void (double factor, Point center)> m_zoom;
+
+    /** Zooms and centers the view on a region in document space. */
+    std::function<void (const Rect& region)> m_zoom_to;
+  };
 
   /**
    * What tools work with: the editing state of a document, the services
@@ -95,6 +109,36 @@ namespace Rellu {
        */
       Point to_view(Point point) const;
 
+      /**
+       * Sets the navigator changing the view, which otherwise changes only
+       * this ToolContext's view.
+       * @param navigator The navigator.
+       */
+      void set_navigator(ViewNavigator navigator);
+
+      /**
+       * Zooms the view by a factor about a point.
+       * @param factor The factor multiplying the zoom.
+       * @param center The point in logical units that stays in place.
+       */
+      void zoom(double factor, Point center);
+
+      /**
+       * Zooms and centers the view so that a region is visible.
+       * @param region The region in document space.
+       */
+      void zoom_to(const Rect& region);
+
+      /**
+       * Asks for a tool to become active once the event being handled is
+       * done.
+       * @param name The name of the tool.
+       */
+      void request_tool(std::string name);
+
+      /** Returns and clears the name of the tool requested, if any. */
+      std::optional<std::string> take_tool_request();
+
       /** Lays out the artboard titles again, as when the document changes. */
       void update_titles();
 
@@ -115,6 +159,8 @@ namespace Rellu {
       Matrix m_inverse;
       double m_scale;
       Size m_size;
+      ViewNavigator m_navigator;
+      std::optional<std::string> m_tool_request;
       std::uint64_t m_revision;
       Subscription m_subscription;
 

@@ -1,6 +1,7 @@
 #include <filesystem>
 #include <utility>
 #include <QFileInfo>
+#include "Rellu/Io/XdOpaque.hpp"
 #include "Rellu/Io/XdWriter.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 
@@ -11,7 +12,12 @@ DocumentSession::DocumentSession(
   : m_document(&document),
     m_path(std::move(path)),
     m_layout(std::move(layout)),
-    m_editor(document) {}
+    m_editor(document) {
+  m_editor.get_history().set_compound_filter([] (const Node& compound) {
+    return decode_node_data(compound.m_header.m_opaque.get_bytes()).
+      m_orphans.empty();
+  });
+}
 
 Document& DocumentSession::get_document() const {
   return *m_document;

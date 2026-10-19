@@ -1,18 +1,24 @@
+#include <string>
 #include <vector>
 #include <doctest/doctest.h>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QLineEdit>
+#include <QToolButton>
+#include <QWidget>
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
+#include "Rellu/Ui/XdMenus.hpp"
 #include "TestDocument.hpp"
 
 using namespace Rellu;
 using namespace Rellu::Tests;
 
 namespace {
+  using Sections = std::vector<std::string>;
+
   QString get_text(const PropertyInspector& inspector, const char* path) {
     auto property = find_property(inspector.get_properties(), path);
     REQUIRE(property);
@@ -31,6 +37,13 @@ namespace {
     return *line;
   }
 
+  QLineEdit& get_display(
+      const PropertyInspector& inspector, const char* path) {
+    auto line = qobject_cast<QLineEdit*>(inspector.find_display(path));
+    REQUIRE(line);
+    return *line;
+  }
+
   void enter(
       PropertyInspector& inspector, const char* path, const QString& text) {
     auto& line = get_line(inspector, path);
@@ -43,6 +56,16 @@ namespace {
       make_standard_property_editors(estimate_text_bounds));
     inspector.set_editor(&editor);
   }
+
+  NodeId add_shape(
+      Document& document, const NodeId& parent, ShapeGeometry geometry) {
+    auto shape = Shape();
+    shape.m_geometry = std::move(geometry);
+    auto transaction = Transaction(document);
+    auto id = transaction.append(parent, make_header("Shape"), shape);
+    transaction.commit();
+    return id;
+  }
 }
 
 TEST_SUITE("PropertyInspector") {
@@ -52,15 +75,56 @@ TEST_SUITE("PropertyInspector") {
     auto inspector = PropertyInspector();
     inspector.set_document(&document);
     REQUIRE(inspector.get_properties().empty());
+    REQUIRE(inspector.get_sections() == Sections({"align", "boolean",
+      "component", "transform", "layout", "appearance"}));
+    REQUIRE(!inspector.find_section("transform")->isEnabled());
     inspector.set_current(ids.m_background);
     REQUIRE(inspector.get_current() == ids.m_background);
-    REQUIRE(get_text(inspector, "layer.name") == "Background");
-    REQUIRE(inspector.get_view().topLevelItemCount() ==
-      static_cast<int>(inspector.get_properties().size()));
-    REQUIRE(inspector.get_view().topLevelItem(0)->text(0) == "Layer");
+    REQUIRE(inspector.find_section("transform")->isEnabled());
+    REQUIRE(get_display(inspector, "transform.width").text() == "100");
     inspector.set_current(NodeId());
     REQUIRE(inspector.get_properties().empty());
-    REQUIRE(inspector.get_view().topLevelItemCount() == 0);
+    REQUIRE(get_display(inspector, "transform.width").text() == "0");
+  }
+
+  TEST_CASE("section_order") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto line = add_shape(
+      document, ids.m_artboard, LineShape(Point(0, 0), Point(10, 10)));
+    auto inspector = PropertyInspector();
+    inspector.set_document(&document);
+    inspector.set_current(ids.m_background);
+    REQUIRE(inspector.get_sections() == Sections({"align", "boolean",
+      "component", "transform", "layout", "appearance", "geometry", "fill",
+      "stroke", "effects", "export"}));
+    inspector.set_current(ids.m_ellipse);
+    REQUIRE(inspector.get_sections() == Sections({"align", "boolean",
+      "component", "transform", "layout", "appearance", "fill", "stroke",
+      "effects", "export"}));
+    inspector.set_current(line);
+    REQUIRE(inspector.get_sections() == Sections({"align", "boolean",
+      "component", "transform", "layout", "appearance", "stroke", "effects",
+      "export"}));
+    inspector.set_current(ids.m_label);
+    REQUIRE(inspector.get_sections() == Sections({"align", "boolean",
+      "component", "transform", "layout", "text", "appearance", "fill",
+      "stroke", "effects", "export"}));
+    inspector.set_current(ids.m_card);
+    REQUIRE(inspector.get_sections() == Sections({"align", "boolean",
+      "component", "transform", "layout", "appearance", "fill", "stroke",
+      "export"}));
+    inspector.set_current(ids.m_instance);
+    REQUIRE(inspector.get_sections() == Sections({"align", "boolean",
+      "component", "transform", "layout", "appearance", "fill", "stroke",
+      "export"}));
+    inspector.set_current(ids.m_artboard);
+    REQUIRE(inspector.get_sections() == Sections({"align", "boolean",
+      "component", "transform", "layout", "appearance", "fill", "grid"}));
+    inspector.set_workspace(Workspace::PROTOTYPE);
+    REQUIRE(inspector.get_sections() == Sections({"interaction"}));
+    inspector.set_workspace(Workspace::SHARE);
+    REQUIRE(inspector.get_sections() == Sections({"link_settings"}));
   }
 
   TEST_CASE("updates") {
@@ -80,12 +144,12 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(get_text(inspector, "fill.color") == "#00FF00");
     {
       auto transaction = Transaction(document);
-      auto header = document.get(ids.m_reference).m_header;
-      header.m_name = "Renamed";
+      auto header = document.get(ids.m_master_shape).m_header;
+      header.m_opacity = 0.25;
       transaction.replace_header(header);
       transaction.commit();
     }
-    REQUIRE(get_text(inspector, "layer.name") == "Renamed");
+    REQUIRE(get_display(inspector, "appearance.opacity").text() == "25%");
     {
       auto transaction = Transaction(document);
       transaction.remove(ids.m_instance);
@@ -95,19 +159,54 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(inspector.get_properties().empty());
   }
 
-  TEST_CASE("collapsed_sections") {
+  TEST_CASE("read_only_fields") {
     auto document = Document();
     auto ids = build_test_document(document);
+    auto editor = Editor(document);
     auto inspector = PropertyInspector();
     inspector.set_document(&document);
     inspector.set_current(ids.m_background);
-    auto& view = inspector.get_view();
-    REQUIRE(view.topLevelItem(0)->isExpanded());
-    view.collapseItem(view.topLevelItem(0));
-    inspector.set_current(ids.m_ellipse);
-    REQUIRE(!view.topLevelItem(0)->isExpanded());
-    REQUIRE(view.topLevelItem(1)->isExpanded());
     REQUIRE(!inspector.find_field("appearance.opacity"));
+    REQUIRE(get_display(inspector, "appearance.opacity").isReadOnly());
+    make_editable(inspector, editor);
+    editor.get_selection().select(ids.m_background);
+    REQUIRE(inspector.find_field("appearance.opacity"));
+    REQUIRE(!inspector.find_field("export.marked"));
+    REQUIRE(inspector.find_display("export.marked"));
+    auto text = make_text(u"Point");
+    text.m_frame = PositionedFrame();
+    auto transaction = Transaction(document);
+    auto point = transaction.append(ids.m_artboard, make_header("Point"), text);
+    transaction.commit();
+    editor.get_selection().select(point);
+    REQUIRE(!inspector.find_field("transform.width"));
+    REQUIRE(get_display(inspector, "transform.width").isReadOnly());
+    REQUIRE(inspector.find_field("transform.x"));
+  }
+
+  TEST_CASE("display_conventions") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    {
+      auto transaction = Transaction(document);
+      auto shape = *document.get(ids.m_background).get_shape();
+      shape.m_style.m_effects.push_back(
+        DropShadow(Point(0, 4), 8, make_color(0, 0, 0, 0.16)));
+      transaction.replace_payload(ids.m_background, shape);
+      auto header = document.get(ids.m_background).m_header;
+      header.m_transform = make_rotation(0.5);
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    auto inspector = PropertyInspector();
+    inspector.set_document(&document);
+    inspector.set_current(ids.m_background);
+    REQUIRE(get_text(inspector, "effects.drop_shadow.blur") == "8");
+    REQUIRE(get_display(inspector, "effects.drop_shadow.blur").text() ==
+      "16");
+    REQUIRE(get_display(inspector, "effects.drop_shadow.y").text() == "4");
+    REQUIRE(get_display(inspector, "transform.rotation").text() ==
+      QString("28.65") + QChar(0x00B0));
   }
 
   TEST_CASE("number_edits") {
@@ -169,43 +268,32 @@ TEST_SUITE("PropertyInspector") {
     make_editable(inspector, editor);
     auto& history = editor.get_history();
     editor.get_selection().select(ids.m_background);
-    auto lock = qobject_cast<QCheckBox*>(inspector.find_field("layer.locked"));
-    REQUIRE(lock);
-    lock->click();
-    REQUIRE(document.get(ids.m_background).m_header.m_is_locked);
-    REQUIRE(history.get_undo_label() == "Lock");
     auto blend_mode = qobject_cast<QComboBox*>(
       inspector.find_field("appearance.blend_mode"));
     REQUIRE(blend_mode);
-    blend_mode->setCurrentIndex(1);
-    Q_EMIT blend_mode->activated(1);
+    auto multiply = blend_mode->findText("Multiply");
+    REQUIRE(multiply > 0);
+    blend_mode->setCurrentIndex(multiply);
+    Q_EMIT blend_mode->activated(multiply);
     REQUIRE(document.get(ids.m_background).m_header.m_blend_mode ==
       BlendMode::MULTIPLY);
     REQUIRE(history.get_undo_label() == "Change Blend Mode");
-    enter(inspector, "fill.color", "#00ff00");
-    REQUIRE(get_text(inspector, "fill.color") == "#00FF00");
-    enter(inspector, "fill.color", "#0000FF 50%");
-    REQUIRE(get_text(inspector, "fill.color") == "#0000FF 50%");
-    enter(inspector, "fill.color", "blue");
-    REQUIRE(get_line(inspector, "fill.color").text() == "#0000FF 50%");
-    REQUIRE(history.get_undo_count() == 3);
-    auto fill = qobject_cast<QComboBox*>(inspector.find_field("fill"));
+    REQUIRE(inspector.find_field("fill.color"));
+    auto fill = qobject_cast<QCheckBox*>(inspector.find_field("fill.enabled"));
     REQUIRE(fill);
-    fill->setCurrentIndex(0);
-    Q_EMIT fill->activated(0);
+    REQUIRE(fill->isChecked());
+    fill->click();
     QCoreApplication::processEvents();
     REQUIRE(get_text(inspector, "fill") == "None");
-    REQUIRE(!inspector.find_field("fill.color"));
-    REQUIRE(history.get_undo_count() == 4);
-    auto& name = get_line(inspector, "layer.name");
-    name.setText("B");
-    Q_EMIT name.textEdited("B");
-    name.setText("Box");
-    Q_EMIT name.textEdited("Box");
-    Q_EMIT name.editingFinished();
-    REQUIRE(document.get(ids.m_background).m_header.m_name == "Box");
-    REQUIRE(history.get_undo_count() == 5);
-    REQUIRE(history.get_undo_label() == "Rename");
+    REQUIRE(!find_property(inspector.get_properties(), "fill.color"));
+    REQUIRE(history.get_undo_count() == 2);
+    auto border =
+      qobject_cast<QCheckBox*>(inspector.find_field("stroke.enabled"));
+    REQUIRE(border);
+    border->click();
+    QCoreApplication::processEvents();
+    REQUIRE(get_text(inspector, "stroke.enabled") == "Yes");
+    REQUIRE(history.get_undo_count() == 3);
   }
 
   TEST_CASE("multiple_selection") {
@@ -227,10 +315,12 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(inspector.get_current() == ids.m_ellipse);
     REQUIRE(is_mixed(inspector, "appearance.opacity"));
     REQUIRE(get_line(inspector, "appearance.opacity").text().isEmpty());
+    REQUIRE(get_line(inspector, "appearance.opacity").placeholderText() ==
+      QString(QChar(0x2014)));
     REQUIRE(!is_mixed(inspector, "appearance.blend_mode"));
     REQUIRE(is_mixed(inspector, "fill"));
     REQUIRE(!find_property(inspector.get_properties(), "fill.color"));
-    REQUIRE(!find_property(inspector.get_properties(), "geometry.center"));
+    REQUIRE(!find_property(inspector.get_properties(), "geometry"));
     REQUIRE(get_text(inspector, "transform.x") == "0");
     REQUIRE(get_text(inspector, "transform.y") == "2");
     REQUIRE(get_text(inspector, "transform.width") == "110");
@@ -246,5 +336,36 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(get_world_transform(document, ids.m_ellipse).m_tx == 110);
     REQUIRE(get_world_transform(document, ids.m_background).m_tx == 120);
     REQUIRE(editor.get_history().get_undo_count() == 2);
+  }
+
+  TEST_CASE("action_buttons") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto window = QWidget();
+    auto actions = ActionRegistry(window);
+    add_xd_menus(actions);
+    auto triggered = 0;
+    actions.set_handler("object.align.left", [&] { ++triggered; });
+    auto inspector = PropertyInspector();
+    inspector.set_actions(&actions);
+    inspector.set_document(&document);
+    inspector.set_current(ids.m_background);
+    auto align = inspector.find_section("align");
+    REQUIRE(align);
+    auto buttons = align->findChildren<QToolButton*>();
+    auto left = static_cast<QToolButton*>(nullptr);
+    for(auto button : buttons) {
+      if(button->toolTip() == "Align Left") {
+        left = button;
+      } else {
+        REQUIRE(!button->isEnabled());
+      }
+    }
+    REQUIRE(left);
+    REQUIRE(left->isEnabled());
+    left->click();
+    REQUIRE(triggered == 1);
+    actions.set_enabled("object.align.left", false);
+    REQUIRE(!left->isEnabled());
   }
 }

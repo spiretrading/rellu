@@ -1,8 +1,10 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <optional>
 #include <utility>
 #include <variant>
+#include "Rellu/Commands/CornerRadiusCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/StyleCommands.hpp"
@@ -218,6 +220,58 @@ namespace {
     return nullptr;
   }
 
+  std::unique_ptr<Command> set_fill_enabled(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto is_enabled = std::get_if<bool>(&value);
+    if(!is_enabled || nodes.empty()) {
+      return nullptr;
+    } else if(!*is_enabled) {
+      return std::make_unique<SetFillCommand>(nodes, NoFill());
+    }
+    auto color =
+      find_fill_color(document, nodes).value_or(make_color(255, 255, 255));
+    return std::make_unique<SetFillCommand>(nodes, SolidFill(color));
+  }
+
+  std::vector<double> get_dashes(
+      const Document& document, const std::vector<NodeId>& nodes) {
+    for(auto& id : nodes) {
+      auto& node = document.get(id);
+      if(auto shape = node.get_shape(); shape && shape->m_style.m_stroke) {
+        return shape->m_style.m_stroke->m_dashes;
+      } else if(auto text = node.get_text();
+          text && text->m_style.m_stroke) {
+        return text->m_style.m_stroke->m_dashes;
+      }
+    }
+    return {};
+  }
+
+  PropertySetter make_dash_setter(bool is_dash) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      auto number = get_number(value);
+      if(!number || *number < 0 || nodes.empty()) {
+        return nullptr;
+      }
+      auto dashes = get_dashes(document, nodes);
+      auto dash = dashes.empty() ? 0.0 : dashes[0];
+      auto gap = dashes.size() > 1 ? dashes[1] : dash;
+      if(is_dash) {
+        dash = *number;
+      } else {
+        gap = *number;
+      }
+      auto edit = StrokeEdit();
+      if(dash == 0) {
+        edit.m_dashes = std::vector<double>();
+      } else {
+        edit.m_dashes = std::vector<double>({dash, gap});
+      }
+      return std::make_unique<SetStrokeCommand>(nodes, std::move(edit));
+    };
+  }
+
   std::unique_ptr<Command> set_fill_color(const Document& document,
       const std::vector<NodeId>& nodes, const PropertyValue& value) {
     auto color = std::get_if<Color>(&value);
@@ -250,15 +304,32 @@ namespace {
     return std::make_unique<SetOpacityCommand>(nodes, *number);
   }
 
+  PropertySetter make_corner_setter(std::optional<Corner> corner) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      auto radius = get_number(value);
+      if(!radius || nodes.empty()) {
+        return nullptr;
+      }
+      if(corner) {
+        return std::make_unique<SetCornerRadiusCommand>(
+          nodes, *corner, *radius);
+      }
+      return std::make_unique<SetCornerRadiusCommand>(nodes, *radius);
+    };
+  }
+
   std::unique_ptr<Command> set_blend_mode(const Document& document,
       const std::vector<NodeId>& nodes, const PropertyValue& value) {
     auto choice = std::get_if<Choice>(&value);
-    if(!choice || nodes.empty() || choice->m_index < 0 ||
-        choice->m_index > static_cast<int>(BlendMode::LUMINOSITY)) {
+    if(!choice || nodes.empty()) {
       return nullptr;
     }
-    return std::make_unique<SetBlendModeCommand>(
-      nodes, static_cast<BlendMode>(choice->m_index));
+    auto blend_mode = get_blend_mode(*choice);
+    if(!blend_mode) {
+      return nullptr;
+    }
+    return std::make_unique<SetBlendModeCommand>(nodes, *blend_mode);
   }
 
   std::unique_ptr<Command> set_name(const Document& document,
@@ -335,7 +406,20 @@ PropertyEditors Rellu::make_standard_property_editors(TextMeasurer measurer) {
   opacity.m_suffix = "%";
   editors.add("appearance.opacity", std::move(opacity));
   editors.add("appearance.blend_mode", make_editor(set_blend_mode));
+  editors.add("geometry.radii.all", make_number_editor(
+    make_corner_setter(std::nullopt), 0.0, std::nullopt));
+  editors.add("geometry.radii.top_left", make_number_editor(
+    make_corner_setter(Corner::TOP_LEFT), 0.0, std::nullopt));
+  editors.add("geometry.radii.top_right", make_number_editor(
+    make_corner_setter(Corner::TOP_RIGHT), 0.0, std::nullopt));
+  editors.add("geometry.radii.bottom_right", make_number_editor(
+    make_corner_setter(Corner::BOTTOM_RIGHT), 0.0, std::nullopt));
+  editors.add("geometry.radii.bottom_left", make_number_editor(
+    make_corner_setter(Corner::BOTTOM_LEFT), 0.0, std::nullopt));
+  editors.add("geometry.corner_radius", make_number_editor(
+    make_corner_setter(std::nullopt), 0.0, std::nullopt));
   editors.add("fill", make_editor(set_fill_type));
+  editors.add("fill.enabled", make_editor(set_fill_enabled));
   editors.add("fill.color", make_editor(set_fill_color));
   editors.add("stroke.enabled", make_editor(make_stroke_setter(
     [] (StrokeEdit& edit, const PropertyValue& value) {
@@ -371,5 +455,29 @@ PropertyEditors Rellu::make_standard_property_editors(TextMeasurer measurer) {
       edit.m_alignment = static_cast<StrokeAlignment>(choice->m_index);
       return true;
     })));
+  editors.add("stroke.cap", make_editor(make_stroke_setter(
+    [] (StrokeEdit& edit, const PropertyValue& value) {
+      auto choice = std::get_if<Choice>(&value);
+      if(!choice || choice->m_index < 0 ||
+          choice->m_index > static_cast<int>(StrokeCap::SQUARE)) {
+        return false;
+      }
+      edit.m_cap = static_cast<StrokeCap>(choice->m_index);
+      return true;
+    })));
+  editors.add("stroke.join", make_editor(make_stroke_setter(
+    [] (StrokeEdit& edit, const PropertyValue& value) {
+      auto choice = std::get_if<Choice>(&value);
+      if(!choice || choice->m_index < 0 ||
+          choice->m_index > static_cast<int>(StrokeJoin::BEVEL)) {
+        return false;
+      }
+      edit.m_join = static_cast<StrokeJoin>(choice->m_index);
+      return true;
+    })));
+  editors.add("stroke.dash",
+    make_number_editor(make_dash_setter(true), 0.0, std::nullopt));
+  editors.add("stroke.gap",
+    make_number_editor(make_dash_setter(false), 0.0, std::nullopt));
   return editors;
 }

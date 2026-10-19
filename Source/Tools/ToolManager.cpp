@@ -1,6 +1,12 @@
+#include <stdexcept>
 #include <unordered_set>
+#include "Rellu/Text/FontLibrary.hpp"
+#include "Rellu/Tools/ArtboardTool.hpp"
 #include "Rellu/Tools/SelectTool.hpp"
+#include "Rellu/Tools/ShapeTool.hpp"
+#include "Rellu/Tools/TextTool.hpp"
 #include "Rellu/Tools/ToolManager.hpp"
+#include "Rellu/Tools/ZoomTool.hpp"
 
 using namespace Rellu;
 
@@ -15,8 +21,18 @@ ToolManager::ToolManager(Editor& editor)
     : m_editor(&editor),
       m_hit_tester(editor.get_document()),
       m_context(editor, m_hit_tester, m_titles),
-      m_tool(std::make_unique<SelectTool>()),
+      m_tool(nullptr),
       m_has_move(false) {
+  add_tool("select", std::make_unique<SelectTool>());
+  add_tool("rectangle", std::make_unique<ShapeTool>(ShapeKind::RECTANGLE));
+  add_tool("ellipse", std::make_unique<ShapeTool>(ShapeKind::ELLIPSE));
+  add_tool("polygon", std::make_unique<ShapeTool>(ShapeKind::POLYGON));
+  add_tool("line", std::make_unique<ShapeTool>(ShapeKind::LINE));
+  add_tool("artboard", std::make_unique<ArtboardTool>());
+  add_tool("zoom", std::make_unique<ZoomTool>());
+  add_tool("text", std::make_unique<TextTool>(get_default_font_library()));
+  m_tool = m_tools.at("select").get();
+  m_name = "select";
   m_document_subscription =
     editor.get_document().subscribe([this] (const auto&) {
       m_context.update_titles();
@@ -48,10 +64,39 @@ Tool& ToolManager::get_tool() {
   return *m_tool;
 }
 
-void ToolManager::set_tool(std::unique_ptr<Tool> tool) {
+void ToolManager::add_tool(std::string name, std::unique_ptr<Tool> tool) {
+  if(m_tools.contains(name)) {
+    throw std::invalid_argument("Duplicate tool: " + name);
+  }
+  m_tools.emplace(std::move(name), std::move(tool));
+}
+
+bool ToolManager::has_tool(const std::string& name) const {
+  return m_tools.contains(name);
+}
+
+void ToolManager::set_tool(const std::string& name) {
+  auto entry = m_tools.find(name);
+  if(entry == m_tools.end()) {
+    throw std::out_of_range("Unknown tool: " + name);
+  }
+  if(name == m_name) {
+    return;
+  }
   m_tool->cancel(m_context);
-  m_tool = std::move(tool);
+  m_tool->leave(m_context);
+  m_tool = entry->second.get();
+  m_name = name;
+  m_tool_signal();
   m_signal();
+}
+
+const std::string& ToolManager::get_tool_name() const {
+  return m_name;
+}
+
+Subscription ToolManager::subscribe_tool(std::function<void ()> observer) {
+  return m_tool_signal.subscribe(std::move(observer));
 }
 
 void ToolManager::set_view(const Matrix& view, double scale, Size size) {
@@ -62,6 +107,7 @@ void ToolManager::press(const PointerEvent& event) {
   m_last_move = event;
   m_has_move = true;
   m_tool->press(m_context, event);
+  take_request();
   m_signal();
 }
 
@@ -69,6 +115,7 @@ void ToolManager::move(const PointerEvent& event) {
   m_last_move = event;
   m_has_move = true;
   m_tool->move(m_context, event);
+  take_request();
   m_signal();
 }
 
@@ -76,6 +123,7 @@ void ToolManager::release(const PointerEvent& event) {
   m_last_move = event;
   m_has_move = true;
   m_tool->release(m_context, event);
+  take_request();
   m_signal();
 }
 
@@ -83,6 +131,7 @@ void ToolManager::double_click(const PointerEvent& event) {
   m_last_move = event;
   m_has_move = true;
   m_tool->double_click(m_context, event);
+  take_request();
   m_signal();
 }
 
@@ -97,6 +146,7 @@ bool ToolManager::key_press(const KeyEvent& event) {
     return true;
   }
   auto is_used = m_tool->key_press(m_context, event);
+  take_request();
   m_signal();
   return is_used;
 }
@@ -106,6 +156,7 @@ bool ToolManager::key_release(const KeyEvent& event) {
     return true;
   }
   auto is_used = m_tool->key_release(m_context, event);
+  take_request();
   m_signal();
   return is_used;
 }
@@ -156,4 +207,10 @@ bool ToolManager::replay(const KeyEvent& event) {
   m_tool->move(m_context, replayed);
   m_signal();
   return m_tool->is_busy();
+}
+
+void ToolManager::take_request() {
+  if(auto name = m_context.take_tool_request(); name && has_tool(*name)) {
+    set_tool(*name);
+  }
 }

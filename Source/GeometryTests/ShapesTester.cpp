@@ -196,23 +196,40 @@ TEST_SUITE("Shapes") {
   }
 
   TEST_CASE("regular_polygon") {
-    auto diamond = get_vertices(make_polygon(4, Rect(0, 0, 8, 6), 0));
-    REQUIRE(diamond.size() == 4);
-    REQUIRE(is_near(diamond[0], Point(4, 0)));
-    REQUIRE(is_near(diamond[1], Point(8, 3)));
-    REQUIRE(is_near(diamond[2], Point(4, 6)));
-    REQUIRE(is_near(diamond[3], Point(0, 3)));
+    auto square = get_vertices(make_polygon(4, Rect(0, 0, 8, 6), 0));
+    REQUIRE(square.size() == 4);
+    REQUIRE(is_near(square[0], Point(8, 0)));
+    REQUIRE(is_near(square[1], Point(8, 6)));
+    REQUIRE(is_near(square[2], Point(0, 6)));
+    REQUIRE(is_near(square[3], Point(0, 0)));
     auto hexagon = get_vertices(make_polygon(6, Rect(10, 20, 8, 4), 0));
     REQUIRE(hexagon.size() == 6);
-    REQUIRE(is_near(hexagon[0], Point(14, 20)));
-    REQUIRE(is_near(hexagon[1], Point(18, 21)));
-    REQUIRE(is_near(hexagon[2], Point(18, 23)));
-    REQUIRE(is_near(hexagon[3], Point(14, 24)));
-    REQUIRE(is_near(hexagon[4], Point(10, 23)));
-    REQUIRE(is_near(hexagon[5], Point(10, 21)));
+    REQUIRE(is_near(hexagon[0], Point(16, 20)));
+    REQUIRE(is_near(hexagon[1], Point(18, 22)));
+    REQUIRE(is_near(hexagon[2], Point(16, 24)));
+    REQUIRE(is_near(hexagon[3], Point(12, 24)));
+    REQUIRE(is_near(hexagon[4], Point(10, 22)));
+    REQUIRE(is_near(hexagon[5], Point(12, 20)));
+    auto pentagon = make_polygon_vertices(5, Rect(0, 0, 10, 10));
+    REQUIRE(pentagon.size() == 5);
+    REQUIRE(is_near(pentagon[0], Point(5, 0)));
+    REQUIRE(is_near(pentagon[2], Point(pentagon[2].m_x, 10)));
+    REQUIRE(is_near(pentagon[3], Point(10 - pentagon[2].m_x, 10)));
     auto bounds = Rect(1, 2, 30, 40);
     REQUIRE(is_near(get_bounds(make_polygon(5, bounds, 0)), bounds));
     REQUIRE(make_polygon(2, bounds, 0).is_empty());
+    REQUIRE(make_polygon_vertices(2, bounds).empty());
+  }
+
+  TEST_CASE("xd_hexagon") {
+    auto vertices = make_polygon_vertices(6, Rect(0, 0, 80, 80));
+    REQUIRE(vertices.size() == 6);
+    REQUIRE(is_near(vertices[0], Point(60, 0)));
+    REQUIRE(is_near(vertices[1], Point(80, 40)));
+    REQUIRE(is_near(vertices[2], Point(60, 80)));
+    REQUIRE(is_near(vertices[3], Point(20, 80)));
+    REQUIRE(is_near(vertices[4], Point(0, 40)));
+    REQUIRE(is_near(vertices[5], Point(20, 0)));
   }
 
   TEST_CASE("rounded_polygon") {

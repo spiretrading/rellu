@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 #include <QChar>
 #include <QString>
@@ -42,8 +43,24 @@ namespace {
     double m_descent;
   };
 
+  struct CaretSink {
+    std::size_t m_start;
+    std::vector<double> m_positions;
+
+    void set(std::size_t index, double x) {
+      if(index >= m_start && index - m_start < m_positions.size()) {
+        m_positions[index - m_start] = x;
+      }
+    }
+  };
+
+  struct ClusterStop {
+    std::size_t m_cluster;
+    double m_x;
+  };
+
   bool is_line_separator(char16_t character) {
-    return character == u'\n' || character == u'\r' ||
+    return character == u'\n' || character == u'\r' || character == u'\v' ||
       character == u'\u2028' || character == u'\u2029';
   }
 
@@ -156,10 +173,46 @@ namespace {
     return items;
   }
 
+  void record(CaretSink& carets, const std::vector<std::size_t>& sources,
+      std::vector<ClusterStop>& stops, bool is_mapped, double start,
+      double end) {
+    if(sources.empty()) {
+      return;
+    }
+    if(!is_mapped || stops.empty()) {
+      for(auto i = std::size_t(0); i != sources.size(); ++i) {
+        carets.set(sources[i], start + (end - start) *
+          static_cast<double>(i) / static_cast<double>(sources.size()));
+      }
+      return;
+    }
+    std::stable_sort(stops.begin(), stops.end(),
+      [] (const auto& left, const auto& right) {
+        return left.m_cluster < right.m_cluster;
+      });
+    stops.push_back(ClusterStop(sources.size(), end));
+    if(stops.front().m_cluster != 0) {
+      stops.insert(stops.begin(), ClusterStop(0, start));
+    }
+    for(auto i = std::size_t(0); i + 1 < stops.size(); ++i) {
+      auto& from = stops[i];
+      auto& to = stops[i + 1];
+      if(to.m_cluster <= from.m_cluster) {
+        continue;
+      }
+      for(auto j = from.m_cluster; j != to.m_cluster && j < sources.size();
+          ++j) {
+        carets.set(sources[j], from.m_x + (to.m_x - from.m_x) *
+          static_cast<double>(j - from.m_cluster) /
+          static_cast<double>(to.m_cluster - from.m_cluster));
+      }
+    }
+  }
+
   double place(const std::u16string& content, std::size_t start,
       std::size_t end, const TextStyle& style, const Font& font, Color color,
       Point pen, double origin, const FontLibrary& library,
-      TextLayout* layout) {
+      TextLayout* layout, CaretSink* carets = nullptr) {
     auto resolution = library.resolve(font);
     if(!resolution.m_typeface || start >= end) {
       return 0;
@@ -177,8 +230,13 @@ namespace {
     auto spacing = style.m_letter_spacing * font.m_size / 1000;
     auto x = pen.m_x;
     auto display = std::u16string();
+    auto sources = std::vector<std::size_t>();
     auto flush = [&] {
-      display = apply_transform(display, style.m_transform);
+      auto converted = apply_transform(display, style.m_transform);
+      auto is_mapped = converted.size() == display.size();
+      display = std::move(converted);
+      auto flush_start = x;
+      auto stops = std::vector<ClusterStop>();
       for(auto& item : itemize(display, resolution.m_typeface, library)) {
         auto& typeface = item.m_face.m_typeface;
         auto glyphs = typeface->shape(display, item.m_start, item.m_length);
@@ -189,6 +247,10 @@ namespace {
         }
         for(auto i = std::size_t(0); i != glyphs.size(); ++i) {
           auto& glyph = glyphs[i];
+          if(carets &&
+              (i == 0 || glyphs[i - 1].m_cluster != glyph.m_cluster)) {
+            stops.push_back(ClusterStop(glyph.m_cluster, x));
+          }
           if(layout && (!typeface->get_outline(glyph.m_index).is_empty() ||
               !typeface->get_color_layers(glyph.m_index).empty())) {
             layout->m_glyphs.push_back(PlacedGlyph(typeface, glyph.m_index,
@@ -205,15 +267,28 @@ namespace {
           }
         }
       }
+      if(carets) {
+        record(*carets, sources, stops, is_mapped, flush_start, x);
+      }
       display.clear();
+      sources.clear();
     };
     for(auto i = start; i != end; ++i) {
       if(content[i] == u'\t') {
         flush();
+        if(carets) {
+          carets->set(i, x);
+        }
         auto interval = TAB_INTERVAL * font.m_size;
         x = origin + (std::floor((x - origin) / interval) + 1) * interval;
       } else if(!is_line_separator(content[i])) {
         display.push_back(content[i]);
+        if(carets) {
+          sources.push_back(i);
+        }
+      } else if(carets) {
+        flush();
+        carets->set(i, x);
       }
     }
     flush();
@@ -264,7 +339,8 @@ namespace {
 
   double place(const std::u16string& content, const Segment& segment,
       std::size_t end, const std::vector<Span>& spans, Point pen,
-      double origin, const FontLibrary& library, TextLayout* layout) {
+      double origin, const FontLibrary& library, TextLayout* layout,
+      CaretSink* carets = nullptr) {
     auto x = pen.m_x;
     auto previous = static_cast<const TextStyle*>(nullptr);
     auto previous_font = static_cast<const Font*>(nullptr);
@@ -284,7 +360,7 @@ namespace {
             content[from - 1], content[from], style, font, library);
         }
         x += place(content, from, to, style, font, color, Point(x, pen.m_y),
-          origin, library, layout);
+          origin, library, layout, carets);
         previous = &style;
         previous_font = &font;
         previous_end = to;
@@ -295,11 +371,12 @@ namespace {
 
   double place(const std::u16string& content, const Line& line,
       std::size_t end, const std::vector<Span>& spans, Point pen,
-      const FontLibrary& library, TextLayout* layout) {
+      const FontLibrary& library, TextLayout* layout,
+      CaretSink* carets = nullptr) {
     auto x = pen.m_x;
     for(auto& segment : line.m_segments) {
       x += place(content, segment, end, spans, Point(x, pen.m_y), pen.m_x,
-        library, layout);
+        library, layout, carets);
     }
     return x - pen.m_x;
   }
@@ -643,6 +720,49 @@ StoredLayout Rellu::store_layout(const Text& text, const FontLibrary& library) {
       is_paragraph_start = line.m_is_paragraph_end;
     });
   return layout;
+}
+
+std::vector<LineGeometry> Rellu::measure_lines(
+    const Text& text, const FontLibrary& library) {
+  auto& content = *text.m_content;
+  auto spans = make_spans(text);
+  auto lines = std::vector<LineGeometry>();
+  visit_lines(text, get_lines(text, spans, library), spans, library,
+    [&] (const Line& line, Point origin, const LineMetrics& metrics) {
+      auto start = std::size_t(0);
+      if(!lines.empty()) {
+        start = lines.back().m_end;
+      }
+      auto end = start;
+      if(!line.m_segments.empty()) {
+        start = std::min(line.m_segments.front().m_start, content.size());
+        end = std::clamp(line.m_segments.back().m_end, start, content.size());
+      }
+      while(end > start && is_line_separator(content[end - 1])) {
+        --end;
+      }
+      auto carets = CaretSink(start, std::vector<double>(end - start + 1,
+        std::numeric_limits<double>::quiet_NaN()));
+      auto width = place(content, line, end, spans, origin, library, nullptr,
+        &carets);
+      carets.set(end, origin.m_x + width);
+      auto previous = origin.m_x;
+      for(auto& position : carets.m_positions) {
+        if(std::isnan(position)) {
+          position = previous;
+        }
+        previous = position;
+      }
+      lines.push_back(LineGeometry(start, end, line.m_is_paragraph_end,
+        origin.m_y, metrics.m_ascent, metrics.m_descent,
+        std::move(carets.m_positions)));
+    });
+  if(lines.empty()) {
+    auto relaid = text;
+    relaid.m_layout = std::nullopt;
+    return measure_lines(relaid, library);
+  }
+  return lines;
 }
 
 std::vector<TextFill> Rellu::outline(const TextLayout& layout) {

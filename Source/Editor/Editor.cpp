@@ -39,6 +39,7 @@ Editor::Editor(Document& document)
       m_history(document),
       m_selection(document),
       m_context(document),
+      m_text_selection(document),
       m_is_updating(false) {
   m_subscription = m_selection.subscribe([this] {
     on_selection();

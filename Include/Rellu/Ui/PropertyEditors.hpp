@@ -71,7 +71,7 @@ namespace Rellu {
 
   /**
    * Makes the editors of the position, size, rotation, opacity, blend mode,
-   * fill, stroke, name, visibility and lock of nodes.
+   * fill, border, name, visibility and lock of nodes.
    * @param measurer The function measuring text.
    */
   PropertyEditors make_standard_property_editors(TextMeasurer measurer);

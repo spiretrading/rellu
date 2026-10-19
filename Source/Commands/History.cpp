@@ -1,3 +1,4 @@
+#include <utility>
 #include "Rellu/Commands/History.hpp"
 #include "Rellu/Model/Transaction.hpp"
 
@@ -30,14 +31,19 @@ History::History(Document& document)
       m_clean(0),
       m_base(document.get_undo_count()),
       m_is_open(false),
-      m_is_applying(false) {
-  m_subscription = document.subscribe([this] (const ChangeSet&) {
-    on_change();
+      m_is_applying(false),
+      m_is_recording(false) {
+  m_subscription = document.subscribe([this] (const auto& changes) {
+    on_change(changes);
   });
 }
 
 Document& History::get_document() const {
   return *m_document;
+}
+
+void History::set_compound_filter(CompoundFilter filter) {
+  m_filter = std::move(filter);
 }
 
 const Command* History::execute(std::unique_ptr<Command> command) {
@@ -46,12 +52,15 @@ const Command* History::execute(std::unique_ptr<Command> command) {
     auto guard = Guard(m_is_applying);
     auto transaction = Transaction(*m_document);
     command->apply(*m_document, transaction);
+    auto recording = Guard(m_is_recording);
     return transaction.commit();
   }();
   if(!is_changed) {
+    m_changes = ChangeSet();
     synchronize();
     return nullptr;
   }
+  refresh();
   auto label = command->get_label();
   auto result = command.get();
   push(Step(std::move(label), std::move(command), std::any()));
@@ -72,12 +81,18 @@ const Command* History::merge(std::unique_ptr<Command> command) {
     try {
       auto transaction = Transaction(*m_document);
       command->apply(*m_document, transaction);
+      auto recording = Guard(m_is_recording);
       return transaction.amend();
     } catch(...) {
       m_is_open = false;
       throw;
     }
   }();
+  if(is_recorded) {
+    refresh();
+  } else {
+    m_changes = ChangeSet();
+  }
   if(m_clean == m_undo.size()) {
     m_clean = std::nullopt;
   }
@@ -226,7 +241,16 @@ void History::synchronize() {
   m_signal();
 }
 
-void History::on_change() {
+void History::refresh() {
+  auto changes = std::exchange(m_changes, ChangeSet());
+  auto guard = Guard(m_is_applying);
+  refresh_compounds(*m_document, changes, m_filter);
+}
+
+void History::on_change(const ChangeSet& changes) {
+  if(m_is_recording) {
+    m_changes = changes;
+  }
   if(!m_is_applying) {
     synchronize();
   }

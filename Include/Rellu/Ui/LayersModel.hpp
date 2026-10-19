@@ -1,9 +1,11 @@
 #ifndef RELLU_UI_LAYERS_MODEL_HPP
 #define RELLU_UI_LAYERS_MODEL_HPP
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
 #include <QAbstractItemModel>
+#include <QString>
 #include "Rellu/Model/ChangeSet.hpp"
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/NodeId.hpp"
@@ -54,6 +56,14 @@ namespace Rellu {
       };
 
       /**
+       * The type of function called when the user renames a node.
+       * @param id The node's id.
+       * @param name The name entered.
+       */
+      using RenameHandler =
+        std::function<void (const NodeId& id, const QString& name)>;
+
+      /**
        * Constructs a LayersModel without a document.
        * @param parent The parent object.
        */
@@ -70,6 +80,14 @@ namespace Rellu {
        *        for none. It must outlive this model or be replaced first.
        */
       void set_document(Document* document);
+
+      /**
+       * Sets the function called when the user renames a node, the names
+       * being editable only while there is one.
+       * @param handler The function to call, or empty to make names
+       *        read-only.
+       */
+      void set_rename_handler(RenameHandler handler);
 
       /**
        * Returns the id of the node at an index.
@@ -99,6 +117,8 @@ namespace Rellu {
       QVariant headerData(
         int section, Qt::Orientation orientation, int role) const override;
       Qt::ItemFlags flags(const QModelIndex& index) const override;
+      bool setData(
+        const QModelIndex& index, const QVariant& value, int role) override;
 
     private:
       struct Item {
@@ -110,6 +130,7 @@ namespace Rellu {
         std::vector<Item*> m_children;
       };
       Document* m_document;
+      RenameHandler m_rename_handler;
       Subscription m_subscription;
       std::unique_ptr<Item> m_root;
       mutable std::unordered_map<NodeId, std::unique_ptr<Item>> m_items;

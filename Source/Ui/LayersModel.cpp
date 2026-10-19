@@ -66,6 +66,10 @@ void LayersModel::set_document(Document* document) {
   endResetModel();
 }
 
+void LayersModel::set_rename_handler(RenameHandler handler) {
+  m_rename_handler = std::move(handler);
+}
+
 NodeId LayersModel::get_id(const QModelIndex& index) const {
   if(!index.isValid()) {
     return NodeId();
@@ -181,10 +185,15 @@ QVariant LayersModel::data(const QModelIndex& index, int role) const {
   }
   if(index.column() == NAME) {
     if(role == Qt::DisplayRole) {
+      return get_display_name(*m_document, *node).replace(
+        QChar('\r'), QChar(' ')).replace(QChar('\n'), QChar(' '));
+    } else if(role == Qt::EditRole) {
       return get_display_name(*m_document, *node);
     } else if(role == Qt::DecorationRole) {
-      auto kind = displayed ? displayed->get_kind() : NodeKind::REFERENCE;
-      return get_kind_icon(kind, is_reference);
+      if(!displayed) {
+        return get_kind_icon(NodeKind::REFERENCE, is_reference);
+      }
+      return get_layer_icon(*displayed, is_reference);
     } else if(role == Qt::ToolTipRole) {
       auto type = displayed ? get_type_name(*displayed) :
         QString("Unresolved reference");
@@ -234,7 +243,24 @@ Qt::ItemFlags LayersModel::flags(const QModelIndex& index) const {
   if(!index.isValid()) {
     return Qt::NoItemFlags;
   }
+  if(m_rename_handler && index.column() == NAME) {
+    return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable;
+  }
   return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+}
+
+bool LayersModel::setData(
+    const QModelIndex& index, const QVariant& value, int role) {
+  if(!m_rename_handler || role != Qt::EditRole || !index.isValid() ||
+      index.column() != NAME) {
+    return false;
+  }
+  auto name = value.toString();
+  if(name.trimmed().isEmpty() || name == data(index, Qt::EditRole)) {
+    return false;
+  }
+  m_rename_handler(get_id(index), name);
+  return true;
 }
 
 LayersModel::Item* LayersModel::get_item(const QModelIndex& index) const {

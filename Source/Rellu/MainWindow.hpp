@@ -2,11 +2,9 @@
 #define RELLU_MAIN_WINDOW_HPP
 #include <memory>
 #include <string>
-#include <QByteArray>
-#include <QDockWidget>
-#include <QLabel>
 #include <QMainWindow>
-#include <QPointF>
+#include <QMenuBar>
+#include <QStackedWidget>
 #include <QString>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/CommandRegistry.hpp"
@@ -14,22 +12,30 @@
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Model/Subscription.hpp"
 #include "Rellu/Ui/ActionRegistry.hpp"
+#include "Rellu/Ui/AppBar.hpp"
+#include "Rellu/Ui/AssetsPanel.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/EditActions.hpp"
 #include "Rellu/Ui/LayersPanel.hpp"
+#include "Rellu/Ui/PluginsPanel.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
 #include "Rellu/Ui/RecentFiles.hpp"
+#include "Rellu/Ui/Toolbar.hpp"
 #include "DocumentView.hpp"
 
 namespace Rellu {
 
-  /** The application's top-level window editing one document. */
+  /**
+   * The application's top-level window editing one document, laid out as
+   * Adobe XD's editor: the menu row, the app bar, the toolbar, the left
+   * panel, the canvas and the property inspector.
+   */
   class MainWindow : public QMainWindow {
     public:
 
       /**
-       * Constructs a MainWindow without a document, restoring the layout
-       * saved when the last MainWindow closed.
+       * Constructs a MainWindow without a document, restoring the geometry
+       * and panel saved when the last MainWindow closed.
        * @param parent The parent widget.
        */
       explicit MainWindow(QWidget* parent = nullptr);
@@ -77,24 +83,28 @@ namespace Rellu {
       ActionRegistry m_actions;
       CommandRegistry m_commands;
       std::unique_ptr<EditActions> m_edit_actions;
+      AppBar* m_app_bar;
+      Toolbar* m_toolbar;
+      QStackedWidget* m_left_panel;
+      AssetsPanel* m_assets;
       LayersPanel* m_layers;
+      PluginsPanel* m_plugins;
       PropertyInspector* m_inspector;
-      QDockWidget* m_layers_dock;
-      QDockWidget* m_inspector_dock;
-      QLabel* m_message;
-      QLabel* m_cursor;
-      QLabel* m_zoom;
+      QWidget* m_inspector_frame;
       RecentFiles m_recent_files;
-      QByteArray m_default_layout;
       TextMeasurer m_measurer;
       std::unique_ptr<DocumentSession> m_session;
       Subscription m_history_subscription;
+      Subscription m_selection_subscription;
+      Subscription m_tool_subscription;
 
-      QDockWidget* make_dock(
-        const QString& title, const QString& name, QWidget* widget);
+      QMenuBar* make_layout();
       void add_actions();
-      void add_panel_action(const std::string& name, const QString& text,
-        QDockWidget& dock);
+      void add_tool_actions();
+      void select_tool(const std::string& name);
+      void update_tool();
+      void show_panel(const std::string& name);
+      void set_workspace(Workspace workspace);
       void restore_settings();
       void save_settings() const;
       void update_recent_files();
@@ -105,10 +115,11 @@ namespace Rellu {
       void install(std::unique_ptr<Document> document, const QString& path);
       void detach();
       void update_title();
+      void update_selection_actions();
       void reveal(const NodeId& id);
+      void zoom_to_selection();
       double get_zoom() const;
       void update_zoom();
-      void update_cursor(const QPointF& position);
   };
 }
 

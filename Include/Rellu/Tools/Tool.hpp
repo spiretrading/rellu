@@ -1,5 +1,6 @@
 #ifndef RELLU_TOOLS_TOOL_HPP
 #define RELLU_TOOLS_TOOL_HPP
+#include <string>
 #include <Qt>
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Rendering/CanvasOverlay.hpp"
@@ -34,6 +35,9 @@ namespace Rellu {
 
     /** Whether the event repeats a key held down. */
     bool m_is_repeat = false;
+
+    /** The characters the key produces, if any, in UTF-16. */
+    std::u16string m_text;
   };
 
   /** Lists the kinds of pointer shown over the canvas. */
@@ -46,7 +50,13 @@ namespace Rellu {
     RESIZE,
 
     /** A curved arrow rotating about a corner at an angle. */
-    ROTATE
+    ROTATE,
+
+    /** A crosshair placing what a drawing tool draws. */
+    CROSSHAIR,
+
+    /** An I-beam placing a text caret. */
+    TEXT
   };
 
   /** The pointer a tool shows over the canvas. */

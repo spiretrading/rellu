@@ -172,15 +172,18 @@ Path Rellu::make_polygon(
   return make_path(corners);
 }
 
-Path Rellu::make_polygon(
-    int corner_count, const Rect& bounds, double corner_radius) {
-  if(corner_count < 3) {
-    return Path();
-  }
+std::vector<Point> Rellu::make_polygon_vertices(
+    int corner_count, const Rect& bounds) {
   auto vertices = std::vector<Point>();
+  if(corner_count < 3) {
+    return vertices;
+  }
+  auto start = -std::numbers::pi / 2;
+  if(corner_count % 2 == 0) {
+    start += std::numbers::pi / corner_count;
+  }
   for(auto i = 0; i != corner_count; ++i) {
-    auto angle =
-      -std::numbers::pi / 2 + 2 * std::numbers::pi * i / corner_count;
+    auto angle = start + 2 * std::numbers::pi * i / corner_count;
     vertices.push_back(Point(std::cos(angle), std::sin(angle)));
   }
   auto left = vertices.front().m_x;
@@ -198,5 +201,11 @@ Path Rellu::make_polygon(
       bounds.m_x + (vertex.m_x - left) / (right - left) * bounds.m_width,
       bounds.m_y + (vertex.m_y - top) / (bottom - top) * bounds.m_height);
   }
-  return make_polygon(vertices, corner_radius);
+  return vertices;
+}
+
+Path Rellu::make_polygon(
+    int corner_count, const Rect& bounds, double corner_radius) {
+  return make_polygon(
+    make_polygon_vertices(corner_count, bounds), corner_radius);
 }

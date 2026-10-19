@@ -17,12 +17,12 @@
 namespace Rellu {
 
   /**
-   * Keeps a Drawing of a Document's canvas up to date, holding a draw list
-   * for each top-level node and converting again only the top-level nodes
-   * that the document's changes affect, including through references and
-   * image resources, or whose drawing depends on the tolerance when it
-   * changes. The draw lists are those SceneBuilder converts the top-level
-   * nodes into, in z order.
+   * Keeps a Drawing of a Document's canvas up to date, holding draw lists
+   * for each top-level node and converting again only the parts of the
+   * top-level nodes that the document's changes affect, including through
+   * references and image resources, or whose drawing depends on the
+   * tolerance when it changes. Together the draw lists draw what
+   * SceneBuilder converts the top-level nodes into, in z order.
    */
   class Scene {
     public:
@@ -80,7 +80,7 @@ namespace Rellu {
 
     private:
       struct Fragment {
-        std::shared_ptr<const DrawList> m_list;
+        std::vector<std::shared_ptr<const DrawList>> m_lists;
         SceneDependencies m_dependencies;
         bool m_is_dirty;
       };

@@ -1,8 +1,11 @@
 #include <array>
+#include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Geometry/Stroke.hpp"
@@ -33,6 +36,28 @@ namespace {
 
   const Color& get_color(const FillCommand& command) {
     return std::get<SolidPaint>(command.m_paint).m_color;
+  }
+
+  bool is_same(const std::vector<std::shared_ptr<const DrawList>>& lists,
+      const DrawList& list) {
+    auto index = std::size_t(0);
+    for(auto& part : lists) {
+      for(auto& command : *part) {
+        if(index == list.size()) {
+          return false;
+        }
+        auto left = std::get_if<FillCommand>(&command);
+        auto right = std::get_if<FillCommand>(&list[index]);
+        if(!left || !right || left->m_path != right->m_path ||
+            left->m_transform != right->m_transform ||
+            left->m_clip != right->m_clip ||
+            get_color(*left) != get_color(*right)) {
+          return false;
+        }
+        ++index;
+      }
+    }
+    return index == list.size();
   }
 }
 
@@ -465,6 +490,41 @@ TEST_SUITE("SceneBuilder") {
     transaction.commit();
     auto builder = SceneBuilder(document, TOLERANCE);
     REQUIRE(builder.build().empty());
+  }
+
+  TEST_CASE("build_lists") {
+    auto document = Document();
+    auto transaction = std::optional<Transaction>(std::in_place, document);
+    auto group = transaction->append(
+      NodeId(), make_header(make_translation(5, 5)), Group());
+    auto children = std::vector<NodeId>();
+    for(auto i = 0; i != 600; ++i) {
+      children.push_back(transaction->append(group,
+        make_header(make_translation(i % 30 * 10, i / 30 * 10)),
+        make_shape(Rect(0, 0, 8, 8), make_color(i % 256, 0, 0))));
+    }
+    transaction->commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto dependencies = SceneDependencies();
+    auto lists = builder.build_lists(group, dependencies);
+    REQUIRE(lists.size() > 1);
+    REQUIRE(is_same(lists, builder.build(group)));
+    REQUIRE(builder.build_lists(group, dependencies) == lists);
+    transaction.emplace(document);
+    transaction->replace_payload(children[300],
+      make_shape(Rect(0, 0, 8, 8), make_color(0, 255, 0)));
+    transaction->commit();
+    builder.invalidate(children[300]);
+    auto edited = builder.build_lists(group, dependencies);
+    REQUIRE(edited.size() == lists.size());
+    REQUIRE(is_same(edited, builder.build(group)));
+    auto changed = 0;
+    for(auto i = std::size_t(0); i != lists.size(); ++i) {
+      if(edited[i] != lists[i]) {
+        ++changed;
+      }
+    }
+    REQUIRE(changed == 1);
   }
 
   TEST_CASE("edit") {

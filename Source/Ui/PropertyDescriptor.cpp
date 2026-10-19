@@ -15,32 +15,40 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto CONTENT_LENGTH = 80;
-
-  const auto BLEND_MODES = QStringList({"Normal", "Multiply", "Screen",
-    "Overlay", "Darken", "Lighten", "Color Dodge", "Color Burn", "Hard Light",
-    "Soft Light", "Difference", "Exclusion", "Hue", "Saturation", "Color",
+  constexpr auto LINE_HEIGHT_RATIO = 1.2;
+  const auto PASS_THROUGH = QString("Pass Through");
+  const auto BLEND_MODE_ORDER = std::to_array({BlendMode::NORMAL,
+    BlendMode::DARKEN, BlendMode::MULTIPLY, BlendMode::COLOR_BURN,
+    BlendMode::LIGHTEN, BlendMode::SCREEN, BlendMode::COLOR_DODGE,
+    BlendMode::OVERLAY, BlendMode::SOFT_LIGHT, BlendMode::HARD_LIGHT,
+    BlendMode::DIFFERENCE, BlendMode::EXCLUSION, BlendMode::HUE,
+    BlendMode::SATURATION, BlendMode::COLOR, BlendMode::LUMINOSITY});
+  const auto BLEND_MODES = QStringList({"Normal", "Darken", "Multiply",
+    "Color Burn", "Lighten", "Screen", "Color Dodge", "Overlay", "Soft Light",
+    "Hard Light", "Difference", "Exclusion", "Hue", "Saturation", "Color",
     "Luminosity"});
   const auto FILL_TYPES = QStringList({"None", "Solid", "Gradient", "Image"});
-  const auto GRADIENT_TYPES = QStringList({"Linear", "Radial"});
-  const auto GRADIENT_UNITS =
-    QStringList({"Object Bounding Box", "User Space"});
-  const auto SCALE_BEHAVIORS = QStringList({"Fill", "Cover"});
-  const auto STROKE_ALIGNMENTS = QStringList({"Center", "Inside", "Outside"});
-  const auto STROKE_CAPS = QStringList({"Butt", "Round", "Square"});
+  const auto STROKE_ALIGNMENTS = QStringList({"Center", "Inner", "Outer"});
+  const auto STROKE_CAPS = QStringList({"Butt", "Round", "Projecting"});
   const auto STROKE_JOINS = QStringList({"Miter", "Round", "Bevel"});
   const auto TEXT_ALIGNMENTS = QStringList({"Left", "Center", "Right"});
   const auto TEXT_TRANSFORMS =
     QStringList({"None", "Uppercase", "Lowercase", "Title Case"});
   const auto TEXT_SCRIPTS = QStringList({"Normal", "Superscript", "Subscript"});
-  const auto TEXT_FRAMES = QStringList({"Positioned", "Area", "Auto Height"});
-  const auto SCROLL_DIRECTIONS =
-    QStringList({"Horizontal", "Vertical", "Panning"});
-  const auto ORIENTATIONS = QStringList({"Horizontal", "Vertical"});
-  const auto GRID_TYPES = QStringList({"Square", "Layout"});
-  const auto COMPOUND_OPERATIONS =
-    QStringList({"Union", "Subtract", "Intersect", "Exclude"});
-  const auto FILL_RULES = QStringList({"Non Zero", "Even Odd"});
+  const auto TEXT_FRAMES =
+    QStringList({"Auto Width", "Auto Height", "Fixed Size"});
+  const auto SCROLL_DIRECTIONS = QStringList(
+    {"None", "Horizontal", "Vertical", "Horizontal & Vertical"});
+  const auto ARTBOARD_SCROLLING = QStringList({"None", "Vertical"});
+  const auto ORIENTATIONS = QStringList({"Portrait", "Landscape"});
+  const auto GRID_TYPES = QStringList({"Layout", "Square"});
+  const auto BOOLEAN_OPERATIONS =
+    QStringList({"Add", "Subtract", "Intersect", "Exclude Overlap"});
+  const auto CORNER_MODES = QStringList(
+    {"Same radius for all corners", "Different radius for each corner"});
+  const auto BLUR_TYPES = QStringList({"Background Blur", "Object Blur"});
+  const auto DEFAULT_STROKE_COLOR = make_color(0x70, 0x70, 0x70);
+  const auto DEFAULT_SHADOW_COLOR = make_color(0, 0, 0, 0.16);
 
   QString format_number(double value) {
     if(std::abs(value) < 0.005) {
@@ -66,16 +74,10 @@ namespace {
       std::move(value), std::vector<PropertyDescriptor>());
   }
 
-  void add(PropertyDescriptor& parent, const std::string& name, QString label,
-      PropertyValue value = PropertyValue()) {
+  PropertyDescriptor& add(PropertyDescriptor& parent, const std::string& name,
+      QString label, PropertyValue value = PropertyValue()) {
     parent.m_children.push_back(make_property(
       parent.m_path + '.' + name, std::move(label), std::move(value)));
-  }
-
-  PropertyDescriptor& add_heading(
-      PropertyDescriptor& parent, const std::string& name, QString label,
-      PropertyValue value = PropertyValue()) {
-    add(parent, name, std::move(label), std::move(value));
     return parent.m_children.back();
   }
 
@@ -83,63 +85,32 @@ namespace {
     return QString::fromStdString(value);
   }
 
-  QString format_margins(const Margins& margins) {
-    return QString("%1, %2, %3, %4").arg(format_number(margins.m_top),
-      format_number(margins.m_right), format_number(margins.m_bottom),
-      format_number(margins.m_left));
-  }
-
-  QString format_font(const Font& font) {
-    if(font.m_style.empty()) {
-      return to_qstring(font.m_family);
+  void set_read_only(PropertyDescriptor& property) {
+    property.m_is_read_only = true;
+    for(auto& child : property.m_children) {
+      set_read_only(child);
     }
-    return QString("%1 %2").arg(
-      to_qstring(font.m_family), to_qstring(font.m_style));
   }
 
   struct Placement {
     const Node* m_node;
     Matrix m_transform;
-    const Node* m_children;
   };
 
   std::optional<Placement> get_placement(
       const Document& document, const Node& node) {
     if(node.get_kind() != NodeKind::REFERENCE) {
-      return Placement(&node, node.m_header.m_transform, &node);
+      return Placement(&node, node.m_header.m_transform);
     }
     auto resolution = resolve_reference(document.get_nodes(), node.get_id());
     if(!resolution) {
       return std::nullopt;
     }
     auto source = document.find(resolution->m_source);
-    auto children = document.find(resolution->m_child_source);
-    if(!source || !children) {
+    if(!source) {
       return std::nullopt;
     }
-    return Placement(source, resolution->m_transform, children);
-  }
-
-  PropertyDescriptor make_layer(
-      const Document& document, const Node& node, const Node& displayed) {
-    auto section = make_property("layer", "Layer");
-    add(section, "name", "Name", get_display_name(document, node));
-    auto kind = get_type_name(displayed);
-    if(node.get_kind() == NodeKind::REFERENCE) {
-      kind += " (reference)";
-    }
-    add(section, "kind", "Kind", kind);
-    add(section, "id", "Id", to_qstring(to_string(node.get_id())));
-    add(section, "visible", "Visible", displayed.m_header.m_is_visible);
-    add(section, "locked", "Locked", displayed.m_header.m_is_locked);
-    add(section, "export", "Marked for Export",
-      displayed.m_header.m_is_marked_for_export);
-    if(!node.m_children.empty() || displayed.get_group() ||
-        displayed.get_artboard()) {
-      add(section, "children", "Children",
-        static_cast<int>(node.m_children.size()));
-    }
-    return section;
+    return Placement(source, resolution->m_transform);
   }
 
   std::optional<Rect> get_node_frame(
@@ -157,69 +128,252 @@ namespace {
     return Rect(origin.m_x, origin.m_y, bounds->m_width, bounds->m_height);
   }
 
+  bool is_line(const Node& node) {
+    auto shape = node.get_shape();
+    return shape && std::holds_alternative<LineShape>(shape->m_geometry);
+  }
+
+  bool is_point_text(const Node& node) {
+    auto text = node.get_text();
+    return text && std::holds_alternative<PositionedFrame>(text->m_frame);
+  }
+
+  PropertyDescriptor make_boolean(const Node& node) {
+    auto section = make_property("boolean", "Boolean");
+    if(auto shape = node.get_shape()) {
+      if(auto compound = std::get_if<CompoundShape>(&shape->m_geometry)) {
+        add(section, "operation", "Operation",
+          make_choice(compound->m_operation, BOOLEAN_OPERATIONS));
+      }
+    }
+    return section;
+  }
+
+  PropertyDescriptor make_component(
+      const Document& document, const Node& node) {
+    auto section = make_property("component", "Component");
+    auto group = node.get_group();
+    if(!group || !group->m_component_instance) {
+      return section;
+    }
+    auto& instance = *group->m_component_instance;
+    section.m_label = "Component (Instance)";
+    auto& components = document.get_resources().m_components;
+    auto component = components.find(instance.m_component);
+    if(component == components.end()) {
+      add(section, "name", "Name", QString("Missing"));
+      return section;
+    }
+    add(section, "name", "Name", to_qstring(component->second.m_name));
+    auto states = QStringList();
+    auto index = 0;
+    for(auto& state : component->second.m_states) {
+      if(state.m_id == instance.m_state) {
+        index = static_cast<int>(states.size());
+      }
+      states.push_back(to_qstring(state.m_name));
+    }
+    if(states.isEmpty()) {
+      states.push_back("Default State");
+    }
+    add(section, "state", "State", Choice(index, states));
+    return section;
+  }
+
   PropertyDescriptor make_transform(const Document& document,
-      const Node& node, const Placement& placement,
+      const Node& node, const Node& displayed, const Placement& placement,
       const TextMeasurer& measurer) {
     auto section = make_property("transform", "Transform");
     auto& transform = placement.m_transform;
     auto frame = get_node_frame(document, node, transform, measurer);
     if(frame && node.get_artboard()) {
+      add(section, "width", "W", frame->m_width);
+      add(section, "height", "H", frame->m_height);
       add(section, "x", "X", frame->m_x);
       add(section, "y", "Y", frame->m_y);
-      add(section, "width", "Width", frame->m_width);
-      add(section, "height", "Height", frame->m_height);
+      add(section, "orientation", "Orientation", Choice(
+        frame->m_width > frame->m_height ? 1 : 0, ORIENTATIONS));
       return section;
     }
     auto origin = frame ? frame->get_top_left() : transform.map(Point(0, 0));
+    if(frame) {
+      add(section, "width", "W", frame->m_width).m_is_read_only =
+        is_point_text(displayed);
+      add(section, "height", "H", frame->m_height).m_is_read_only =
+        is_point_text(displayed);
+    }
+    add(section, "lock_aspect", "Lock Aspect", false).m_is_read_only = true;
     add(section, "x", "X", origin.m_x);
     add(section, "y", "Y", origin.m_y);
-    if(frame) {
-      add(section, "width", "Width", frame->m_width);
-      add(section, "height", "Height", frame->m_height);
-    }
-    auto scale_x = std::hypot(transform.m_a, transform.m_b);
     auto rotation = std::atan2(transform.m_b, transform.m_a) *
       180 / std::numbers::pi;
     add(section, "rotation", "Rotation", rotation == 0 ? 0.0 : rotation);
-    auto scale_y = scale_x == 0 ? 0.0 :
-      transform.get_determinant() / scale_x;
-    if(scale_x != 1 || scale_y != 1) {
-      add(section, "scale", "Scale", Point(scale_x, scale_y));
+    auto scroll = 0;
+    if(auto group = displayed.get_group()) {
+      if(auto& scroll_group = group->m_scroll_group) {
+        scroll = static_cast<int>(scroll_group->m_direction) + 1;
+      }
     }
+    add(section, "scroll", "Scroll", Choice(scroll, SCROLL_DIRECTIONS));
+    if(!find_artboard(document, node.get_id()).is_nil()) {
+      add(section, "fixed_position", "Fix Position When Scrolling", false).
+        m_is_read_only = true;
+    }
+    return section;
+  }
+
+  PropertyDescriptor make_layout(const Node& node, const Node& displayed) {
+    auto section = make_property("layout", "Layout");
+    add(section, "responsive", "Responsive Resize",
+      displayed.m_header.m_constraints.m_is_enabled);
+    if(auto artboard = displayed.get_artboard()) {
+      add(section, "scrolling", "Scrolling",
+        Choice(artboard->m_viewport_height ? 1 : 0, ARTBOARD_SCROLLING));
+      if(artboard->m_viewport_height) {
+        add(section, "viewport_height", "Viewport Height",
+          *artboard->m_viewport_height);
+      }
+    }
+    return section;
+  }
+
+  bool is_same_font(const Font& left, const Font& right) {
+    return left.m_family == right.m_family && left.m_style == right.m_style;
+  }
+
+  PropertyDescriptor make_text(const Text& text) {
+    auto section = make_property("text", "Text");
+    auto runs = std::vector<const TextStyle*>();
+    for(auto& run : text.m_runs) {
+      runs.push_back(&run.m_style);
+    }
+    if(runs.empty()) {
+      runs.push_back(&text.m_base_style);
+    }
+    auto& style = *runs.front();
+    auto is_mixed = [&] (auto compare) {
+      return std::any_of(runs.begin(), runs.end(), [&] (auto run) {
+        return !compare(*run, style);
+      });
+    };
+    add(section, "family", "Font", to_qstring(style.m_font.m_family)).
+      m_is_mixed = is_mixed([] (const auto& left, const auto& right) {
+        return left.m_font.m_family == right.m_font.m_family;
+      });
+    add(section, "size", "Font Size", style.m_font.m_size).m_is_mixed =
+      is_mixed([] (const auto& left, const auto& right) {
+        return left.m_font.m_size == right.m_font.m_size;
+      });
+    auto weight = style.m_font.m_style.empty() ? QString("Regular") :
+      to_qstring(style.m_font.m_style);
+    add(section, "style", "Font Style", weight).m_is_mixed =
+      is_mixed([] (const auto& left, const auto& right) {
+        return is_same_font(left.m_font, right.m_font);
+      });
+    add(section, "letter_spacing", "Character Spacing",
+      style.m_letter_spacing).m_is_mixed = is_mixed(
+        [] (const auto& left, const auto& right) {
+          return left.m_letter_spacing == right.m_letter_spacing;
+        });
+    auto& paragraph = text.m_paragraph_style;
+    auto line_height = paragraph.m_line_height.value_or(
+      std::round(style.m_font.m_size * LINE_HEIGHT_RATIO));
+    add(section, "line_height", "Line Spacing", line_height);
+    add(section, "paragraph_spacing", "Paragraph Spacing",
+      paragraph.m_paragraph_spacing);
+    add(section, "alignment", "Alignment",
+      make_choice(paragraph.m_alignment, TEXT_ALIGNMENTS));
+    auto frame = 0;
+    if(std::holds_alternative<AutoHeightFrame>(text.m_frame)) {
+      frame = 1;
+    } else if(std::holds_alternative<AreaFrame>(text.m_frame)) {
+      frame = 2;
+    }
+    add(section, "frame", "Frame", Choice(frame, TEXT_FRAMES));
+    add(section, "transform", "Case",
+      make_choice(style.m_transform, TEXT_TRANSFORMS)).m_is_mixed =
+        is_mixed([] (const auto& left, const auto& right) {
+          return left.m_transform == right.m_transform;
+        });
+    add(section, "script", "Script",
+      make_choice(style.m_script, TEXT_SCRIPTS)).m_is_mixed =
+        is_mixed([] (const auto& left, const auto& right) {
+          return left.m_script == right.m_script;
+        });
+    add(section, "underline", "Underline", style.m_is_underlined).
+      m_is_mixed = is_mixed([] (const auto& left, const auto& right) {
+        return left.m_is_underlined == right.m_is_underlined;
+      });
+    add(section, "strikethrough", "Strikethrough",
+      style.m_is_struck_through).m_is_mixed =
+        is_mixed([] (const auto& left, const auto& right) {
+          return left.m_is_struck_through == right.m_is_struck_through;
+        });
+    add(section, "hyperlink", "Insert URL here", QString()).m_is_read_only =
+      true;
     return section;
   }
 
   PropertyDescriptor make_appearance(const Node& node) {
     auto section = make_property("appearance", "Appearance");
+    if(node.get_artboard()) {
+      return section;
+    }
     add(section, "opacity", "Opacity", node.m_header.m_opacity);
-    add(section, "blend_mode", "Blend Mode",
-      make_choice(node.m_header.m_blend_mode, BLEND_MODES));
-    add(section, "isolated", "Isolated", node.m_header.m_is_isolated);
+    auto& header = node.m_header;
+    auto index = static_cast<int>(std::find(BLEND_MODE_ORDER.begin(),
+      BLEND_MODE_ORDER.end(), header.m_blend_mode) - BLEND_MODE_ORDER.begin());
+    if(node.get_group()) {
+      auto options = BLEND_MODES;
+      options.prepend(PASS_THROUGH);
+      if(header.m_blend_mode == BlendMode::NORMAL && !header.m_is_isolated) {
+        index = 0;
+      } else {
+        ++index;
+      }
+      add(section, "blend_mode", "Blend Mode", Choice(index, options));
+    } else {
+      add(section, "blend_mode", "Blend Mode", Choice(index, BLEND_MODES));
+    }
     return section;
   }
 
-  PropertyDescriptor make_fill(
-      const Document& document, const Fill& fill, QString label) {
-    auto section = make_property("fill", std::move(label),
-      make_choice(fill.index(), FILL_TYPES));
+  std::optional<PropertyDescriptor> make_geometry(const Shape& shape) {
+    auto section = make_property("geometry", "Geometry");
+    if(auto rectangle = std::get_if<RectangleShape>(&shape.m_geometry)) {
+      auto& radii = rectangle->m_radii;
+      auto is_uniform = radii.m_top_left == radii.m_top_right &&
+        radii.m_top_left == radii.m_bottom_right &&
+        radii.m_top_left == radii.m_bottom_left;
+      auto& corners = add(section, "radii", "Corner Radius",
+        Choice(is_uniform ? 0 : 1, CORNER_MODES));
+      add(corners, "all", "Corner Radius", radii.m_top_left);
+      add(corners, "top_left", "Top Left Corner Radius", radii.m_top_left);
+      add(corners, "top_right", "Top Right Corner Radius",
+        radii.m_top_right);
+      add(corners, "bottom_right", "Bottom Right Corner Radius",
+        radii.m_bottom_right);
+      add(corners, "bottom_left", "Bottom Left Corner Radius",
+        radii.m_bottom_left);
+      return section;
+    } else if(auto polygon = std::get_if<PolygonShape>(&shape.m_geometry)) {
+      add(section, "corners", "Corner Count", polygon->m_corner_count);
+      add(section, "corner_radius", "Corner Radius", polygon->m_corner_radius);
+      add(section, "star_ratio", "Star Ratio", 1.0).m_is_read_only = true;
+      return section;
+    }
+    return std::nullopt;
+  }
+
+  PropertyDescriptor make_fill(const Fill& fill) {
+    auto section =
+      make_property("fill", "Fill", make_choice(fill.index(), FILL_TYPES));
+    add(section, "enabled", "Apply Fill",
+      !std::holds_alternative<NoFill>(fill));
     if(auto solid = std::get_if<SolidFill>(&fill)) {
       add(section, "color", "Color", solid->m_color);
-      if(!solid->m_swatch.is_nil()) {
-        auto& swatches = document.get_resources().m_swatches;
-        auto swatch = std::find_if(swatches.begin(), swatches.end(),
-          [&] (const auto& swatch) {
-            return swatch.m_id == solid->m_swatch;
-          });
-        if(swatch != swatches.end()) {
-          add(section, "swatch", "Swatch", to_qstring(swatch->m_name));
-        }
-      }
     } else if(auto gradient = std::get_if<GradientFill>(&fill)) {
-      add(section, "gradient_type", "Gradient",
-        make_choice(gradient->m_geometry.index(), GRADIENT_TYPES));
-      add(section, "units", "Units",
-        make_choice(gradient->m_units, GRADIENT_UNITS));
-      auto& stops = add_heading(section, "stops", "Stops",
+      auto& stops = add(section, "stops", "Stops",
         static_cast<int>(gradient->m_stops.size()));
       for(auto i = std::size_t(0); i != gradient->m_stops.size(); ++i) {
         auto& stop = gradient->m_stops[i];
@@ -228,257 +382,142 @@ namespace {
       }
     } else if(auto image = std::get_if<ImageFill>(&fill)) {
       add(section, "image", "Image", to_qstring(to_string(image->m_image)));
-      add(section, "size", "Size", image->m_size);
-      add(section, "scale_behavior", "Scaling",
-        make_choice(image->m_scale_behavior, SCALE_BEHAVIORS));
     }
     return section;
   }
 
-  PropertyDescriptor make_stroke(const std::optional<Stroke>& stroke) {
-    if(!stroke) {
-      return make_property("stroke", "Stroke", QString("None"));
+  PropertyDescriptor make_stroke(
+      const std::optional<Stroke>& stroke, const Node& node) {
+    auto section = make_property("stroke", "Border");
+    add(section, "enabled", "Apply Border",
+      stroke && stroke->m_is_enabled);
+    add(section, "color", "Color",
+      stroke ? stroke->m_color : DEFAULT_STROKE_COLOR);
+    if(node.get_text()) {
+      return section;
     }
-    auto section = make_property("stroke", "Stroke");
-    add(section, "enabled", "Enabled", stroke->m_is_enabled);
-    add(section, "color", "Color", stroke->m_color);
-    add(section, "width", "Width", stroke->m_width);
+    add(section, "width", "Size", stroke ? stroke->m_width : 1.0);
+    auto dash = 0.0;
+    auto gap = 0.0;
+    if(stroke && !stroke->m_dashes.empty()) {
+      dash = stroke->m_dashes[0];
+      gap = stroke->m_dashes.size() > 1 ? stroke->m_dashes[1] : dash;
+    }
+    add(section, "dash", "Dash", dash);
+    add(section, "gap", "Gap", gap);
     add(section, "alignment", "Alignment",
-      make_choice(stroke->m_alignment, STROKE_ALIGNMENTS));
-    add(section, "cap", "Cap", make_choice(stroke->m_cap, STROKE_CAPS));
-    add(section, "join", "Join", make_choice(stroke->m_join, STROKE_JOINS));
-    add(section, "miter_limit", "Miter Limit", stroke->m_miter_limit);
-    if(!stroke->m_dashes.empty()) {
-      auto dashes = QStringList();
-      for(auto dash : stroke->m_dashes) {
-        dashes.push_back(format_number(dash));
-      }
-      add(section, "dashes", "Dashes", dashes.join(", "));
-    }
+      make_choice(stroke ? stroke->m_alignment : StrokeAlignment::CENTER,
+        STROKE_ALIGNMENTS)).m_is_read_only = is_line(node);
+    add(section, "cap", "Cap",
+      make_choice(stroke ? stroke->m_cap : StrokeCap::BUTT, STROKE_CAPS));
+    add(section, "join", "Join",
+      make_choice(stroke ? stroke->m_join : StrokeJoin::MITER, STROKE_JOINS)).
+        m_is_read_only = is_line(node);
     return section;
   }
 
-  void add_shadow(PropertyDescriptor& effect, const auto& shadow) {
-    add(effect, "visible", "Visible", shadow.m_is_visible);
-    add(effect, "offset", "Offset", shadow.m_offset);
-    add(effect, "blur", "Blur", shadow.m_blur);
-    add(effect, "color", "Color", shadow.m_color);
+  void add_shadow(PropertyDescriptor& section, const std::string& name,
+      const QString& label, const auto* shadow) {
+    auto& row = add(section, name, label,
+      static_cast<bool>(shadow) && shadow->m_is_visible);
+    add(row, "color", "Color", shadow ? shadow->m_color :
+      DEFAULT_SHADOW_COLOR);
+    if(shadow) {
+      add(row, "x", "X", shadow->m_offset.m_x);
+      add(row, "y", "Y", shadow->m_offset.m_y);
+      add(row, "blur", "B", shadow->m_blur);
+    }
   }
 
-  PropertyDescriptor make_effects(const std::vector<Effect>& effects) {
-    auto section = make_property(
-      "effects", "Effects", static_cast<int>(effects.size()));
-    for(auto i = std::size_t(0); i != effects.size(); ++i) {
-      auto name = std::to_string(i);
-      if(auto shadow = std::get_if<DropShadow>(&effects[i])) {
-        add_shadow(add_heading(section, name, "Drop Shadow"), *shadow);
-      } else if(auto shadow = std::get_if<InnerShadow>(&effects[i])) {
-        add_shadow(add_heading(section, name, "Inner Shadow"), *shadow);
-      } else if(auto blur = std::get_if<Blur>(&effects[i])) {
-        auto& effect = add_heading(section, name,
-          blur->m_is_background ? "Background Blur" : "Object Blur");
-        add(effect, "visible", "Visible", blur->m_is_visible);
-        add(effect, "amount", "Amount", blur->m_amount);
-        add(effect, "brightness", "Brightness", blur->m_brightness);
-        if(blur->m_is_background) {
-          add(effect, "fill_opacity", "Fill Opacity", blur->m_fill_opacity);
-        }
-      }
-    }
-    return section;
-  }
-
-  PropertyDescriptor make_geometry(const Shape& shape) {
-    auto section = make_property("geometry", "Geometry");
-    std::visit([&] <typename T> (const T& geometry) {
-      if constexpr(std::same_as<T, RectangleShape>) {
-        auto& radii = geometry.m_radii;
-        auto& corners = add_heading(section, "radii", "Corner Radii");
-        add(corners, "top_left", "Top Left", radii.m_top_left);
-        add(corners, "top_right", "Top Right", radii.m_top_right);
-        add(corners, "bottom_right", "Bottom Right", radii.m_bottom_right);
-        add(corners, "bottom_left", "Bottom Left", radii.m_bottom_left);
-      } else if constexpr(std::same_as<T, EllipseShape>) {
-        add(section, "center", "Center", geometry.m_center);
-        add(section, "radii", "Radii",
-          Size(geometry.m_x_radius, geometry.m_y_radius));
-      } else if constexpr(std::same_as<T, LineShape>) {
-        add(section, "start", "Start", geometry.m_start);
-        add(section, "end", "End", geometry.m_end);
-      } else if constexpr(std::same_as<T, PolygonShape>) {
-        add(section, "corners", "Corners", geometry.m_corner_count);
-        add(section, "corner_radius", "Corner Radius",
-          geometry.m_corner_radius);
-      } else if constexpr(std::same_as<T, PathShape>) {
-        add(section, "fill_rule", "Fill Rule",
-          make_choice(geometry.m_fill_rule, FILL_RULES));
-      } else if constexpr(std::same_as<T, CompoundShape>) {
-        add(section, "operation", "Operation",
-          make_choice(geometry.m_operation, COMPOUND_OPERATIONS));
-      }
-    }, shape.m_geometry);
-    return section;
-  }
-
-  bool is_same_font(const TextStyle& left, const TextStyle& right) {
-    return left.m_font.m_family == right.m_font.m_family &&
-      left.m_font.m_style == right.m_font.m_style &&
-      left.m_font.m_size == right.m_font.m_size;
-  }
-
-  PropertyDescriptor make_text(const Text& text) {
-    auto section = make_property("text", "Text");
-    auto content = QString::fromStdU16String(*text.m_content);
-    auto length = static_cast<int>(content.size());
-    if(content.size() > CONTENT_LENGTH) {
-      content.truncate(CONTENT_LENGTH);
-      content += "...";
-    }
-    content.replace(QChar('\r'), QChar(' ')).replace(QChar('\n'), QChar(' '));
-    add(section, "content", "Content", content);
-    add(section, "length", "Characters", length);
-    auto& style = text.m_runs.empty() ? text.m_base_style :
-      text.m_runs.front().m_style;
-    auto is_mixed = std::any_of(text.m_runs.begin(), text.m_runs.end(),
-      [&] (const auto& run) {
-        return !is_same_font(run.m_style, style);
-      });
-    auto font = format_font(style.m_font);
-    if(is_mixed) {
-      font += " (mixed)";
-    }
-    add(section, "font", "Font", font);
-    add(section, "size", "Size", style.m_font.m_size);
-    add(section, "color", "Color", style.m_color);
-    add(section, "letter_spacing", "Letter Spacing", style.m_letter_spacing);
-    add(section, "transform", "Case",
-      make_choice(style.m_transform, TEXT_TRANSFORMS));
-    add(section, "script", "Script", make_choice(style.m_script, TEXT_SCRIPTS));
-    add(section, "runs", "Styled Runs", static_cast<int>(text.m_runs.size()));
-    auto& paragraph = text.m_paragraph_style;
-    add(section, "alignment", "Alignment",
-      make_choice(paragraph.m_alignment, TEXT_ALIGNMENTS));
-    if(paragraph.m_line_height) {
-      add(section, "line_height", "Line Height", *paragraph.m_line_height);
-    } else {
-      add(section, "line_height", "Line Height", QString("Auto"));
-    }
-    add(section, "paragraph_spacing", "Paragraph Spacing",
-      paragraph.m_paragraph_spacing);
-    add(section, "frame", "Frame", make_choice(text.m_frame.index(),
-      TEXT_FRAMES));
-    if(auto area = std::get_if<AreaFrame>(&text.m_frame)) {
-      add(section, "frame_size", "Frame Size", area->m_size);
-    } else if(auto auto_height = std::get_if<AutoHeightFrame>(&text.m_frame)) {
-      add(section, "frame_width", "Frame Width", auto_height->m_width);
-    }
-    add(section, "stored_layout", "Stored Layout",
-      static_cast<bool>(text.m_layout));
-    return section;
-  }
-
-  PropertyDescriptor make_artboard(const Artboard& artboard) {
-    auto section = make_property("artboard", "Artboard");
-    if(artboard.m_viewport_height) {
-      add(section, "viewport_height", "Viewport Height",
-        *artboard.m_viewport_height);
-    }
-    if(auto& grid = artboard.m_layout_grid) {
-      auto& heading = add_heading(section, "grid", "Grid",
-        make_choice(grid->m_type, GRID_TYPES));
-      add(heading, "visible", "Visible", grid->m_is_visible);
-      if(grid->m_type == GridType::LAYOUT) {
-        add(heading, "columns", "Columns", grid->m_column_count);
-        add(heading, "gutter", "Gutter", grid->m_gutter);
-        add(heading, "margins", "Margins", format_margins(grid->m_margins));
-      } else {
-        add(heading, "size", "Size", grid->m_square_size);
+  PropertyDescriptor make_effects(
+      const std::vector<Effect>& effects, const Node& node) {
+    auto section = make_property("effects", "Effects");
+    auto inner = static_cast<const InnerShadow*>(nullptr);
+    auto drop = static_cast<const DropShadow*>(nullptr);
+    auto blur = static_cast<const Blur*>(nullptr);
+    for(auto& effect : effects) {
+      if(auto shadow = std::get_if<InnerShadow>(&effect); shadow && !inner) {
+        inner = shadow;
+      } else if(auto shadow = std::get_if<DropShadow>(&effect);
+          shadow && !drop) {
+        drop = shadow;
+      } else if(auto candidate = std::get_if<Blur>(&effect);
+          candidate && !blur) {
+        blur = candidate;
       }
     }
-    add(section, "guides", "Guides",
-      static_cast<int>(artboard.m_guides.size()));
+    if(!is_line(node)) {
+      add_shadow(section, "inner_shadow", "Inner Shadow", inner);
+    }
+    add_shadow(section, "drop_shadow", "Drop Shadow", drop);
+    auto& row = add(section, "blur", "Blur",
+      static_cast<bool>(blur) && blur->m_is_visible);
+    add(row, "type", "Type",
+      Choice(!blur || blur->m_is_background ? 0 : 1, BLUR_TYPES));
+    if(blur) {
+      add(row, "amount", "Blur Amount", blur->m_amount);
+      add(row, "brightness", "Brightness", blur->m_brightness);
+      add(row, "opacity", "Effect Opacity", blur->m_fill_opacity);
+    }
     return section;
   }
 
-  PropertyDescriptor make_roles(const Document& document, const Group& group) {
-    auto section = make_property("roles", "Roles");
-    if(auto& instance = group.m_component_instance) {
-      auto& heading = add_heading(section, "component", "Component");
-      auto& components = document.get_resources().m_components;
-      auto component = components.find(instance->m_component);
-      if(component != components.end()) {
-        add(heading, "name", "Name", to_qstring(component->second.m_name));
-        auto state = QString("Default");
-        for(auto& candidate : component->second.m_states) {
-          if(candidate.m_id == instance->m_state) {
-            state = to_qstring(candidate.m_name);
-          }
-        }
-        add(heading, "state", "State", state);
-      } else {
-        add(heading, "name", "Name", QString("Missing"));
+  PropertyDescriptor make_grid(const Artboard& artboard) {
+    auto section = make_property("grid", "Grid");
+    auto& grid = artboard.m_layout_grid;
+    add(section, "visible", "Show Grid", grid && grid->m_is_visible);
+    auto is_square = grid && grid->m_type == GridType::SQUARE;
+    add(section, "type", "Grid Type", Choice(is_square ? 1 : 0, GRID_TYPES));
+    if(!grid) {
+      return section;
+    }
+    if(is_square) {
+      add(section, "size", "Size", grid->m_square_size.m_width);
+      add(section, "color", "Color", grid->m_square_column_color);
+      return section;
+    }
+    auto& margins = grid->m_margins;
+    auto count = std::max(grid->m_column_count, 1);
+    auto width = (artboard.m_frame.m_width - margins.m_left -
+      margins.m_right - grid->m_gutter * (count - 1)) / count;
+    add(section, "columns", "Columns", grid->m_column_count);
+    add(section, "column_color", "Column Color", grid->m_column_color);
+    add(section, "gutter", "Gutter Width", grid->m_gutter);
+    add(section, "column_width", "Column Width", width);
+    add(section, "linked_margins", "Linked Margins",
+      margins.m_top == margins.m_right && margins.m_top == margins.m_bottom &&
+      margins.m_top == margins.m_left);
+    add(section, "margin_top", "Top Margin", margins.m_top);
+    add(section, "margin_right", "Right Margin", margins.m_right);
+    add(section, "margin_bottom", "Bottom Margin", margins.m_bottom);
+    add(section, "margin_left", "Left Margin", margins.m_left);
+    return section;
+  }
+
+  PropertyDescriptor make_export(const Node& node) {
+    auto section = make_property("export", "Export");
+    add(section, "marked", "Mark for Export",
+      node.m_header.m_is_marked_for_export);
+    return section;
+  }
+
+  void collect_leaves(const Document& document, const Node& node,
+      std::vector<const Node*>& leaves) {
+    for(auto& id : node.m_children) {
+      auto child = document.find(id);
+      if(!child) {
+        continue;
       }
-      add(heading, "size", "Size", instance->m_size);
+      auto displayed = get_displayed_node(document, *child);
+      if(!displayed) {
+        continue;
+      }
+      if(displayed->get_shape() || displayed->get_text()) {
+        leaves.push_back(displayed);
+      } else if(displayed->get_group()) {
+        collect_leaves(document, *displayed, leaves);
+      }
     }
-    if(auto& grid = group.m_repeat_grid) {
-      auto& heading = add_heading(section, "repeat_grid", "Repeat Grid");
-      add(heading, "columns", "Columns", grid->m_column_count);
-      add(heading, "rows", "Rows", grid->m_row_count);
-      add(heading, "cell_size", "Cell Size", grid->m_cell_size);
-      add(heading, "column_spacing", "Column Spacing", grid->m_column_spacing);
-      add(heading, "row_spacing", "Row Spacing", grid->m_row_spacing);
-    }
-    if(auto& scroll = group.m_scroll_group) {
-      auto& heading = add_heading(section, "scroll_group", "Scroll Group");
-      add(heading, "direction", "Direction",
-        make_choice(scroll->m_direction, SCROLL_DIRECTIONS));
-      add(heading, "viewport", "Viewport", scroll->m_viewport);
-      add(heading, "offset", "Offset", scroll->m_offset);
-    }
-    if(auto& stack = group.m_stack) {
-      auto& heading = add_heading(section, "stack", "Stack");
-      add(heading, "orientation", "Orientation",
-        make_choice(stack->m_orientation, ORIENTATIONS));
-      add(heading, "padding", "Padding", format_margins(stack->m_padding));
-      add(heading, "background", "Background", stack->m_has_background);
-    }
-    if(auto& padding = group.m_padding) {
-      auto& heading = add_heading(section, "padding", "Padding");
-      add(heading, "padding", "Padding", format_margins(padding->m_padding));
-      add(heading, "content_aware", "Content Aware",
-        padding->m_is_content_aware);
-      add(heading, "background", "Background", padding->m_has_background);
-    }
-    if(auto& mask = group.m_mask) {
-      auto& heading = add_heading(section, "mask", "Mask");
-      add(heading, "shapes", "Shapes", static_cast<int>(mask->m_shapes.size()));
-    }
-    if(section.m_children.empty()) {
-      section.m_value = QString("None");
-    }
-    return section;
-  }
-
-  PropertyDescriptor make_reference(
-      const Document& document, const Node& node, const Node* displayed) {
-    auto& reference = *node.get_reference();
-    auto section = make_property("reference", "Reference");
-    if(auto source = document.find(reference.m_source)) {
-      add(section, "source", "Source", get_display_name(document, *source));
-    } else {
-      add(section, "source", "Source", QString("Missing"));
-    }
-    add(section, "source_id", "Source Id",
-      to_qstring(to_string(reference.m_source)));
-    add(section, "resolved", "Resolved", static_cast<bool>(displayed));
-    add(section, "transform", "Overrides Transform",
-      static_cast<bool>(reference.m_transform));
-    add(section, "children", "Own Children", reference.m_has_children);
-    return section;
-  }
-
-  int to_byte(double component) {
-    return std::clamp(static_cast<int>(std::lround(component * 255)), 0, 255);
   }
 
   void intersect_properties(std::vector<PropertyDescriptor>& properties,
@@ -494,9 +533,39 @@ namespace {
       if(other->m_is_mixed || !(property.m_value == other->m_value)) {
         property.m_is_mixed = true;
       }
+      property.m_is_read_only |= other->m_is_read_only;
       intersect_properties(property.m_children, other->m_children);
       return false;
     });
+  }
+
+  std::vector<PropertyDescriptor> make_leaf_style(const Node& leaf) {
+    auto sections = std::vector<PropertyDescriptor>();
+    auto& style = leaf.get_shape() ? leaf.get_shape()->m_style :
+      leaf.get_text()->m_style;
+    sections.push_back(make_fill(style.m_fill));
+    sections.push_back(make_stroke(style.m_stroke, leaf));
+    return sections;
+  }
+
+  void add_group_style(const Document& document, const Node& group,
+      std::vector<PropertyDescriptor>& sections) {
+    auto leaves = std::vector<const Node*>();
+    collect_leaves(document, group, leaves);
+    auto style = std::vector<PropertyDescriptor>();
+    if(leaves.empty()) {
+      style.push_back(make_fill(NoFill()));
+      style.push_back(make_stroke(std::nullopt, group));
+    } else {
+      style = make_leaf_style(*leaves.front());
+      for(auto i = std::size_t(1); i != leaves.size(); ++i) {
+        intersect_properties(style, make_leaf_style(*leaves[i]));
+      }
+    }
+    for(auto& section : style) {
+      set_read_only(section);
+      sections.push_back(std::move(section));
+    }
   }
 
   bool is_frame_property(std::string_view path) {
@@ -538,34 +607,44 @@ std::vector<PropertyDescriptor> Rellu::extract_properties(
     return sections;
   }
   auto placement = get_placement(document, *node);
-  auto displayed = placement ? placement->m_node : node;
-  sections.push_back(make_layer(document, *node, *displayed));
+  auto& displayed = placement ? *placement->m_node : *node;
+  auto artboard = displayed.get_artboard();
+  auto shape = displayed.get_shape();
+  auto text = displayed.get_text();
+  auto group = displayed.get_group();
+  sections.push_back(make_property("align", "Align"));
+  sections.push_back(make_boolean(displayed));
+  sections.push_back(make_component(document, displayed));
   if(placement) {
     sections.push_back(
-      make_transform(document, *node, *placement, measurer));
+      make_transform(document, *node, displayed, *placement, measurer));
   }
-  sections.push_back(make_appearance(*displayed));
-  if(auto shape = displayed->get_shape()) {
-    sections.push_back(make_geometry(*shape));
-    sections.push_back(make_fill(document, shape->m_style.m_fill, "Fill"));
-    sections.push_back(make_stroke(shape->m_style.m_stroke));
-    sections.push_back(make_effects(shape->m_style.m_effects));
-  } else if(auto text = displayed->get_text()) {
+  sections.push_back(make_layout(*node, displayed));
+  if(text) {
     sections.push_back(make_text(*text));
-    sections.push_back(make_fill(document, text->m_style.m_fill, "Fill"));
-    sections.push_back(make_stroke(text->m_style.m_stroke));
-    sections.push_back(make_effects(text->m_style.m_effects));
-  } else if(auto artboard = displayed->get_artboard()) {
-    sections.push_back(make_artboard(*artboard));
-    sections.push_back(
-      make_fill(document, artboard->m_background, "Background"));
-  } else if(auto group = displayed->get_group()) {
-    sections.push_back(make_roles(document, *group));
   }
-  if(node->get_kind() == NodeKind::REFERENCE) {
-    sections.push_back(make_reference(
-      document, *node, placement ? placement->m_node : nullptr));
+  sections.push_back(make_appearance(displayed));
+  if(shape) {
+    if(auto geometry = make_geometry(*shape)) {
+      sections.push_back(std::move(*geometry));
+    }
+    if(!is_line(displayed)) {
+      sections.push_back(make_fill(shape->m_style.m_fill));
+    }
+    sections.push_back(make_stroke(shape->m_style.m_stroke, displayed));
+    sections.push_back(make_effects(shape->m_style.m_effects, displayed));
+  } else if(text) {
+    sections.push_back(make_fill(text->m_style.m_fill));
+    sections.push_back(make_stroke(text->m_style.m_stroke, displayed));
+    sections.push_back(make_effects(text->m_style.m_effects, displayed));
+  } else if(artboard) {
+    sections.push_back(make_fill(artboard->m_background));
+    sections.push_back(make_grid(*artboard));
+    return sections;
+  } else if(group) {
+    add_group_style(document, displayed, sections);
   }
+  sections.push_back(make_export(displayed));
   return sections;
 }
 
@@ -650,6 +729,10 @@ QString Rellu::to_text(const PropertyValue& value) {
     } else if constexpr(std::same_as<T, QString>) {
       return value;
     } else if constexpr(std::same_as<T, Color>) {
+      auto to_byte = [] (double component) {
+        return std::clamp(
+          static_cast<int>(std::lround(component * 255)), 0, 255);
+      };
       auto text = QString("#%1%2%3").arg(to_byte(value.m_red), 2, 16,
         QChar('0')).arg(to_byte(value.m_green), 2, 16, QChar('0')).arg(
         to_byte(value.m_blue), 2, 16, QChar('0')).toUpper();
@@ -670,4 +753,19 @@ QString Rellu::to_text(const PropertyValue& value) {
       return QString::number(value.m_index);
     }
   }, value);
+}
+
+std::optional<BlendMode> Rellu::get_blend_mode(const Choice& choice) {
+  if(choice.m_index < 0 || choice.m_index >= choice.m_options.size()) {
+    return std::nullopt;
+  }
+  auto& name = choice.m_options[choice.m_index];
+  if(name == PASS_THROUGH) {
+    return BlendMode::NORMAL;
+  }
+  auto i = BLEND_MODES.indexOf(name);
+  if(i < 0) {
+    return std::nullopt;
+  }
+  return BLEND_MODE_ORDER[i];
 }

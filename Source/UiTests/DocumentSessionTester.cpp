@@ -1,6 +1,8 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <variant>
+#include <vector>
 #include <doctest/doctest.h>
 #include <QFileInfo>
 #include <QTemporaryDir>
@@ -8,7 +10,9 @@
 #include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/StyleCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
+#include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Io/XdImporters.hpp"
+#include "Rellu/Io/XdOpaque.hpp"
 #include "Rellu/Io/XdWriter.hpp"
 #include "Rellu/Model/DocumentComparison.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
@@ -211,6 +215,42 @@ TEST_SUITE("DocumentSession") {
     auto original = Document();
     import_xd(to_path(source), original);
     REQUIRE(original.get(background).m_header.m_opacity == 1);
+  }
+
+  TEST_CASE("compound_operands") {
+    auto document = Document();
+    auto stored = make_rectangle(Rect(0, 0, 1, 1));
+    auto compounds = std::vector<NodeId>();
+    auto operands = std::vector<NodeId>();
+    {
+      auto transaction = Transaction(document);
+      for(auto i = 0; i != 2; ++i) {
+        auto header = NodeHeader();
+        if(i == 1) {
+          auto data = XdNodeData();
+          data.m_orphans.emplace_back(NodeId(), "{}");
+          header.m_opaque = OpaqueData(encode_node_data(data));
+        }
+        auto shape = Shape();
+        shape.m_geometry =
+          CompoundShape(CompoundOperation::UNION, Shared(stored));
+        compounds.push_back(transaction.append(NodeId(), header, shape));
+        auto operand = Shape();
+        operand.m_geometry = RectangleShape(Rect(0, 0, 10, 10));
+        operands.push_back(
+          transaction.append(compounds.back(), NodeHeader(), operand));
+      }
+      transaction.commit();
+    }
+    auto session = DocumentSession(document, QString(), XdTextLayout());
+    session.get_editor().execute(
+      std::make_unique<TranslateCommand>(operands, Point(5, 0)));
+    auto get_result = [&] (const NodeId& id) {
+      return *std::get<CompoundShape>(
+        document.get(id).get_shape()->m_geometry).m_path;
+    };
+    REQUIRE(get_result(compounds[0]) != stored);
+    REQUIRE(get_result(compounds[1]) == stored);
   }
 
   TEST_CASE("xd_document") {

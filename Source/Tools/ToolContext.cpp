@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <cmath>
+#include <utility>
 #include "Rellu/Tools/ToolContext.hpp"
 
 using namespace Rellu;
@@ -82,6 +84,45 @@ Point ToolContext::to_document(Point point) const {
 
 Point ToolContext::to_view(Point point) const {
   return m_view.map(point);
+}
+
+void ToolContext::set_navigator(ViewNavigator navigator) {
+  m_navigator = std::move(navigator);
+}
+
+void ToolContext::zoom(double factor, Point center) {
+  if(m_navigator.m_zoom) {
+    m_navigator.m_zoom(factor, center);
+    return;
+  }
+  set_view(make_translation(center.m_x, center.m_y) *
+    make_scale(factor, factor) *
+    make_translation(-center.m_x, -center.m_y) * m_view, m_scale, m_size);
+}
+
+void ToolContext::zoom_to(const Rect& region) {
+  if(m_navigator.m_zoom_to) {
+    m_navigator.m_zoom_to(region);
+    return;
+  }
+  if(!(region.m_width > 0) || !(region.m_height > 0) ||
+      !(m_size.m_width > 0) || !(m_size.m_height > 0)) {
+    return;
+  }
+  auto zoom = std::min(m_size.m_width / region.m_width,
+    m_size.m_height / region.m_height);
+  auto center = region.get_center();
+  set_view(make_translation(m_size.m_width / 2 - zoom * center.m_x,
+    m_size.m_height / 2 - zoom * center.m_y) * make_scale(zoom, zoom),
+    m_scale, m_size);
+}
+
+void ToolContext::request_tool(std::string name) {
+  m_tool_request = std::move(name);
+}
+
+std::optional<std::string> ToolContext::take_tool_request() {
+  return std::exchange(m_tool_request, std::nullopt);
 }
 
 void ToolContext::update_titles() {

@@ -1,5 +1,6 @@
 #ifndef RELLU_SCENE_SCENE_BUILDER_HPP
 #define RELLU_SCENE_SCENE_BUILDER_HPP
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -42,7 +43,9 @@ namespace Rellu {
   /**
    * Converts the nodes of a Document into DrawLists in document coordinates,
    * reusing the outlines of shapes left unchanged since an earlier
-   * conversion and sharing them with the draw lists.
+   * conversion and sharing them with the draw lists. Conversions made with
+   * build_lists are kept, so that converting again after a change converts
+   * only what the change affects.
    */
   class SceneBuilder {
     public:
@@ -110,6 +113,28 @@ namespace Rellu {
       DrawList build(const NodeId& id, SceneDependencies& dependencies);
 
       /**
+       * Converts a node and its descendants as they appear within their
+       * ancestors into draw lists that together draw what build converts the
+       * node into, reusing the draw lists kept by earlier calls for the
+       * subtrees that no change reported through invalidate has affected
+       * since. Every change to the document that affects its drawing must be
+       * reported through invalidate before the next call.
+       * @param id The node's id.
+       * @param dependencies Receives what the conversion depends on.
+       * @return The draw lists in z order, none if there is no such node.
+       */
+      std::vector<std::shared_ptr<const DrawList>> build_lists(
+        const NodeId& id, SceneDependencies& dependencies);
+
+      /**
+       * Reports a change to a node or an image, discarding what build_lists
+       * keeps of the conversions the change affects.
+       * @param id The id of the node changed, inserted or removed, or of the
+       *        image added or removed.
+       */
+      void invalidate(const NodeId& id);
+
+      /**
        * Discards what is cached of a node, as when it is removed.
        * @param id The node's id.
        */
@@ -121,6 +146,8 @@ namespace Rellu {
         double m_opacity;
         std::optional<Rect> m_clip;
         std::optional<Projection> m_projection;
+
+        bool operator ==(const Placement&) const = default;
       };
       struct Entry {
         const Node* m_source;
@@ -157,6 +184,27 @@ namespace Rellu {
         std::vector<std::pair<Matrix, std::vector<TextRaster>>> m_rasters;
         std::uint64_t m_generation;
       };
+      struct Segment {
+        std::size_t m_begin;
+        std::size_t m_end;
+        bool m_is_retained;
+        bool m_is_stale;
+        std::vector<std::shared_ptr<const DrawList>> m_lists;
+        std::size_t m_size;
+        SceneDependencies m_dependencies;
+        double m_tolerance;
+      };
+      struct Subtree {
+        Placement m_parent;
+        int m_depth;
+        bool m_is_stale;
+        double m_tolerance;
+        SceneDependencies m_dependencies;
+        std::vector<Segment> m_segments;
+        std::vector<std::shared_ptr<const DrawList>> m_lists;
+        std::size_t m_size;
+        SceneDependencies m_total;
+      };
       const Document* m_document;
       double m_tolerance;
       std::optional<Matrix> m_device_transform;
@@ -167,7 +215,11 @@ namespace Rellu {
       PaintConverter m_paints;
       std::unordered_map<NodeId, TextOutline> m_texts;
       SceneDependencies* m_dependencies;
-      std::unordered_set<NodeId> m_sources;
+      std::unordered_map<NodeId, NodeId> m_roots;
+      bool m_is_retaining;
+      std::unordered_map<NodeId, Subtree> m_subtrees;
+      std::unordered_set<NodeId> m_large;
+      std::unordered_map<NodeId, std::unordered_set<NodeId>> m_dependents;
 
       SceneBuilder(const SceneBuilder&) = delete;
       SceneBuilder& operator =(const SceneBuilder&) = delete;
@@ -175,6 +227,22 @@ namespace Rellu {
       std::optional<Placement> get_placement(const NodeId& id, int depth);
       void add_node(const NodeId& id, const Placement& parent, int depth,
         DrawList& list);
+      void add_entry(const Node& node, const Entry& entry, int depth,
+        DrawList& list);
+      std::optional<LayerMask> get_group_mask(
+        const Node& source, Placement& placement);
+      void add_composites(const Node& source, const Placement& placement,
+        const std::optional<Rect>& clip, std::optional<LayerMask> mask,
+        std::size_t first, DrawList& list);
+      void retain(const NodeId& id, const Placement& parent, int depth,
+        Segment& segment);
+      void add_segments(const Node& source, const std::vector<NodeId>& children,
+        bool is_own, std::size_t begin, std::size_t end, std::size_t limit,
+        const Placement& placement, int depth, std::vector<Segment>& segments);
+      void forget(const NodeId& id);
+      void mark_ancestors(const Node& node);
+      void invalidate_dependents(const NodeId& key);
+      void clear_retained();
       void add_dependencies(const Node& reference);
       void add_tolerance(double minimum, double maximum);
       std::optional<Paint> convert(const Fill& fill, const Path& outline);

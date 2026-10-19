@@ -5,6 +5,7 @@
 #include <QWidget>
 #include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Ui/EditActions.hpp"
+#include "Rellu/Ui/XdMenus.hpp"
 #include "TestDocument.hpp"
 
 using namespace Rellu;
@@ -19,7 +20,7 @@ namespace {
 
     Fixture()
         : m_actions(m_window) {
-      m_actions.add(MenuDefinition("edit", "&Edit"));
+      add_xd_menus(m_actions);
       add_standard_commands(m_commands);
       m_edit_actions = std::make_unique<EditActions>(m_actions, m_commands);
     }
@@ -48,7 +49,10 @@ TEST_SUITE("EditActions") {
     REQUIRE(!fixture.is_enabled("edit.paste"));
     REQUIRE(!fixture.is_enabled("object.group"));
     REQUIRE(fixture.is_enabled("edit.select_all"));
+    REQUIRE(!fixture.is_enabled("edit.deselect_all"));
+    REQUIRE(!fixture.is_enabled("object.path.add"));
     editor.get_selection().select(ids.m_ellipse);
+    REQUIRE(fixture.is_enabled("edit.deselect_all"));
     REQUIRE(fixture.is_enabled("edit.delete"));
     REQUIRE(fixture.is_enabled("edit.cut"));
     REQUIRE(fixture.is_enabled("edit.copy"));
@@ -56,8 +60,8 @@ TEST_SUITE("EditActions") {
     REQUIRE(fixture.is_enabled("object.group"));
     REQUIRE(!fixture.is_enabled("object.ungroup"));
     REQUIRE(fixture.is_enabled("arrange.bring_to_front"));
-    REQUIRE(actions.get("object.toggle_lock").text() == "&Lock");
-    REQUIRE(actions.get("object.toggle_visibility").text() == "&Hide");
+    REQUIRE(actions.get("object.toggle_lock").text() == "Lock");
+    REQUIRE(actions.get("object.toggle_visibility").text() == "Hide");
     editor.get_selection().select(ids.m_card);
     REQUIRE(fixture.is_enabled("object.ungroup"));
     editor.get_selection().select(ids.m_artboard);
@@ -76,19 +80,19 @@ TEST_SUITE("EditActions") {
     auto editor = Editor(document);
     fixture.m_edit_actions->set_editor(&editor);
     editor.get_selection().select(ids.m_ellipse);
-    REQUIRE(actions.get("edit.undo").text() == "&Undo");
+    REQUIRE(actions.get("edit.undo").text() == "Undo");
     REQUIRE(actions.trigger("object.group"));
     REQUIRE(fixture.is_enabled("edit.undo"));
-    REQUIRE(actions.get("edit.undo").text() == "&Undo Group");
+    REQUIRE(actions.get("edit.undo").text() == "Undo Group");
     REQUIRE(fixture.is_enabled("object.ungroup"));
     REQUIRE(actions.trigger("object.toggle_lock"));
     REQUIRE(document.get(editor.get_selection().get_primary()).m_header.
       m_is_locked);
-    REQUIRE(actions.get("object.toggle_lock").text() == "&Unlock");
-    REQUIRE(actions.get("edit.undo").text() == "&Undo Lock");
+    REQUIRE(actions.get("object.toggle_lock").text() == "Unlock");
+    REQUIRE(actions.get("edit.undo").text() == "Undo Lock");
     REQUIRE(actions.trigger("edit.undo"));
-    REQUIRE(actions.get("edit.undo").text() == "&Undo Group");
-    REQUIRE(actions.get("edit.redo").text() == "&Redo Lock");
+    REQUIRE(actions.get("edit.undo").text() == "Undo Group");
+    REQUIRE(actions.get("edit.redo").text() == "Redo Lock");
     REQUIRE(actions.trigger("edit.undo"));
     REQUIRE(editor.get_selection().get_nodes() ==
       std::vector<NodeId>({ids.m_ellipse}));
@@ -115,11 +119,11 @@ TEST_SUITE("EditActions") {
     REQUIRE(document.get(copy).m_parent == ids.m_artboard);
     REQUIRE(document.get_children(ids.m_artboard).back() == copy);
     REQUIRE(document.get(copy).m_children.size() == 2);
-    REQUIRE(actions.get("edit.undo").text() == "&Undo Paste");
+    REQUIRE(actions.get("edit.undo").text() == "Undo Paste");
     editor.get_selection().select(ids.m_ellipse);
     REQUIRE(actions.trigger("edit.cut"));
     REQUIRE(!document.find(ids.m_ellipse));
-    REQUIRE(actions.get("edit.undo").text() == "&Undo Cut");
+    REQUIRE(actions.get("edit.undo").text() == "Undo Cut");
     REQUIRE(actions.trigger("edit.paste"));
     auto pasted = editor.get_selection().get_primary();
     REQUIRE(document.get(pasted).get_shape());

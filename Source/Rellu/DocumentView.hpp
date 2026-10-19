@@ -5,6 +5,7 @@
 #include <QCursor>
 #include <QPointF>
 #include <QTimer>
+#include <QVariant>
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
@@ -12,13 +13,16 @@
 #include "Rellu/Model/Subscription.hpp"
 #include "Rellu/Rendering/Canvas.hpp"
 #include "Rellu/Scene/Scene.hpp"
+#include "Rellu/Tools/TextTool.hpp"
 #include "Rellu/Tools/ToolManager.hpp"
 
 namespace Rellu {
 
   /**
    * Displays a document on the canvas, letting the user pan and zoom, and
-   * edit it with the active tool through an Editor.
+   * edit it with the active tool through an Editor. The tools include a
+   * TextTool named text, chosen with T, which receives keys ahead of the
+   * application's shortcuts and input method events while it edits text.
    */
   class DocumentView : public Canvas {
     public:
@@ -84,6 +88,7 @@ namespace Rellu {
       void set_zoom(double zoom);
 
     protected:
+      bool event(QEvent* event) override;
       void render(QRhiCommandBuffer* buffer) override;
       void mousePressEvent(QMouseEvent* event) override;
       void mouseMoveEvent(QMouseEvent* event) override;
@@ -92,6 +97,8 @@ namespace Rellu {
       void wheelEvent(QWheelEvent* event) override;
       void keyPressEvent(QKeyEvent* event) override;
       void keyReleaseEvent(QKeyEvent* event) override;
+      void inputMethodEvent(QInputMethodEvent* event) override;
+      QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
       void leaveEvent(QEvent* event) override;
       void resizeEvent(QResizeEvent* event) override;
 
@@ -113,6 +120,7 @@ namespace Rellu {
       QPointF m_position;
       std::optional<QCursor> m_rotate_cursor;
       QTimer m_preparation;
+      QTimer m_caret_timer;
 
       void frame(const Rect& region);
       void zoom(double factor, QPointF center);
@@ -120,6 +128,8 @@ namespace Rellu {
       void update_view();
       void update_cursor();
       void attach_tools();
+      TextTool* get_text_tool() const;
+      void update_text_editing();
       bool forward(QMouseEvent* event, auto handler);
   };
 }

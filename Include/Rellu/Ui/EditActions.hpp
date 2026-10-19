@@ -13,9 +13,11 @@
 namespace Rellu {
 
   /**
-   * The edit, object and arrange actions of an ActionRegistry, applied to the
-   * selection of an editor through commands. An action backed by a command
-   * is enabled only while the command applies to the selection.
+   * Handles the edit, object and arrange actions of an ActionRegistry,
+   * applied to the selection of an editor: the clipboard, history and
+   * selection actions, and every action named after a command of a
+   * CommandRegistry. An action backed by a command is enabled only while
+   * the command applies to the selection.
    */
   class EditActions {
     public:
@@ -27,10 +29,9 @@ namespace Rellu {
       using ErrorHandler = std::function<void (const QString& message)>;
 
       /**
-       * Adds the actions, along with the object menu and its arrange
-       * submenu, disabled until an editor is set. The registry must already
-       * have the edit menu.
-       * @param actions The registry to add the actions to.
+       * Sets the handlers of the actions, which are disabled until an
+       * editor is set. The registry must already have Adobe XD's menus.
+       * @param actions The registry holding the actions.
        * @param commands The registry naming the commands applied, which must
        *        outlive this object.
        */
@@ -69,16 +70,13 @@ namespace Rellu {
       ErrorHandler m_error_handler;
       Subscription m_selection_subscription;
       Subscription m_history_subscription;
+      std::vector<std::string> m_names;
       std::vector<std::string> m_command_actions;
 
       EditActions(const EditActions&) = delete;
       EditActions& operator =(const EditActions&) = delete;
-      void add_command(const std::string& name, const QString& text,
-        const QKeySequence& shortcut, const std::string& menu,
-        const std::string& section);
-      void add_action(const std::string& name, const QString& text,
-        const QKeySequence& shortcut, const std::string& menu,
-        const std::string& section, std::function<void ()> handler);
+      void set_action(
+        const std::string& name, std::function<void ()> handler);
       void run(auto operation);
       void cut();
       void copy();

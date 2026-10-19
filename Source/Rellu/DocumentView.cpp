@@ -4,12 +4,16 @@
 #include <limits>
 #include <numbers>
 #include <utility>
+#include <QGuiApplication>
+#include <QInputMethod>
+#include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
 #include <QResizeEvent>
+#include <QStyleHints>
 #include <QWheelEvent>
 #include "Rellu/Rendering/StripRasterizer.hpp"
 #include "DocumentView.hpp"
@@ -35,7 +39,20 @@ namespace {
   }
 
   KeyEvent to_key_event(const QKeyEvent& event) {
-    return KeyEvent(event.key(), event.modifiers(), event.isAutoRepeat());
+    return KeyEvent(event.key(), event.modifiers(), event.isAutoRepeat(),
+      event.text().toStdU16String());
+  }
+
+  InputMethodEvent to_input_method_event(const QInputMethodEvent& event) {
+    auto cursor = static_cast<int>(event.preeditString().size());
+    for(auto& attribute : event.attributes()) {
+      if(attribute.type == QInputMethodEvent::Cursor) {
+        cursor = attribute.length == 0 ? -1 : attribute.start;
+      }
+    }
+    return InputMethodEvent(event.commitString().toStdU16String(),
+      event.preeditString().toStdU16String(), cursor,
+      event.replacementStart(), event.replacementLength());
   }
 
   Qt::CursorShape get_resize_shape(double angle) {
@@ -93,6 +110,18 @@ DocumentView::DocumentView(QWidget* parent)
       m_is_panning(false) {
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
+  setAttribute(Qt::WA_InputMethodEnabled);
+  m_caret_timer.setInterval(
+    std::max(QGuiApplication::styleHints()->cursorFlashTime() / 2, 1));
+  QObject::connect(&m_caret_timer, &QTimer::timeout, this, [this] {
+    auto tool = get_text_tool();
+    if(!tool || !tool->is_editing(m_tools->get_context())) {
+      m_caret_timer.stop();
+      return;
+    }
+    tool->blink();
+    update();
+  });
   m_preparation.setInterval(0);
   QObject::connect(&m_preparation, &QTimer::timeout, this, [this] {
     if(!m_tools || m_tools->get_hit_tester().prepare(PREPARATION_BUDGET)) {
@@ -103,6 +132,7 @@ DocumentView::DocumentView(QWidget* parent)
 
 DocumentView::~DocumentView() {
   m_preparation.stop();
+  m_caret_timer.stop();
   m_tool_subscription.release();
   m_tools.reset();
   m_own_editor.reset();
@@ -173,6 +203,18 @@ void DocumentView::set_zoom(double zoom) {
   this->zoom(zoom / m_zoom, QPointF(width() / 2.0, height() / 2.0));
 }
 
+bool DocumentView::event(QEvent* event) {
+  if(event->type() == QEvent::ShortcutOverride) {
+    if(auto tool = get_text_tool(); tool && tool->is_text_key(
+        m_tools->get_context(),
+        to_key_event(*static_cast<QKeyEvent*>(event)))) {
+      event->accept();
+      return true;
+    }
+  }
+  return Canvas::event(event);
+}
+
 void DocumentView::render(QRhiCommandBuffer* buffer) {
   if(m_scene && !m_scene->is_current()) {
     auto region = Rect(-m_offset.m_x / m_zoom, -m_offset.m_y / m_zoom,
@@ -222,6 +264,7 @@ void DocumentView::mousePressEvent(QMouseEvent* event) {
   if(forward(event, [&] (const auto& pointer) {
       m_tools->press(pointer);
     })) {
+    update_text_editing();
     return;
   }
   Canvas::mousePressEvent(event);
@@ -254,6 +297,7 @@ void DocumentView::mouseReleaseEvent(QMouseEvent* event) {
   if(forward(event, [&] (const auto& pointer) {
       m_tools->release(pointer);
     })) {
+    update_text_editing();
     return;
   }
   Canvas::mouseReleaseEvent(event);
@@ -268,6 +312,7 @@ void DocumentView::mouseDoubleClickEvent(QMouseEvent* event) {
   if(forward(event, [&] (const auto& pointer) {
       m_tools->double_click(pointer);
     })) {
+    update_text_editing();
     return;
   }
   Canvas::mouseDoubleClickEvent(event);
@@ -294,7 +339,17 @@ void DocumentView::wheelEvent(QWheelEvent* event) {
 }
 
 void DocumentView::keyPressEvent(QKeyEvent* event) {
-  if(event->key() == Qt::Key_Space) {
+  auto text_tool = get_text_tool();
+  auto is_editing =
+    text_tool && text_tool->is_editing(m_tools->get_context());
+  if(m_tools && !is_editing && event->key() == Qt::Key_T &&
+      event->modifiers() == Qt::NoModifier) {
+    m_tools->set_tool("text");
+    update_cursor();
+    event->accept();
+    return;
+  }
+  if(event->key() == Qt::Key_Space && !is_editing) {
     if(!event->isAutoRepeat()) {
       m_is_space_pressed = true;
       update_cursor();
@@ -305,6 +360,7 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
   if(m_tools && m_tools->key_press(to_key_event(*event))) {
     update_cursor();
     update();
+    update_text_editing();
     event->accept();
     return;
   }
@@ -312,7 +368,7 @@ void DocumentView::keyPressEvent(QKeyEvent* event) {
 }
 
 void DocumentView::keyReleaseEvent(QKeyEvent* event) {
-  if(event->key() == Qt::Key_Space) {
+  if(event->key() == Qt::Key_Space && m_is_space_pressed) {
     if(!event->isAutoRepeat()) {
       m_is_space_pressed = false;
       update_cursor();
@@ -327,6 +383,56 @@ void DocumentView::keyReleaseEvent(QKeyEvent* event) {
     return;
   }
   Canvas::keyReleaseEvent(event);
+}
+
+void DocumentView::inputMethodEvent(QInputMethodEvent* event) {
+  if(auto tool = get_text_tool();
+      tool && tool->is_editing(m_tools->get_context())) {
+    tool->input_method(m_tools->get_context(), to_input_method_event(*event));
+    update();
+    update_text_editing();
+    event->accept();
+    return;
+  }
+  Canvas::inputMethodEvent(event);
+}
+
+QVariant DocumentView::inputMethodQuery(Qt::InputMethodQuery query) const {
+  auto tool = get_text_tool();
+  if(!tool || !tool->is_editing(m_tools->get_context())) {
+    if(query == Qt::ImEnabled) {
+      return false;
+    }
+    return Canvas::inputMethodQuery(query);
+  }
+  auto& context = m_tools->get_context();
+  auto& selection = m_editor->get_text_selection();
+  auto content = QString();
+  if(auto node = m_document->find(selection.get_node())) {
+    content = QString::fromStdU16String(*node->get_text()->m_content);
+  }
+  auto range = selection.get_range();
+  if(query == Qt::ImEnabled) {
+    return true;
+  } else if(query == Qt::ImCursorRectangle) {
+    if(auto rect = tool->get_caret_rect(context)) {
+      return QRectF(rect->m_x, rect->m_y, std::max(rect->m_width, 1.0),
+        rect->m_height);
+    }
+    return QRectF();
+  } else if(query == Qt::ImCursorPosition) {
+    return static_cast<int>(selection.get_caret());
+  } else if(query == Qt::ImAnchorPosition) {
+    return static_cast<int>(selection.get_anchor());
+  } else if(query == Qt::ImSurroundingText) {
+    return content;
+  } else if(query == Qt::ImCurrentSelection) {
+    return content.mid(static_cast<qsizetype>(range.m_start),
+      static_cast<qsizetype>(range.m_end - range.m_start));
+  } else if(query == Qt::ImHints) {
+    return static_cast<int>(Qt::ImhMultiLine);
+  }
+  return Canvas::inputMethodQuery(query);
 }
 
 void DocumentView::leaveEvent(QEvent* event) {
@@ -394,11 +500,15 @@ void DocumentView::update_cursor() {
   }
   if(cursor.m_kind == CursorKind::RESIZE) {
     setCursor(get_resize_shape(cursor.m_angle));
+  } else if(cursor.m_kind == CursorKind::TEXT) {
+    setCursor(Qt::IBeamCursor);
   } else if(cursor.m_kind == CursorKind::ROTATE) {
     if(!m_rotate_cursor) {
       m_rotate_cursor = make_rotate_cursor();
     }
     setCursor(*m_rotate_cursor);
+  } else if(cursor.m_kind == CursorKind::CROSSHAIR) {
+    setCursor(Qt::CrossCursor);
   } else {
     unsetCursor();
   }
@@ -436,9 +546,36 @@ void DocumentView::attach_tools() {
   m_tool_subscription = m_tools->subscribe([this] {
     update();
   });
+  m_tools->get_context().set_navigator(ViewNavigator(
+    [this] (const auto& factor, const auto& center) {
+      zoom(factor, QPointF(center.m_x, center.m_y));
+    }, [this] (const auto& region) {
+      zoom_to(region);
+    }));
   m_tools->set_view(get_renderer().get_view(), devicePixelRatio(),
     Size(width(), height()));
   m_preparation.start();
+}
+
+TextTool* DocumentView::get_text_tool() const {
+  if(!m_tools) {
+    return nullptr;
+  }
+  return dynamic_cast<TextTool*>(&m_tools->get_tool());
+}
+
+void DocumentView::update_text_editing() {
+  auto tool = get_text_tool();
+  if(!tool || !tool->is_editing(m_tools->get_context())) {
+    m_caret_timer.stop();
+    return;
+  }
+  if(QGuiApplication::styleHints()->cursorFlashTime() > 0) {
+    m_caret_timer.start();
+  }
+  if(auto method = QGuiApplication::inputMethod()) {
+    method->update(Qt::ImQueryAll);
+  }
 }
 
 bool DocumentView::forward(QMouseEvent* event, auto handler) {
