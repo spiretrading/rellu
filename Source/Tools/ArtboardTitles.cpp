@@ -77,10 +77,21 @@ NodeId ArtboardTitles::find(Point position) const {
   return NodeId();
 }
 
+const QFont& ArtboardTitles::get_font() const {
+  return m_font;
+}
+
+void ArtboardTitles::set_hidden(const NodeId& artboard) {
+  m_hidden = artboard;
+}
+
 void ArtboardTitles::draw(CanvasOverlay& overlay, double scale,
     const std::unordered_set<NodeId>& highlights) {
   ++m_generation;
   for(auto& title : m_titles) {
+    if(title.m_artboard == m_hidden) {
+      continue;
+    }
     auto is_highlighted = highlights.contains(title.m_artboard);
     auto key = QString("%1|%2|%3").arg(title.m_text).arg(
       is_highlighted).arg(scale);

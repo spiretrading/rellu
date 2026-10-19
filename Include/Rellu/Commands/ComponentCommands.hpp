@@ -47,7 +47,8 @@ namespace Rellu {
 
   /**
    * Dissolves component instances into their parents as editable copies of
-   * their children, labelled Ungroup Component.
+   * their children, labelled Ungroup Component, or Ungroup Components for
+   * several.
    */
   class UngroupComponentCommand : public Command {
     public:
@@ -112,7 +113,9 @@ namespace Rellu {
 
   /**
    * Replaces component instances with instances of another component in
-   * their place, labelled Swap Component.
+   * their place, labelled Replace Component. Replacing a main component
+   * replaces every instance of its component outside other components and
+   * repeat grids.
    */
   class SwapComponentCommand : public Command {
     public:
@@ -336,6 +339,40 @@ namespace Rellu {
       ComponentId m_component;
       std::string m_name;
   };
+
+  /**
+   * Replaces instances of linked components with ordinary groups holding
+   * copies of what they show, nested instances turned into groups too,
+   * labelled Unlink Component, or Unlink Components for several.
+   */
+  class UnlinkComponentCommand : public Command {
+    public:
+
+      /**
+       * Constructs an UnlinkComponentCommand.
+       * @param nodes The instances to unlink.
+       */
+      explicit UnlinkComponentCommand(std::vector<NodeId> nodes) noexcept;
+
+      std::string get_label() const override;
+      void apply(const Document& document, Transaction& transaction) override;
+      std::optional<std::vector<NodeId>> get_selection() const override;
+
+    private:
+      std::vector<NodeId> m_nodes;
+      std::vector<NodeId> m_selection;
+  };
+
+  /**
+   * Makes the command unlinking targets that are all instances of linked
+   * components, as Adobe XD's Ungroup does for them.
+   * @param document The document holding the targets.
+   * @param targets The targets.
+   * @return The command, or <code>nullptr</code> if a target is not an
+   *         instance of a linked component.
+   */
+  std::unique_ptr<Command> make_unlink_component(
+    const Document& document, const std::vector<NodeId>& targets);
 
   /**
    * Makes the command turning component instances among targets into

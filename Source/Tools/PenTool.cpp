@@ -5,6 +5,7 @@
 #include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Tools/DrawTool.hpp"
 #include "Rellu/Tools/PenTool.hpp"
 
@@ -83,7 +84,7 @@ void PenTool::press(ToolContext& context, const PointerEvent& event) {
     if(anchors.size() > 1 && distance(view.map(anchors.front().m_point),
         event.m_position) <= ANCHOR_REACH) {
       contour.m_is_closed = true;
-      apply(context, *path, "Pen");
+      apply(context, *path, "Close Path");
       m_anchor = 0;
       m_is_closing = true;
       m_is_dragging = true;
@@ -106,7 +107,7 @@ void PenTool::press(ToolContext& context, const PointerEvent& event) {
     }
     anchors.push_back(make_anchor(to_local(*path, point)));
     m_anchor = anchors.size() - 1;
-    apply(context, *path, "Pen");
+    apply(context, *path, "Add Anchor Point");
     return;
   }
   finish();
@@ -129,7 +130,7 @@ void PenTool::press(ToolContext& context, const PointerEvent& event) {
         position->m_position.m_t < 1) {
       split_segment(path->m_contours[position->m_contour],
         position->m_position.m_segment, position->m_position.m_t);
-      apply(context, *path, "Add Point");
+      apply(context, *path, "Add Anchor Point");
       return;
     }
   }
@@ -187,7 +188,7 @@ void PenTool::double_click(ToolContext& context, const PointerEvent& event) {
       auto& contour = path->m_contours[index->m_contour];
       set_smooth(contour, index->m_anchor,
         !is_smooth(contour.m_anchors[index->m_anchor]));
-      apply(context, *path, "Edit Path");
+      apply(context, *path, "Convert Point Type");
       return;
     }
   }
@@ -331,19 +332,20 @@ void PenTool::start(ToolContext& context, Point point) {
   outline.move_to(inverse->map(point));
   auto header = NodeHeader();
   header.m_id = generate_node_id();
-  header.m_name = make_node_name(document, "Path ");
+  header.m_name = make_node_name(
+    document, std::string(localize("name", "Path")) + ' ');
   auto id = header.m_id;
   auto shape = Shape(PathShape(Shared(std::move(outline)), FillRule::NON_ZERO),
     make_default_path_style());
   auto commands = std::vector<std::unique_ptr<Command>>();
   commands.push_back(std::make_unique<InsertNodeCommand>(
-    "Pen", parent, std::move(header), std::move(shape)));
+    "Draw Path", parent, std::move(header), std::move(shape)));
   if(auto index = get_stack_index(document, parent, id, point)) {
     commands.push_back(
       std::make_unique<ReparentCommand>(std::vector{id}, parent, *index));
   }
   if(!context.get_editor().execute(
-      std::make_unique<CompositeCommand>("Pen", std::move(commands)))) {
+      std::make_unique<CompositeCommand>("Draw Path", std::move(commands)))) {
     return;
   }
   m_is_drawing = true;
@@ -385,7 +387,13 @@ void PenTool::drag(ToolContext& context, const PointerEvent& event) {
   } else {
     anchor.m_out = local;
   }
-  apply(context, *path, "Pen");
+  if(m_is_closing) {
+    apply(context, *path, "Close Path");
+  } else if(m_anchor == 0) {
+    apply(context, *path, "Draw Path");
+  } else {
+    apply(context, *path, "Add Anchor Point");
+  }
 }
 
 void PenTool::finish() {

@@ -1,6 +1,7 @@
 #ifndef RELLU_UI_DOCUMENT_SESSION_HPP
 #define RELLU_UI_DOCUMENT_SESSION_HPP
 #include <functional>
+#include <string>
 #include <QString>
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Io/XdGenerator.hpp"
@@ -34,6 +35,12 @@ namespace Rellu {
       QString get_name() const;
 
       /**
+       * Returns the id Adobe XD gives the document, recorded in the file it
+       * was read from or last saved to, or empty if there is none.
+       */
+      const std::string& get_id() const;
+
+      /**
        * Returns <code>true</code> iff the document changed since it was
        * opened or last saved.
        */
@@ -50,6 +57,7 @@ namespace Rellu {
     private:
       Document* m_document;
       QString m_path;
+      std::string m_id;
       XdTextLayout m_layout;
       Editor m_editor;
 

@@ -13,6 +13,7 @@
 #include <QString>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/CommandRegistry.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Model/Subscription.hpp"
@@ -23,6 +24,8 @@
 #include "Rellu/Ui/ComponentActions.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/EditActions.hpp"
+#include "Rellu/Ui/GradientHandles.hpp"
+#include "Rellu/Ui/GuideActions.hpp"
 #include "Rellu/Ui/LayersPanel.hpp"
 #include "Rellu/Ui/PluginsPanel.hpp"
 #include "Rellu/Ui/PreviewWindow.hpp"
@@ -36,6 +39,12 @@
 #include "DocumentView.hpp"
 
 namespace Rellu {
+
+  /**
+   * Returns the language of the user interface stored in the preferences,
+   * English if there is none.
+   */
+  Language load_language();
 
   /**
    * The application's top-level window editing one document, laid out as
@@ -112,6 +121,7 @@ namespace Rellu {
       std::unique_ptr<EditActions> m_edit_actions;
       std::unique_ptr<ComponentActions> m_component_actions;
       std::unique_ptr<TextActions> m_text_actions;
+      std::unique_ptr<GuideActions> m_guide_actions;
       ComponentThumbnails m_thumbnails;
       std::unique_ptr<ComponentDrop> m_component_drop;
       AppBar* m_app_bar;
@@ -127,30 +137,14 @@ namespace Rellu {
       QWidget* m_inspector_frame;
       RecentFiles m_recent_files;
       TextMeasurer m_measurer;
-      enum class GradientPart : unsigned char {
-        NONE,
-        CENTER,
-        ROTATION,
-        STOP
-      };
       struct GradientTarget {
         GradientFill m_fill;
-        Matrix m_to_view;
-        Matrix m_from_view;
+        GradientFrame m_frame;
       };
-      struct GradientDrag {
-        GradientPart m_part = GradientPart::NONE;
-        int m_stop = 0;
-        double m_rotation = 0;
-        double m_angle = 0;
-        Point m_offset = Point(0, 0);
-      };
-      static constexpr auto DEFAULT_ROTATION_HANDLE_ANGLE = -90.0;
       QWidget* m_highlight;
       std::vector<NodeId> m_highlighted;
       QWidget* m_gradient_overlay;
-      GradientDrag m_gradient_drag;
-      double m_rotation_handle_angle;
+      GradientHandles m_gradient_handles;
       std::unique_ptr<DocumentSession> m_session;
       Subscription m_history_subscription;
       Subscription m_selection_subscription;
@@ -166,7 +160,11 @@ namespace Rellu {
       void set_workspace(Workspace workspace);
       void toggle_preview();
       void restore_settings();
-      void set_language(const std::string& language);
+      void check_language(Language language);
+      void choose_language(Language language);
+      void show_message(const QString& message);
+      void restore_text_properties();
+      void store_text_properties();
       void save_settings() const;
       void update_recent_files();
       void prompt_open();
@@ -190,7 +188,6 @@ namespace Rellu {
       void set_highlights(std::vector<NodeId> nodes);
       std::optional<GradientTarget> find_gradient_target() const;
       void paint_gradient_editor(QPainter& painter);
-      QPointF get_rotation_handle(const GradientTarget& target) const;
       bool handle_gradient_event(
         ColorPicker::CanvasEvent event, QPointF position);
       void update_gradient_editor();

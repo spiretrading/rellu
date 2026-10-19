@@ -3,6 +3,7 @@
 #include <memory>
 #include <unordered_set>
 #include <utility>
+#include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/HeaderCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
@@ -11,18 +12,14 @@
 using namespace Rellu;
 
 namespace {
+  constexpr auto MAXIMUM_DEPTH = 256;
+
   void edit_headers(const Document& document, Transaction& transaction,
       const std::vector<NodeId>& nodes, auto edit) {
     auto visited = std::unordered_set<NodeId>();
     for(auto& id : nodes) {
-      auto node = document.find(id);
-      if(!node || !visited.insert(id).second) {
-        continue;
-      }
-      auto header = node->m_header;
-      edit(*node, header);
-      if(header != node->m_header) {
-        transaction.replace_header(std::move(header));
+      if(visited.insert(id).second) {
+        edit_rendered_header(document, transaction, id, edit);
       }
     }
   }
@@ -30,6 +27,43 @@ namespace {
   void assign(bool& target, const std::optional<bool>& source) {
     if(source) {
       target = *source;
+    }
+  }
+
+  void pin(Constraints& constraints, bool Constraints::* flag, bool value,
+      bool Constraints::* released) {
+    constraints.*flag = value;
+    constraints.m_is_custom = true;
+    if(constraints.m_left && constraints.m_width && constraints.m_right &&
+        (flag == &Constraints::m_left || flag == &Constraints::m_width ||
+          flag == &Constraints::m_right)) {
+      constraints.*released = false;
+    } else if(constraints.m_top && constraints.m_height &&
+        constraints.m_bottom && (flag == &Constraints::m_top ||
+          flag == &Constraints::m_height || flag == &Constraints::m_bottom)) {
+      constraints.*released = false;
+    }
+  }
+
+  void set_descendants_enabled(const Document& document,
+      Transaction& transaction, const NodeId& id, bool is_enabled,
+      int depth) {
+    if(depth > MAXIMUM_DEPTH) {
+      return;
+    }
+    auto children = document.get(id).m_children;
+    for(auto& child : children) {
+      auto& node = document.get(child);
+      if(auto group = node.get_group(); group && group->m_component_instance) {
+        continue;
+      }
+      if(node.m_header.m_constraints.m_is_enabled != is_enabled) {
+        auto header = node.m_header;
+        header.m_constraints.m_is_enabled = is_enabled;
+        transaction.replace_header(std::move(header));
+      }
+      set_descendants_enabled(
+        document, transaction, child, is_enabled, depth + 1);
     }
   }
 
@@ -130,8 +164,14 @@ void SetAspectLockCommand::apply(
 
 SetConstraintsCommand::SetConstraintsCommand(
   std::vector<NodeId> nodes, ConstraintsEdit edit) noexcept
+  : SetConstraintsCommand(
+      std::move(nodes), std::move(edit), estimate_text_bounds) {}
+
+SetConstraintsCommand::SetConstraintsCommand(std::vector<NodeId> nodes,
+  ConstraintsEdit edit, TextMeasurer measurer) noexcept
   : m_nodes(std::move(nodes)),
-    m_edit(std::move(edit)) {}
+    m_edit(std::move(edit)),
+    m_measurer(std::move(measurer)) {}
 
 std::string SetConstraintsCommand::get_label() const {
   return "Change Constraints";
@@ -139,18 +179,53 @@ std::string SetConstraintsCommand::get_label() const {
 
 void SetConstraintsCommand::apply(
     const Document& document, Transaction& transaction) {
-  edit_headers(document, transaction, m_nodes,
+  auto nodes = get_existing(document, m_nodes);
+  if(m_edit.m_is_custom.value_or(false)) {
+    auto parents = std::vector<NodeId>();
+    for(auto& id : nodes) {
+      auto& node = document.get(id);
+      if(!node.get_artboard() && !node.m_parent.is_nil() &&
+          std::find(parents.begin(), parents.end(), node.m_parent) ==
+            parents.end()) {
+        parents.push_back(node.m_parent);
+      }
+    }
+    for(auto& parent : parents) {
+      record_constraints(document, transaction, parent, m_measurer);
+    }
+  }
+  edit_headers(document, transaction, nodes,
     [&] (const auto&, auto& header) {
       auto& constraints = header.m_constraints;
       assign(constraints.m_is_enabled, m_edit.m_is_enabled);
       assign(constraints.m_is_custom, m_edit.m_is_custom);
-      assign(constraints.m_left, m_edit.m_left);
-      assign(constraints.m_right, m_edit.m_right);
-      assign(constraints.m_top, m_edit.m_top);
-      assign(constraints.m_bottom, m_edit.m_bottom);
-      assign(constraints.m_width, m_edit.m_width);
-      assign(constraints.m_height, m_edit.m_height);
+      for(auto [edit, flag, released] : {
+          std::tuple(&ConstraintsEdit::m_left, &Constraints::m_left,
+            &Constraints::m_right),
+          std::tuple(&ConstraintsEdit::m_width, &Constraints::m_width,
+            &Constraints::m_right),
+          std::tuple(&ConstraintsEdit::m_right, &Constraints::m_right,
+            &Constraints::m_left),
+          std::tuple(&ConstraintsEdit::m_top, &Constraints::m_top,
+            &Constraints::m_bottom),
+          std::tuple(&ConstraintsEdit::m_height, &Constraints::m_height,
+            &Constraints::m_bottom),
+          std::tuple(&ConstraintsEdit::m_bottom, &Constraints::m_bottom,
+            &Constraints::m_top)}) {
+        if(auto& value = m_edit.*edit) {
+          pin(constraints, flag, *value, released);
+        }
+      }
     });
+  if(!m_edit.m_is_enabled) {
+    return;
+  }
+  for(auto& id : nodes) {
+    if(!document.get(id).get_artboard()) {
+      set_descendants_enabled(
+        document, transaction, id, *m_edit.m_is_enabled, 0);
+    }
+  }
 }
 
 bool SetConstraintsCommand::merge(const Command& command) {

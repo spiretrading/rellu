@@ -57,7 +57,35 @@ TEST_SUITE("StyleImporter") {
       "uxdesign#type": "solid", "color": {"mode": "RGB", "value": {"r": 1,
       "g": 2, "b": 3}}}})"), document);
     REQUIRE(report.m_unconsumed.empty());
-    REQUIRE(std::holds_alternative<NoFill>(get_style(document).m_fill));
+    REQUIRE(get_style(document).m_fill ==
+      Fill(NoFill(FillPaint(SolidFill(make_color(1, 2, 3))))));
+  }
+
+  TEST_CASE("disabled_fills") {
+    auto import_fill = [] (const std::string& fill) {
+      auto document = Document();
+      auto report = import_nodes(
+        make_shape(R"({"fill": )" + fill + "}"), document);
+      REQUIRE(report.m_unconsumed.empty());
+      REQUIRE(report.m_warnings.empty());
+      return get_style(document).m_fill;
+    };
+    REQUIRE(import_fill(R"({"type": "none", "color": {"mode": "RGB",
+      "value": {"r": 4, "g": 5, "b": 6}}})") ==
+      Fill(NoFill(FillPaint(SolidFill(make_color(4, 5, 6))))));
+    REQUIRE(import_fill(R"({"type": "none"})") == Fill(NoFill()));
+    auto gradient = import_fill(R"({"type": "none",
+      "uxdesign#type": "gradient", "gradient": {"meta": {"ux": {
+      "gradientResources": {"type": "linear", "stops": [{"offset": 0,
+      "color": {"mode": "RGB", "value": {"r": 255, "g": 255, "b": 255}}},
+      {"offset": 1, "color": {"mode": "RGB", "value": {"r": 0, "g": 0,
+      "b": 0}}}]}}}, "x1": 0, "y1": 0, "x2": 1, "y2": 1,
+      "units": "objectBoundingBox"}})");
+    auto& none = std::get<NoFill>(gradient);
+    REQUIRE(none.m_paint);
+    REQUIRE(std::get<GradientFill>(*none.m_paint).m_stops.size() == 2);
+    REQUIRE(enable_fill(gradient) == Fill(std::get<GradientFill>(
+      *none.m_paint)));
   }
 
   TEST_CASE("linear_gradient") {

@@ -3,6 +3,7 @@
 #include <utility>
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Tools/ArtboardGrids.hpp"
+#include "Rellu/Tools/ArtboardGuides.hpp"
 #include "Rellu/Tools/ArtboardTool.hpp"
 #include "Rellu/Tools/PathEditTool.hpp"
 #include "Rellu/Tools/PenTool.hpp"
@@ -201,6 +202,7 @@ CanvasOverlay ToolManager::draw() {
   }
   draw_artboard_grids(
     document, m_context.get_view(), m_context.get_size(), overlay);
+  draw_artboard_guides(m_context, overlay);
   m_titles.draw(overlay, m_context.get_scale(), highlights);
   m_tool->draw(m_context, overlay);
   m_context.get_snap_service().draw(m_context.get_view(), overlay);

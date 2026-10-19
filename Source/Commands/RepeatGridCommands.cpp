@@ -7,6 +7,7 @@
 #include "Rellu/Commands/Layouts.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
+#include "Rellu/Localization/Localization.hpp"
 
 using namespace Rellu;
 
@@ -120,7 +121,8 @@ void RepeatGridCommand::apply(
     throw std::invalid_argument("There is nothing to repeat.");
   }
   auto header = NodeHeader();
-  header.m_name = make_node_name(document, "Repeat Grid ");
+  header.m_name = make_node_name(
+    document, std::string(localize("name", "Repeat Grid")) + ' ');
   header.m_transform = make_translation(bounds->m_x, bounds->m_y);
   auto group = Group();
   group.m_repeat_grid = RepeatGrid(bounds->get_size(), DEFAULT_REPEAT_SPACING,

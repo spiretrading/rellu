@@ -95,26 +95,35 @@ namespace Rellu {
   Path make_polygon(std::span<const Point> vertices, double corner_radius);
 
   /**
-   * Returns the vertices of the regular polygon Adobe XD draws for a corner
-   * count: resting on a horizontal bottom edge, running clockwise on screen
-   * from the first vertex at or after the top, and stretched so that the
-   * vertices span the bounds.
-   * @param corner_count The number of vertices, at least 3; fewer produce no
+   * Returns the vertices of the regular polygon or star Adobe XD draws for a
+   * corner count: resting on a horizontal bottom edge, running clockwise on
+   * screen from the first corner at or after the top, and stretched so that
+   * the corners span the bounds. A star has an inner vertex after each
+   * corner, on the line from the center to the middle of the edge the
+   * polygon would have there.
+   * @param corner_count The number of corners, at least 3; fewer produce no
    *        vertices.
-   * @param bounds The rect the vertices span.
+   * @param bounds The rect the corners span.
+   * @param star_ratio The distance of the inner vertices from the center as
+   *        a percentage of the distance to the middle of an edge, 100 or
+   *        more for a polygon without inner vertices.
    */
   std::vector<Point> make_polygon_vertices(
-    int corner_count, const Rect& bounds);
+    int corner_count, const Rect& bounds, double star_ratio = 100);
 
   /**
-   * Makes the regular polygon Adobe XD draws for a corner count, through the
-   * vertices of make_polygon_vertices.
-   * @param corner_count The number of vertices, at least 3; fewer produce an
+   * Makes the regular polygon or star Adobe XD draws for a corner count,
+   * through the vertices of make_polygon_vertices.
+   * @param corner_count The number of corners, at least 3; fewer produce an
    *        empty Path.
-   * @param bounds The rect the vertices span.
+   * @param bounds The rect the corners span.
    * @param corner_radius The radius rounding each vertex.
+   * @param star_ratio The distance of the inner vertices from the center as
+   *        a percentage of the distance to the middle of an edge, 100 or
+   *        more for a polygon without inner vertices.
    */
-  Path make_polygon(int corner_count, const Rect& bounds, double corner_radius);
+  Path make_polygon(int corner_count, const Rect& bounds, double corner_radius,
+    double star_ratio = 100);
 
   constexpr bool CornerRadii::operator ==(const CornerRadii& radii) const {
     return equals(m_top_left, radii.m_top_left) &&

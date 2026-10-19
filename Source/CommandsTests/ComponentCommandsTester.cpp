@@ -346,6 +346,9 @@ TEST_SUITE("ComponentCommands") {
     add_component_commands(commands);
     auto component = make_component(history, parts.m_group);
     auto instance = add_instance(history, component, parts.m_artboard, 200, 20);
+    auto other = add_instance(history, component, parts.m_artboard, 200, 100);
+    REQUIRE(commands.make("object.ungroup", document,
+      std::vector{instance, other})->get_label() == "Ungroup Components");
     auto command = commands.make("object.ungroup", document,
       std::vector{instance});
     REQUIRE(command);
@@ -377,16 +380,25 @@ TEST_SUITE("ComponentCommands") {
     auto instance = add_instance(history, component, parts.m_artboard, 200, 20);
     REQUIRE(!commands.make("object.reset_main_state", document,
       std::vector{instance}));
+    history.execute(
+      std::make_unique<SetOpacityCommand>(std::vector{instance}, 0.5));
+    history.execute(std::make_unique<RenameCommand>(instance, "Renamed"));
+    REQUIRE(!commands.make("object.reset_main_state", document,
+      std::vector{instance}));
     auto master_rectangle =
       get_master_node(document, parts.m_group, parts.m_rectangle);
     auto copy = find_copy(document, instance, master_rectangle);
     edit(history, copy, make_fill(copy, make_color(0, 255, 0)));
+    REQUIRE(!commands.make("object.reset_main_state", document,
+      std::vector{instance, parts.m_group}));
     auto command = commands.make("object.reset_main_state", document,
       std::vector{instance});
     REQUIRE(command);
     require_undoable(history, std::move(command));
     REQUIRE(history.get_undo_label() == "Reset to Main State");
     REQUIRE(get_role(document, instance).m_overrides == Overrides());
+    REQUIRE(document.get(instance).m_header.m_opacity == 0.5);
+    REQUIRE(document.get(instance).m_header.m_name == "Button");
     REQUIRE(document.get(copy).get_reference());
     REQUIRE(get_fill(document, copy) == make_color(255, 0, 0));
     REQUIRE(!commands.make("object.reset_main_state", document,
@@ -408,6 +420,7 @@ TEST_SUITE("ComponentCommands") {
     auto& added = definition.m_states.front();
     REQUIRE(added.m_id == state);
     REQUIRE(added.m_name == "Hover State");
+    REQUIRE(added.m_size == definition.m_size);
     REQUIRE(document.get(added.m_tree).m_header.m_name == "Hover State");
     REQUIRE(added.m_sync_map.size() == 2);
     auto& interactions = document.get_prototype().m_interactions;
@@ -503,15 +516,79 @@ TEST_SUITE("ComponentCommands") {
     }
     auto second = make_component(history, loose);
     auto instance = add_instance(history, first, parts.m_artboard, 200, 20);
+    history.execute(
+      std::make_unique<SetOpacityCommand>(std::vector{instance}, 0.5));
+    history.execute(
+      std::make_unique<SetVisibilityCommand>(std::vector{instance}, false));
+    history.execute(std::make_unique<RenameCommand>(instance, "Custom"));
     auto command = require_undoable(history,
       std::make_unique<SwapComponentCommand>(std::vector{instance}, second));
-    REQUIRE(history.get_undo_label() == "Swap Component");
+    REQUIRE(history.get_undo_label() == "Replace Component");
     auto swapped = command->get_selection()->front();
     REQUIRE(!document.find(instance));
     REQUIRE(get_role(document, swapped).m_component == second);
-    REQUIRE(document.get(swapped).m_parent == parts.m_artboard);
-    REQUIRE(document.get(swapped).m_header.m_transform ==
-      make_translation(200, 20));
+    auto& node = document.get(swapped);
+    REQUIRE(node.m_parent == parts.m_artboard);
+    REQUIRE(node.m_header.m_transform == make_translation(200, 20));
+    REQUIRE(node.m_header.m_opacity == 0.5);
+    REQUIRE(!node.m_header.m_is_visible);
+    REQUIRE(node.m_header.m_name == "Custom");
+  }
+
+  TEST_CASE("swap_main_component") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto first = make_component(history, parts.m_group);
+    auto loose = NodeId();
+    {
+      auto transaction = Transaction(document);
+      loose = transaction.append(NodeId(), make_header("Loose"),
+        make_rectangle_shape(10, 10));
+      transaction.commit();
+    }
+    auto second = make_component(history, loose);
+    auto instance = add_instance(history, first, parts.m_artboard, 200, 20);
+    auto command = history.execute(std::make_unique<SwapComponentCommand>(
+      std::vector{parts.m_group}, second));
+    REQUIRE(command->get_selection()->size() == 1);
+    REQUIRE(!document.find(parts.m_group));
+    REQUIRE(!document.find(instance));
+    REQUIRE(find_instances(document, first).empty());
+    REQUIRE(find_instances(document, second).size() == 3);
+  }
+
+  TEST_CASE("root_override") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto component = make_component(history, parts.m_group);
+    auto instance = add_instance(history, component, parts.m_artboard, 200, 20);
+    require_undoable(history,
+      std::make_unique<SetOpacityCommand>(std::vector{instance}, 0.5));
+    REQUIRE(get_role(document, instance).m_overrides == Overrides());
+    require_undoable(history, std::make_unique<SetVisibilityCommand>(
+      std::vector{parts.m_group}, false));
+    auto master = document.get_resources().m_components.at(component).
+      m_master;
+    REQUIRE(document.get(master).m_header.m_is_visible);
+    REQUIRE(document.get(instance).m_header.m_is_visible);
+    REQUIRE(document.get(instance).m_header.m_opacity == 0.5);
+  }
+
+  TEST_CASE("state_sizes") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto component = make_component(history, parts.m_group);
+    history.execute(std::make_unique<AddStateCommand>(
+      component, "Hover", StateKind::HOVER));
+    history.execute(std::make_unique<InsertNodeCommand>("Rectangle",
+      parts.m_group, make_header("Dot", make_translation(100, 100)),
+      make_rectangle_shape(50, 50)));
+    auto& definition = document.get_resources().m_components.at(component);
+    REQUIRE(definition.m_states.front().m_size == Size(150, 150));
+    REQUIRE(definition.m_size != Size(150, 150));
   }
 
   TEST_CASE("duplicate_main") {
@@ -580,6 +657,70 @@ TEST_SUITE("ComponentCommands") {
     REQUIRE(is_linked(document, component));
     REQUIRE_THROWS_AS(history.execute(std::make_unique<AddStateCommand>(
       component, "New State", StateKind::NEW)), std::invalid_argument);
+  }
+
+  TEST_CASE("unlink_component") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto commands = CommandRegistry();
+    add_standard_commands(commands);
+    auto component = make_component(history, parts.m_group);
+    auto instance = add_instance(history, component, parts.m_artboard, 200, 20);
+    {
+      auto transaction = Transaction(document);
+      auto definition = document.get_resources().m_components.at(component);
+      definition.m_link = ComponentLink("cloud-asset://library", "Library");
+      transaction.replace_component(definition);
+      transaction.commit();
+    }
+    auto command = commands.make("object.ungroup", document,
+      std::vector{instance});
+    REQUIRE(command->get_label() == "Unlink Component");
+    auto recorded = require_undoable(history, std::move(command));
+    auto unlinked = recorded->get_selection()->front();
+    REQUIRE(!document.find(instance));
+    auto& node = document.get(unlinked);
+    REQUIRE(node.m_parent == parts.m_artboard);
+    REQUIRE(!get_instance_role(node));
+    REQUIRE(node.m_header.m_transform == make_translation(200, 20));
+    REQUIRE(node.m_children.size() == 2);
+    REQUIRE(!document.get(node.m_children.front()).get_reference());
+    REQUIRE(get_fill(document, node.m_children.front()) ==
+      make_color(255, 0, 0));
+    auto other = add_instance(history, component, parts.m_artboard, 0, 0);
+    REQUIRE(make_unlink_component(document,
+      std::vector{other, parts.m_group})->get_label() == "Unlink Components");
+    REQUIRE(!make_unlink_component(document,
+      std::vector{other, parts.m_artboard}));
+  }
+
+  TEST_CASE("nested_make_component") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto commands = CommandRegistry();
+    add_component_commands(commands);
+    auto component = make_component(history, parts.m_group);
+    auto instance = add_instance(history, component, parts.m_artboard, 200, 20);
+    REQUIRE(!commands.make("object.make_component", document,
+      std::vector{instance}));
+    auto master_rectangle =
+      get_master_node(document, parts.m_group, parts.m_rectangle);
+    auto copy = find_copy(document, instance, master_rectangle);
+    auto command = commands.make("object.make_component", document,
+      std::vector{copy});
+    REQUIRE(command);
+    auto recorded = require_undoable(history, std::move(command));
+    auto main = static_cast<const MakeComponentCommand&>(*recorded).get_main();
+    REQUIRE(document.get(main).m_parent == instance);
+    REQUIRE(get_role(document, main).m_is_main);
+    REQUIRE(document.get(main).m_children == std::vector{copy});
+    REQUIRE(!document.get(copy).get_reference());
+    auto& role = get_role(document, instance);
+    REQUIRE(!role.m_sync_map.contains(copy));
+    REQUIRE(role.m_overrides.m_added == std::vector{main});
+    REQUIRE(role.m_overrides.m_removed == std::vector{master_rectangle});
   }
 
   TEST_CASE("registry") {

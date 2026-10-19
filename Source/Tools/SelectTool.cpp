@@ -90,6 +90,26 @@ namespace {
     return node && node->get_artboard();
   }
 
+  bool is_responsive(
+      const Document& document, const std::vector<NodeId>& nodes) {
+    if(std::none_of(nodes.begin(), nodes.end(), [&] (const auto& id) {
+        return document.get(id).m_header.m_constraints.m_is_enabled;
+      })) {
+      return false;
+    } else if(nodes.size() != 1) {
+      return true;
+    }
+    auto& node = document.get(nodes.front());
+    if(node.get_artboard()) {
+      return true;
+    } else if(auto shape = node.get_shape()) {
+      return std::holds_alternative<CompoundShape>(shape->m_geometry);
+    } else if(auto group = node.get_group(); group && !group->m_repeat_grid) {
+      return true;
+    }
+    return !find_instance(document, nodes.front()).is_nil();
+  }
+
   bool is_stacked(const Document& document, const NodeId& id, Point axis) {
     auto node = document.find(id);
     auto parent = node ? document.find(node->m_parent) : nullptr;
@@ -432,6 +452,7 @@ SelectTool::SelectTool()
     m_grab_offset(0, 0),
     m_delta(0, 0),
     m_resized(0, 0, 0, 0),
+    m_rule(ResizeRule::RESPONSIVE),
     m_angle(0),
     m_raw_angle(0),
     m_is_applied(false),
@@ -475,6 +496,7 @@ void SelectTool::press(ToolContext& context, const PointerEvent& event) {
       if(grab->m_target == Target::HANDLE) {
         m_gesture = Gesture::RESIZE;
         m_resized = m_box.m_rect;
+        m_rule = ResizeRule::RESPONSIVE;
         m_grab_offset = Point(0, 0);
         if(auto inverse = invert(m_box.m_transform)) {
           m_grab_offset =
@@ -500,6 +522,13 @@ void SelectTool::press(ToolContext& context, const PointerEvent& event) {
       editor.get_history().seal();
       return;
     }
+  }
+  if(m_guides.press(context, event)) {
+    m_gesture = Gesture::GUIDE;
+    if(auto cursor = m_guides.hover(context, event.m_position)) {
+      m_cursor = *cursor;
+    }
+    return;
   }
   auto select = [&] (const NodeId& target) {
     if(is_shift(modifiers)) {
@@ -588,6 +617,12 @@ void SelectTool::move(ToolContext& context, const PointerEvent& event) {
   if(m_gesture == Gesture::LAYOUT) {
     m_layout_handles.move(context, event);
     return;
+  } else if(m_gesture == Gesture::GUIDE) {
+    m_guides.move(context, event);
+    if(auto cursor = m_guides.hover(context, event.m_position)) {
+      m_cursor = *cursor;
+    }
+    return;
   }
   if(m_gesture == Gesture::PENDING) {
     if(distance(event.m_position, m_press) < DRAG_THRESHOLD) {
@@ -615,6 +650,8 @@ void SelectTool::release(ToolContext& context, const PointerEvent& event) {
   if(m_gesture == Gesture::PENDING && m_is_reselecting &&
       !m_clicked.is_nil()) {
     context.get_editor().get_selection().select(m_clicked);
+  } else if(m_gesture == Gesture::GUIDE) {
+    m_guides.release(context, event);
   }
   finish(context);
   update_hover(context, event);
@@ -674,6 +711,7 @@ void SelectTool::leave(ToolContext& context) {
   if(m_gesture == Gesture::NONE) {
     context.get_snap_service().measure(std::nullopt, Rect());
     context.get_editor().get_context().set_hover(NodeId());
+    m_guides.cancel(context);
     m_cursor = ToolCursor();
   }
 }
@@ -757,6 +795,8 @@ void SelectTool::cancel(ToolContext& context) {
   auto& editor = context.get_editor();
   if(m_gesture == Gesture::LAYOUT) {
     m_layout_handles.cancel(context);
+  } else if(m_gesture == Gesture::GUIDE) {
+    m_guides.cancel(context);
   } else if((m_gesture == Gesture::MOVE || m_gesture == Gesture::RESIZE ||
       m_gesture == Gesture::ROTATE || m_gesture == Gesture::RADIUS) &&
       m_is_applied) {
@@ -779,6 +819,7 @@ ToolCursor SelectTool::get_cursor() const {
 
 void SelectTool::draw(
     const ToolContext& context, CanvasOverlay& overlay) const {
+  m_guides.draw(context, overlay);
   auto& editor = context.get_editor();
   auto& selection = editor.get_selection();
   auto& document = context.get_document();
@@ -1167,17 +1208,42 @@ void SelectTool::update_resize(
     [&] (const auto& id) {
       return is_artboard(document, id);
     });
-  auto rect = resize(m_box.m_rect, m_handle, local,
-    is_shift(event.m_modifiers), is_alt(event.m_modifiers), is_flippable,
-    MINIMUM_SIZE);
-  if(rect == m_resized) {
+  auto is_shift_held = is_shift(event.m_modifiers);
+  auto is_locked = m_nodes.size() == 1 &&
+    document.get(m_nodes.front()).m_header.m_aspect_lock;
+  auto is_proportional = is_shift_held || is_locked;
+  if(is_responsive(document, m_nodes)) {
+    is_proportional = (is_shift_held && is_corner(m_handle)) || is_locked;
+  }
+  auto rule = ResizeRule::RESPONSIVE;
+  if(is_shift_held && !std::all_of(m_nodes.begin(), m_nodes.end(),
+      [&] (const auto& id) {
+        return document.get(id).m_header.m_constraints.m_is_enabled &&
+          !find_instance(document, id).is_nil();
+      })) {
+    rule = ResizeRule::SUPPRESSED;
+  }
+  auto rect = resize(m_box.m_rect, m_handle, local, is_proportional,
+    is_alt(event.m_modifiers), is_flippable, MINIMUM_SIZE);
+  if(rect == m_resized && rule == m_rule) {
     return;
   }
-  auto step = transform * make_rect_mapping(m_resized, rect) * *inverse;
-  context.get_editor().merge(std::make_unique<TransformCommand>(
-    m_nodes, step, "Resize", TransformMode::DRAG));
+  auto& editor = context.get_editor();
+  if(m_is_applied) {
+    editor.undo();
+    m_is_applied = false;
+  }
   m_resized = rect;
-  m_is_applied = true;
+  m_rule = rule;
+  if(rect == m_box.m_rect) {
+    return;
+  }
+  auto mapping =
+    transform * make_rect_mapping(m_box.m_rect, rect) * *inverse;
+  if(editor.execute(std::make_unique<TransformCommand>(m_nodes, mapping,
+      "Resize", TransformMode::DRAG, rule, context.get_text_measurer()))) {
+    m_is_applied = true;
+  }
 }
 
 void SelectTool::update_rotate(
@@ -1254,6 +1320,9 @@ void SelectTool::update_hover(
   auto& edit = context.get_editor().get_context();
   m_cursor = ToolCursor();
   if(auto cursor = m_layout_handles.hover(context, event.m_position)) {
+    m_cursor = *cursor;
+  } else if(auto cursor = m_guides.hover(context, event.m_position);
+      cursor && !find_grab(context, event.m_position)) {
     m_cursor = *cursor;
   } else if(auto grab = find_grab(context, event.m_position)) {
     auto box = *get_box(context);

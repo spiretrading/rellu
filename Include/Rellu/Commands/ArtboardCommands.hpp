@@ -80,6 +80,17 @@ namespace Rellu {
   std::vector<GridOverride> get_built_in_overrides();
 
   /**
+   * Adapts a layout grid to its artboard's new size as Adobe XD does when
+   * the artboard is resized: the bottom and then the top margin shrink so
+   * that rows remain, and for a new width the gutter narrows so that every
+   * column remains and the margins move so that the columns are about whole
+   * widths.
+   * @param grid The layout grid.
+   * @param size The artboard's new size.
+   */
+  void fit_layout_grid(LayoutGrid& grid, Size size);
+
+  /**
    * Returns the grids made the default by Make Default: the grid itself,
    * and the layout grids by width with the grid's layout given to artboards
    * up to the artboard's width.

@@ -1222,11 +1222,14 @@ void SceneBuilder::add_shape(
     const Node& node, const Placement& placement, DrawList& list) {
   auto& shape = *node.get_shape();
   auto& style = shape.m_style;
+  auto poster = shape.m_video ?
+    std::optional<Fill>(shape.m_video->m_poster) : std::nullopt;
+  auto& paint_fill = poster ? *poster : style.m_fill;
   auto& outline = get_outline(
     node, get_scale(placement.m_transform, placement.m_projection));
   auto fill = std::optional<FillCommand>();
   if(!std::holds_alternative<LineShape>(shape.m_geometry)) {
-    if(auto paint = convert(style.m_fill, *outline.m_path)) {
+    if(auto paint = convert(paint_fill, *outline.m_path)) {
       fill.emplace(outline.m_path, placement.m_transform, std::move(*paint),
         placement.m_clip);
     }
@@ -1255,7 +1258,7 @@ void SceneBuilder::add_shape(
     add_styled(list, std::move(fill), std::move(stroke), style.m_effects);
     return;
   }
-  if(fill && stroke && outline.m_layered && is_opaque(style.m_fill) &&
+  if(fill && stroke && outline.m_layered && is_opaque(paint_fill) &&
       placement.m_opacity >= 1 && !is_inward(style.m_effects) &&
       (!is_inside || style.m_stroke->m_color.m_alpha >= 1)) {
     if(is_inside) {

@@ -173,10 +173,10 @@ Path Rellu::make_polygon(
 }
 
 std::vector<Point> Rellu::make_polygon_vertices(
-    int corner_count, const Rect& bounds) {
-  auto vertices = std::vector<Point>();
+    int corner_count, const Rect& bounds, double star_ratio) {
+  auto corners = std::vector<Point>();
   if(corner_count < 3) {
-    return vertices;
+    return corners;
   }
   auto start = -std::numbers::pi / 2;
   if(corner_count % 2 == 0) {
@@ -184,17 +184,27 @@ std::vector<Point> Rellu::make_polygon_vertices(
   }
   for(auto i = 0; i != corner_count; ++i) {
     auto angle = start + 2 * std::numbers::pi * i / corner_count;
-    vertices.push_back(Point(std::cos(angle), std::sin(angle)));
+    corners.push_back(Point(std::cos(angle), std::sin(angle)));
   }
-  auto left = vertices.front().m_x;
-  auto top = vertices.front().m_y;
+  auto left = corners.front().m_x;
+  auto top = corners.front().m_y;
   auto right = left;
   auto bottom = top;
-  for(auto& vertex : vertices) {
-    left = std::min(left, vertex.m_x);
-    top = std::min(top, vertex.m_y);
-    right = std::max(right, vertex.m_x);
-    bottom = std::max(bottom, vertex.m_y);
+  for(auto& corner : corners) {
+    left = std::min(left, corner.m_x);
+    top = std::min(top, corner.m_y);
+    right = std::max(right, corner.m_x);
+    bottom = std::max(bottom, corner.m_y);
+  }
+  auto vertices = std::vector<Point>();
+  auto is_star = star_ratio < 100;
+  vertices.reserve(is_star ? 2 * corners.size() : corners.size());
+  for(auto i = std::size_t(0); i != corners.size(); ++i) {
+    vertices.push_back(corners[i]);
+    if(is_star) {
+      auto middle = (corners[i] + corners[(i + 1) % corners.size()]) / 2;
+      vertices.push_back(middle * (star_ratio / 100));
+    }
   }
   for(auto& vertex : vertices) {
     vertex = Point(
@@ -204,8 +214,8 @@ std::vector<Point> Rellu::make_polygon_vertices(
   return vertices;
 }
 
-Path Rellu::make_polygon(
-    int corner_count, const Rect& bounds, double corner_radius) {
+Path Rellu::make_polygon(int corner_count, const Rect& bounds,
+    double corner_radius, double star_ratio) {
   return make_polygon(
-    make_polygon_vertices(corner_count, bounds), corner_radius);
+    make_polygon_vertices(corner_count, bounds, star_ratio), corner_radius);
 }

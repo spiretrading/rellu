@@ -1,11 +1,14 @@
 #include <array>
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <variant>
 #include <vector>
+#include <QBuffer>
+#include <QImage>
 #include <doctest/doctest.h>
 #include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Geometry/Stroke.hpp"
@@ -28,6 +31,22 @@ namespace {
     shape.m_geometry = RectangleShape(bounds);
     shape.m_style.m_fill = SolidFill(color);
     return shape;
+  }
+
+  ImageResource make_resource(QSize size) {
+    auto image = QImage(size, QImage::Format_RGBA8888);
+    image.fill(QColor(10, 20, 30));
+    auto bytes = QByteArray();
+    auto buffer = QBuffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    auto data = std::vector<std::byte>(bytes.size());
+    std::memcpy(data.data(), bytes.constData(), bytes.size());
+    auto resource = ImageResource();
+    resource.m_id = generate_node_id();
+    resource.m_media_type = "image/png";
+    resource.m_data = Shared(std::move(data));
+    return resource;
   }
 
   const FillCommand& get_fill(const DrawList& list, std::size_t index) {
@@ -479,6 +498,26 @@ TEST_SUITE("SceneBuilder") {
     auto list = builder.build();
     REQUIRE(list.size() == 1);
     REQUIRE(*get_fill(list, 0).m_path == result);
+  }
+
+  TEST_CASE("video") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto video = Shape();
+    video.m_geometry = RectangleShape(Rect(0, 0, 64, 48));
+    auto poster = ImageFill();
+    poster.m_image = transaction.add_image(make_resource(QSize(8, 6)));
+    poster.m_size = Size(8, 6);
+    poster.m_scale_behavior = ScaleBehavior::COVER;
+    video.m_video = Video(poster, generate_node_id(), false);
+    transaction.append(NodeId(), make_header(), video);
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto list = builder.build();
+    REQUIRE(list.size() == 1);
+    auto& fill = get_fill(list, 0);
+    REQUIRE(*fill.m_path == make_rectangle(Rect(0, 0, 64, 48)));
+    REQUIRE(std::holds_alternative<ImagePaint>(fill.m_paint));
   }
 
   TEST_CASE("unsupported") {

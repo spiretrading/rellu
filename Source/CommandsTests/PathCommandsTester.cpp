@@ -4,9 +4,11 @@
 #include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Commands/CommandRegistry.hpp"
+#include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/History.hpp"
 #include "Rellu/Commands/PathCommands.hpp"
 #include "Rellu/Geometry/BooleanOperation.hpp"
+#include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Model/Transaction.hpp"
 #include "Fixture.hpp"
@@ -169,6 +171,98 @@ TEST_SUITE("PathCommands") {
     REQUIRE(document.get(board.m_bottom).m_header.m_name == "Bottom");
   }
 
+  TEST_CASE("outline_stroke") {
+    auto document = Document();
+    auto board = build_board(document);
+    {
+      auto line = get_shape(document, board.m_line);
+      line.m_style.m_stroke = Stroke(make_color(0, 0, 255), 4);
+      auto transaction = Transaction(document);
+      transaction.replace_payload(board.m_line, line);
+      transaction.commit();
+      document.clear_history();
+    }
+    auto registry = make_registry();
+    REQUIRE(is_outline_strokable(document, board.m_bottom));
+    REQUIRE(is_outline_strokable(document, board.m_line));
+    REQUIRE(!is_outline_strokable(document, board.m_top));
+    REQUIRE(!is_outline_strokable(document, board.m_text));
+    REQUIRE(!registry.make("object.path.outline_stroke", document,
+      std::vector{board.m_top, board.m_text}));
+    auto history = History(document);
+    auto command = registry.make("object.path.outline_stroke", document,
+      std::vector{board.m_bottom, board.m_line, board.m_top});
+    REQUIRE(command->get_label() == "Outline Stroke");
+    auto recorded = require_undoable(history, std::move(command));
+    auto selection = *recorded->get_selection();
+    REQUIRE(selection.size() == 4);
+    REQUIRE(selection[0] == board.m_bottom);
+    REQUIRE(selection[2] == board.m_line);
+    REQUIRE(selection[3] == board.m_top);
+    auto& bottom = get_shape(document, board.m_bottom);
+    REQUIRE(!bottom.m_style.m_stroke->m_is_enabled);
+    REQUIRE(std::holds_alternative<RectangleShape>(bottom.m_geometry));
+    auto& outline = document.get(selection[1]);
+    REQUIRE(outline.m_header.m_name == "Bottom - Outline");
+    REQUIRE(outline.m_header.m_transform == make_translation(10, 10));
+    REQUIRE(get_index(document, selection[1]) ==
+      get_index(document, board.m_bottom) + 1);
+    auto& style = outline.get_shape()->m_style;
+    REQUIRE(style.m_fill == Fill(SolidFill(make_color(0, 0, 0))));
+    REQUIRE(!style.m_stroke->m_is_enabled);
+    auto& path = *std::get<PathShape>(outline.get_shape()->m_geometry).m_path;
+    REQUIRE(get_bounds(path) == Rect(-1, -1, 42, 42));
+    REQUIRE(!contains(path, Point(20, 20)));
+    REQUIRE(contains(path, Point(0, 20)));
+    auto& line = document.get(board.m_line);
+    REQUIRE(line.m_header.m_name == "Line");
+    auto& line_shape = *line.get_shape();
+    REQUIRE(line_shape.m_style.m_fill ==
+      Fill(SolidFill(make_color(0, 0, 255))));
+    REQUIRE(get_bounds(*std::get<PathShape>(line_shape.m_geometry).m_path).
+      m_height > 20);
+  }
+
+  TEST_CASE("outline_stroke_group") {
+    auto document = Document();
+    auto board = build_board(document);
+    {
+      auto header = document.get(board.m_bottom).m_header;
+      header.m_opacity = 0.5;
+      auto shape = get_shape(document, board.m_bottom);
+      shape.m_style.m_effects.push_back(
+        DropShadow(Point(0, 3), 6, make_color(0, 0, 0), true));
+      auto transaction = Transaction(document);
+      transaction.replace_header(header);
+      transaction.replace_payload(board.m_bottom, shape);
+      transaction.commit();
+      document.clear_history();
+    }
+    auto registry = make_registry();
+    auto history = History(document);
+    auto recorded = require_undoable(history, registry.make(
+      "object.path.outline_stroke", document, std::vector{board.m_bottom}));
+    auto selection = *recorded->get_selection();
+    REQUIRE(selection.size() == 1);
+    auto& group = document.get(selection.front());
+    REQUIRE(group.get_group());
+    REQUIRE(group.m_header.m_name == "Bottom");
+    REQUIRE(group.m_header.m_opacity == 0.5);
+    REQUIRE(group.m_parent == board.m_artboard);
+    REQUIRE(group.m_children.size() == 2);
+    REQUIRE(group.m_children.front() == board.m_bottom);
+    auto& bottom = document.get(board.m_bottom);
+    REQUIRE(bottom.m_header.m_opacity == 1);
+    REQUIRE(get_world_transform(document, board.m_bottom) ==
+      make_translation(110, 110));
+    REQUIRE(!std::get<DropShadow>(
+      bottom.get_shape()->m_style.m_effects.front()).m_is_visible);
+    auto& outline = document.get(group.m_children.back());
+    REQUIRE(outline.m_header.m_opacity == 1);
+    REQUIRE(!std::get<DropShadow>(
+      outline.get_shape()->m_style.m_effects.front()).m_is_visible);
+  }
+
   TEST_CASE("convert_compound") {
     auto document = Document();
     auto board = build_board(document);
@@ -305,10 +399,10 @@ TEST_SUITE("PathCommands") {
     auto registry = make_registry();
     for(auto name : {"object.path.add", "object.path.subtract",
         "object.path.intersect", "object.path.exclude",
-        "object.path.convert"}) {
+        "object.path.convert", "object.path.outline_stroke"}) {
       REQUIRE(registry.contains(name));
     }
-    REQUIRE(registry.get_names().size() == 5);
+    REQUIRE(registry.get_names().size() == 6);
     REQUIRE(!registry.make(
       "object.path.add", document, std::vector{board.m_bottom}));
     REQUIRE(!registry.make("object.path.add", document,

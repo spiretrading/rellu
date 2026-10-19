@@ -71,6 +71,16 @@ namespace Rellu {
        */
       NodeId find(Point position) const;
 
+      /** Returns the font titles are drawn with, at one pixel per unit. */
+      const QFont& get_font() const;
+
+      /**
+       * Sets the artboard whose title is not drawn, as while it is renamed
+       * in place.
+       * @param artboard The artboard, or nil for none.
+       */
+      void set_hidden(const NodeId& artboard);
+
       /**
        * Draws the titles most recently laid out.
        * @param overlay The overlay to draw into.
@@ -86,6 +96,7 @@ namespace Rellu {
         std::uint64_t m_generation;
       };
       QFont m_font;
+      NodeId m_hidden;
       std::vector<Title> m_titles;
       std::unordered_map<std::string, double> m_widths;
       std::unordered_map<QString, Image> m_images;

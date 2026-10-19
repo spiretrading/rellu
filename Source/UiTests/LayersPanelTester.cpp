@@ -220,6 +220,41 @@ TEST_SUITE("LayersPanel") {
     REQUIRE(document.get(ids.m_ellipse).m_header.m_is_locked);
     REQUIRE(editor.get_history().get_undo_label() == "Lock");
     REQUIRE(editor.get_selection().is_empty());
+    REQUIRE(panel.toggle_visibility(ids.m_reference));
+    auto& reference = document.get(ids.m_reference);
+    REQUIRE(!reference.get_reference());
+    REQUIRE(!reference.m_header.m_is_visible);
+    REQUIRE(document.get(ids.m_master_shape).m_header.m_is_visible);
+    REQUIRE(panel.toggle_visibility(ids.m_reference));
+    REQUIRE(document.get(ids.m_reference).m_header.m_is_visible);
+  }
+
+  TEST_CASE("compound_operand_visibility") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto operand = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto compound = Shape();
+      compound.m_geometry = CompoundShape(CompoundOperation::UNION,
+        Shared(make_rectangle(Rect(0, 0, 5, 5))));
+      auto id = transaction.append(
+        ids.m_artboard, make_header("Compound"), compound);
+      auto shape = Shape();
+      shape.m_geometry = RectangleShape(Rect(0, 0, 5, 5));
+      operand = transaction.append(id, make_header("Operand"), shape);
+      transaction.commit();
+    }
+    auto editor = Editor(document);
+    auto panel = LayersPanel();
+    panel.set_editor(&editor);
+    auto& model = panel.get_model();
+    REQUIRE(!model.data(model.find(operand, LayersModel::VISIBILITY),
+      Qt::DecorationRole).isValid());
+    REQUIRE(model.data(model.find(ids.m_ellipse, LayersModel::VISIBILITY),
+      Qt::DecorationRole).isValid());
+    REQUIRE(!panel.toggle_visibility(operand));
+    REQUIRE(document.get(operand).m_header.m_is_visible);
   }
 
   TEST_CASE("move") {

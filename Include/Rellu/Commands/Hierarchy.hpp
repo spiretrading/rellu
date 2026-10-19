@@ -28,6 +28,16 @@ namespace Rellu {
   NodeId find_artboard(const Document& document, const NodeId& id);
 
   /**
+   * Tests whether a node lies within a compound shape, which Adobe XD never
+   * lets the user hide.
+   * @param document The document holding the node.
+   * @param id The node's id.
+   * @return <code>true</code> iff an ancestor of the node is a compound
+   *         shape.
+   */
+  bool is_inside_compound(const Document& document, const NodeId& id);
+
+  /**
    * Returns the position of a node among its parent's children, or among the
    * canvas nodes for a top-level node.
    * @param document The document holding the node.

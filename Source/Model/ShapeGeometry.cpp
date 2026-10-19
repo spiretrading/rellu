@@ -17,7 +17,7 @@ Path Rellu::to_path(const ShapeGeometry& geometry) {
       if(shape.m_vertices.empty()) {
         return make_polygon(shape.m_corner_count,
           Rect(0, 0, shape.m_size.m_width, shape.m_size.m_height),
-          shape.m_corner_radius);
+          shape.m_corner_radius, shape.m_star_ratio);
       }
       return make_polygon(shape.m_vertices, shape.m_corner_radius);
     } else if constexpr(std::is_same_v<Type, PathShape>) {

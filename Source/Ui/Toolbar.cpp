@@ -1,6 +1,7 @@
 #include <utility>
 #include <QVBoxLayout>
 #include "Rellu/Ui/Toolbar.hpp"
+#include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "Icons.hpp"
 
@@ -164,12 +165,18 @@ QToolButton* Toolbar::make_button(const ToolEntry& entry) {
   button->setFixedSize(BUTTON_SIZE, BUTTON_SIZE);
   button->setIconSize(QSize(ICON_SIZE, ICON_SIZE));
   button->setIcon(entry.m_icon);
-  button->setAccessibleName(entry.m_label);
+  auto label = translate("toolbar", entry.m_label);
+  button->setAccessibleName(label);
   if(entry.m_shortcut.isEmpty()) {
-    button->setToolTip(entry.m_label);
+    button->setToolTip(label);
   } else {
-    button->setToolTip(QString("%1 (%2)").arg(
-      entry.m_label, to_xd_shortcut_text(entry.m_shortcut)));
+    auto shortcut = to_xd_shortcut_text(entry.m_shortcut);
+    auto tip = QString("%1 (%2)").arg(entry.m_label, shortcut);
+    auto translation = translate("toolbar", tip);
+    if(translation == tip) {
+      translation = QString("%1 (%2)").arg(label, shortcut);
+    }
+    button->setToolTip(translation);
   }
   return button;
 }

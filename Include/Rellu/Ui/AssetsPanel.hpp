@@ -131,8 +131,7 @@ namespace Rellu {
       void render_thumbnails();
 
       /**
-       * Makes the menu of a component: Edit Main Component, Swap Component
-       * and Rename.
+       * Makes the menu of a component: Edit Main Component and Rename.
        * @param component The component.
        * @param parent The menu's parent.
        * @return The menu.
@@ -146,14 +145,6 @@ namespace Rellu {
        * @return <code>true</code> iff the component was renamed.
        */
       bool rename_component(const ComponentId& component, const QString& name);
-
-      /**
-       * Replaces the selected component instances with instances of a
-       * component.
-       * @param component The component.
-       * @return <code>true</code> iff an instance was replaced.
-       */
-      bool swap_component(const ComponentId& component);
 
       /**
        * Scrolls a component into view and highlights it.

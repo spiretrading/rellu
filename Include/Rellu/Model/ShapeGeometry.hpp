@@ -64,8 +64,15 @@ namespace Rellu {
     double m_corner_radius = 0;
 
     /**
+     * The distance of the inner vertices from the center, as a percentage
+     * of the distance to the middle of an edge, 100 for a polygon without
+     * inner vertices.
+     */
+    double m_star_ratio = 100;
+
+    /**
      * The vertices in the node's local space, or empty to derive them from
-     * the corner count and size.
+     * the corner count, size and star ratio.
      */
     std::vector<Point> m_vertices;
 
@@ -101,8 +108,9 @@ namespace Rellu {
   };
 
   /**
-   * The result of a boolean operation over operand shapes, which are the
-   * compound shape's child nodes.
+   * The result of a boolean operation over operands, which are the compound
+   * shape's child nodes: shapes, groups standing for the union of their
+   * descendants, and references standing for what they render.
    */
   struct CompoundShape {
 
@@ -136,6 +144,7 @@ namespace Rellu {
     return m_corner_count == polygon.m_corner_count &&
       m_size == polygon.m_size &&
       equals(m_corner_radius, polygon.m_corner_radius) &&
+      equals(m_star_ratio, polygon.m_star_ratio) &&
       m_vertices == polygon.m_vertices;
   }
 }

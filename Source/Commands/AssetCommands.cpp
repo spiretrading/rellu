@@ -961,7 +961,12 @@ void MoveAssetsCommand::apply(
 }
 
 AddAssetGroupCommand::AddAssetGroupCommand(std::string parent) noexcept
+  : AddAssetGroupCommand(std::move(parent), NEW_GROUP_NAME) {}
+
+AddAssetGroupCommand::AddAssetGroupCommand(
+  std::string parent, std::string name) noexcept
   : m_parent(std::move(parent)),
+    m_name(std::move(name)),
     m_group(to_string(generate_node_id())) {}
 
 const std::string& AddAssetGroupCommand::get_group() const {
@@ -975,13 +980,14 @@ std::string AddAssetGroupCommand::get_label() const {
 void AddAssetGroupCommand::apply(
     const Document& document, Transaction& transaction) {
   auto& resources = document.get_resources();
-  if(!find_group(resources, m_parent)) {
+  if(!find_group(resources, m_parent) && m_parent != COLOR_SECTION &&
+      m_parent != CHARACTER_STYLE_SECTION) {
     throw std::invalid_argument("Unknown asset group.");
   }
   auto groups = resources.m_asset_groups;
   auto group = AssetGroup();
   group.m_id = m_group;
-  group.m_name = NEW_GROUP_NAME;
+  group.m_name = m_name;
   group.m_order = make_order_between(
     std::string(), find_first_order(resources, m_parent, {}));
   group.m_parent = m_parent;

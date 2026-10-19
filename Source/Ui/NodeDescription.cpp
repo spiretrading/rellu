@@ -2,6 +2,7 @@
 #include <variant>
 #include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Ui/NodeDescription.hpp"
+#include "Rellu/Ui/Translation.hpp"
 
 using namespace Rellu;
 
@@ -60,15 +61,15 @@ QString Rellu::get_display_name(const Document& document, const Node& node) {
 QString Rellu::get_kind_name(NodeKind kind) {
   switch(kind) {
     case NodeKind::ARTBOARD:
-      return "Artboard";
+      return translate("layers", "Artboard");
     case NodeKind::GROUP:
-      return "Group";
+      return translate("layers", "Group");
     case NodeKind::SHAPE:
-      return "Shape";
+      return translate("layers", "Shape");
     case NodeKind::TEXT:
-      return "Text";
+      return translate("layers", "Text");
     case NodeKind::REFERENCE:
-      return "Reference";
+      return translate("layers", "Reference");
   }
   return QString();
 }
@@ -77,30 +78,30 @@ QString Rellu::get_type_name(const Node& node) {
   if(auto shape = node.get_shape()) {
     return std::visit([] <typename T> (const T&) -> QString {
       if constexpr(std::same_as<T, RectangleShape>) {
-        return "Rectangle";
+        return translate("layers", "Rectangle");
       } else if constexpr(std::same_as<T, EllipseShape>) {
-        return "Ellipse";
+        return translate("layers", "Ellipse");
       } else if constexpr(std::same_as<T, LineShape>) {
-        return "Line";
+        return translate("layers", "Line");
       } else if constexpr(std::same_as<T, PolygonShape>) {
-        return "Polygon";
+        return translate("layers", "Polygon");
       } else if constexpr(std::same_as<T, PathShape>) {
-        return "Path";
+        return translate("layers", "Path");
       } else {
-        return "Compound Shape";
+        return translate("layers", "Compound Shape");
       }
     }, shape->m_geometry);
   } else if(auto group = node.get_group()) {
     if(group->m_component_instance) {
-      return "Component";
+      return translate("layers", "Component");
     } else if(group->m_repeat_grid) {
-      return "Repeat Grid";
+      return translate("layers", "Repeat Grid");
     } else if(group->m_scroll_group) {
-      return "Scroll Group";
+      return translate("layers", "Scroll Group");
     } else if(group->m_stack) {
-      return "Stack";
+      return translate("layers", "Stack");
     } else if(group->m_mask) {
-      return "Mask Group";
+      return translate("layers", "Mask Group");
     }
   }
   return get_kind_name(node.get_kind());

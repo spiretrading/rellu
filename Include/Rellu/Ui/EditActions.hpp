@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <QMetaObject>
+#include <QMimeData>
 #include <QString>
 #include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Editor/Editor.hpp"
@@ -42,6 +43,16 @@ namespace Rellu {
        * @param region The region in document coordinates.
        */
       using RevealHandler = std::function<void (const Rect& region)>;
+
+      /**
+       * The type of function pasting system clipboard data ahead of the
+       * clipboard, such as copied guides.
+       * @param data The clipboard data.
+       * @param is_applied Whether to paste rather than only test.
+       * @return <code>true</code> iff the function pastes the data.
+       */
+      using PasteHandler =
+        std::function<bool (const QMimeData& data, bool is_applied)>;
 
       /**
        * Sets the handlers of the actions, which are disabled until an
@@ -104,6 +115,13 @@ namespace Rellu {
        */
       void set_error_handler(ErrorHandler handler);
 
+      /**
+       * Sets the function pasting system clipboard data ahead of the
+       * clipboard.
+       * @param handler The function.
+       */
+      void set_paste_handler(PasteHandler handler);
+
       /** Updates the text and enabled state of every action. */
       void update();
 
@@ -113,6 +131,7 @@ namespace Rellu {
       Editor* m_editor;
       Clipboard m_clipboard;
       ErrorHandler m_error_handler;
+      PasteHandler m_paste_handler;
       ViewProvider m_view_provider;
       RevealHandler m_reveal_handler;
       Workspace m_workspace;

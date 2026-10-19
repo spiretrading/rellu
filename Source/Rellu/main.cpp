@@ -17,6 +17,7 @@ int main(int argc, char** argv) {
   set_default_font_directories({get_bundled_font_directory()});
   application.setOrganizationName("Rellu");
   application.setApplicationName("Rellu");
+  set_language(load_language());
   apply_theme(application);
   auto window = MainWindow();
   window.show();

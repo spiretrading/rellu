@@ -134,3 +134,19 @@ void ToolContext::update_titles() {
 std::uint64_t ToolContext::get_revision() const {
   return m_revision;
 }
+
+const GuideSettings& ToolContext::get_guide_settings() const {
+  return m_guide_settings;
+}
+
+void ToolContext::set_guide_settings(GuideSettings settings) {
+  m_guide_settings = settings;
+}
+
+const std::optional<GuideReference>& ToolContext::get_dragged_guide() const {
+  return m_dragged_guide;
+}
+
+void ToolContext::set_dragged_guide(std::optional<GuideReference> guide) {
+  m_dragged_guide = std::move(guide);
+}

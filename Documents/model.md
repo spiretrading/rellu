@@ -89,7 +89,7 @@ role (for example a component instance that is also a stack).
 | Scroll group | `meta.ux.scrollingType`, `viewportWidth/Height`, `offsetX/Y` | direction (horizontal, vertical, panning), viewport, offset |
 | Stack | `contentStackType`, `contentStackMarginAfter` (per child), `contentPadding`, `hasContentBackground` | direction, per-child spacing, padding, whether the first child is the background |
 | Padding | `contentPadding`, `isContentAware`, `hasContentBackground` | padding around content with a background child |
-| Component instance | `meta.ux.symbolId`, `stateId`, `syncMap`, `symbolOverrides` | component, active state, override bookkeeping |
+| Component instance | `meta.ux.symbolId`, `stateId`, `syncMap`, `symbolOverrides` | component, active state, override bookkeeping (including the group within the instance that records each added, removed or reordered node) |
 
 XD stores the laid-out result of stacks, padding and repeat grids as ordinary
 child transforms and sizes. The model keeps those results as authoritative
@@ -114,7 +114,12 @@ The model keeps these as `Reference` nodes rather than copying the master:
 
 A reference renders as its source subtree with the overrides applied. The
 renderer resolves references when it builds its render scene; editing a
-master therefore updates every reference to it.
+master therefore updates every reference to it. Like XD, which writes a
+`syncRef` only for a node whose own properties other than its transform and
+interactions equal its source's, a reference has no header of its own: it
+shows its source's name, visibility, lock, opacity and blend mode, and an
+edit of any of them first replaces it with a full copy whose children stay
+references.
 
 ### Shapes
 
@@ -125,24 +130,40 @@ A shape's geometry is one of:
 | `RectangleShape` | `rect` | rect, four corner radii (XD order: top-left, top-right, bottom-right, bottom-left) |
 | `EllipseShape` | `ellipse`, `circle` | center, x and y radii |
 | `LineShape` | `line` | two points |
-| `PolygonShape` | `polygon` | corner count, size, corner radius, vertices |
+| `PolygonShape` | `polygon` | corner count, size, corner radius, star ratio (`uxdesign#starRatio`, 100 when absent), vertices |
 | `PathShape` | `path` | `Path` (parsed SVG data) and fill rule |
-| `CompoundShape` | `compound` | `CompoundOperation`, operand shapes (child shape nodes), cached result `Path` |
+| `CompoundShape` | `compound` | `CompoundOperation`, operands (child shape, group and reference nodes), cached result `Path` |
 
 Geometry converts to a `Path` with the `RelluGeometry` builders
 (`make_rectangle`, `make_ellipse`, `make_polygon`, `parse_svg_path`,
 `combine`). A compound shape keeps its operands so it stays editable; the
-cached result is XD's stored `path`, recomputed when an operand changes.
+cached result is XD's stored `path`, recomputed when an operand changes. A
+group operand stands for the union of its children's outlines and a reference
+operand for the outline of what it renders (CompoundResolution.hpp); a nested
+compound shape contributes its result (verified in XD with a group in an
+exclusion). XD never lets a node inside a compound shape, or an artboard, be
+hidden.
+
+A star is a polygon whose star ratio is below 100: after each corner it has
+an inner vertex on the line from the center to the middle of the edge the
+polygon would have there, at that percentage of the distance. A video
+(`shape.meta.ux.subtype: video`) is a rectangle shape with a `Video`
+payload: its poster frame (`mediaFill`), the media resource
+(`mediaFileGuid`) and whether it loops; it has no fill or stroke and is drawn
+as its poster.
 
 ### Style
 
 `Style` belongs to shapes, text and artboards (artboards use only the fill):
 
-- `fill`: one of `NoFill`, `SolidFill{color, swatch}`,
+- `fill`: one of `NoFill{paint}`, `SolidFill{color, swatch}`,
   `GradientFill{kind (linear, radial), stops (offset, color), geometry
   (x1 y1 x2 y2 for linear; cx cy r fx fy for radial), units
   (object bounding box or user space), transform}`,
   `ImageFill{image, scale behaviour (fill, cover), offset, scale, flips}`.
+  A fill turned off keeps its paint, as XD does (`type: none` with the
+  paint's members and `uxdesign#type`), in `NoFill::m_paint`; turning it
+  back on restores it.
 - `stroke`: `Stroke{paint (solid color for now), width, alignment (inside,
   outside, center), cap (butt, round, square), join (miter, round, bevel),
   miter limit, dash array, is_enabled}`. XD omits the alignment for center.
@@ -180,6 +201,9 @@ Opacity and blend mode live in the node header because groups have them too.
   or striking through a run keeps it, dropping the color the layout stored
   for spans whose run color changed. Stored runs are not validated against
   the content: consumers clamp `from` and `to` to the content length.
+- `is_flipped_vertically`: XD `meta.ux.flipY`. The text is drawn mirrored
+  top to bottom about the middle of its bounds; the node's transform, as XD
+  stores it, does not include the mirror.
 
 ### Artboards
 
@@ -193,7 +217,32 @@ visibility), guides, children}`. The frame comes from the resource
 `Constraints{is_enabled, left, right, top, bottom, width, height}` as XD's
 `constraint*` booleans, with `is_custom` for `customConstraints`. They only
 affect how a node responds when its parent is resized; they never move
-anything at load time.
+anything at load time. `is_enabled` defaults to on, as XD's
+`constraintsDisabled` does; new artboards are created with it off.
+
+Resizing (Commands/ResponsiveResize) follows XD 61's resizers: Auto
+constraints are inferred from position and recorded on the nodes, then
+children are laid out by them; with Responsive Resize off on an artboard, or
+Shift held, the artboard's children keep their artboard-relative positions
+(verified in XD: dragging the left or top handle moves them with the edge).
+
+Open questions, not yet verified in XD; Rellu's current choice in brackets:
+
+- After resizing an instance whose main was never resized, are its children
+  saved as `syncRef` or as full nodes marked Manual? [inferred constraints
+  are not written on instance contents, only on main components]
+- A group whose only Manual child pins its right edge with a fixed width:
+  dragging the group's right handle, does the content follow the new right
+  edge or stay anchored at the left? [laid out in the new frame]
+- Do hidden children count toward a group's frame when it is resized?
+  [frame from visible children; hidden children still laid out]
+- A rotated group stretched by a responsive artboard: how do its children
+  change? [scaled along the group's own axes]
+- Scroll groups: does resizing change only the viewport along the scrolling
+  axes, and are the bounds the viewport or the content? [viewport changes by
+  the change in content bounds]
+- Does resizing an artboard that never had a layout grid create one in the
+  saved file? [only an existing grid is adapted]
 
 ### Components
 
@@ -202,8 +251,9 @@ link}`:
 
 - `states`: `ComponentState{id, name, tree (a group subtree),
   added (node ids), removed (node ids), overridden property names,
-  interactions}`. XD stores each state as a full group plus bookkeeping of how
-  it differs from the master; the model keeps both.
+  interactions, size (XD `width` and `height`)}`. XD stores each state as a
+  full group plus bookkeeping of how it differs from the master; the model
+  keeps both.
 - `link`: for components linked from another document or library
   (`linkedElementRef`, `resolvedRefName`, `linkedElementLastModified`), the
   source description. XD embeds a local copy, which the model uses; the link
@@ -346,7 +396,11 @@ refinements:
   component changes the master, or the tree of the state the main
   component shows, and then every instance except the properties an
   instance overrides; an edit of any other instance adds the XD names of
-  the properties it changed to the instance's overrides. An instance mirrors
+  the properties it changed to the instance's overrides. The header of a
+  tree's root (the root of an instance, of the main component or of a
+  master) is its own, as in XD: it is neither synced nor recorded as an
+  override, except that a nested instance's root records its overrides
+  against the node it mirrors in the outer tree. An instance mirrors
   the master or, in a state other than the default, that state's tree: its
   sync map maps its nodes to the nodes of that tree.
 - `resolve_reference` (ReferenceResolution.hpp) is the single rule for what a
@@ -386,3 +440,9 @@ refinements:
 - How XD orders a stack turned on from the inspector (the plugin API keeps
   the z order; Rellu orders by position) and what new cells copy when
   columns are added (rows copy the last cell).
+- Where XD places the inner vertices of a star stretched to a box that is
+  not equilateral, and whether the corner radius rounds them (no star in
+  the corpus).
+- Whether XD draws vertically flipped text mirrored (the After Effects
+  export mirrors it about the middle of its bounds; the only flipped text
+  in the corpus is hidden).

@@ -6,6 +6,7 @@
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Ui/ComponentActions.hpp"
+#include "Rellu/Ui/Translation.hpp"
 
 using namespace Rellu;
 
@@ -22,8 +23,8 @@ namespace {
 
   void ensure(ActionRegistry& actions, const char* name, const QString& text) {
     if(!actions.find(name)) {
-      actions.add(
-        ActionDefinition(name, text, QKeySequence(), "", "component"));
+      actions.add(ActionDefinition(
+        name, translate("menu", text), QKeySequence(), "", "component"));
     }
   }
 
@@ -36,15 +37,15 @@ namespace {
     };
     if(kind == StateKind::NEW) {
       for(auto i = component.m_states.size() + 2;; ++i) {
-        auto candidate = "State " + std::to_string(i);
+        auto candidate = translate("name", "State %1").arg(i).toStdString();
         if(!is_taken(candidate)) {
           return candidate;
         }
       }
     }
-    auto name = std::string("Hover State");
+    auto name = std::string(localize("name", "Hover State"));
     if(kind == StateKind::TOGGLE) {
-      name = "Toggle State";
+      name = localize("name", "Toggle State");
     }
     if(!is_taken(name)) {
       return name;

@@ -100,7 +100,8 @@ namespace Rellu {
       return false;
     }
     if(auto shape = std::get_if<Box<Shape>>(&parent)) {
-      return kind == NodeKind::SHAPE &&
+      return (kind == NodeKind::SHAPE || kind == NodeKind::GROUP ||
+        kind == NodeKind::REFERENCE) &&
         std::holds_alternative<CompoundShape>((*shape)->m_geometry);
     } else if(auto reference = std::get_if<Reference>(&parent)) {
       return reference->m_has_children;

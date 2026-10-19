@@ -3,6 +3,7 @@
 #include <unordered_set>
 #include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Commands/ComponentCommands.hpp"
+#include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
@@ -96,6 +97,9 @@ namespace {
     if(auto command = make_ungroup_grid_command(document, targets)) {
       return command;
     }
+    if(auto command = make_unlink_component(document, targets)) {
+      return command;
+    }
     auto nodes = get_top_level(document, targets);
     if(std::none_of(nodes.begin(), nodes.end(),
         [&] (const auto& id) { return is_ungroupable(document, id); })) {
@@ -111,18 +115,28 @@ namespace {
       return nullptr;
     }
     auto is_locked = std::any_of(nodes.begin(), nodes.end(),
-      [&] (const auto& id) { return !document.get(id).m_header.m_is_locked; });
+      [&] (const auto& id) {
+        auto header = find_rendered_header(document, id);
+        return header && !header->m_is_locked;
+      });
     return std::make_unique<SetLockCommand>(std::move(nodes), is_locked);
   }
 
   std::unique_ptr<Command> make_visibility_toggle(
       const Document& document, const std::vector<NodeId>& targets) {
     auto nodes = get_distinct(document, targets);
+    std::erase_if(nodes, [&] (const auto& id) {
+      return document.get(id).get_artboard() ||
+        is_inside_compound(document, id);
+    });
     if(nodes.empty()) {
       return nullptr;
     }
     auto is_visible = std::none_of(nodes.begin(), nodes.end(),
-      [&] (const auto& id) { return document.get(id).m_header.m_is_visible; });
+      [&] (const auto& id) {
+        auto header = find_rendered_header(document, id);
+        return header && header->m_is_visible;
+      });
     return std::make_unique<SetVisibilityCommand>(
       std::move(nodes), is_visible);
   }

@@ -49,25 +49,73 @@ TEST_SUITE("HeaderCommands") {
     auto scene = build_scene(document);
     auto history = History(document);
     auto nodes = std::vector{scene.m_rectangle};
-    auto enable = ConstraintsEdit();
-    enable.m_is_enabled = true;
+    auto disable = ConstraintsEdit();
+    disable.m_is_enabled = false;
     auto manual = ConstraintsEdit();
     manual.m_is_custom = true;
-    manual.m_left = true;
+    manual.m_right = true;
     REQUIRE(history.merge(std::make_unique<SetConstraintsCommand>(
-      nodes, enable)));
+      nodes, disable)));
     REQUIRE(history.merge(std::make_unique<SetConstraintsCommand>(
       nodes, manual)));
     REQUIRE(history.get_undo_count() == 1);
     REQUIRE(history.get_undo_label() == "Change Constraints");
     auto& constraints = document.get(scene.m_rectangle).m_header.m_constraints;
-    REQUIRE(constraints.m_is_enabled);
+    REQUIRE(!constraints.m_is_enabled);
     REQUIRE(constraints.m_is_custom);
-    REQUIRE(constraints.m_left);
-    REQUIRE(!constraints.m_right);
+    REQUIRE(!constraints.m_left);
+    REQUIRE(constraints.m_right);
+    REQUIRE(constraints.m_width);
+    REQUIRE(constraints.m_top);
+    REQUIRE(constraints.m_height);
     REQUIRE(history.undo());
     REQUIRE(document.get(scene.m_rectangle).m_header.m_constraints ==
       Constraints());
+  }
+
+  TEST_CASE("constraint_pins") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto history = History(document);
+    auto nodes = std::vector{scene.m_rectangle};
+    auto pins = ConstraintsEdit();
+    pins.m_left = true;
+    pins.m_right = true;
+    pins.m_width = true;
+    require_undoable(
+      history, std::make_unique<SetConstraintsCommand>(nodes, pins));
+    auto& constraints = document.get(scene.m_rectangle).m_header.m_constraints;
+    REQUIRE(constraints.m_is_custom);
+    REQUIRE(!constraints.m_left);
+    REQUIRE(constraints.m_width);
+    REQUIRE(constraints.m_right);
+    auto left = ConstraintsEdit();
+    left.m_left = true;
+    require_undoable(
+      history, std::make_unique<SetConstraintsCommand>(nodes, left));
+    auto& pinned = document.get(scene.m_rectangle).m_header.m_constraints;
+    REQUIRE(pinned.m_left);
+    REQUIRE(!pinned.m_right);
+  }
+
+  TEST_CASE("constraint_propagation") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto history = History(document);
+    auto disable = ConstraintsEdit();
+    disable.m_is_enabled = false;
+    require_undoable(history, std::make_unique<SetConstraintsCommand>(
+      std::vector{scene.m_group}, disable));
+    REQUIRE(!document.get(scene.m_ellipse).m_header.m_constraints.
+      m_is_enabled);
+    REQUIRE(
+      !document.get(scene.m_text).m_header.m_constraints.m_is_enabled);
+    require_undoable(history, std::make_unique<SetConstraintsCommand>(
+      std::vector{scene.m_artboard}, disable));
+    REQUIRE(!document.get(scene.m_artboard).m_header.m_constraints.
+      m_is_enabled);
+    REQUIRE(
+      document.get(scene.m_rectangle).m_header.m_constraints.m_is_enabled);
   }
 
   TEST_CASE("reset_3d") {

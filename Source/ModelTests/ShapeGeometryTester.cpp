@@ -29,8 +29,10 @@ TEST_SUITE("ShapeGeometry") {
       make_polygon(6, Rect(0, 0, 20, 10), 1));
     auto vertices = std::vector<Point>({Point(0, 0), Point(10, 0),
       Point(5, 8)});
-    REQUIRE(to_path(PolygonShape(3, Size(10, 8), 2, vertices)) ==
+    REQUIRE(to_path(PolygonShape(3, Size(10, 8), 2, 100, vertices)) ==
       make_polygon(vertices, 2));
+    REQUIRE(to_path(PolygonShape(5, Size(20, 10), 1, 40)) ==
+      make_polygon(5, Rect(0, 0, 20, 10), 1, 40));
   }
 
   TEST_CASE("path") {

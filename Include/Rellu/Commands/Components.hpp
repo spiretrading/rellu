@@ -1,6 +1,7 @@
 #ifndef RELLU_COMMANDS_COMPONENTS_HPP
 #define RELLU_COMMANDS_COMPONENTS_HPP
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -153,6 +154,32 @@ namespace Rellu {
    */
   void materialize_references(const Document& document,
     Transaction& transaction, const std::vector<NodeId>& nodes);
+
+  /**
+   * Returns the header a node renders with, which for a reference is its
+   * source's.
+   * @param document The document holding the node.
+   * @param id The node's id.
+   * @return The header, or <code>nullptr</code> if the node is unknown or
+   *         is a reference that does not resolve.
+   */
+  const NodeHeader* find_rendered_header(
+    const Document& document, const NodeId& id);
+
+  /**
+   * Edits a node's header as it renders. A reference inside a component
+   * instance that the edit changes is first replaced with an editable copy,
+   * which Adobe XD writes in full, while its children remain references.
+   * @param document The document holding the node.
+   * @param transaction The open transaction on the <i>document</i>.
+   * @param id The node's id.
+   * @param edit The function editing the header, given the node as it
+   *        renders and the header to edit.
+   * @return <code>true</code> iff the header changed.
+   */
+  bool edit_rendered_header(const Document& document, Transaction& transaction,
+    const NodeId& id,
+    const std::function<void (const Node&, NodeHeader&)>& edit);
 
   /**
    * Tests whether a node is a reference inside a component instance that

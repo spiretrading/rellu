@@ -1,6 +1,7 @@
 #include <string>
 #include <doctest/doctest.h>
 #include "Rellu/Geometry/SvgPath.hpp"
+#include "Rellu/Io/XdGenerator.hpp"
 #include "XdTestPackage.hpp"
 
 using namespace Rellu;
@@ -57,6 +58,16 @@ TEST_SUITE("ShapeImporter") {
     REQUIRE(polygon.m_corner_radius == 1);
     REQUIRE(polygon.m_vertices ==
       std::vector<Point>({Point(2.5, 0), Point(5, 6), Point(0, 6)}));
+    REQUIRE(polygon.m_star_ratio == 100);
+  }
+
+  TEST_CASE("star") {
+    auto geometry = import_geometry(R"({"type": "polygon",
+      "uxdesign#cornerCount": 5, "uxdesign#width": 20, "uxdesign#height": 19,
+      "uxdesign#starRatio": 47, "points": [{"x": 10, "y": 0}]})");
+    auto& polygon = std::get<PolygonShape>(geometry);
+    REQUIRE(polygon.m_corner_count == 5);
+    REQUIRE(polygon.m_star_ratio == 47);
   }
 
   TEST_CASE("path") {
@@ -131,12 +142,38 @@ TEST_SUITE("ShapeImporter") {
       "x": 0, "y": 0, "width": 64, "height": 48, "meta": {"ux": {
       "mediaFill": {"type": "pattern", "pattern": {"width": 640,
       "height": 480, "meta": {"ux": {"scaleBehavior": "cover",
-      "uid": "d6608fe5b4dfdc23627c4e5c912872b5"}}, "href": ""}}}}},
-      "group": {"children": []}}])");
+      "uid": "d6608fe5b4dfdc23627c4e5c912872b5"}}, "href": ""}},
+      "subtype": "video", "mediaFileGuid": "bc4e63905ff05d3f1e4677a1bab292f5",
+      "loop": true}}}, "group": {"children": []}}])");
     auto document = Document();
     auto report = import_package(package, document);
     REQUIRE(report.m_unconsumed.empty());
-    auto& fill = document.get(SHAPE_ID).get_shape()->m_style.m_fill;
-    REQUIRE(std::get<ImageFill>(fill).m_size == Size(640, 480));
+    REQUIRE(report.m_warnings.empty());
+    auto& shape = *document.get(SHAPE_ID).get_shape();
+    REQUIRE(std::holds_alternative<NoFill>(shape.m_style.m_fill));
+    REQUIRE(shape.m_video);
+    REQUIRE(shape.m_video->m_poster.m_size == Size(640, 480));
+    REQUIRE(shape.m_video->m_poster.m_scale_behavior == ScaleBehavior::COVER);
+    REQUIRE(to_uid(shape.m_video->m_media) ==
+      "bc4e63905ff05d3f1e4677a1bab292f5");
+    REQUIRE(shape.m_video->m_is_looping);
+  }
+
+  TEST_CASE("compound_operands") {
+    auto document = Document();
+    auto report = import_nodes(R"([{"type": "shape",
+      "id": "9fac4ba0-f4aa-4529-ae35-4f279c49c1bd", "shape": {
+      "type": "compound", "operation": "subtract", "path": "M 0 0 L 4 0 Z",
+      "children": [{"type": "shape", "id": "1", "shape": {"type": "rect",
+      "x": 0, "y": 0, "width": 4, "height": 4}}, {"type": "group",
+      "id": "2", "group": {"children": [{"type": "shape", "id": "3",
+      "shape": {"type": "rect", "x": 0, "y": 0, "width": 1,
+      "height": 1}}]}}, {"type": "syncRef", "guid": "4",
+      "syncSourceGuid": "1"}]}}])", document);
+    REQUIRE(report.m_warnings.empty());
+    auto& node = document.get(SHAPE_ID);
+    REQUIRE(node.m_children.size() == 3);
+    REQUIRE(document.get(node.m_children[1]).get_group());
+    REQUIRE(document.get(node.m_children[2]).get_reference());
   }
 }

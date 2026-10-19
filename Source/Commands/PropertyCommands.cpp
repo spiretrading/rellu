@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <unordered_set>
+#include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
 
 using namespace Rellu;
@@ -9,14 +10,9 @@ namespace {
       const std::vector<NodeId>& nodes, auto edit) {
     auto visited = std::unordered_set<NodeId>();
     for(auto& id : nodes) {
-      auto node = document.find(id);
-      if(!node || !visited.insert(id).second) {
-        continue;
-      }
-      auto header = node->m_header;
-      edit(header);
-      if(header != node->m_header) {
-        transaction.replace_header(std::move(header));
+      if(visited.insert(id).second) {
+        edit_rendered_header(document, transaction, id,
+          [&] (const auto&, auto& header) { edit(header); });
       }
     }
   }

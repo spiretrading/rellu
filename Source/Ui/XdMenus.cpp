@@ -1,5 +1,6 @@
 #include <array>
 #include <QKeyCombination>
+#include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 
 using namespace Rellu;
@@ -104,7 +105,7 @@ namespace {
       "Portugu\xC3\xAA" "s do Brasil", "", "edit.preferences.language",
       "languages"),
     Item(TOGGLE, "edit.preferences.language.russian",
-      "\xD0\xA0\xD1\x83\xD1\x81\xD1\x81\xD0\xBA\xD0\xB8\xD0\xB9", "",
+      "P\xD1\x83\xD1\x81\xD1\x81\xD0\xBA\xD0\xB8\xD0\xB9", "",
       "edit.preferences.language", "languages"),
     Item(TOGGLE, "edit.preferences.language.chinese",
       "\xE7\xAE\x80\xE4\xBD\x93\xE4\xB8\xAD\xE6\x96\x87", "",
@@ -290,12 +291,13 @@ namespace {
 
 void Rellu::add_xd_menus(ActionRegistry& actions) {
   for(auto& item : ITEMS) {
+    auto text = translate("menu", QString::fromUtf8(item.m_text));
     if(item.m_type == MENU) {
-      actions.add(MenuDefinition(item.m_name, item.m_text, item.m_parent,
-        item.m_section));
+      actions.add(
+        MenuDefinition(item.m_name, text, item.m_parent, item.m_section));
       continue;
     }
-    auto& action = actions.add(ActionDefinition(item.m_name, item.m_text,
+    auto& action = actions.add(ActionDefinition(item.m_name, text,
       QKeySequence(item.m_shortcut), item.m_parent, item.m_section,
       item.m_type != ACTION));
     if(item.m_type == CHECKED) {

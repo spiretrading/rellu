@@ -10,6 +10,7 @@
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
+#include "Rellu/Localization/Localization.hpp"
 
 using namespace Rellu;
 
@@ -337,7 +338,8 @@ void GroupCommand::apply(const Document& document, Transaction& transaction) {
   auto header = NodeHeader();
   header.m_name = m_name;
   if(header.m_name.empty()) {
-    header.m_name = make_node_name(document, "Group ");
+    header.m_name = make_node_name(
+      document, std::string(localize("name", "Group")) + ' ');
   }
   if(origin) {
     header.m_transform = make_translation(origin->m_x, origin->m_y);

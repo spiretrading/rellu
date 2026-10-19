@@ -250,9 +250,11 @@ TEST_SUITE("SmartGuides") {
   TEST_CASE("distance_labels") {
     REQUIRE(format_distance(30) == "30");
     REQUIRE(format_distance(12.5) == "12.5");
-    REQUIRE(format_distance(1.0 / 3) == "0.33");
+    REQUIRE(format_distance(1.0 / 3) == "0.3");
     REQUIRE(format_distance(2.999) == "3");
-    REQUIRE(format_distance(100.05) == "100.05");
+    REQUIRE(format_distance(100.25) == "100.3");
+    REQUIRE(format_distance(1234.5) == "1,234.5");
+    REQUIRE(format_distance(1234567) == "1,234,567");
     auto document = Document();
     auto transaction = Transaction(document);
     auto artboard = add_artboard(transaction, Rect(0, 0, 400, 300));
@@ -394,17 +396,32 @@ TEST_SUITE("SmartGuides") {
     guides.measure(Rect(100, 100, 50, 50), Rect(0, 0, 400, 300));
     REQUIRE(guides.get_measured_edges().empty());
     REQUIRE(guides.get_measured_distances() == std::vector{
-      GuideDistance(Point(0, 125), Point(100, 125)),
+      GuideDistance(Point(125, 100), Point(125, 0)),
       GuideDistance(Point(150, 125), Point(400, 125)),
-      GuideDistance(Point(125, 0), Point(125, 100)),
-      GuideDistance(Point(125, 150), Point(125, 300))});
+      GuideDistance(Point(125, 150), Point(125, 300)),
+      GuideDistance(Point(100, 125), Point(0, 125))});
     guides.measure(Rect(0, 0, 10, 10), Rect(100, 100, 10, 10));
     REQUIRE(guides.get_measured_distances() == std::vector{
       GuideDistance(Point(10, 5), Point(100, 5)),
       GuideDistance(Point(5, 10), Point(5, 100))});
     REQUIRE(guides.get_measured_lines() == std::vector{
-      GuideLine(Point(100, 100), Point(100, 5)),
-      GuideLine(Point(100, 100), Point(5, 100))});
+      GuideLine(Point(100, 5), Point(100, 100)),
+      GuideLine(Point(5, 100), Point(100, 100))});
+    guides.measure(Rect(100, 100, 50, 50), Rect(170, 60, 50, 60));
+    REQUIRE(guides.get_measured_distances() == std::vector{
+      GuideDistance(Point(150, 100), Point(170, 100), LabelSide::LEADING)});
+    guides.measure(Rect(100, 100, 50, 50), Rect(170, 140, 50, 60));
+    REQUIRE(guides.get_measured_distances() == std::vector{
+      GuideDistance(Point(150, 150), Point(170, 150), LabelSide::TRAILING)});
+    guides.measure(Rect(100, 100, 50, 50), Rect(140, 170, 60, 50));
+    REQUIRE(guides.get_measured_distances() == std::vector{
+      GuideDistance(Point(150, 150), Point(150, 170), LabelSide::TRAILING)});
+    guides.measure(Rect(100, 100, 50, 50), Rect(120, 120, 50, 50));
+    REQUIRE(guides.get_measured_distances() == std::vector{
+      GuideDistance(Point(150, 100), Point(170, 100), LabelSide::LEADING),
+      GuideDistance(Point(170, 120), Point(170, 100), LabelSide::TRAILING),
+      GuideDistance(Point(120, 170), Point(100, 170), LabelSide::TRAILING),
+      GuideDistance(Point(100, 150), Point(100, 170), LabelSide::LEADING)});
     guides.measure(std::nullopt, Rect());
     REQUIRE(guides.get_measured_distances().empty());
     REQUIRE(guides.get_measured_lines().empty());
@@ -420,11 +437,11 @@ TEST_SUITE("SmartGuides") {
     editor.get_selection().select(board.m_moved);
     hover(tools, Point(125, 125), Qt::AltModifier);
     REQUIRE(guides.get_measured_distances() == std::vector{
-      GuideDistance(Point(150, 205), Point(200, 205)),
-      GuideDistance(Point(205, 150), Point(205, 200))});
+      GuideDistance(Point(200, 205), Point(150, 205)),
+      GuideDistance(Point(205, 200), Point(205, 150))});
     REQUIRE(guides.get_measured_lines() == std::vector{
-      GuideLine(Point(150, 150), Point(150, 205)),
-      GuideLine(Point(150, 150), Point(205, 150))});
+      GuideLine(Point(150, 205), Point(150, 150)),
+      GuideLine(Point(205, 150), Point(150, 150))});
     hover(tools, Point(300, 50), Qt::AltModifier);
     REQUIRE(guides.get_measured_distances().size() == 4);
     hover(tools, Point(300, 50));

@@ -2,6 +2,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -9,6 +10,7 @@
 #include <QString>
 #include "Rellu/Io/XdGenerator.hpp"
 #include "Rellu/Io/XdValues.hpp"
+#include "Rellu/Localization/Localization.hpp"
 
 using namespace Rellu;
 
@@ -299,6 +301,9 @@ namespace {
       if(polygon->m_corner_radius != 0) {
         json.set("uxdesign#cornerRadius", polygon->m_corner_radius);
       }
+      if(polygon->m_star_ratio != 100) {
+        json.set("uxdesign#starRatio", polygon->m_star_ratio);
+      }
       if(!polygon->m_vertices.empty()) {
         auto& points = json.set("points", XdValue::make_array());
         for(auto& vertex : polygon->m_vertices) {
@@ -336,6 +341,15 @@ namespace {
   }
 
   XdValue make_fill(const Fill& fill) {
+    if(auto none = std::get_if<NoFill>(&fill); none && none->m_paint) {
+      auto json = std::visit([] (const auto& paint) {
+        return make_fill(Fill(paint));
+      }, *none->m_paint);
+      auto type = std::string(json.find("type")->to_string());
+      json.set("uxdesign#type", std::move(type));
+      json.set("type", "none");
+      return json;
+    }
     auto json = XdValue::make_object();
     if(auto solid = std::get_if<SolidFill>(&fill)) {
       json.set("type", "solid");
@@ -366,6 +380,9 @@ namespace {
         content.set("r", radial->m_radius);
         content.set("fx", radial->m_focus.m_x);
         content.set("fy", radial->m_focus.m_y);
+      }
+      if(!gradient->m_transform.is_identity()) {
+        content.set("transform", make_matrix(gradient->m_transform));
       }
       auto angular = std::get_if<AngularGradient>(&gradient->m_geometry);
       if(angular) {
@@ -684,25 +701,35 @@ namespace {
     return json;
   }
 
-  XdValue make_overrides(const Overrides& overrides, const NodeId& id) {
+  XdValue make_overrides(const Overrides& overrides, const NodeId& id,
+      const std::function<bool (const NodeId&)>& is_recorded) {
     auto json = XdValue::make_object();
-    if(!overrides.m_added.empty()) {
-      auto& added = json.set("addedGuids", XdValue::make_array());
-      for(auto& entry : overrides.m_added) {
+    auto added = XdValue::make_array();
+    for(auto& entry : overrides.m_added) {
+      if(is_recorded(entry)) {
         added.append(to_id(entry));
       }
     }
-    if(!overrides.m_removed.empty()) {
-      auto& removed = json.set("removedGuids", XdValue::make_array());
-      for(auto& entry : overrides.m_removed) {
+    if(!added.get_elements().empty()) {
+      json.set("addedGuids", std::move(added));
+    }
+    auto removed = XdValue::make_array();
+    for(auto& entry : overrides.m_removed) {
+      if(is_recorded(entry)) {
         removed.append(to_id(entry));
       }
     }
-    if(!overrides.m_reordered.empty()) {
-      auto& reordered = json.set("reorderedGuids", XdValue::make_object());
-      for(auto& entry : overrides.m_reordered) {
+    if(!removed.get_elements().empty()) {
+      json.set("removedGuids", std::move(removed));
+    }
+    auto reordered = XdValue::make_object();
+    for(auto& entry : overrides.m_reordered) {
+      if(is_recorded(entry.first)) {
         reordered.set(to_id(entry.first), to_id(entry.second));
       }
+    }
+    if(!reordered.get_members().empty()) {
+      json.set("reorderedGuids", std::move(reordered));
     }
     if(auto names = overrides.m_properties.find(id);
         names != overrides.m_properties.end()) {
@@ -741,7 +768,7 @@ namespace {
     return json;
   }
 
-  bool has_default_name(std::string_view name, std::string_view prefix) {
+  bool has_number(std::string_view name, std::string_view prefix) {
     if(!name.starts_with(prefix) || name.size() == prefix.size()) {
       return false;
     }
@@ -751,12 +778,24 @@ namespace {
       });
   }
 
+  bool has_default_name(std::string_view name, std::string_view prefix) {
+    if(name.empty() || name.back() < '0' || name.back() > '9') {
+      return false;
+    }
+    auto kind = prefix.substr(0, prefix.size() - 1);
+    return std::any_of(LANGUAGES.begin(), LANGUAGES.end(),
+      [&] (const auto& language) {
+        return has_number(
+          name, std::string(localize("name", kind, language)) + ' ');
+      });
+  }
+
   bool has_instance_name(std::string_view name, std::string_view prefix) {
     constexpr auto SEPARATOR = std::string_view(" \xE2\x80\x93 ");
     auto position = name.rfind(SEPARATOR);
     return position != std::string_view::npos &&
       has_default_name(name.substr(0, position), prefix) &&
-      has_default_name(name.substr(position), SEPARATOR);
+      has_number(name.substr(position), SEPARATOR);
   }
 
   std::string_view get_shape_name_key(
@@ -1083,12 +1122,29 @@ XdValue XdGenerator::make_node(const Node& node) const {
   }
   json.set("meta", XdValue::make_object()).set("ux", make_ux(node));
   if(auto shape = node.get_shape()) {
-    json.set("style", make_style(node, &shape->m_style));
+    if(shape->m_video) {
+      if(auto style = make_style(node, nullptr);
+          !style.get_members().empty()) {
+        json.set("style", std::move(style));
+      }
+    } else {
+      json.set("style", make_style(node, &shape->m_style));
+    }
     if(!header.m_is_visible) {
       json.set("visible", false);
     }
-    json.set("shape",
+    auto& geometry = json.set("shape",
       make_geometry(shape->m_geometry, node.m_children.size()));
+    if(auto& video = shape->m_video) {
+      auto& ux = geometry.set("meta", XdValue::make_object()).set(
+        "ux", XdValue::make_object());
+      ux.set("subtype", "video");
+      ux.set("mediaFill", make_fill(video->m_poster));
+      ux.set("mediaFileGuid", to_uid(video->m_media));
+      if(video->m_is_looping) {
+        ux.set("loop", true);
+      }
+    }
   } else if(auto text = node.get_text()) {
     auto style = make_style(node, &text->m_style);
     style.set("font", make_font(text->m_base_style.m_font));
@@ -1354,6 +1410,25 @@ const Overrides* XdGenerator::find_scope(const Node& node) const {
   return nullptr;
 }
 
+std::function<bool (const NodeId&)> XdGenerator::make_root_recorder(
+    const Overrides& overrides) const {
+  return [this, &overrides] (const NodeId& entry) {
+    auto owner = overrides.m_owners.find(entry);
+    if(owner == overrides.m_owners.end()) {
+      return true;
+    }
+    auto node = m_document->find(owner->second);
+    if(!node || m_masters.contains(owner->second) ||
+        m_states.contains(owner->second)) {
+      return true;
+    }
+    if(auto group = node->get_group(); group && group->m_component_instance) {
+      return true;
+    }
+    return find_scope(*node) != &overrides;
+  };
+}
+
 XdValue XdGenerator::make_ux(const Node& node) const {
   auto ux = XdValue::make_object();
   auto& header = node.m_header;
@@ -1412,10 +1487,15 @@ XdValue XdGenerator::make_ux(const Node& node) const {
     }
   } else if(auto state = m_states.find(id); state != m_states.end()) {
     auto& info = state->second;
+    ux.set("hasCustomName", true);
     ux.set("symbolId", to_id(info.m_component));
-    ux.set("stateId", to_id(info.m_state->m_id));
+    ux.set("width", info.m_state->m_size.m_width);
+    ux.set("height", info.m_state->m_size.m_height);
+    ux.set("componentType", "componentNoBounds");
     ux.set("syncMap", make_sync_map(info.m_state->m_sync_map));
-    auto overrides = make_overrides(info.m_state->m_overrides, id);
+    ux.set("stateId", to_id(info.m_state->m_id));
+    auto overrides = make_overrides(info.m_state->m_overrides, id,
+      make_root_recorder(info.m_state->m_overrides));
     if(!overrides.get_members().empty()) {
       ux.set("symbolOverrides", std::move(overrides));
     }
@@ -1441,7 +1521,8 @@ XdValue XdGenerator::make_ux(const Node& node) const {
       ux.set("isMaster", true);
     }
     ux.set("syncMap", make_sync_map(instance.m_sync_map));
-    auto overrides = make_overrides(instance.m_overrides, id);
+    auto overrides = make_overrides(
+      instance.m_overrides, id, make_root_recorder(instance.m_overrides));
     if(!overrides.get_members().empty()) {
       ux.set("symbolOverrides", std::move(overrides));
     }
@@ -1449,13 +1530,12 @@ XdValue XdGenerator::make_ux(const Node& node) const {
       ux.set("states", make_placeholders(instance.m_states.size()));
     }
   } else if(auto scope = find_scope(node)) {
-    if(auto names = scope->m_properties.find(id);
-        names != scope->m_properties.end()) {
-      auto& properties = ux.set("symbolOverrides", XdValue::make_object()).set(
-        "propertyNames", XdValue::make_array());
-      for(auto& name : names->second) {
-        properties.append(name);
-      }
+    auto overrides = make_overrides(*scope, id, [&] (const NodeId& entry) {
+      auto owner = scope->m_owners.find(entry);
+      return owner != scope->m_owners.end() && owner->second == id;
+    });
+    if(!overrides.get_members().empty()) {
+      ux.set("symbolOverrides", std::move(overrides));
     }
   }
   if(auto group = node.get_group()) {
@@ -1537,8 +1617,11 @@ XdValue XdGenerator::make_ux(const Node& node) const {
             "guides", XdValue::make_array());
         for(auto& guide : artboard->m_guides) {
           if(guide.m_orientation == orientation) {
-            list.append(XdValue::make_object()).set(
-              "position", guide.m_position);
+            auto& entry = list.append(XdValue::make_object());
+            entry.set("position", guide.m_position);
+            if(!guide.m_id.empty()) {
+              entry.set("guid", guide.m_id);
+            }
           }
         }
       }
@@ -1551,6 +1634,9 @@ XdValue XdGenerator::make_ux(const Node& node) const {
     }
   } else if(auto text = node.get_text()) {
     ux.set("singleTextObject", true);
+    if(text->m_is_flipped_vertically) {
+      ux.set("flipY", true);
+    }
     auto& ranges = ux.set("rangedStyles", XdValue::make_array());
     if(text->m_runs.empty()) {
       ranges.append(make_range(text->m_base_style,

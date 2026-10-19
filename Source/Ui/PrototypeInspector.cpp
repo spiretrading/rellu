@@ -23,6 +23,7 @@
 #include "Rellu/Prototype/KeyNames.hpp"
 #include "Rellu/Prototype/StageDocument.hpp"
 #include "Rellu/Ui/PrototypeInspector.hpp"
+#include "Rellu/Ui/Translation.hpp"
 #include "HyperlinkStatus.hpp"
 #include "Icons.hpp"
 
@@ -105,12 +106,15 @@ namespace {
   }
 
   QString format_seconds(double seconds) {
-    return QString::number(seconds, 'g', 6) + " s";
+    return QString::number(seconds, 'g', 6) + translate("prototype", " s");
   }
 
   std::optional<double> parse_seconds(QString text) {
     text = text.trimmed();
-    if(text.endsWith('s')) {
+    if(auto suffix = translate("prototype", " s").trimmed();
+        text.endsWith(suffix)) {
+      text.chop(suffix.size());
+    } else if(text.endsWith('s')) {
       text.chop(1);
     }
     auto is_valid = false;
@@ -122,7 +126,7 @@ namespace {
   }
 
   QLabel* make_label(const QString& text, const char* name = "field_label") {
-    auto label = new QLabel(text);
+    auto label = new QLabel(translate("prototype", text));
     label->setObjectName(name);
     return label;
   }
@@ -137,10 +141,11 @@ namespace {
     auto header = new QHBoxLayout(row);
     header->setContentsMargins(0, 0, 0, 0);
     header->setSpacing(6);
-    header->addWidget(make_label(title.toUpper(), "section_heading"));
+    auto heading = translate("prototype.section", title);
+    header->addWidget(make_label(heading.toUpper(), "section_heading"));
     auto info = new QLabel();
     info->setPixmap(get_icon(Glyph::INFO).pixmap(QSize(14, 14)));
-    info->setToolTip(title);
+    info->setToolTip(heading);
     header->addWidget(info);
     header->addStretch(1);
     row->setFixedHeight(22);
@@ -155,11 +160,12 @@ namespace {
     return rule;
   }
 
-  QComboBox* make_combo(const std::vector<Option>& options, int current) {
+  QComboBox* make_combo(const std::vector<Option>& options, int current,
+      std::string_view context = "prototype") {
     auto box = new QComboBox();
     box->setObjectName("choice_field");
     for(auto& option : options) {
-      box->addItem(option.m_label);
+      box->addItem(translate(context, option.m_label));
     }
     if(auto model = qobject_cast<QStandardItemModel*>(box->model())) {
       for(auto i = 0; i != static_cast<int>(options.size()); ++i) {
@@ -388,9 +394,10 @@ namespace {
   QString summarize(const Interaction& interaction) {
     auto& triggers = PrototypeInspector::get_trigger_labels();
     auto& types = PrototypeInspector::get_type_labels();
-    return QString::fromStdString(
-      triggers[get_trigger_index(interaction.m_trigger)] + " - " +
-      types[get_type_index(interaction.m_action)]);
+    return translate("prototype", QString::fromStdString(
+      triggers[get_trigger_index(interaction.m_trigger)])) + " - " +
+      translate("prototype", QString::fromStdString(
+        types[get_type_index(interaction.m_action)]));
   }
 
   Animation* get_animation(Action& action) {
@@ -601,8 +608,8 @@ void PrototypeInspector::rebuild() {
   add->setAutoRaise(true);
   add->setIcon(get_icon(Glyph::PLUS));
   add->setIconSize(QSize(20, 20));
-  add->setToolTip("Add Interaction");
-  add->setAccessibleName("Add Interaction");
+  add->setToolTip(translate("prototype", "Add Interaction"));
+  add->setAccessibleName(add->toolTip());
   add->setEnabled(!m_node.is_nil());
   section.m_header->addWidget(add);
   m_fields.emplace_back("add", add);
@@ -641,7 +648,7 @@ void PrototypeInspector::rebuild() {
   if(!current) {
     auto placeholder = [&] (const std::string& name, const QString& label,
         const QString& value) {
-      auto box = make_combo({Option(value, true)}, 0);
+      auto box = make_combo({Option(value, true)}, 0, "prototype." + name);
       box->setEnabled(false);
       add_field(*section.m_layout, name, label, box);
     };
@@ -714,7 +721,7 @@ void PrototypeInspector::rebuild() {
       auto keys = new KeyField();
       keys->setObjectName("text_field");
       keys->setText(QString::fromStdString(key->m_keys));
-      keys->setPlaceholderText("Press a key");
+      keys->setPlaceholderText(translate("prototype", "Press a key"));
       keys->m_handler = [this, base] (const KeyChord& chord) {
         auto changed = base;
         std::get<KeyTrigger>(changed.m_trigger).m_keys = to_string(chord);
@@ -789,7 +796,8 @@ void PrototypeInspector::rebuild() {
     if(auto transition = std::get_if<ArtboardTransition>(&action);
         transition &&
         transition->m_animation.m_transition != Transition::AUTO_ANIMATE) {
-      auto preserve = new QCheckBox("Preserve Scroll Position");
+      auto preserve = new QCheckBox(
+        translate("prototype", "Preserve Scroll Position"));
       preserve->setChecked(transition->m_preserve_scroll);
       QObject::connect(preserve, &QCheckBox::clicked, this,
         [this, base] (bool is_checked) {
@@ -839,9 +847,11 @@ void PrototypeInspector::rebuild() {
         add_target(id, QString::fromStdString(node->m_header.m_name), false);
       }
       if(has_states) {
-        box->setPlaceholderText("(Choose an artboard or a state)");
+        box->setPlaceholderText(
+          translate("prototype", "(Choose an artboard or a state)"));
       } else {
-        box->setPlaceholderText("(Choose an artboard)");
+        box->setPlaceholderText(
+          translate("prototype", "(Choose an artboard)"));
       }
       box->setCurrentIndex(selected);
       QObject::connect(box, &QComboBox::activated, this,
@@ -956,7 +966,7 @@ void PrototypeInspector::rebuild() {
             selected = static_cast<int>(i);
           }
         }
-        auto box = make_combo(options, selected);
+        auto box = make_combo(options, selected, "prototype.animation");
         box->setEnabled(!get_destination(action).is_nil());
         QObject::connect(box, &QComboBox::activated, this,
           [this, base, choices] (int index) {
@@ -976,7 +986,8 @@ void PrototypeInspector::rebuild() {
       for(auto i = std::size_t(0); i != easing_count; ++i) {
         options.push_back(Option(to_label(EASINGS[i]), true));
       }
-      auto easing = make_combo(options, static_cast<int>(easing_index));
+      auto easing = make_combo(
+        options, static_cast<int>(easing_index), "prototype.easing");
       QObject::connect(easing, &QComboBox::activated, this,
         [this, base] (int index) {
           auto changed = base;
@@ -1016,8 +1027,8 @@ void PrototypeInspector::rebuild() {
       secondary->setAutoRaise(true);
       secondary->setIcon(get_icon(Glyph::PLUS));
       secondary->setIconSize(QSize(20, 20));
-      secondary->setToolTip("Add Action");
-      secondary->setAccessibleName("Add Action");
+      secondary->setToolTip(translate("prototype", "Add Action"));
+      secondary->setAccessibleName(secondary->toolTip());
       secondary->setEnabled(false);
       row_layout->addWidget(secondary);
       m_fields.emplace_back("secondary_action", secondary);
@@ -1025,7 +1036,7 @@ void PrototypeInspector::rebuild() {
     }
     auto remove = new QToolButton();
     remove->setObjectName("text_button");
-    remove->setText("Delete Interaction");
+    remove->setText(translate("prototype", "Delete Interaction"));
     auto id = base.m_id;
     QObject::connect(remove, &QToolButton::clicked, this, [this, id] {
       if(!m_editor) {
@@ -1058,7 +1069,7 @@ void PrototypeInspector::rebuild() {
       auto url = new QLineEdit();
       url->setObjectName("text_field");
       url->setText(QString::fromStdString(link.m_url));
-      url->setPlaceholderText("Insert URL here");
+      url->setPlaceholderText(translate("prototype", "Insert URL here"));
       row_layout->addWidget(url, 1);
       auto status = add_hyperlink_status(row, *url);
       auto node = m_node;
@@ -1088,7 +1099,7 @@ void PrototypeInspector::rebuild() {
     if(document->get(m_node).get_artboard()) {
       auto flows = make_section("Flow");
       auto flow = find_flow(*document, m_node);
-      auto start = new QCheckBox("Start of Flow");
+      auto start = new QCheckBox(translate("prototype", "Start of Flow"));
       start->setChecked(flow);
       auto artboard = m_node;
       QObject::connect(start, &QCheckBox::clicked, this,
@@ -1127,7 +1138,8 @@ void PrototypeInspector::rebuild() {
       m_layout->addWidget(make_rule());
     } else {
       auto scrolling = make_section("Scrolling");
-      auto fixed = new QCheckBox("Fix Position When Scrolling");
+      auto fixed = new QCheckBox(
+        translate("prototype", "Fix Position When Scrolling"));
       fixed->setChecked(is_fixed(*document, m_node));
       fixed->setEnabled(static_cast<bool>(m_fixed_position_factory));
       auto node = m_node;

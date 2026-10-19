@@ -137,7 +137,7 @@ TEST_SUITE("PathEditTool") {
     drag(tools, Point(150, 150), Point(140, 130));
     REQUIRE(setup.is_path(setup.m_rectangle));
     REQUIRE(history.get_undo_count() == 1);
-    REQUIRE(history.get_undo_label() == "Edit Path");
+    REQUIRE(history.get_undo_label() == "Move Anchor Point");
     auto contours = setup.get_contours(setup.m_rectangle);
     REQUIRE(contours.size() == 1);
     REQUIRE(contours.front().m_is_closed);
@@ -202,7 +202,8 @@ TEST_SUITE("PathEditTool") {
     REQUIRE(anchors[1] == make_anchor(Point(50, 0)));
     REQUIRE(setup.get_tool().get_selection() ==
       std::vector{AnchorIndex(0, 1)});
-    REQUIRE(setup.m_editor.get_history().get_undo_label() == "Add Point");
+    REQUIRE(
+      setup.m_editor.get_history().get_undo_label() == "Add Anchor Point");
     drag(tools, Point(200, 150), Point(200, 140));
     anchors = setup.get_contours(setup.m_rectangle).front().m_anchors;
     REQUIRE(anchors[1] == make_anchor(Point(50, -10)));

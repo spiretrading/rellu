@@ -842,4 +842,36 @@ TEST_SUITE("SelectTool") {
     REQUIRE(get_bounds(document, first).m_x == 100);
     REQUIRE(get_bounds(document, last).m_x == 150);
   }
+
+  TEST_CASE("responsive_resize") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto& history = editor.get_history();
+    editor.get_selection().select(board.m_group);
+    drag(tools, Point(250, 170), Point(350, 170));
+    require_near(get_bounds(document, board.m_first), Rect(150, 150, 40, 40));
+    require_near(
+      get_bounds(document, board.m_second), Rect(310, 150, 40, 40));
+    REQUIRE(history.get_undo_count() == 1);
+    REQUIRE(document.get(board.m_second).m_header.m_constraints.m_right);
+    REQUIRE(editor.undo());
+    REQUIRE(!document.get(board.m_second).m_header.m_constraints.m_right);
+    drag(tools, Point(250, 170), Point(350, 170), Qt::ShiftModifier);
+    require_near(get_bounds(document, board.m_first), Rect(150, 150, 80, 40));
+    require_near(
+      get_bounds(document, board.m_second), Rect(270, 150, 80, 40));
+    REQUIRE(editor.undo());
+    tools.press(make_event(
+      Point(250, 170), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
+    drag_to(tools, Point(250, 170), Point(160, 170));
+    drag_to(tools, Point(160, 170), Point(300, 170));
+    tools.release(make_event(
+      Point(300, 170), Qt::LeftButton, Qt::NoButton, Qt::NoModifier));
+    require_near(
+      get_bounds(document, board.m_second), Rect(260, 150, 40, 40));
+    REQUIRE(history.get_undo_count() == 1);
+  }
 }

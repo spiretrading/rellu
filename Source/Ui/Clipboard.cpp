@@ -20,6 +20,7 @@
 #include "Rellu/Commands/StyleCommands.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Io/XdClipboard.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Ui/Clipboard.hpp"
 
@@ -677,6 +678,7 @@ class Clipboard::PasteCommand : public Command {
   private:
     struct Placement {
       NodeId m_artboard;
+      NodeId m_target;
       std::vector<Point> m_deltas;
       bool m_is_overflowing = false;
     };
@@ -722,6 +724,7 @@ class Clipboard::PasteCommand : public Command {
       auto& trees = m_content->m_trees;
       auto placement = Placement();
       placement.m_artboard = target;
+      placement.m_target = target;
       placement.m_deltas.assign(trees.size(), Point(0, 0));
       auto container = target;
       auto region = std::optional<Rect>();
@@ -732,10 +735,11 @@ class Clipboard::PasteCommand : public Command {
         [] (const auto& tree) { return static_cast<bool>(tree.m_offset); });
       if(!region || !overlaps_view(m_target.m_view, *region)) {
         container = NodeId();
+        placement.m_artboard = NodeId();
         auto bounds = m_content->get_bounds();
         if(!m_content->m_is_foreign && !m_content->m_is_sequenced && bounds &&
             overlaps_view(m_target.m_view, *bounds)) {
-          placement.m_artboard = NodeId();
+          placement.m_target = NodeId();
           return placement;
         }
         is_offset = false;
@@ -845,8 +849,8 @@ class Clipboard::PasteCommand : public Command {
           copy.first.m_name = make_node_name(document, m_content->m_prefix);
         }
         auto is_kept = (!tree.m_artboard.is_nil() &&
-          !placement.m_artboard.is_nil() &&
-          tree.m_artboard != placement.m_artboard) ||
+          !placement.m_target.is_nil() &&
+          tree.m_artboard != placement.m_target) ||
           has_image_fill(copy.second);
         auto id = transaction.append(
           container, std::move(copy.first), std::move(copy.second));
@@ -878,7 +882,8 @@ class Clipboard::PasteCommand : public Command {
         const std::vector<NodeId>& nodes) {
       auto parent = document.get(nodes.front()).m_parent;
       auto header = NodeHeader();
-      header.m_name = make_node_name(document, "Group ");
+      header.m_name = make_node_name(
+        document, std::string(localize("name", "Group")) + ' ');
       auto id = transaction.append(parent, std::move(header), Group());
       for(auto i = std::size_t(0); i != nodes.size(); ++i) {
         transaction.move(nodes[i], id, i);
@@ -1149,10 +1154,14 @@ class Clipboard::AppearanceCommand : public Command {
         return;
       }
       appearance.m_kind = AppearanceKind::RECTANGLE;
+      appearance.m_effects = std::vector<Effect>();
+      appearance.m_radii = CornerRadii(0, 0, 0, 0);
       if(styles.m_fill.is_set()) {
         appearance.m_fill = *styles.m_fill.m_value;
       }
       auto& stroke = appearance.m_stroke;
+      stroke.m_is_enabled = true;
+      stroke.m_miter_limit = Stroke().m_miter_limit;
       if(styles.m_color.is_set()) {
         stroke.m_color = *styles.m_color.m_value;
       }
@@ -1270,6 +1279,8 @@ class Clipboard::AppearanceCommand : public Command {
       auto is_target_enabled = style.m_stroke && style.m_stroke->m_is_enabled;
       if(is_selected || (is_target_enabled && is_source_enabled)) {
         apply_stroke(style.m_stroke, kind, is_open);
+      } else if(style.m_stroke && !appearance.m_is_strokeless) {
+        apply_stroke_shape(*style.m_stroke);
       }
       if(appearance.m_effects) {
         replace_effects(
@@ -1308,18 +1319,7 @@ class Clipboard::AppearanceCommand : public Command {
       if(source.m_width) {
         stroke.m_width = *source.m_width;
       }
-      if(source.m_cap) {
-        stroke.m_cap = *source.m_cap;
-      }
-      if(source.m_join) {
-        stroke.m_join = *source.m_join;
-      }
-      if(source.m_miter_limit) {
-        stroke.m_miter_limit = *source.m_miter_limit;
-      }
-      if(source.m_dashes) {
-        stroke.m_dashes = *source.m_dashes;
-      }
+      apply_stroke_shape(stroke);
       if(source.m_alignment && kind != AppearanceKind::TEXT &&
           kind != AppearanceKind::LINE && !is_open) {
         stroke.m_alignment = *source.m_alignment;
@@ -1332,6 +1332,22 @@ class Clipboard::AppearanceCommand : public Command {
         stroke.m_is_enabled = *source.m_is_enabled;
       }
       target = stroke;
+    }
+
+    void apply_stroke_shape(Stroke& stroke) const {
+      auto& source = m_appearance.m_stroke;
+      if(source.m_cap) {
+        stroke.m_cap = *source.m_cap;
+      }
+      if(source.m_join) {
+        stroke.m_join = *source.m_join;
+      }
+      if(source.m_miter_limit) {
+        stroke.m_miter_limit = *source.m_miter_limit;
+      }
+      if(source.m_dashes) {
+        stroke.m_dashes = *source.m_dashes;
+      }
     }
 };
 
@@ -1464,7 +1480,8 @@ bool Clipboard::load(const QMimeData& data, const TextMeasurer& measurer) {
       shape.m_geometry =
         RectangleShape(Rect(0, 0, size.m_width, size.m_height));
       shape.m_style.m_fill = fill;
-      auto content = Content::make_node(NodeHeader(), shape, "Image ");
+      auto content = Content::make_node(NodeHeader(), shape,
+        std::string(localize("name", "Image")) + ' ');
       content->m_images.push_back(std::move(resource));
       content->m_is_image = true;
       m_content = std::move(content);

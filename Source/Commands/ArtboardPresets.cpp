@@ -1,6 +1,7 @@
 #include <utility>
 #include "Rellu/Commands/ArtboardPlacement.hpp"
 #include "Rellu/Commands/ArtboardPresets.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/Transaction.hpp"
 
 using namespace Rellu;
@@ -101,7 +102,9 @@ void CreateArtboardCommand::apply(
   artboard.m_background = SolidFill(make_color(255, 255, 255));
   artboard.m_viewport_height = size.m_height;
   auto header = NodeHeader();
-  header.m_name = make_artboard_name(document, m_preset.m_name, false);
+  header.m_name = make_artboard_name(
+    document, localize("presets", m_preset.m_name), false);
+  header.m_constraints.m_is_enabled = false;
   m_artboard = transaction.insert(NodeId(), get_artboard_index(document),
     std::move(header), std::move(artboard));
 }

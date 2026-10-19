@@ -5,7 +5,6 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <numbers>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -45,10 +44,12 @@
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Ui/ComponentPropertyEditors.hpp"
 #include "Rellu/Ui/ContextMenus.hpp"
+#include "Rellu/Ui/LastTextProperties.hpp"
 #include "Rellu/Ui/LayoutProperties.hpp"
 #include "Rellu/Ui/PropertyEditors.hpp"
 #include "Rellu/Ui/TextMeasurement.hpp"
 #include "Rellu/Ui/TextPropertyEditors.hpp"
+#include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "MainWindow.hpp"
 #include "NativeFrame.hpp"
@@ -64,21 +65,14 @@ namespace {
   constexpr auto CAPTION_BUTTON_WIDTH = 46;
   constexpr auto HIT_TOLERANCE = 3.0;
   constexpr auto HIGHLIGHT_WIDTH = 2.0;
-  constexpr auto HANDLE_RADIUS = 6.0;
-  constexpr auto HANDLE_TOLERANCE = 8.0;
-  constexpr auto ROTATION_HANDLE_DISTANCE = 20.0;
-  constexpr auto TRACK_SEGMENTS = 96;
-  const auto HANDLE_COLOR = QColor(0x26, 0x80, 0xEB);
   constexpr auto MESSAGE_MARGIN = 48;
   const auto HIGHLIGHT_COLOR = QColor(0x00, 0x90, 0xE9);
   const auto FILE_FILTER = QString("Adobe XD Files (*.xd);;All Files (*)");
   const auto PASTEBOARD = QColor(0xE4, 0xE4, 0xE4);
   const auto DEFAULT_PANEL = QString("layers");
-  const auto DEFAULT_LANGUAGE = QString("english");
   const auto LANGUAGE_PREFIX = std::string("edit.preferences.language.");
-  constexpr auto LANGUAGES = std::to_array({"german", "english", "spanish",
-    "french", "italian", "japanese", "korean", "portuguese", "russian",
-    "chinese"});
+  const auto LANGUAGE_KEY = QString("preferences/language");
+  const auto LAST_TEXT_PROPERTIES_KEY = QString("last_text_properties");
 
   std::string get_recent_name(int index) {
     return "file.recent." + std::to_string(index);
@@ -106,8 +100,8 @@ namespace {
         setObjectName("caption_button");
         setFocusPolicy(Qt::NoFocus);
         setFixedSize(CAPTION_BUTTON_WIDTH, MENU_ROW_HEIGHT);
-        setToolTip(tip);
-        setAccessibleName(tip);
+        setToolTip(translate("window", tip));
+        setAccessibleName(toolTip());
         setAttribute(Qt::WA_Hover);
       }
 
@@ -210,15 +204,6 @@ namespace {
       }
   };
 
-  QPointF to_qpoint(Point point) {
-    return QPointF(point.m_x, point.m_y);
-  }
-
-  double get_distance(QPointF left, QPointF right) {
-    auto delta = left - right;
-    return std::hypot(delta.x(), delta.y());
-  }
-
   QPixmap make_mark(double ratio) {
     auto size = 20;
     auto pixmap = QPixmap(static_cast<int>(size * ratio),
@@ -238,6 +223,12 @@ namespace {
     painter.drawText(QRectF(0, 0, size, size), Qt::AlignCenter, "Rl");
     return pixmap;
   }
+}
+
+Language Rellu::load_language() {
+  auto settings = QSettings();
+  return parse_language(settings.value(LANGUAGE_KEY).toString().
+    toStdString()).value_or(Language::ENGLISH);
 }
 
 MainWindow::MainWindow(QWidget* parent)
@@ -261,8 +252,7 @@ MainWindow::MainWindow(QWidget* parent)
       m_recent_files(MAXIMUM_RECENT_FILES),
       m_measurer(make_text_measurer(get_default_font_library())),
       m_highlight(nullptr),
-      m_gradient_overlay(nullptr),
-      m_rotation_handle_angle(DEFAULT_ROTATION_HANDLE_ANGLE) {
+      m_gradient_overlay(nullptr) {
   add_standard_commands(m_commands, m_measurer);
   add_align_commands(m_commands, m_measurer);
   add_path_commands(m_commands);
@@ -324,6 +314,16 @@ MainWindow::MainWindow(QWidget* parent)
   m_text_actions =
     std::make_unique<TextActions>(m_actions, get_default_font_library());
   add_asset_actions();
+  m_guide_actions = std::make_unique<GuideActions>(m_actions);
+  m_guide_actions->set_settings_handler([this] (const auto& settings) {
+    if(auto tools = m_view->get_tools()) {
+      tools->get_context().set_guide_settings(settings);
+      m_view->update();
+    }
+  });
+  m_edit_actions->set_paste_handler([this] (const auto& data, auto is_applied) {
+    return m_guide_actions->paste(data, is_applied);
+  });
   m_actions.build(*bar);
   restore_settings();
   update_title();
@@ -373,13 +373,15 @@ bool MainWindow::revert() {
     return false;
   }
   auto path = m_session->get_path();
-  auto box = QMessageBox(QMessageBox::Warning, "Rellu",
-    QString("Do you want to revert to the most recently saved version of the "
-      "document \"%1\"?").arg(QFileInfo(path).fileName()),
+  auto box = QMessageBox(QMessageBox::Warning, "Rellu", translate("dialog",
+    "Do you want to revert to the most recently saved version of the "
+    "document \"%1\"?").arg(QFileInfo(path).fileName()),
     QMessageBox::NoButton, this);
-  box.setInformativeText("Your current changes will be lost.");
-  auto revert = box.addButton("Revert", QMessageBox::AcceptRole);
-  box.addButton(QMessageBox::Cancel);
+  box.setInformativeText(
+    translate("dialog", "Your current changes will be lost."));
+  auto revert =
+    box.addButton(translate("dialog", "Revert"), QMessageBox::AcceptRole);
+  box.addButton(QMessageBox::Cancel)->setText(translate("dialog", "Cancel"));
   box.setDefaultButton(revert);
   box.exec();
   if(box.clickedButton() != revert) {
@@ -438,6 +440,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     event->ignore();
     return;
   }
+  store_text_properties();
   save_settings();
   QMainWindow::closeEvent(event);
 }
@@ -445,7 +448,8 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 void MainWindow::changeEvent(QEvent* event) {
   QMainWindow::changeEvent(event);
   if(event->type() == QEvent::WindowStateChange && m_maximize) {
-    auto tip = isMaximized() ? QString("Restore Down") : QString("Maximize");
+    auto tip = translate("window",
+      isMaximized() ? QString("Restore Down") : QString("Maximize"));
     m_maximize->setToolTip(tip);
     m_maximize->setAccessibleName(tip);
     m_maximize->update();
@@ -483,8 +487,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
   }
   if(watched == &m_inspector->get_color_picker() &&
       (event->type() == QEvent::Show || event->type() == QEvent::Hide)) {
-    m_gradient_drag = GradientDrag();
-    m_rotation_handle_angle = DEFAULT_ROTATION_HANDLE_ANGLE;
+    m_gradient_handles.reset();
     QTimer::singleShot(0, this, [this] {
       update_gradient_editor();
     });
@@ -558,7 +561,7 @@ void MainWindow::update_grid_actions() {
           return grid && grid->m_is_visible && grid->m_type == type;
         });
     }
-    m_actions.get(name).setText(is_shown ? hide : show);
+    m_actions.get(name).setText(translate("menu", is_shown ? hide : show));
   }
 }
 
@@ -585,9 +588,7 @@ std::optional<MainWindow::GradientTarget>
     return std::nullopt;
   }
   auto gradient = std::get_if<GradientFill>(&picker.get_fill());
-  if(!gradient || gradient->m_units != GradientUnits::OBJECT_BOUNDING_BOX ||
-      !gradient->m_transform.is_identity() ||
-      !std::holds_alternative<AngularGradient>(gradient->m_geometry)) {
+  if(!gradient || !GradientHandles::is_editable(*gradient)) {
     return std::nullopt;
   }
   auto& document = m_session->get_document();
@@ -601,170 +602,50 @@ std::optional<MainWindow::GradientTarget>
   if(!bounds || !(bounds->m_width > 0) || !(bounds->m_height > 0)) {
     return std::nullopt;
   }
-  auto to_view = m_view->get_renderer().get_view() *
-    get_world_transform(document, id) *
-    make_translation(bounds->m_x, bounds->m_y) *
-    make_scale(bounds->m_width, bounds->m_height);
-  auto from_view = invert(to_view);
-  if(!from_view) {
+  auto to_view =
+    m_view->get_renderer().get_view() * get_world_transform(document, id);
+  if(!invert(to_view)) {
     return std::nullopt;
   }
-  return GradientTarget(*gradient, to_view, *from_view);
+  return GradientTarget(*gradient, GradientFrame(*bounds, to_view));
 }
 
 void MainWindow::paint_gradient_editor(QPainter& painter) {
-  auto target = find_gradient_target();
-  if(!target) {
-    return;
+  if(auto target = find_gradient_target()) {
+    m_gradient_handles.paint(painter, target->m_fill, target->m_frame,
+      m_inspector->get_color_picker().get_stop());
   }
-  auto& angular = std::get<AngularGradient>(target->m_fill.m_geometry);
-  auto point_at = [&] (double turns) {
-    auto radians = 2 * std::numbers::pi * turns;
-    return to_qpoint(target->m_to_view.map(angular.m_center +
-      Point(0.5 * std::cos(radians), 0.5 * std::sin(radians))));
-  };
-  auto track = QPolygonF();
-  for(auto i = 0; i != TRACK_SEGMENTS; ++i) {
-    track.push_back(point_at(static_cast<double>(i) / TRACK_SEGMENTS));
-  }
-  painter.setBrush(Qt::NoBrush);
-  painter.setPen(QPen(QColor(0, 0, 0, 90), 3));
-  painter.drawPolygon(track);
-  painter.setPen(QPen(Qt::white, 1));
-  painter.drawPolygon(track);
-  auto center = to_qpoint(target->m_to_view.map(angular.m_center));
-  auto handle = get_rotation_handle(*target);
-  painter.setPen(QPen(HANDLE_COLOR, 1));
-  painter.drawLine(center, handle);
-  painter.setBrush(Qt::white);
-  painter.drawEllipse(handle, HANDLE_RADIUS - 2, HANDLE_RADIUS - 2);
-  painter.drawEllipse(center, HANDLE_RADIUS - 1, HANDLE_RADIUS - 1);
-  auto selected = m_inspector->get_color_picker().get_stop();
-  auto& stops = target->m_fill.m_stops;
-  for(auto i = 0; i != static_cast<int>(stops.size()); ++i) {
-    auto position =
-      point_at(stops[i].m_offset + angular.m_rotation / 360);
-    painter.setPen(QPen(i == selected ? HANDLE_COLOR : QColor(Qt::white),
-      i == selected ? 2.5 : 2));
-    painter.setBrush(QColor::fromRgbF(
-      static_cast<float>(stops[i].m_color.m_red),
-      static_cast<float>(stops[i].m_color.m_green),
-      static_cast<float>(stops[i].m_color.m_blue)));
-    painter.drawEllipse(position, HANDLE_RADIUS, HANDLE_RADIUS);
-  }
-}
-
-QPointF MainWindow::get_rotation_handle(const GradientTarget& target) const {
-  auto& angular = std::get<AngularGradient>(target.m_fill.m_geometry);
-  auto center = to_qpoint(target.m_to_view.map(angular.m_center));
-  auto radians = m_rotation_handle_angle * std::numbers::pi / 180;
-  auto direction = QPointF(std::cos(radians), std::sin(radians));
-  auto unit = target.m_from_view.map(
-    Point(center.x() + direction.x(), center.y() + direction.y()));
-  auto offset = get_angular_offset(angular, unit);
-  auto turns = 2 * std::numbers::pi * (offset + angular.m_rotation / 360);
-  auto edge = to_qpoint(target.m_to_view.map(angular.m_center +
-    Point(0.5 * std::cos(turns), 0.5 * std::sin(turns))));
-  return center + direction *
-    (get_distance(edge, center) + ROTATION_HANDLE_DISTANCE);
 }
 
 bool MainWindow::handle_gradient_event(
     ColorPicker::CanvasEvent event, QPointF position) {
-  auto& picker = m_inspector->get_color_picker();
-  auto target = find_gradient_target();
   if(event == ColorPicker::CanvasEvent::RELEASE) {
-    m_gradient_drag = GradientDrag();
+    m_gradient_handles.release();
     return true;
   }
+  auto target = find_gradient_target();
   if(!target) {
     return false;
   }
   auto local = QPointF(m_view->mapFromGlobal(position.toPoint()));
-  auto unit = target->m_from_view.map(Point(local.x(), local.y()));
-  auto fill = target->m_fill;
-  auto& angular = std::get<AngularGradient>(fill.m_geometry);
-  auto center = to_qpoint(target->m_to_view.map(angular.m_center));
+  auto point = Point(local.x(), local.y());
+  auto edit = GradientEdit();
   if(event == ColorPicker::CanvasEvent::PRESS) {
-    m_gradient_drag = GradientDrag();
-    auto& stops = fill.m_stops;
-    for(auto i = 0; i != static_cast<int>(stops.size()); ++i) {
-      auto turns = 2 * std::numbers::pi *
-        (stops[i].m_offset + angular.m_rotation / 360);
-      auto stop = to_qpoint(target->m_to_view.map(angular.m_center +
-        Point(0.5 * std::cos(turns), 0.5 * std::sin(turns))));
-      if(get_distance(stop, local) <= HANDLE_TOLERANCE) {
-        m_gradient_drag.m_part = GradientPart::STOP;
-        m_gradient_drag.m_stop = i;
-        picker.set_stop(i);
-        m_gradient_overlay->update();
-        return true;
-      }
-    }
-    if(get_distance(get_rotation_handle(*target), local) <=
-        HANDLE_TOLERANCE) {
-      m_gradient_drag.m_part = GradientPart::ROTATION;
-      m_gradient_drag.m_rotation = angular.m_rotation;
-      m_gradient_drag.m_angle = std::atan2(unit.m_y - angular.m_center.m_y,
-        unit.m_x - angular.m_center.m_x) * 180 / std::numbers::pi;
-      return true;
-    }
-    if(get_distance(center, local) <= HANDLE_TOLERANCE) {
-      m_gradient_drag.m_part = GradientPart::CENTER;
-      m_gradient_drag.m_offset = angular.m_center - unit;
-      return true;
-    }
-    auto offset = get_angular_offset(angular, unit);
-    auto turns =
-      2 * std::numbers::pi * (offset + angular.m_rotation / 360);
-    auto track = to_qpoint(target->m_to_view.map(angular.m_center +
-      Point(0.5 * std::cos(turns), 0.5 * std::sin(turns))));
-    if(get_distance(track, local) > HANDLE_TOLERANCE) {
-      return false;
-    }
-    auto index = static_cast<int>(std::upper_bound(stops.begin(),
-      stops.end(), offset, [] (double offset, const auto& stop) {
-        return offset < stop.m_offset;
-      }) - stops.begin());
-    stops.insert(stops.begin() + index,
-      GradientStop(offset, evaluate_gradient(target->m_fill.m_stops, offset)));
-    picker.apply_fill(fill);
-    picker.set_stop(index);
-    m_gradient_drag.m_part = GradientPart::STOP;
-    m_gradient_drag.m_stop = index;
-    m_gradient_overlay->update();
-    return true;
-  }
-  if(m_gradient_drag.m_part == GradientPart::CENTER) {
-    angular.m_center = unit + m_gradient_drag.m_offset;
-  } else if(m_gradient_drag.m_part == GradientPart::ROTATION) {
-    auto angle = std::atan2(unit.m_y - angular.m_center.m_y,
-      unit.m_x - angular.m_center.m_x) * 180 / std::numbers::pi;
-    angular.m_rotation =
-      m_gradient_drag.m_rotation + angle - m_gradient_drag.m_angle;
-    m_rotation_handle_angle = std::atan2(local.y() - center.y(),
-      local.x() - center.x()) * 180 / std::numbers::pi;
-  } else if(m_gradient_drag.m_part == GradientPart::STOP &&
-      m_gradient_drag.m_stop < static_cast<int>(fill.m_stops.size())) {
-    auto stop = fill.m_stops[m_gradient_drag.m_stop];
-    stop.m_offset = get_angular_offset(angular, unit);
-    fill.m_stops.erase(fill.m_stops.begin() + m_gradient_drag.m_stop);
-    auto index = static_cast<int>(std::upper_bound(fill.m_stops.begin(),
-      fill.m_stops.end(), stop.m_offset, [] (double offset, const auto& stop) {
-        return offset < stop.m_offset;
-      }) - fill.m_stops.begin());
-    fill.m_stops.insert(fill.m_stops.begin() + index, stop);
-    m_gradient_drag.m_stop = index;
-    picker.apply_fill(fill);
-    picker.set_stop(index);
-    m_gradient_overlay->update();
-    return true;
+    edit = m_gradient_handles.press(target->m_fill, target->m_frame, point);
   } else {
-    return true;
+    edit = m_gradient_handles.move(target->m_fill, target->m_frame, point,
+      QGuiApplication::keyboardModifiers());
+    edit.m_is_handled = true;
   }
-  picker.apply_fill(fill);
+  auto& picker = m_inspector->get_color_picker();
+  if(edit.m_fill) {
+    picker.apply_fill(*edit.m_fill);
+  }
+  if(edit.m_stop) {
+    picker.set_stop(*edit.m_stop);
+  }
   m_gradient_overlay->update();
-  return true;
+  return edit.m_is_handled;
 }
 
 void MainWindow::update_gradient_editor() {
@@ -817,8 +698,7 @@ void MainWindow::add_asset_actions() {
     set_highlights(nodes);
   });
   m_assets->set_message_handler([this] (const auto& message) {
-    QToolTip::showText(m_view->mapToGlobal(QPoint(m_view->width() / 2,
-      m_view->height() - MESSAGE_MARGIN)), message, m_view);
+    show_message(message);
   });
   m_assets->set_font_styles([] (const QString& family) {
     auto styles = QStringList();
@@ -1050,8 +930,8 @@ void MainWindow::add_actions() {
     });
   }
   auto& document = m_actions.add(ActionDefinition(
-    "window.document", "Untitled", QKeySequence(), "window", "documents",
-    true));
+    "window.document", translate("Untitled"), QKeySequence(), "window",
+    "documents", true));
   document.setChecked(true);
   m_actions.set_handler("window.document", [this] {
     m_actions.get("window.document").setChecked(true);
@@ -1059,15 +939,13 @@ void MainWindow::add_actions() {
   });
   m_actions.set_handler("window.preview", [this] { toggle_preview(); });
   for(auto language : LANGUAGES) {
-    auto name = std::string(language);
-    m_actions.set_handler(LANGUAGE_PREFIX + name, [this, name] {
-      set_language(name);
-      auto settings = QSettings();
-      settings.setValue("preferences/language", QString::fromStdString(name));
-    });
+    m_actions.set_handler(LANGUAGE_PREFIX + std::string(get_code(language)),
+      [this, language] {
+        choose_language(language);
+      });
   }
   for(auto button : m_app_bar->findChildren<QToolButton*>()) {
-    if(button->accessibleName() == "Desktop Preview") {
+    if(button->accessibleName() == translate("app_bar", "Desktop Preview")) {
       button->setEnabled(true);
       connect(button, &QToolButton::clicked, this, [this] {
         m_actions.get("window.preview").trigger();
@@ -1075,7 +953,7 @@ void MainWindow::add_actions() {
     }
   }
   m_actions.set_handler("help.about", [this] {
-    QMessageBox::about(this, "About Rellu", "Rellu\n\n"
+    QMessageBox::about(this, translate("menu", "About Rellu"), "Rellu\n\n"
       "An editor for Adobe XD documents.");
   });
   add_tool_actions();
@@ -1173,6 +1051,7 @@ void MainWindow::set_workspace(Workspace workspace) {
   }
   m_inspector->set_workspace(workspace);
   m_edit_actions->set_workspace(workspace);
+  m_guide_actions->set_workspace(workspace);
   update_presets();
   m_inspector->setVisible(workspace != Workspace::PROTOTYPE);
   m_prototype_inspector->setVisible(workspace == Workspace::PROTOTYPE);
@@ -1202,7 +1081,8 @@ void MainWindow::toggle_preview() {
       m_actions.get("window.preview").setChecked(false);
     });
   }
-  m_preview->setWindowTitle("Preview : " + m_session->get_name());
+  m_preview->setWindowTitle(
+    translate("preview", "Preview : ") + m_session->get_name());
   m_preview->play(m_session->get_document(), start);
   m_preview->show();
   m_preview->raise();
@@ -1219,17 +1099,64 @@ void MainWindow::restore_settings() {
   }
   show_panel(settings.value("main_window/panel", DEFAULT_PANEL).toString().
     toStdString());
-  set_language(settings.value("preferences/language", DEFAULT_LANGUAGE).
-    toString().toStdString());
+  check_language(load_language());
+  m_guide_actions->set_settings(GuideSettings(
+    settings.value("guides/visible", true).toBool(),
+    settings.value("guides/locked", false).toBool()));
 }
 
-void MainWindow::set_language(const std::string& language) {
-  auto chosen = std::find(LANGUAGES.begin(), LANGUAGES.end(), language) ==
-    LANGUAGES.end() ? DEFAULT_LANGUAGE.toStdString() : language;
+void MainWindow::check_language(Language language) {
   for(auto candidate : LANGUAGES) {
-    m_actions.get(LANGUAGE_PREFIX + candidate).setChecked(
-      chosen == candidate);
+    m_actions.get(LANGUAGE_PREFIX + std::string(get_code(candidate))).
+      setChecked(candidate == language);
   }
+}
+
+void MainWindow::choose_language(Language language) {
+  auto previous = load_language();
+  check_language(language);
+  if(language == previous) {
+    return;
+  }
+  auto settings = QSettings();
+  auto code = get_code(language);
+  settings.setValue(LANGUAGE_KEY,
+    QString::fromUtf8(code.data(), static_cast<qsizetype>(code.size())));
+  auto message = localize("message",
+    "You must restart Rellu to apply the language change.", language);
+  show_message(QString::fromUtf8(
+    message.data(), static_cast<qsizetype>(message.size())));
+}
+
+void MainWindow::show_message(const QString& message) {
+  QToolTip::showText(m_view->mapToGlobal(QPoint(m_view->width() / 2,
+    m_view->height() - MESSAGE_MARGIN)), message, m_view);
+}
+
+void MainWindow::restore_text_properties() {
+  if(!m_session || m_session->get_id().empty()) {
+    return;
+  }
+  auto settings = QSettings();
+  if(auto properties = find_last_text_properties(
+      settings.value(LAST_TEXT_PROPERTIES_KEY).toByteArray(),
+      m_session->get_id())) {
+    m_session->get_editor().get_text_selection().set_last_style(
+      properties->m_style, properties->m_paragraph);
+  }
+}
+
+void MainWindow::store_text_properties() {
+  if(!m_session || m_session->get_id().empty()) {
+    return;
+  }
+  auto& selection = m_session->get_editor().get_text_selection();
+  auto properties = LastTextProperties(
+    selection.get_last_style(), selection.get_last_paragraph_style());
+  auto settings = QSettings();
+  settings.setValue(LAST_TEXT_PROPERTIES_KEY, record_last_text_properties(
+    settings.value(LAST_TEXT_PROPERTIES_KEY).toByteArray(),
+    m_session->get_id(), properties, QDateTime::currentDateTimeUtc()));
 }
 
 void MainWindow::save_settings() const {
@@ -1238,6 +1165,10 @@ void MainWindow::save_settings() const {
   settings.setValue("main_window/geometry", saveGeometry());
   settings.setValue("main_window/panel",
     QString::fromStdString(m_toolbar->get_panel()));
+  settings.setValue(
+    "guides/visible", m_guide_actions->get_settings().m_is_visible);
+  settings.setValue(
+    "guides/locked", m_guide_actions->get_settings().m_is_locked);
 }
 
 void MainWindow::update_recent_files() {
@@ -1256,8 +1187,8 @@ void MainWindow::update_recent_files() {
     action.setStatusTip(path);
     m_actions.set_handler(name, [this, path] { open(path); });
   }
-  m_actions.add(ActionDefinition("file.recent.clear", "Clear Menu",
-    QKeySequence(), "file.recent", "clear"));
+  m_actions.add(ActionDefinition("file.recent.clear",
+    translate("menu", "Clear Menu"), QKeySequence(), "file.recent", "clear"));
   m_actions.set_handler("file.recent.clear", [this] {
     m_recent_files.clear();
     update_recent_files();
@@ -1289,6 +1220,7 @@ bool MainWindow::save_to(const QString& path) {
   update_recent_files();
   save_settings();
   update_title();
+  store_text_properties();
   return true;
 }
 
@@ -1304,12 +1236,16 @@ bool MainWindow::confirm_close() {
 }
 
 UnsavedChoice MainWindow::prompt_unsaved() {
-  auto box = QMessageBox(QMessageBox::Warning, "Rellu",
-    QString("Do you want to save the changes you made to %1?").arg(
+  auto box = QMessageBox(QMessageBox::Warning, "Rellu", translate("dialog",
+    "Do you want to save the changes made to the document \"%1\"?").arg(
       m_session->get_name()),
     QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, this);
-  box.setInformativeText("Your changes will be lost if you don't save them.");
-  box.button(QMessageBox::Discard)->setText("Do&n't Save");
+  box.setInformativeText(translate("dialog",
+    "Your changes will be lost if you don't save them."));
+  box.button(QMessageBox::Save)->setText(translate("dialog", "Save"));
+  box.button(QMessageBox::Discard)->setText(
+    translate("dialog", "Do&n't Save"));
+  box.button(QMessageBox::Cancel)->setText(translate("dialog", "Cancel"));
   box.setDefaultButton(QMessageBox::Save);
   auto result = box.exec();
   if(result == QMessageBox::Save) {
@@ -1328,6 +1264,7 @@ void MainWindow::install(
   m_view->set_editor(&session->get_editor());
   m_view->set_document(std::move(document));
   m_session = std::move(session);
+  restore_text_properties();
   auto& editor = m_session->get_editor();
   editor.get_history().set_text_measurer(m_measurer);
   m_layers->set_editor(&editor);
@@ -1338,6 +1275,7 @@ void MainWindow::install(
   m_edit_actions->set_editor(&editor);
   m_component_actions->set_editor(&editor);
   m_text_actions->set_editor(&editor);
+  m_guide_actions->set_editor(&editor);
   m_component_drop->set_editor(&editor);
   m_history_subscription = editor.get_history().subscribe([this] {
     update_title();
@@ -1350,6 +1288,7 @@ void MainWindow::install(
   });
   if(auto tools = m_view->get_tools()) {
     tools->get_context().set_text_measurer(m_measurer);
+    m_guide_actions->set_settings(m_guide_actions->get_settings());
     m_tool_subscription = tools->subscribe_tool([this] {
       update_tool();
     });
@@ -1362,6 +1301,7 @@ void MainWindow::install(
 }
 
 void MainWindow::detach() {
+  store_text_properties();
   set_highlights({});
   m_tool_subscription.release();
   m_history_subscription.release();
@@ -1372,6 +1312,9 @@ void MainWindow::detach() {
   }
   if(m_text_actions) {
     m_text_actions->set_editor(nullptr);
+  }
+  if(m_guide_actions) {
+    m_guide_actions->set_editor(nullptr);
   }
   if(m_component_drop) {
     m_component_drop->set_editor(nullptr);
@@ -1400,7 +1343,7 @@ void MainWindow::update_title() {
   } else {
     setWindowTitle("Rellu");
     m_app_bar->set_title(QString(), false);
-    m_actions.get("window.document").setText("Untitled");
+    m_actions.get("window.document").setText(translate("Untitled"));
   }
   m_actions.set_enabled("file.save", has_session &&
     (m_session->is_dirty() || m_session->get_path().isEmpty()));
@@ -1457,17 +1400,7 @@ void MainWindow::show_region(const Rect& region) {
   if(visible.contains(region)) {
     return;
   }
-  auto zoom = get_zoom();
-  auto size = Size(
-    std::max(m_view->width() - 2 * REVEAL_MARGIN, 1.0) / zoom,
-    std::max(m_view->height() - 2 * REVEAL_MARGIN, 1.0) / zoom);
-  if(region.m_width > size.m_width || region.m_height > size.m_height) {
-    m_view->zoom_to(region);
-    return;
-  }
-  auto center = region.get_center();
-  m_view->zoom_to(Rect(center.m_x - size.m_width / 2,
-    center.m_y - size.m_height / 2, size.m_width, size.m_height));
+  m_view->center_on(region.get_center());
 }
 
 void MainWindow::update_presets() {

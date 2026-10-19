@@ -2,6 +2,7 @@
 #include <charconv>
 #include <stdexcept>
 #include <utility>
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Prototype/InteractionCommands.hpp"
 
 using namespace Rellu;
@@ -197,14 +198,15 @@ Interaction Rellu::make_default_interaction(
 }
 
 std::string Rellu::make_flow_name(const Prototype& prototype) {
-  constexpr auto PREFIX = std::string_view("Flow ");
+  auto pattern = localize("name", "Flow %1");
+  auto prefix = std::string(pattern.substr(0, pattern.find("%1")));
   auto used = std::vector<int>();
   for(auto& flow : prototype.m_flows) {
     auto name = std::string_view(flow.m_name);
-    if(!name.starts_with(PREFIX)) {
+    if(!name.starts_with(prefix)) {
       continue;
     }
-    name.remove_prefix(PREFIX.size());
+    name.remove_prefix(prefix.size());
     auto number = 0;
     auto result =
       std::from_chars(name.data(), name.data() + name.size(), number);
@@ -216,7 +218,7 @@ std::string Rellu::make_flow_name(const Prototype& prototype) {
   while(std::ranges::contains(used, number)) {
     ++number;
   }
-  return std::string(PREFIX) + std::to_string(number);
+  return prefix + std::to_string(number);
 }
 
 std::vector<const Interaction*> Rellu::get_interactions(

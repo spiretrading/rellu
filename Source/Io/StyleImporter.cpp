@@ -99,6 +99,11 @@ namespace {
       return std::nullopt;
     }
     resources->consume("type"_L1);
+    if(auto transform = gradient.get_object("transform"_L1)) {
+      if(auto matrix = read_matrix(*transform)) {
+        fill.m_transform = *matrix;
+      }
+    }
     if(auto stops = resources->get_array("stops"_L1)) {
       auto result = read_stops(*stops);
       if(!result) {
@@ -195,6 +200,30 @@ namespace {
     return blur;
   }
 
+  std::optional<Fill> read_paint(
+      XdObject& fill, const QString& type, XdImport& import) {
+    if(type == "solid"_L1) {
+      auto color_json = fill.get_object("color"_L1);
+      if(!color_json) {
+        return std::nullopt;
+      }
+      auto color = read_color(*color_json);
+      if(!color) {
+        return std::nullopt;
+      }
+      return SolidFill(*color, read_swatch(fill, *color_json, import));
+    } else if(type == "gradient"_L1) {
+      if(auto gradient = fill.get_object("gradient"_L1)) {
+        return read_gradient(*gradient);
+      }
+    } else if(type == "pattern"_L1) {
+      if(auto pattern = fill.get_object("pattern"_L1)) {
+        return read_pattern(*pattern, import);
+      }
+    }
+    return std::nullopt;
+  }
+
   void import_style(XdObject& json, Style& style, XdImport& import) {
     if(auto fill_json = json.get_object("fill"_L1)) {
       if(auto fill = read_fill(*fill_json, import)) {
@@ -217,48 +246,28 @@ namespace {
 }
 
 std::optional<Fill> Rellu::read_fill(XdObject& fill, XdImport& import) {
-  auto type = fill.get_json().value("type"_L1).toString();
-  if(type == "none"_L1) {
-    fill.consume("type"_L1);
-    fill.ignore({"uxdesign#type"_L1, "linkId"_L1, "color"_L1, "gradient"_L1,
-      "pattern"_L1});
-    return NoFill();
-  } else if(type == "solid"_L1) {
-    auto color_json = fill.get_object("color"_L1);
-    if(!color_json) {
-      return std::nullopt;
-    }
-    auto color = read_color(*color_json);
-    if(!color) {
-      return std::nullopt;
-    }
-    fill.consume("type"_L1);
-    fill.ignore({"uxdesign#type"_L1});
-    return SolidFill(*color, read_swatch(fill, *color_json, import));
-  } else if(type == "gradient"_L1) {
-    auto gradient = fill.get_object("gradient"_L1);
-    if(!gradient) {
-      return std::nullopt;
-    }
-    auto result = read_gradient(*gradient);
-    if(result) {
+  auto& json = fill.get_json();
+  auto type = json.value("type"_L1).toString();
+  if(type != "none"_L1) {
+    auto paint = read_paint(fill, type, import);
+    if(paint) {
       fill.consume("type"_L1);
       fill.ignore({"uxdesign#type"_L1});
     }
-    return result;
-  } else if(type == "pattern"_L1) {
-    auto pattern = fill.get_object("pattern"_L1);
-    if(!pattern) {
-      return std::nullopt;
-    }
-    auto result = read_pattern(*pattern, import);
-    if(result) {
-      fill.consume("type"_L1);
-      fill.ignore({"uxdesign#type"_L1});
-    }
-    return result;
+    return paint;
   }
-  return std::nullopt;
+  fill.consume("type"_L1);
+  auto paint_type = json.value("uxdesign#type"_L1).toString();
+  if(json.value("color"_L1).isObject()) {
+    paint_type = "solid"_L1;
+  }
+  if(auto paint = read_paint(fill, paint_type, import)) {
+    fill.consume("uxdesign#type"_L1);
+    return disable_fill(*paint);
+  }
+  fill.ignore({"uxdesign#type"_L1, "linkId"_L1, "color"_L1, "gradient"_L1,
+    "pattern"_L1});
+  return NoFill();
 }
 
 std::optional<Stroke> Rellu::read_stroke(XdObject& stroke) {

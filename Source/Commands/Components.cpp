@@ -17,7 +17,9 @@
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
+#include "Rellu/Commands/HeaderCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
+#include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Geometry/Equality.hpp"
@@ -32,6 +34,14 @@ namespace {
     ChangeMask::OPACITY | ChangeMask::BLEND_MODE | ChangeMask::ISOLATION |
     ChangeMask::CONSTRAINTS | ChangeMask::EXPORT | ChangeMask::GEOMETRY |
     ChangeMask::STYLE | ChangeMask::TEXT | ChangeMask::ROLES;
+  constexpr auto HEADER_CHANGES = ChangeMask::NAME | ChangeMask::VISIBILITY |
+    ChangeMask::LOCK | ChangeMask::TRANSFORM | ChangeMask::OPACITY |
+    ChangeMask::BLEND_MODE | ChangeMask::ISOLATION | ChangeMask::CONSTRAINTS |
+    ChangeMask::EXPORT;
+  constexpr auto OWN_HEADER_CHANGES = ChangeMask::NAME |
+    ChangeMask::VISIBILITY | ChangeMask::LOCK | ChangeMask::OPACITY |
+    ChangeMask::BLEND_MODE | ChangeMask::ISOLATION | ChangeMask::CONSTRAINTS |
+    ChangeMask::EXPORT;
 
   using Names = std::vector<std::string>;
 
@@ -103,6 +113,35 @@ namespace {
     return nullptr;
   }
 
+  void copy_header(const NodeHeader& from, NodeHeader& to, ChangeMask mask) {
+    if(is_set(mask, ChangeMask::NAME)) {
+      to.m_name = from.m_name;
+    }
+    if(is_set(mask, ChangeMask::VISIBILITY)) {
+      to.m_is_visible = from.m_is_visible;
+    }
+    if(is_set(mask, ChangeMask::LOCK)) {
+      to.m_is_locked = from.m_is_locked;
+    }
+    if(is_set(mask, ChangeMask::OPACITY)) {
+      to.m_opacity = from.m_opacity;
+    }
+    if(is_set(mask, ChangeMask::BLEND_MODE)) {
+      to.m_blend_mode = from.m_blend_mode;
+    }
+    if(is_set(mask, ChangeMask::ISOLATION)) {
+      to.m_is_isolated = from.m_is_isolated;
+    }
+    if(is_set(mask, ChangeMask::CONSTRAINTS)) {
+      to.m_constraints = from.m_constraints;
+      to.m_is_fixed_position = from.m_is_fixed_position;
+      to.m_aspect_lock = from.m_aspect_lock;
+    }
+    if(is_set(mask, ChangeMask::EXPORT)) {
+      to.m_is_marked_for_export = from.m_is_marked_for_export;
+    }
+  }
+
   using Comparison =
     std::function<void (const Node& node, const Node& source, Names& names)>;
   using Assignment = std::function<
@@ -111,14 +150,13 @@ namespace {
   struct Field {
     ChangeMask m_mask;
     std::vector<std::string_view> m_names;
-    bool m_is_placement;
     Comparison m_compare;
     Assignment m_assign;
   };
 
   Field make_header_field(ChangeMask mask, std::string_view name,
-      bool is_placement, auto member) {
-    return Field(mask, {name}, is_placement,
+      auto member) {
+    return Field(mask, {name},
       [=] (const Node& node, const Node& source, Names& names) {
         if(!is_same(member(node.m_header), member(source.m_header))) {
           add_name(names, name);
@@ -130,14 +168,14 @@ namespace {
   }
 
   Field make_constraint_field(std::string_view name, bool Constraints::*flag) {
-    return make_header_field(ChangeMask::CONSTRAINTS, name, false,
+    return make_header_field(ChangeMask::CONSTRAINTS, name,
       [=] (auto& header) -> auto& {
         return header.m_constraints.*flag;
       });
   }
 
   Field make_stroke_field(std::string_view name, auto member) {
-    return Field(ChangeMask::STYLE, {name}, false,
+    return Field(ChangeMask::STYLE, {name},
       [=] (const Node& node, const Node& source, Names& names) {
         auto style = get_style(node);
         auto source_style = get_style(source);
@@ -176,7 +214,7 @@ namespace {
   }
 
   Field make_effect_field(std::string_view name, std::size_t kind) {
-    return Field(ChangeMask::STYLE, {name}, false,
+    return Field(ChangeMask::STYLE, {name},
       [=] (const Node& node, const Node& source, Names& names) {
         auto style = get_style(node);
         auto source_style = get_style(source);
@@ -206,7 +244,7 @@ namespace {
 
   template<typename G>
   Field make_geometry_field(std::string_view name, auto member) {
-    return Field(ChangeMask::GEOMETRY, {name}, false,
+    return Field(ChangeMask::GEOMETRY, {name},
       [=] (const Node& node, const Node& source, Names& names) {
         auto shape = node.get_shape();
         auto source_shape = source.get_shape();
@@ -242,7 +280,7 @@ namespace {
   }
 
   Field make_text_style_field(std::string_view name, auto member) {
-    return Field(ChangeMask::TEXT, {name}, false,
+    return Field(ChangeMask::TEXT, {name},
       [=] (const Node& node, const Node& source, Names& names) {
         auto text = node.get_text();
         auto source_text = source.get_text();
@@ -269,7 +307,7 @@ namespace {
   }
 
   Field make_paragraph_field(std::string_view name, auto member) {
-    return Field(ChangeMask::TEXT, {name}, false,
+    return Field(ChangeMask::TEXT, {name},
       [=] (const Node& node, const Node& source, Names& names) {
         auto text = node.get_text();
         auto source_text = source.get_text();
@@ -290,13 +328,13 @@ namespace {
 
   std::vector<Field> make_fields() {
     auto fields = std::vector<Field>();
-    fields.push_back(make_header_field(ChangeMask::NAME, "name", true,
+    fields.push_back(make_header_field(ChangeMask::NAME, "name",
       [] (auto& header) -> auto& { return header.m_name; }));
-    fields.push_back(make_header_field(ChangeMask::VISIBILITY, "visible", false,
+    fields.push_back(make_header_field(ChangeMask::VISIBILITY, "visible",
       [] (auto& header) -> auto& { return header.m_is_visible; }));
-    fields.push_back(make_header_field(ChangeMask::LOCK, "locked", false,
+    fields.push_back(make_header_field(ChangeMask::LOCK, "locked",
       [] (auto& header) -> auto& { return header.m_is_locked; }));
-    fields.push_back(Field(ChangeMask::TRANSFORM, {"transform"}, true,
+    fields.push_back(Field(ChangeMask::TRANSFORM, {"transform"},
       [] (const Node& node, const Node& source, Names& names) {
         if(node.m_header.m_transform != source.m_header.m_transform ||
             node.m_header.m_transform_3d != source.m_header.m_transform_3d) {
@@ -307,10 +345,10 @@ namespace {
         node.m_header.m_transform = source.m_header.m_transform;
         node.m_header.m_transform_3d = source.m_header.m_transform_3d;
       }));
-    fields.push_back(make_header_field(ChangeMask::OPACITY, "opacity", false,
+    fields.push_back(make_header_field(ChangeMask::OPACITY, "opacity",
       [] (auto& header) -> auto& { return header.m_opacity; }));
     fields.push_back(Field(ChangeMask::BLEND_MODE | ChangeMask::ISOLATION,
-      {"blendMode"}, false,
+      {"blendMode"},
       [] (const Node& node, const Node& source, Names& names) {
         if(node.m_header.m_blend_mode != source.m_header.m_blend_mode ||
             node.m_header.m_is_isolated != source.m_header.m_is_isolated) {
@@ -338,10 +376,8 @@ namespace {
     fields.push_back(
       make_constraint_field("constraintHeight", &Constraints::m_height));
     fields.push_back(make_header_field(ChangeMask::EXPORT, "markedForExport",
-      false, [] (auto& header) -> auto& {
-        return header.m_is_marked_for_export;
-      }));
-    fields.push_back(Field(ChangeMask::STYLE, {"fill"}, false,
+      [] (auto& header) -> auto& { return header.m_is_marked_for_export; }));
+    fields.push_back(Field(ChangeMask::STYLE, {"fill"},
       [] (const Node& node, const Node& source, Names& names) {
         auto style = get_style(node);
         auto source_style = get_style(source);
@@ -364,7 +400,7 @@ namespace {
           }
         }
       }));
-    fields.push_back(Field(ChangeMask::STYLE, {"stroke"}, false,
+    fields.push_back(Field(ChangeMask::STYLE, {"stroke"},
       [] (const Node& node, const Node& source, Names& names) {
         auto style = get_style(node);
         auto source_style = get_style(source);
@@ -444,7 +480,7 @@ namespace {
       [] (auto& line) -> auto& { return line.m_end.m_x; }));
     fields.push_back(make_geometry_field<LineShape>("endY",
       [] (auto& line) -> auto& { return line.m_end.m_y; }));
-    fields.push_back(Field(ChangeMask::GEOMETRY, {"pathData"}, false,
+    fields.push_back(Field(ChangeMask::GEOMETRY, {"pathData"},
       [] (const Node& node, const Node& source, Names& names) {
         auto shape = node.get_shape();
         auto source_shape = source.get_shape();
@@ -468,7 +504,7 @@ namespace {
           edit_shape(node)->m_geometry = source_shape->m_geometry;
         }
       }));
-    fields.push_back(Field(ChangeMask::GEOMETRY, {"textFrame"}, false,
+    fields.push_back(Field(ChangeMask::GEOMETRY, {"textFrame"},
       [] (const Node& node, const Node& source, Names& names) {
         auto text = node.get_text();
         auto source_text = source.get_text();
@@ -482,7 +518,7 @@ namespace {
           edit_text(node)->m_frame = source_text->m_frame;
         }
       }));
-    fields.push_back(Field(ChangeMask::TEXT, {"text", "rangedStyles"}, false,
+    fields.push_back(Field(ChangeMask::TEXT, {"text", "rangedStyles"},
       [] (const Node& node, const Node& source, Names& names) {
         auto text = node.get_text();
         auto source_text = source.get_text();
@@ -531,7 +567,7 @@ namespace {
     fields.push_back(make_paragraph_field("paragraphSpacing",
       [] (auto& style) -> auto& { return style.m_paragraph_spacing; }));
     fields.push_back(Field(ChangeMask::ROLES, {"contentStackMarginAfter"},
-      false, [] (const Node&, const Node&, Names&) {},
+      [] (const Node&, const Node&, Names&) {},
       [] (Node& node, const Node& source, const Names&) {
         auto group = std::get_if<Group>(&node.m_payload);
         auto source_group = source.get_group();
@@ -568,7 +604,7 @@ namespace {
           group->m_padding = std::move(padding);
         }
       }));
-    fields.push_back(Field(ChangeMask::ROLES, {"contentPadding"}, false,
+    fields.push_back(Field(ChangeMask::ROLES, {"contentPadding"},
       [] (const Node& node, const Node& source, Names& names) {
         auto group = node.get_group();
         auto source_group = source.get_group();
@@ -593,7 +629,7 @@ namespace {
           group->m_padding->m_padding = source_group->m_padding->m_padding;
         }
       }));
-    fields.push_back(Field(ChangeMask::ROLES, {"hasContentBackground"}, false,
+    fields.push_back(Field(ChangeMask::ROLES, {"hasContentBackground"},
       [] (const Node& node, const Node& source, Names& names) {
         auto group = node.get_group();
         auto source_group = source.get_group();
@@ -621,7 +657,7 @@ namespace {
             source_group->m_padding->m_has_background;
         }
       }));
-    fields.push_back(Field(ChangeMask::ROLES, {"repeatGridStructure"}, false,
+    fields.push_back(Field(ChangeMask::ROLES, {"repeatGridStructure"},
       [] (const Node& node, const Node& source, Names& names) {
         auto group = node.get_group();
         auto source_group = source.get_group();
@@ -638,7 +674,7 @@ namespace {
           group->m_repeat_grid = source_group->m_repeat_grid;
         }
       }));
-    fields.push_back(Field(ChangeMask::ROLES, {"stateId"}, false,
+    fields.push_back(Field(ChangeMask::ROLES, {"stateId"},
       [] (const Node& node, const Node& source, Names& names) {
         auto instance = get_instance_role(node);
         auto source_instance = get_instance_role(source);
@@ -661,11 +697,16 @@ namespace {
       [&] (auto name) { return contains(overridden, name); });
   }
 
+  bool is_synced(const Field& field, ChangeMask mask, bool is_root) {
+    return is_set(mask, field.m_mask) &&
+      !(is_root && is_set(field.m_mask, HEADER_CHANGES));
+  }
+
   Names compare(const Node& node, const Node& source, ChangeMask mask,
       bool is_root) {
     auto names = Names();
     for(auto& field : get_fields()) {
-      if(is_set(mask, field.m_mask) && !(is_root && field.m_is_placement)) {
+      if(is_synced(field, mask, is_root)) {
         field.m_compare(node, source, names);
       }
     }
@@ -677,7 +718,7 @@ namespace {
     auto header = node.m_header;
     auto payload = node.m_payload;
     for(auto& field : get_fields()) {
-      if(!is_set(mask, field.m_mask) || is_root && field.m_is_placement) {
+      if(!is_synced(field, mask, is_root)) {
         continue;
       }
       if(is_overridden(field, overridden) == is_override_copy) {
@@ -809,6 +850,10 @@ namespace {
       }
       remap_keys(role->m_overrides.m_reordered, mapping);
       for(auto& entry : role->m_overrides.m_reordered) {
+        remap(entry.second, mapping);
+      }
+      remap_keys(role->m_overrides.m_owners, mapping);
+      for(auto& entry : role->m_overrides.m_owners) {
         remap(entry.second, mapping);
       }
       role->m_states.clear();
@@ -991,6 +1036,55 @@ std::vector<std::string> Rellu::find_differences(
   return compare(*resolved, *resolved_source, PROPERTY_CHANGES, false);
 }
 
+const NodeHeader* Rellu::find_rendered_header(
+    const Document& document, const NodeId& id) {
+  auto node = document.find(id);
+  if(!node) {
+    return nullptr;
+  }
+  if(!node->get_reference()) {
+    return &node->m_header;
+  }
+  if(auto resolution = resolve_reference(document.get_nodes(), id)) {
+    if(auto source = document.find(resolution->m_source)) {
+      return &source->m_header;
+    }
+  }
+  return nullptr;
+}
+
+bool Rellu::edit_rendered_header(const Document& document,
+    Transaction& transaction, const NodeId& id,
+    const std::function<void (const Node&, NodeHeader&)>& edit) {
+  auto node = document.find(id);
+  if(!node) {
+    return false;
+  }
+  if(!node->get_reference() ||
+      find_instance(document, node->m_parent).is_nil()) {
+    auto header = node->m_header;
+    edit(*node, header);
+    if(header == node->m_header) {
+      return false;
+    }
+    transaction.replace_header(std::move(header));
+    return true;
+  }
+  auto rendered = resolve(document, id);
+  if(!rendered) {
+    return false;
+  }
+  rendered->m_header.m_id = id;
+  auto header = rendered->m_header;
+  edit(*rendered, header);
+  if(header == rendered->m_header) {
+    return false;
+  }
+  materialize_reference(document, transaction, id);
+  transaction.replace_header(std::move(header));
+  return true;
+}
+
 std::vector<NodeId> Rellu::materialize_reference(
     const Document& document, Transaction& transaction, const NodeId& id) {
   auto node = document.find(id);
@@ -1162,6 +1256,7 @@ namespace {
       dynamic_cast<const InsertNodeCommand*>(&command) ||
       dynamic_cast<const MakeComponentCommand*>(&command) ||
       dynamic_cast<const UngroupComponentCommand*>(&command) ||
+      dynamic_cast<const UnlinkComponentCommand*>(&command) ||
       dynamic_cast<const ResetOverridesCommand*>(&command) ||
       dynamic_cast<const SetInstanceStateCommand*>(&command) ||
       dynamic_cast<const SwapComponentCommand*>(&command) ||
@@ -1171,7 +1266,15 @@ namespace {
       dynamic_cast<const RemoveStateCommand*>(&command) ||
       dynamic_cast<const RenameStateCommand*>(&command) ||
       dynamic_cast<const RenameComponentCommand*>(&command) ||
-      dynamic_cast<const MakeEditableCommand*>(&command);
+      dynamic_cast<const MakeEditableCommand*>(&command) ||
+      dynamic_cast<const SetOpacityCommand*>(&command) ||
+      dynamic_cast<const SetVisibilityCommand*>(&command) ||
+      dynamic_cast<const SetLockCommand*>(&command) ||
+      dynamic_cast<const RenameCommand*>(&command) ||
+      dynamic_cast<const SetExportMarkCommand*>(&command) ||
+      dynamic_cast<const SetFixedPositionCommand*>(&command) ||
+      dynamic_cast<const SetAspectLockCommand*>(&command) ||
+      dynamic_cast<const SetConstraintsCommand*>(&command);
   }
 
   class InstanceEditCommand : public Command {
@@ -1354,6 +1457,11 @@ namespace {
         deduplicate_mains(changes);
         renumber_copies(changes);
         for(auto& change : changes.m_modified) {
+          if(is_set(change.m_mask, OWN_HEADER_CHANGES)) {
+            adopt_header(change.m_id, change.m_mask);
+          }
+        }
+        for(auto& change : changes.m_modified) {
           handle_edit(change.m_id, change.m_mask);
         }
         while(!m_sources.empty()) {
@@ -1374,6 +1482,7 @@ namespace {
       std::unordered_map<NodeId,
         std::unordered_map<NodeId, std::vector<NodeId>>> m_inverses;
       std::deque<Event> m_sources;
+      std::optional<std::unordered_map<NodeId, const Node*>> m_originals;
 
       const Component* find_component(const ComponentId& id) const {
         auto& components = m_document->get_resources().m_components;
@@ -1478,13 +1587,91 @@ namespace {
       }
 
       Names get_overridden(const Context& context, const NodeId& id) const {
+        auto overridden = Names();
         if(auto overrides = get_overrides(context)) {
           if(auto names = overrides->m_properties.find(id);
               names != overrides->m_properties.end()) {
-            return names->second;
+            overridden = names->second;
           }
         }
-        return Names();
+        if(id == context.m_root) {
+          return overridden;
+        }
+        if(auto role = get_nested_role(id)) {
+          if(auto names = role->m_overrides.m_properties.find(id);
+              names != role->m_overrides.m_properties.end()) {
+            for(auto& name : names->second) {
+              add_name(overridden, name);
+            }
+          }
+        }
+        return overridden;
+      }
+
+      const ComponentInstance* get_nested_role(const NodeId& id) const {
+        if(auto node = m_document->find(id)) {
+          return get_instance_role(*node);
+        }
+        return nullptr;
+      }
+
+      const Node* find_original(const NodeId& id) {
+        if(!m_originals) {
+          m_originals.emplace();
+          for(auto& entry : m_document->get_original_records()) {
+            m_originals->emplace(entry.first, entry.second.get());
+          }
+        }
+        if(auto entry = m_originals->find(id); entry != m_originals->end()) {
+          return entry->second;
+        }
+        return nullptr;
+      }
+
+      void adopt_header(const NodeId& id, ChangeMask mask) {
+        auto node = m_document->find(id);
+        if(!node || !node->get_reference() ||
+            find_instance(*m_document, node->m_parent).is_nil()) {
+          return;
+        }
+        auto original = find_original(id);
+        if(!original || !original->get_reference()) {
+          return;
+        }
+        auto changes = ChangeMask::NONE;
+        for(auto flag : {ChangeMask::NAME, ChangeMask::VISIBILITY,
+            ChangeMask::LOCK, ChangeMask::OPACITY, ChangeMask::BLEND_MODE,
+            ChangeMask::ISOLATION, ChangeMask::CONSTRAINTS,
+            ChangeMask::EXPORT}) {
+          auto header = original->m_header;
+          copy_header(node->m_header, header, flag & mask);
+          if(header != original->m_header) {
+            changes |= flag;
+          }
+        }
+        if(changes == ChangeMask::NONE) {
+          return;
+        }
+        auto rendered = resolve(*m_document, id);
+        if(!rendered) {
+          return;
+        }
+        auto edited = node->m_header;
+        auto header = rendered->m_header;
+        header.m_id = id;
+        auto unchanged = header;
+        copy_header(edited, header, changes);
+        if(header == unchanged) {
+          auto restored = edited;
+          copy_header(original->m_header, restored, changes);
+          if(restored != edited) {
+            m_transaction->replace_header(std::move(restored));
+          }
+          return;
+        }
+        materialize_reference(*m_document, *m_transaction, id);
+        m_transaction->replace_header(std::move(header));
+        m_inverses.clear();
       }
 
       NodeId get_source(const Context& context, const NodeId& id) const {
@@ -1667,13 +1854,24 @@ namespace {
           if(resolved && resolved_source) {
             auto names = compare(*resolved, *resolved_source,
               mask & PROPERTY_CHANGES, id == context.m_root);
+            if(auto name = std::find(names.begin(), names.end(), "name");
+                name != names.end() && id != context.m_root &&
+                  get_instance_role(*node)) {
+              names.insert(name, "isCustomNameInherited");
+            }
             if(!names.empty()) {
-              edit_overrides(context, [&] (auto& overrides) {
+              auto record = [&] (auto& overrides) {
                 auto& recorded = overrides.m_properties[id];
                 for(auto& name : names) {
                   add_name(recorded, name);
                 }
-              });
+              };
+              edit_overrides(context, record);
+              if(id != context.m_root && get_instance_role(*node)) {
+                edit_role(*m_document, *m_transaction, id, [&] (auto& role) {
+                  record(role.m_overrides);
+                });
+              }
             }
           }
         }
@@ -2373,8 +2571,12 @@ bool Rellu::refresh_component_sizes(Document& document,
     return false;
   }
   auto masters = std::unordered_map<NodeId, ComponentId>();
+  auto states = std::unordered_map<NodeId, ComponentId>();
   for(auto& entry : components) {
     masters.emplace(entry.second.m_master, entry.first);
+    for(auto& state : entry.second.m_states) {
+      states.emplace(state.m_tree, entry.first);
+    }
   }
   auto touched = std::vector<NodeId>(
     changes.m_inserted.begin(), changes.m_inserted.end());
@@ -2385,6 +2587,7 @@ bool Rellu::refresh_component_sizes(Document& document,
   auto visited = std::unordered_set<NodeId>();
   auto instances = std::vector<NodeId>();
   auto roots = std::vector<NodeId>();
+  auto trees = std::vector<NodeId>();
   for(auto& id : touched) {
     auto current = id;
     for(auto depth = 0; depth != MAXIMUM_DEPTH && !current.is_nil(); ++depth) {
@@ -2398,13 +2601,17 @@ bool Rellu::refresh_component_sizes(Document& document,
       if(get_instance_role(*node)) {
         instances.push_back(current);
       }
-      if(node->m_parent.is_nil() && masters.contains(current)) {
-        roots.push_back(current);
+      if(node->m_parent.is_nil() && !document.is_on_canvas(current)) {
+        if(masters.contains(current)) {
+          roots.push_back(current);
+        } else {
+          trees.push_back(current);
+        }
       }
       current = node->m_parent;
     }
   }
-  if(instances.empty() && roots.empty()) {
+  if(instances.empty() && roots.empty() && trees.empty()) {
     return false;
   }
   auto is_changed = false;
@@ -2437,6 +2644,48 @@ bool Rellu::refresh_component_sizes(Document& document,
       component.m_size = *size;
       transaction.replace_component(std::move(component));
       is_changed = true;
+    }
+    auto owners = std::optional<std::unordered_map<NodeId, NodeId>>();
+    for(auto& id : trees) {
+      auto size = measure(id);
+      if(!size) {
+        continue;
+      }
+      auto resize = [&] (auto& candidates) {
+        auto is_resized = false;
+        for(auto& state : candidates) {
+          if(state.m_tree == id && state.m_size != *size) {
+            state.m_size = *size;
+            is_resized = true;
+          }
+        }
+        return is_resized;
+      };
+      if(auto entry = states.find(id); entry != states.end()) {
+        auto component = components.at(entry->second);
+        if(resize(component.m_states)) {
+          transaction.replace_component(std::move(component));
+          is_changed = true;
+        }
+        continue;
+      }
+      if(!owners) {
+        owners.emplace();
+        document.get_nodes().for_each([&] (const Node& node) {
+          if(auto role = get_instance_role(node)) {
+            for(auto& state : role->m_states) {
+              owners->emplace(state.m_tree, node.get_id());
+            }
+          }
+        });
+      }
+      if(auto owner = owners->find(id); owner != owners->end()) {
+        auto group = *document.get(owner->second).get_group();
+        if(resize(group.m_component_instance->m_states)) {
+          transaction.replace_payload(owner->second, std::move(group));
+          is_changed = true;
+        }
+      }
     }
     if(is_changed) {
       transaction.amend();

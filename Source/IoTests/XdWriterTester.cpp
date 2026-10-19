@@ -15,6 +15,7 @@
 #include "Rellu/Geometry/SvgPath.hpp"
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Io/XdWriter.hpp"
+#include "Rellu/Model/CompoundResolution.hpp"
 #include "Rellu/Model/DocumentComparison.hpp"
 #include "Rellu/Model/Transaction.hpp"
 #include "XdTestPackage.hpp"
@@ -263,8 +264,9 @@ namespace {
     component.m_master = built.m_master;
     component.m_default_state = generate_node_id();
     component.m_size = Size(80, 30);
-    component.m_states.push_back(
-      ComponentState(state, "Hover", built.m_state_tree));
+    auto hover = ComponentState(state, "Hover", built.m_state_tree);
+    hover.m_size = Size(80, 30);
+    component.m_states.push_back(hover);
     built.m_component = transaction.add_component(component);
     auto instance = Group();
     instance.m_component_instance =
@@ -503,6 +505,11 @@ TEST_SUITE("XdWriter") {
     auto states = master.value("states"_L1).toArray();
     REQUIRE(states.size() == 1);
     REQUIRE(states.first().toObject().value("name"_L1) == "Hover"_L1);
+    auto state = get_ux(states.first().toObject());
+    REQUIRE(state.value("width"_L1).toDouble() == 80);
+    REQUIRE(state.value("height"_L1).toDouble() == 30);
+    REQUIRE(state.value("componentType"_L1) == "componentNoBounds"_L1);
+    REQUIRE(state.value("hasCustomName"_L1).toBool());
     auto instance = find_written(package, built.m_instance);
     auto ux = get_ux(instance);
     REQUIRE(ux.value("symbolId"_L1).toString().toStdString() ==
@@ -802,6 +809,122 @@ TEST_SUITE("XdWriter") {
         to_svg_path(path));
   }
 
+  TEST_CASE("model_gaps") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto image = transaction.add_image(
+      ImageResource(NodeId(), "image/png", Shared(make_png())));
+    auto master = transaction.insert_root(make_header("Button"), Group());
+    auto master_shape = transaction.append(master, make_header("Background"),
+      make_rectangle_shape(80, 30));
+    auto component = Component();
+    component.m_name = "Button";
+    component.m_master = master;
+    component.m_default_state = generate_node_id();
+    component.m_size = Size(80, 30);
+    auto component_id = transaction.add_component(component);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 375, 812);
+    artboard.m_background =
+      disable_fill(SolidFill(make_color(10, 20, 30)));
+    auto artboard_id =
+      transaction.append(NodeId(), make_header("Home"), artboard);
+    auto star = Shape();
+    star.m_geometry = PolygonShape(5, Size(40, 38), 0, 40);
+    auto gradient = GradientFill();
+    gradient.m_geometry = LinearGradient(Point(0, 0), Point(1, 1));
+    gradient.m_stops = {GradientStop(0, make_color(255, 0, 0)),
+      GradientStop(1, make_color(0, 255, 0))};
+    star.m_style.m_fill = disable_fill(gradient);
+    auto star_id = transaction.append(artboard_id, make_header("Star"), star);
+    auto video = Shape();
+    video.m_geometry = RectangleShape(Rect(0, 0, 64, 48));
+    auto poster = ImageFill();
+    poster.m_image = image;
+    poster.m_size = Size(640, 480);
+    poster.m_scale_behavior = ScaleBehavior::COVER;
+    video.m_video = Video(poster, generate_node_id(), true);
+    auto video_id =
+      transaction.append(artboard_id, make_header("Video"), video);
+    auto text = make_text_payload(u"Flipped");
+    text.m_is_flipped_vertically = true;
+    auto text_id = transaction.append(artboard_id, make_header("Text"), text);
+    auto compound = Shape();
+    compound.m_geometry = CompoundShape(CompoundOperation::SUBTRACT,
+      Shared(*parse_svg_path("M 0 0 L 100 0 L 100 100 L 0 100 Z")));
+    auto compound_id =
+      transaction.append(artboard_id, make_header("Compound"), compound);
+    transaction.append(compound_id, make_header("Base"),
+      make_rectangle_shape(100, 100));
+    auto group_header = make_header("Group");
+    group_header.m_transform = make_translation(10, 10);
+    auto group = transaction.append(compound_id, group_header, Group());
+    transaction.append(group, make_header("Hole"),
+      make_rectangle_shape(10, 10));
+    auto reference_header = make_header("");
+    reference_header.m_constraints = Constraints();
+    transaction.append(compound_id, reference_header, Reference(master_shape,
+      make_translation(50, 50)));
+    auto instance = Group();
+    instance.m_component_instance =
+      ComponentInstance(component_id, StateId(), Size(80, 30));
+    auto instance_id =
+      transaction.append(artboard_id, make_header("Button"), instance);
+    auto added_group =
+      transaction.append(instance_id, make_header("Added"), Group());
+    auto added_shape = transaction.append(added_group, make_header("Inner"),
+      make_rectangle_shape(5, 5));
+    auto role = *document.get(instance_id).get_group();
+    role.m_component_instance->m_overrides.m_added = {added_group,
+      added_shape};
+    role.m_component_instance->m_overrides.m_owners.emplace(
+      added_shape, added_group);
+    transaction.replace_payload(instance_id, role);
+    auto combined = *document.get(compound_id).get_shape();
+    std::get<CompoundShape>(combined.m_geometry).m_path = Shared(
+      *combine_operands(document.get_nodes(), document.get(compound_id),
+        0.01));
+    transaction.replace_payload(compound_id, combined);
+    transaction.commit();
+    auto bytes = write_xd(document);
+    auto imported = Document();
+    auto report = import_package(bytes, imported);
+    REQUIRE(report.m_unconsumed.empty());
+    REQUIRE(join(filter(find_differences(document, imported))) == "");
+    auto package = XdPackage(bytes);
+    auto star_json = find_written(package, star_id);
+    auto star_shape = star_json.value("shape"_L1).toObject();
+    REQUIRE(star_shape.value("uxdesign#starRatio"_L1).toDouble() == 40);
+    auto fill = star_json.value("style"_L1).toObject().value("fill"_L1).
+      toObject();
+    REQUIRE(fill.value("type"_L1) == "none"_L1);
+    REQUIRE(fill.value("uxdesign#type"_L1) == "gradient"_L1);
+    auto video_json = find_written(package, video_id);
+    REQUIRE(!video_json.contains("style"_L1));
+    auto media = get_ux(video_json.value("shape"_L1).toObject());
+    REQUIRE(media.value("subtype"_L1) == "video"_L1);
+    REQUIRE(media.value("loop"_L1).toBool());
+    REQUIRE(media.value("mediaFill"_L1).toObject().value("type"_L1) ==
+      "pattern"_L1);
+    REQUIRE(get_ux(find_written(package, text_id)).value("flipY"_L1).
+      toBool());
+    auto root = get_ux(find_written(package, instance_id)).value(
+      "symbolOverrides"_L1).toObject();
+    REQUIRE(root.value("addedGuids"_L1).toArray().size() == 1);
+    auto owned = get_ux(find_written(package, added_group)).value(
+      "symbolOverrides"_L1).toObject();
+    REQUIRE(owned.value("addedGuids"_L1).toArray().first().toString().
+      toStdString() == to_string(added_shape));
+    auto compound_json = find_written(package, compound_id);
+    REQUIRE(compound_json.value("shape"_L1).toObject().value(
+      "children"_L1).toArray().size() == 3);
+    auto& path = *std::get<CompoundShape>(
+      imported.get(compound_id).get_shape()->m_geometry).m_path;
+    REQUIRE(!contains(path, Point(15, 15)));
+    REQUIRE(!contains(path, Point(60, 60)));
+    REQUIRE(contains(path, Point(30, 30)));
+  }
+
   TEST_CASE("replace_open_file") {
     auto document = Document();
     build(document);
@@ -831,6 +954,10 @@ TEST_SUITE("XdWriter") {
       make_header("Rectangle 3"), make_rectangle_shape(5, 5));
     auto custom = transaction.append(
       NodeId(), make_header("Logo"), make_rectangle_shape(5, 5));
+    auto localized = transaction.append(
+      NodeId(), make_header("Rechteck 4"), make_rectangle_shape(5, 5));
+    auto localized_group =
+      transaction.append(NodeId(), make_header("Gruppe 7"), Group());
     auto ellipse = Shape();
     ellipse.m_geometry = EllipseShape(Point(5, 5), 5, 3);
     auto ellipse_id =
@@ -900,6 +1027,8 @@ TEST_SUITE("XdWriter") {
     };
     REQUIRE(get_key(rectangle) == "SHAPE_RECTANGLE");
     REQUIRE(get_key(custom).empty());
+    REQUIRE(get_key(localized) == "SHAPE_RECTANGLE");
+    REQUIRE(get_key(localized_group) == "SHAPE_GROUP");
     REQUIRE(get_key(ellipse_id) == "SHAPE_ELLIPSE");
     REQUIRE(get_key(group) == "SHAPE_GROUP");
     REQUIRE(get_key(text) == "SHAPE_GROUP");

@@ -100,11 +100,11 @@ TEST_SUITE("PenTool") {
       std::vector{Contour(std::vector{make_anchor(Point(50, 50))}, false)});
     REQUIRE(setup.get_pen().get_path(tools.get_context()) == id);
     REQUIRE(history.get_undo_count() == 1);
-    REQUIRE(history.get_undo_label() == "Pen");
+    REQUIRE(history.get_undo_label() == "Draw Path");
     click(tools, Point(250, 150));
     click(tools, Point(250, 250));
     REQUIRE(history.get_undo_count() == 3);
-    REQUIRE(history.get_undo_label() == "Pen");
+    REQUIRE(history.get_undo_label() == "Add Anchor Point");
     auto path = Path();
     path.move_to(Point(50, 50));
     path.line_to(Point(150, 50));
@@ -189,6 +189,7 @@ TEST_SUITE("PenTool") {
     click(tools, Point(250, 250));
     click(tools, Point(153, 148));
     REQUIRE(setup.m_editor.get_history().get_undo_count() == 4);
+    REQUIRE(setup.m_editor.get_history().get_undo_label() == "Close Path");
     REQUIRE(setup.get_pen().get_path(tools.get_context()).is_nil());
     auto contours = setup.get_contours(id);
     REQUIRE(contours.size() == 1);
@@ -228,7 +229,8 @@ TEST_SUITE("PenTool") {
     REQUIRE(anchors.size() == 3);
     REQUIRE(is_smooth(anchors[1]));
     REQUIRE(anchors[1].m_in.m_y == doctest::Approx(150));
-    REQUIRE(setup.m_editor.get_history().get_undo_label() == "Edit Path");
+    REQUIRE(
+      setup.m_editor.get_history().get_undo_label() == "Convert Point Type");
     tools.double_click(make_event(Point(250, 250), Qt::LeftButton,
       Qt::LeftButton));
     tools.release(make_event(Point(250, 250), Qt::LeftButton, Qt::NoButton));
@@ -311,7 +313,8 @@ TEST_SUITE("PenTool") {
     auto anchors = setup.get_contours(id).front().m_anchors;
     REQUIRE(anchors.size() == 3);
     REQUIRE(anchors[1].m_point == Point(150, 50));
-    REQUIRE(setup.m_editor.get_history().get_undo_label() == "Add Point");
+    REQUIRE(
+      setup.m_editor.get_history().get_undo_label() == "Add Anchor Point");
     REQUIRE(setup.get_pen().get_path(tools.get_context()).is_nil());
   }
 

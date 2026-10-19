@@ -70,7 +70,8 @@ TEST_SUITE("ArtboardImporter") {
     REQUIRE(artboard.m_viewport_height == 600);
     REQUIRE(std::holds_alternative<NoFill>(artboard.m_background));
     REQUIRE(artboard.m_guides == std::vector<Guide>({
-      Guide(Orientation::HORIZONTAL, 10), Guide(Orientation::VERTICAL, 20)}));
+      Guide(Orientation::HORIZONTAL, 10, "a"),
+      Guide(Orientation::VERTICAL, 20, "b")}));
     auto& grid = *artboard.m_layout_grid;
     REQUIRE(grid.m_type == GridType::LAYOUT);
     REQUIRE(!grid.m_is_visible);

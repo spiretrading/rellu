@@ -120,7 +120,7 @@ TEST_SUITE("Document") {
     auto group_id =
       transaction.append(artboard_id, make_header("Group"), group);
     auto shape = Shape();
-    shape.m_geometry = PolygonShape(5, Size(1, 1), NAN_VALUE,
+    shape.m_geometry = PolygonShape(5, Size(1, 1), NAN_VALUE, 100,
       std::vector<Point>({Point(NAN_VALUE, 0)}));
     shape.m_style.m_stroke = Stroke(Color(0, 0, 0, 1), NAN_VALUE);
     shape.m_style.m_stroke->m_dashes.push_back(NAN_VALUE);

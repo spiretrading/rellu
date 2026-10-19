@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <QCursor>
+#include <QLineEdit>
 #include <QPointF>
 #include <QTimer>
 #include <QVariant>
@@ -23,6 +24,9 @@ namespace Rellu {
    * edit it with the active tool through an Editor. The tools include a
    * TextTool named text, chosen with T, which receives keys ahead of the
    * application's shortcuts and input method events while it edits text.
+   * Double-clicking an artboard's title renames the artboard in place,
+   * labelled Rename Artboard: Enter or clicking elsewhere keeps a name that
+   * is not blank, and Escape cancels.
    */
   class DocumentView : public Canvas {
     public:
@@ -82,6 +86,13 @@ namespace Rellu {
       void zoom_to(const Rect& region);
 
       /**
+       * Scrolls the view, keeping its zoom, so that a point of the document
+       * is at its center.
+       * @param point The point in document coordinates.
+       */
+      void center_on(Point point);
+
+      /**
        * Zooms about the center of the view.
        * @param zoom The number of widget pixels per document pixel.
        */
@@ -123,6 +134,8 @@ namespace Rellu {
       std::optional<QCursor> m_zoom_out_cursor;
       QTimer m_preparation;
       QTimer m_caret_timer;
+      QLineEdit* m_title_editor;
+      NodeId m_renamed;
 
       void frame(const Rect& region);
       void zoom(double factor, QPointF center);
@@ -133,6 +146,9 @@ namespace Rellu {
       TextTool* get_text_tool() const;
       void update_text_editing();
       bool forward(QMouseEvent* event, auto handler);
+      bool start_rename(Point position);
+      void finish_rename(bool is_committed);
+      void place_title_editor();
   };
 }
 

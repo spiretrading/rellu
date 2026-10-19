@@ -67,8 +67,9 @@ namespace {
     for(auto i = std::size_t(0); i != list->get_size(); ++i) {
       if(auto guide = list->get_object(i)) {
         if(auto position = guide->get_number("position"_L1)) {
-          guides.push_back(Guide(orientation, *position));
-          guide->ignore({"guid"_L1});
+          auto id = guide->get_string("guid"_L1);
+          guides.push_back(Guide(orientation, *position,
+            id ? to_std_string(*id) : std::string()));
         }
       }
     }

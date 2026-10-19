@@ -3,6 +3,7 @@
 #include <optional>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <QHashFunctions>
 #include "Rellu/Geometry/SvgPath.hpp"
 #include "Rellu/Io/XdImporters.hpp"
@@ -113,6 +114,7 @@ namespace {
     polygon.m_corner_count = static_cast<int>(*count);
     polygon.m_size = Size(*width, *height);
     polygon.m_corner_radius = shape.get_number("uxdesign#cornerRadius"_L1, 0);
+    polygon.m_star_ratio = shape.get_number("uxdesign#starRatio"_L1, 100);
     if(auto points = shape.get_array("points"_L1)) {
       polygon.m_vertices.reserve(points->get_size());
       for(auto i = std::size_t(0); i != points->get_size(); ++i) {
@@ -174,6 +176,26 @@ namespace {
     }
     return result;
   }
+
+  std::optional<Video> read_video(XdObject& ux, XdImport& import) {
+    auto media = ux.get_object("mediaFill"_L1);
+    auto guid = ux.get_string("mediaFileGuid"_L1);
+    if(!media || !guid) {
+      import.warn("Video without media");
+      return std::nullopt;
+    }
+    auto poster = read_fill(*media, import);
+    if(!poster || !std::holds_alternative<ImageFill>(*poster)) {
+      import.warn("Video without a poster image");
+      return std::nullopt;
+    }
+    ux.consume("subtype"_L1);
+    auto video = Video();
+    video.m_poster = std::get<ImageFill>(std::move(*poster));
+    video.m_media = to_node_id(*guid);
+    video.m_is_looping = ux.get_bool("loop"_L1, false);
+    return video;
+  }
 }
 
 std::optional<ShapeGeometry> Rellu::read_geometry(
@@ -222,8 +244,11 @@ void Rellu::add_shape_importer(XdImporter& importer) {
       node.m_children = shape->get_array("children"_L1);
     }
     auto style = Style();
+    auto video = std::optional<Video>();
     if(auto ux = get_ux(*shape)) {
-      if(auto media = ux->get_object("mediaFill"_L1)) {
+      if(ux->get_json().value("subtype"_L1).toString() == "video"_L1) {
+        video = read_video(*ux, *node.m_import);
+      } else if(auto media = ux->get_object("mediaFill"_L1)) {
         if(auto fill = read_fill(*media, *node.m_import)) {
           style.m_fill = std::move(*fill);
         }
@@ -236,6 +261,7 @@ void Rellu::add_shape_importer(XdImporter& importer) {
         }
       }
     }
-    node.m_payload = Shape(std::move(*geometry), std::move(style));
+    node.m_payload =
+      Shape(std::move(*geometry), std::move(style), std::move(video));
   });
 }

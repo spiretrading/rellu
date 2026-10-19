@@ -14,6 +14,21 @@ namespace {
       const Document& document, const NodeId& id) {
     return std::get<RectangleShape>(document.get(id).get_shape()->m_geometry);
   }
+
+  NodeHeader make_fixed_artboard_header() {
+    auto header = make_header("Artboard");
+    header.m_constraints.m_is_enabled = false;
+    return header;
+  }
+
+  void disable_constraints(Document& document, const NodeId& id) {
+    auto transaction = Transaction(document);
+    auto header = document.get(id).m_header;
+    header.m_constraints.m_is_enabled = false;
+    transaction.replace_header(std::move(header));
+    transaction.commit();
+    document.clear_history();
+  }
 }
 
 TEST_SUITE("TransformCommands") {
@@ -156,6 +171,31 @@ TEST_SUITE("TransformCommands") {
       make_translation(0, 30));
     auto& ellipse = std::get<EllipseShape>(
       document.get(scene.m_ellipse).get_shape()->m_geometry);
+    REQUIRE(ellipse.m_center.m_x == doctest::Approx(10));
+    REQUIRE(ellipse.m_x_radius == doctest::Approx(10));
+    require_near(document.get(scene.m_ellipse).m_header.m_transform,
+      make_translation(5, 5));
+  }
+
+  TEST_CASE("scale_group") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto history = History(document);
+    auto group = document.get(scene.m_group).m_header.m_transform;
+    auto bounds = *get_local_bounds(document, scene.m_group);
+    auto world = get_world_transform(document, scene.m_group);
+    auto target =
+      Rect(bounds.m_x, bounds.m_y, 2 * bounds.m_width, bounds.m_height);
+    require_undoable(history, std::make_unique<TransformCommand>(
+      std::vector{scene.m_group},
+      world * make_rect_mapping(bounds, target) * *invert(world), "Resize",
+      TransformMode::RESIZE, ResizeRule::SUPPRESSED, estimate_text_bounds));
+    require_near(document.get(scene.m_group).m_header.m_transform, group);
+    auto& text = *document.get(scene.m_text).get_text();
+    REQUIRE(std::get<AreaFrame>(text.m_frame).m_size.m_width ==
+      doctest::Approx(200));
+    auto& ellipse = std::get<EllipseShape>(
+      document.get(scene.m_ellipse).get_shape()->m_geometry);
     REQUIRE(ellipse.m_center.m_x == doctest::Approx(20));
     REQUIRE(ellipse.m_center.m_y == doctest::Approx(10));
     REQUIRE(ellipse.m_x_radius == doctest::Approx(20));
@@ -180,13 +220,14 @@ TEST_SUITE("TransformCommands") {
   TEST_CASE("resize_artboard") {
     auto document = Document();
     auto scene = build_scene(document);
+    disable_constraints(document, scene.m_artboard);
     auto history = History(document);
     require_undoable(history, make_bounds_command(
       document, scene.m_artboard, Rect(-50, 0, 450, 300)));
     REQUIRE(document.get(scene.m_artboard).get_artboard()->m_frame ==
       Rect(50, 50, 450, 300));
     REQUIRE(get_world_transform(document, scene.m_rectangle) ==
-      make_translation(110, 60));
+      make_translation(60, 60));
   }
 
   TEST_CASE("positioned_text") {
@@ -201,8 +242,15 @@ TEST_SUITE("TransformCommands") {
     }
     auto history = History(document);
     require_undoable(history, make_resize_command(
-      {text}, Rect(0, 0, 10, 10), Rect(0, 0, 20, 10)));
-    REQUIRE(document.get(text).m_header.m_transform == make_scale(2, 1));
+      {text}, Rect(0, 0, 10, 10), Rect(5, 0, 25, 20)));
+    auto& resized = *document.get(text).get_text();
+    REQUIRE(resized.m_base_style.m_font.m_size == 28);
+    REQUIRE(resized.m_runs.front().m_style.m_font.m_size == 28);
+    REQUIRE(document.get(text).m_header.m_transform ==
+      make_translation(5, 0));
+    history.execute(make_resize_command(
+      {text}, Rect(5, -22.4, 70, 33.6), Rect(5, -22.4, 140, 33.6)));
+    REQUIRE(document.get(text).get_text()->m_base_style.m_font.m_size == 28);
   }
 
   TEST_CASE("rotate") {
@@ -424,7 +472,7 @@ TEST_SUITE("TransformCommands") {
     auto artboard = Artboard();
     artboard.m_frame = Rect(0, 0, 400, 300);
     auto board =
-      transaction.append(NodeId(), make_header("Artboard"), artboard);
+      transaction.append(NodeId(), make_fixed_artboard_header(), artboard);
     auto inner = transaction.append(board,
       make_header("Inner", make_translation(10, 10)),
       make_rectangle_shape(40, 40));
@@ -464,7 +512,7 @@ TEST_SUITE("TransformCommands") {
     auto artboard = Artboard();
     artboard.m_frame = Rect(0, 0, 400, 300);
     auto board =
-      transaction.append(NodeId(), make_header("Artboard"), artboard);
+      transaction.append(NodeId(), make_fixed_artboard_header(), artboard);
     auto shape = transaction.append(board,
       make_header("Shape", make_translation(350, 10)),
       make_rectangle_shape(40, 40));

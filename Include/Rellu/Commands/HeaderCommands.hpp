@@ -112,7 +112,11 @@ namespace Rellu {
 
   /**
    * Sets the responsive resize constraints of nodes, labelled Change
-   * Constraints.
+   * Constraints, as Adobe XD does: turning Responsive Resize on or off
+   * turns it on or off for the descendants of nodes other than artboards,
+   * except within component instances; switching to Manual records the
+   * constraints inferred so far; and setting a pin switches to Manual and
+   * releases the opposite pin where both pins and the size would be fixed.
    */
   class SetConstraintsCommand : public Command {
     public:
@@ -124,6 +128,15 @@ namespace Rellu {
        */
       SetConstraintsCommand(
         std::vector<NodeId> nodes, ConstraintsEdit edit) noexcept;
+
+      /**
+       * Constructs a SetConstraintsCommand.
+       * @param nodes The nodes to change.
+       * @param edit The properties to set.
+       * @param measurer The function measuring text.
+       */
+      SetConstraintsCommand(std::vector<NodeId> nodes, ConstraintsEdit edit,
+        TextMeasurer measurer) noexcept;
 
       std::string get_label() const override;
       void apply(const Document& document, Transaction& transaction) override;
@@ -137,6 +150,7 @@ namespace Rellu {
     private:
       std::vector<NodeId> m_nodes;
       ConstraintsEdit m_edit;
+      TextMeasurer m_measurer;
   };
 
   /** Removes the 3D transforms of nodes, labelled Reset 3D Transforms. */

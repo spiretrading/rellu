@@ -59,6 +59,18 @@ TEST_SUITE("TextImporter") {
     REQUIRE(text.m_base_style.m_color == Color(1, 1, 1, 1));
     REQUIRE(std::get<SolidFill>(text.m_style.m_fill).m_color ==
       Color(1, 1, 1, 1));
+    REQUIRE(!text.m_is_flipped_vertically);
+  }
+
+  TEST_CASE("flip") {
+    auto document = Document();
+    auto report = ImportReport();
+    auto& text = import_text(document,
+      "[" + make_range(6) + R"(], "flipY": true)",
+      R"({"frame": {"type": "autoHeight", "width": 90},
+      "rawText": "<Body>"})", &report);
+    REQUIRE(report.m_unconsumed.empty());
+    REQUIRE(text.m_is_flipped_vertically);
   }
 
   TEST_CASE("frames") {

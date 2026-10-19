@@ -184,7 +184,9 @@ namespace {
     state.m_tree = node.m_header.m_id;
     state.m_sync_map = read_sync_map(ux);
     state.m_overrides = read_overrides(ux, node.m_header.m_id);
-    ux.ignore({"symbolId"_L1, "width"_L1, "height"_L1});
+    state.m_size = Size(
+      ux.get_number("width"_L1, 0), ux.get_number("height"_L1, 0));
+    ux.ignore({"symbolId"_L1});
     ignore_component_keys(ux);
     ignore_link_keys(ux);
     node.m_states.get<OverrideScope>();
@@ -230,6 +232,21 @@ namespace {
       target.m_properties.insert_or_assign(
         entry.first, std::move(entry.second));
     }
+    for(auto& entry : source.m_owners) {
+      target.m_owners.insert_or_assign(entry.first, entry.second);
+    }
+  }
+
+  void record_owner(Overrides& overrides, const NodeId& owner) {
+    for(auto& id : overrides.m_added) {
+      overrides.m_owners.insert_or_assign(id, owner);
+    }
+    for(auto& id : overrides.m_removed) {
+      overrides.m_owners.insert_or_assign(id, owner);
+    }
+    for(auto& entry : overrides.m_reordered) {
+      overrides.m_owners.insert_or_assign(entry.first, owner);
+    }
   }
 
   void import_descendant(XdNode& node, XdObject& ux) {
@@ -245,7 +262,9 @@ namespace {
       ux.ignore({"symbolOverrides"_L1});
       return;
     }
-    merge(read_overrides(ux, node.m_header.m_id), scope->m_overrides);
+    auto overrides = read_overrides(ux, node.m_header.m_id);
+    record_owner(overrides, node.m_header.m_id);
+    merge(std::move(overrides), scope->m_overrides);
   }
 }
 

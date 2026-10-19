@@ -62,7 +62,7 @@ TEST_SUITE("ArtboardTool") {
     REQUIRE(artboard.m_background ==
       Fill(SolidFill(make_color(255, 255, 255))));
     REQUIRE(editor.get_history().get_undo_count() == 1);
-    REQUIRE(editor.get_history().get_undo_label() == "Artboard");
+    REQUIRE(editor.get_history().get_undo_label() == "Draw Artboard");
     REQUIRE(tools.get_tool_name() == "artboard");
     drag(tools, Point(600, 600), Point(700, 650), Qt::ShiftModifier);
     auto& square = document.get(editor.get_selection().get_primary());

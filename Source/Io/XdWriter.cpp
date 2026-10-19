@@ -19,6 +19,7 @@
 #include "Rellu/Io/XdPackage.hpp"
 #include "Rellu/Io/XdPatch.hpp"
 #include "Rellu/Io/XdWriter.hpp"
+#include "Rellu/Model/CompoundResolution.hpp"
 #include "Parallel.hpp"
 
 using namespace Rellu;
@@ -76,58 +77,29 @@ namespace {
     return std::abs(area) / 2;
   }
 
-  BooleanOperation to_operation(CompoundOperation operation) {
-    switch(operation) {
-      case CompoundOperation::SUBTRACT:
-        return BooleanOperation::SUBTRACT;
-      case CompoundOperation::INTERSECT:
-        return BooleanOperation::INTERSECT;
-      case CompoundOperation::EXCLUDE:
-        return BooleanOperation::EXCLUDE;
-      default:
-        return BooleanOperation::ADD;
-    }
-  }
-
-  std::optional<Path> refresh_compound(
-    const Document& document, const Node& node, const CompoundShape& compound);
-
-  Path get_outline(const Document& document, const Node& node,
-      const Shape& shape) {
-    if(auto compound = std::get_if<CompoundShape>(&shape.m_geometry)) {
-      if(auto result = refresh_compound(document, node, *compound)) {
-        return *result;
-      }
-      return *compound->m_path;
-    }
-    return to_path(shape.m_geometry);
-  }
-
   std::optional<Path> refresh_compound(const Document& document,
       const Node& node, const CompoundShape& compound) {
     if(!decode_node_data(node.m_header.m_opaque.get_bytes()).
         m_orphans.empty()) {
       return std::nullopt;
     }
-    auto operands = std::vector<Path>();
-    for(auto& id : node.m_children) {
-      auto child = document.find(id);
-      if(!child || !child->get_shape()) {
-        return std::nullopt;
+    auto nested = [&] (const Node& inner) {
+      auto& geometry = std::get<CompoundShape>(inner.get_shape()->m_geometry);
+      if(auto result = refresh_compound(document, inner, geometry)) {
+        return *result;
       }
-      operands.push_back(transform(get_outline(
-        document, *child, *child->get_shape()), child->m_header.m_transform));
-    }
-    if(operands.empty()) {
+      return *geometry.m_path;
+    };
+    auto result = combine_operands(
+      document.get_nodes(), node, COMPOUND_TOLERANCE, nested);
+    if(!result) {
       return std::nullopt;
     }
-    auto result = combine(
-      operands, to_operation(compound.m_operation), COMPOUND_TOLERANCE);
     auto& stored = *compound.m_path;
     auto difference = get_area(
-      combine(result, stored, BooleanOperation::EXCLUDE, COMPOUND_TOLERANCE));
+      combine(*result, stored, BooleanOperation::EXCLUDE, COMPOUND_TOLERANCE));
     auto total = get_area(
-      combine(result, stored, BooleanOperation::ADD, COMPOUND_TOLERANCE));
+      combine(*result, stored, BooleanOperation::ADD, COMPOUND_TOLERANCE));
     if(difference <= std::max(0.01 * total, 0.5)) {
       return std::nullopt;
     }

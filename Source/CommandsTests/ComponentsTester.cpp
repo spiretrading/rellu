@@ -1,5 +1,10 @@
 #include <algorithm>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 #include <doctest/doctest.h>
+#include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
@@ -60,6 +65,23 @@ namespace {
     document.clear_history();
     return nested;
   }
+
+  class ReplaceHeaderCommand : public Command {
+    public:
+      explicit ReplaceHeaderCommand(NodeHeader header)
+        : m_header(std::move(header)) {}
+
+      std::string get_label() const override {
+        return "Replace Header";
+      }
+
+      void apply(const Document&, Transaction& transaction) override {
+        transaction.replace_header(m_header);
+      }
+
+    private:
+      NodeHeader m_header;
+  };
 }
 
 TEST_SUITE("Components") {
@@ -180,6 +202,139 @@ TEST_SUITE("Components") {
     REQUIRE(document.get(reference).m_header.m_opacity == 0.25);
     REQUIRE(history.undo());
     REQUIRE(document.get(reference).get_reference());
+  }
+
+  TEST_CASE("rendered_header") {
+    auto document = Document();
+    auto nested = build_nested(document);
+    auto reference = document.get(nested.m_instance).m_children.front();
+    REQUIRE(find_rendered_header(document, reference) ==
+      &document.get(nested.m_frame).m_header);
+    REQUIRE(find_rendered_header(document, nested.m_frame) ==
+      &document.get(nested.m_frame).m_header);
+    REQUIRE(!find_rendered_header(document, generate_node_id()));
+  }
+
+  TEST_CASE("edit_rendered_header") {
+    auto document = Document();
+    auto nested = build_nested(document);
+    auto reference = document.get(nested.m_instance).m_children.back();
+    {
+      auto transaction = Transaction(document);
+      REQUIRE(!edit_rendered_header(document, transaction, reference,
+        [] (const auto& node, auto& header) {
+          REQUIRE(get_instance_role(node));
+          header.m_is_visible = true;
+        }));
+      transaction.commit();
+    }
+    REQUIRE(document.get(reference).get_reference());
+    {
+      auto transaction = Transaction(document);
+      REQUIRE(edit_rendered_header(document, transaction, reference,
+        [] (const auto&, auto& header) { header.m_is_visible = false; }));
+      transaction.commit();
+    }
+    auto& node = document.get(reference);
+    REQUIRE(!node.m_header.m_is_visible);
+    REQUIRE(node.m_header.m_name == "Icon");
+    REQUIRE(get_instance_role(node));
+    REQUIRE(document.get(node.m_children.front()).get_reference());
+    {
+      auto transaction = Transaction(document);
+      REQUIRE(edit_rendered_header(document, transaction, nested.m_frame,
+        [] (const auto&, auto& header) { header.m_opacity = 0.5; }));
+      transaction.commit();
+    }
+    REQUIRE(document.get(nested.m_frame).m_header.m_opacity == 0.5);
+  }
+
+  TEST_CASE("reference_header") {
+    auto document = Document();
+    auto nested = build_nested(document);
+    auto history = History(document);
+    auto reference = document.get(nested.m_instance).m_children.back();
+    REQUIRE(!history.execute(std::make_unique<SetVisibilityCommand>(
+      std::vector{reference}, true)));
+    REQUIRE(history.execute(std::make_unique<SetVisibilityCommand>(
+      std::vector{reference}, false)));
+    auto& node = document.get(reference);
+    REQUIRE(!node.get_reference());
+    REQUIRE(!node.m_header.m_is_visible);
+    REQUIRE(document.get(node.m_children.front()).get_reference());
+    auto& role = *get_instance_role(document.get(nested.m_instance));
+    REQUIRE(role.m_overrides.m_properties.at(reference) ==
+      std::vector<std::string>{"visible"});
+    REQUIRE(get_instance_role(node)->m_overrides.m_properties.at(reference) ==
+      std::vector<std::string>{"visible"});
+    REQUIRE(history.execute(
+      std::make_unique<RenameCommand>(reference, "Badge")));
+    REQUIRE(get_instance_role(document.get(nested.m_instance))->m_overrides.
+      m_properties.at(reference) == std::vector<std::string>{"visible",
+        "isCustomNameInherited", "name"});
+    REQUIRE(history.undo());
+    REQUIRE(history.undo());
+    REQUIRE(document.get(reference).get_reference());
+  }
+
+  TEST_CASE("adopted_header") {
+    auto document = Document();
+    auto nested = build_nested(document);
+    auto history = History(document);
+    auto reference = document.get(nested.m_instance).m_children.front();
+    auto header = document.get(reference).m_header;
+    header.m_is_locked = true;
+    REQUIRE(history.execute(std::make_unique<ReplaceHeaderCommand>(header)));
+    auto& node = document.get(reference);
+    REQUIRE(!node.get_reference());
+    REQUIRE(node.m_header.m_is_locked);
+    REQUIRE(node.m_header.m_name == "Frame");
+    REQUIRE(get_instance_role(document.get(nested.m_instance))->
+      m_overrides.m_properties.at(reference) ==
+        std::vector<std::string>{"locked"});
+  }
+
+  TEST_CASE("toggle_reference") {
+    auto document = Document();
+    auto nested = build_nested(document);
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(nested.m_frame).m_header;
+      header.m_is_visible = false;
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    auto history = History(document);
+    auto registry = CommandRegistry();
+    add_standard_commands(registry);
+    auto reference = document.get(nested.m_instance).m_children.front();
+    REQUIRE(history.execute(registry.make(
+      "object.toggle_visibility", document, std::vector{reference})));
+    REQUIRE(find_rendered_header(document, reference)->m_is_visible);
+    REQUIRE(!document.get(nested.m_frame).m_header.m_is_visible);
+  }
+
+  TEST_CASE("nested_reference_header") {
+    auto document = Document();
+    auto nested = build_nested(document);
+    auto icon = document.get(nested.m_instance).m_children.back();
+    {
+      auto transaction = Transaction(document);
+      materialize_reference(document, transaction, icon);
+      transaction.commit();
+    }
+    auto history = History(document);
+    auto glyph = document.get(icon).m_children.front();
+    REQUIRE(document.get(glyph).get_reference());
+    REQUIRE(history.execute(
+      std::make_unique<SetOpacityCommand>(std::vector{glyph}, 0.25)));
+    REQUIRE(!document.get(glyph).get_reference());
+    REQUIRE(document.get(glyph).m_header.m_opacity == 0.25);
+    REQUIRE(get_instance_role(document.get(icon))->m_overrides.m_properties.
+      at(glyph) == std::vector<std::string>{"opacity"});
+    REQUIRE(get_instance_role(document.get(nested.m_instance))->m_overrides.
+      m_properties.at(glyph) == std::vector<std::string>{"opacity"});
+    REQUIRE(document.get(nested.m_icon_shape).m_header.m_opacity == 1);
   }
 
   TEST_CASE("nested_propagation") {

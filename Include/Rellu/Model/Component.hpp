@@ -25,6 +25,13 @@ namespace Rellu {
     /** The names of the overridden properties, by node id. */
     std::map<NodeId, std::vector<std::string>> m_properties;
 
+    /**
+     * The group recording each added, removed or reordered node, by the
+     * node's id, for the nodes Adobe XD records on a group within the
+     * instance or state rather than on its root.
+     */
+    std::map<NodeId, NodeId> m_owners;
+
     bool operator ==(const Overrides&) const = default;
   };
 
@@ -45,6 +52,9 @@ namespace Rellu {
 
     /** How the state differs from the master. */
     Overrides m_overrides;
+
+    /** The size of the state's content. */
+    Size m_size = Size(0, 0);
 
     bool operator ==(const ComponentState&) const = default;
   };

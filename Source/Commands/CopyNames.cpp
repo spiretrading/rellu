@@ -10,6 +10,7 @@
 #include "Rellu/Commands/CreationCommands.hpp"
 #include "Rellu/Commands/PathCommands.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
+#include "Rellu/Localization/Localization.hpp"
 
 using namespace Rellu;
 
@@ -54,32 +55,42 @@ namespace {
       !group.m_component_instance;
   }
 
-  std::vector<std::string> get_prefixes(const Node& node) {
+  std::vector<std::string> get_kinds(const Node& node) {
     if(auto shape = node.get_shape()) {
       auto& geometry = shape->m_geometry;
       if(std::holds_alternative<RectangleShape>(geometry)) {
-        return {"Rectangle ", "Image "};
+        return {"Rectangle", "Image"};
       } else if(std::holds_alternative<EllipseShape>(geometry)) {
-        return {"Ellipse "};
+        return {"Ellipse"};
       } else if(std::holds_alternative<PolygonShape>(geometry)) {
-        return {"Polygon "};
+        return {"Polygon"};
       } else if(std::holds_alternative<LineShape>(geometry)) {
-        return {"Line "};
+        return {"Line"};
       } else if(auto compound = std::get_if<CompoundShape>(&geometry)) {
-        return {get_name_prefix(compound->m_operation)};
+        auto prefix = get_name_prefix(compound->m_operation);
+        prefix.pop_back();
+        return {prefix};
       }
-      return {"Path "};
+      return {"Path"};
     } else if(auto group = node.get_group()) {
       if(group->m_repeat_grid) {
-        return {"Repeat Grid "};
+        return {"Repeat Grid"};
       } else if(group->m_scroll_group) {
-        return {"Scroll Group "};
+        return {"Scroll Group"};
       } else if(group->m_mask) {
-        return {"Mask Group "};
+        return {"Mask Group"};
       }
-      return {"Group "};
+      return {"Group"};
     }
     return {};
+  }
+
+  bool is_numbered_kind(std::string_view name, std::string_view kind) {
+    return std::any_of(LANGUAGES.begin(), LANGUAGES.end(),
+      [&] (const auto& language) {
+        return is_numbered(name,
+          std::string(localize("name", kind, language)) + ' ');
+      });
   }
 
   bool has_custom_name(const Node& node) {
@@ -91,24 +102,25 @@ namespace {
     } else if(auto text = node.get_text()) {
       return name != make_text_name(*text->m_content);
     }
-    auto prefixes = get_prefixes(node);
-    return std::none_of(prefixes.begin(), prefixes.end(),
-      [&] (const auto& prefix) { return is_numbered(name, prefix); });
+    auto kinds = get_kinds(node);
+    return std::none_of(kinds.begin(), kinds.end(),
+      [&] (const auto& kind) { return is_numbered_kind(name, kind); });
   }
 
   std::string make_name(const Document& document, const Node& node) {
     if(auto text = node.get_text()) {
       return make_text_name(*text->m_content);
     }
-    auto prefixes = get_prefixes(node);
-    auto prefix = std::find_if(prefixes.begin(), prefixes.end(),
-      [&] (const auto& prefix) {
-        return is_numbered(node.m_header.m_name, prefix);
+    auto kinds = get_kinds(node);
+    auto kind = std::find_if(kinds.begin(), kinds.end(),
+      [&] (const auto& kind) {
+        return is_numbered_kind(node.m_header.m_name, kind);
       });
-    if(prefix == prefixes.end()) {
-      prefix = prefixes.begin();
+    if(kind == kinds.end()) {
+      kind = kinds.begin();
     }
-    return make_node_name(document, *prefix);
+    return make_node_name(
+      document, std::string(localize("name", *kind)) + ' ');
   }
 
   std::string make_instance_copy_name(

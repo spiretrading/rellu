@@ -8,6 +8,7 @@
 #include <QClipboard>
 #include <QComboBox>
 #include <QContextMenuEvent>
+#include <QCursor>
 #include <QDrag>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -27,7 +28,9 @@
 #include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/StyleCommands.hpp"
+#include "Rellu/Ui/AssetMoveDialog.hpp"
 #include "Rellu/Ui/AssetsPanel.hpp"
+#include "Rellu/Ui/Translation.hpp"
 #include "Colors.hpp"
 #include "Icons.hpp"
 
@@ -146,8 +149,8 @@ namespace {
     button->setIcon(get_icon(glyph));
     button->setIconSize(QSize(16, 16));
     button->setFixedSize(24, 24);
-    button->setToolTip(tip);
-    button->setAccessibleName(tip);
+    button->setToolTip(translate("assets", tip));
+    button->setAccessibleName(translate("assets", tip));
     return button;
   }
 
@@ -307,19 +310,19 @@ class AssetsPanel::StyleEditor : public QFrame {
       m_family->setObjectName("underlined_choice");
       m_family->setEditable(true);
       m_family->addItems(families);
-      m_family->setAccessibleName("Font");
+      m_family->setAccessibleName(translate("assets", "Font"));
       layout->addWidget(m_family);
       auto row = new QWidget();
       auto row_layout = new QHBoxLayout(row);
       row_layout->setContentsMargins(0, 0, 0, 0);
       row_layout->setSpacing(14);
       m_size->setObjectName("number_field");
-      m_size->setAccessibleName("Font Size");
+      m_size->setAccessibleName(translate("assets", "Font Size"));
       m_size->setFixedWidth(48);
       row_layout->addWidget(m_size);
       m_font_style->setObjectName("underlined_choice");
       m_font_style->setEditable(true);
-      m_font_style->setAccessibleName("Font Style");
+      m_font_style->setAccessibleName(translate("assets", "Font Style"));
       row_layout->addWidget(m_font_style, 1);
       layout->addWidget(row);
       auto spacing = new QWidget();
@@ -336,7 +339,7 @@ class AssetsPanel::StyleEditor : public QFrame {
         icon->setPixmap(get_icon(glyph).pixmap(QSize(18, 18)));
         spacing_layout->addWidget(icon);
         field->setObjectName("number_field");
-        field->setAccessibleName(name);
+        field->setAccessibleName(translate("assets", name));
         spacing_layout->addWidget(field, 1);
       }
       layout->addWidget(spacing);
@@ -346,7 +349,7 @@ class AssetsPanel::StyleEditor : public QFrame {
           commit();
         });
       }
-      m_line_height->setPlaceholderText("Auto");
+      m_line_height->setPlaceholderText(translate("assets", "Auto"));
       auto toggles = new QWidget();
       auto toggles_layout = new QHBoxLayout(toggles);
       toggles_layout->setContentsMargins(0, 0, 0, 0);
@@ -391,7 +394,7 @@ class AssetsPanel::StyleEditor : public QFrame {
       toggles_layout->addStretch(1);
       layout->addWidget(toggles);
       m_color->setObjectName("swatch");
-      m_color->setAccessibleName("Color");
+      m_color->setAccessibleName(translate("assets", "Color"));
       m_color->setFocusPolicy(Qt::NoFocus);
       m_color->setAutoRaise(true);
       m_color->setIconSize(QSize(30, 18));
@@ -476,8 +479,8 @@ class AssetsPanel::StyleEditor : public QFrame {
       button->setIcon(get_icon(glyph));
       button->setIconSize(QSize(18, 18));
       button->setFixedSize(26, 26);
-      button->setToolTip(name);
-      button->setAccessibleName(name);
+      button->setToolTip(translate("assets", name));
+      button->setAccessibleName(translate("assets", name));
       return button;
     }
 
@@ -633,7 +636,7 @@ AssetsPanel::AssetsPanel(QWidget* parent)
   auto back = make_tool_button(Glyph::CHEVRON_LEFT, "Back");
   back->setEnabled(false);
   header_layout->addWidget(back);
-  auto title = new QLabel("DOCUMENT ASSETS");
+  auto title = new QLabel(translate("assets", "DOCUMENT ASSETS"));
   title->setObjectName("panel_heading");
   header_layout->addWidget(title, 1);
   auto share = make_tool_button(Glyph::SHARE, "Share");
@@ -646,7 +649,7 @@ AssetsPanel::AssetsPanel(QWidget* parent)
   search_layout->setSpacing(4);
   auto field = new QLineEdit();
   field->setObjectName("search_field");
-  field->setPlaceholderText("Search document assets");
+  field->setPlaceholderText(translate("assets", "Search document assets"));
   field->addAction(get_icon(Glyph::SEARCH), QLineEdit::LeadingPosition);
   field->setEnabled(false);
   search_layout->addWidget(field, 1);
@@ -761,31 +764,14 @@ QMenu* AssetsPanel::make_component_menu(
     const ComponentId& component, QWidget* parent) {
   auto menu = new QMenu(parent);
   auto linked = m_document && is_linked(*m_document, component);
-  auto edit = menu->addAction("Edit Main Component");
+  auto edit = menu->addAction(translate("assets", "Edit Main Component"));
   edit->setEnabled(static_cast<bool>(m_main_component_handler) && !linked);
   QObject::connect(edit, &QAction::triggered, this, [this, component] {
     if(m_main_component_handler) {
       m_main_component_handler(component);
     }
   });
-  auto swap = menu->addAction("Swap Component");
-  auto is_swappable = false;
-  if(m_editor) {
-    auto& document = m_editor->get_document();
-    for(auto& id : m_editor->get_selection().get_nodes()) {
-      if(auto node = document.find(id)) {
-        if(auto role = get_instance_role(*node); role && !role->m_is_main &&
-            role->m_component != component) {
-          is_swappable = true;
-        }
-      }
-    }
-  }
-  swap->setEnabled(is_swappable);
-  QObject::connect(swap, &QAction::triggered, this, [this, component] {
-    swap_component(component);
-  });
-  auto rename = menu->addAction("Rename");
+  auto rename = menu->addAction(translate("assets", "Rename"));
   rename->setEnabled(m_editor && !linked);
   QObject::connect(rename, &QAction::triggered, this, [this, component] {
     auto row = m_component_rows.find(component);
@@ -824,18 +810,6 @@ bool AssetsPanel::rename_component(
   try {
     return m_editor->execute(std::make_unique<RenameComponentCommand>(
       component, name.trimmed().toStdString())) != nullptr;
-  } catch(const std::exception&) {
-    return false;
-  }
-}
-
-bool AssetsPanel::swap_component(const ComponentId& component) {
-  if(!m_editor) {
-    return false;
-  }
-  try {
-    return m_editor->execute(std::make_unique<SwapComponentCommand>(
-      m_editor->get_selection().get_nodes(), component)) != nullptr;
   } catch(const std::exception&) {
     return false;
   }
@@ -927,14 +901,15 @@ void AssetsPanel::rebuild() {
     illustration->setPixmap(
       make_icon(Glyph::ASSETS, Colors::SECONDARY_TEXT).pixmap(72, 72));
     layout->addWidget(illustration);
-    auto message = new QLabel(
+    auto message = new QLabel(translate("assets",
       "Add your styles and components, or use elements from existing "
-      "libraries.");
+      "libraries."));
     message->setObjectName("empty_message");
     message->setAlignment(Qt::AlignCenter);
     message->setWordWrap(true);
     layout->addWidget(message);
-    auto link = new QLabel("<u>View libraries</u>");
+    auto link = new QLabel(
+      QString("<u>%1</u>").arg(translate("assets", "View libraries")));
     link->setObjectName("empty_link");
     link->setAlignment(Qt::AlignCenter);
     link->setEnabled(false);
@@ -961,20 +936,20 @@ void AssetsPanel::add_section(AssetSection section, const QString& title) {
   toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
   toggle->setIcon(get_icon(Glyph::CHEVRON_DOWN));
   toggle->setIconSize(QSize(14, 14));
-  toggle->setText(title);
+  toggle->setText(translate("assets", title));
   header_layout->addWidget(toggle, 1, Qt::AlignLeft);
   auto add = make_tool_button(Glyph::PLUS, "Add");
   add->setEnabled(false);
   if(m_editor && section == AssetSection::COLORS) {
-    add->setToolTip("Add Color");
-    add->setAccessibleName("Add Color");
+    add->setToolTip(translate("assets", "Add Color"));
+    add->setAccessibleName(add->toolTip());
     add->setEnabled(true);
     QObject::connect(add, &QToolButton::clicked, this, [this] {
       add_colors();
     });
   } else if(m_editor && section == AssetSection::CHARACTER_STYLES) {
-    add->setToolTip("Add Character Style");
-    add->setAccessibleName("Add Character Style");
+    add->setToolTip(translate("assets", "Add Character Style"));
+    add->setAccessibleName(add->toolTip());
     add->setEnabled(true);
     QObject::connect(add, &QToolButton::clicked, this, [this] {
       add_character_styles();
@@ -1260,25 +1235,25 @@ QMenu* AssetsPanel::make_swatch_menu(const SwatchId& swatch, QWidget* parent) {
       }
     }
   }
-  auto copy = menu->addAction(QString("Copy %1").arg(color));
+  auto copy = menu->addAction(translate("assets", "Copy %1").arg(color));
   QObject::connect(copy, &QAction::triggered, this, [color] {
     if(auto clipboard = QGuiApplication::clipboard()) {
       clipboard->setText(color);
     }
   });
-  auto edit = menu->addAction("Edit");
+  auto edit = menu->addAction(translate("assets", "Edit"));
   edit->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(edit, &QAction::triggered, this, [this, swatch] {
     edit_swatch(swatch);
   });
   menu->addSeparator();
-  auto highlight = menu->addAction("Highlight on canvas");
+  auto highlight = menu->addAction(translate("assets", "Highlight on canvas"));
   highlight->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(highlight, &QAction::triggered, this, [this, swatch] {
     highlight_instances(swatch);
   });
   menu->addSeparator();
-  auto group = menu->addAction("New group from element");
+  auto group = menu->addAction(translate("assets", "New group from element"));
   group->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(group, &QAction::triggered, this, [this, swatch] {
     group_assets({swatch});
@@ -1286,14 +1261,14 @@ QMenu* AssetsPanel::make_swatch_menu(const SwatchId& swatch, QWidget* parent) {
   menu->addSeparator();
   add_move_menu(*menu, "Move to...", {swatch});
   menu->addSeparator();
-  auto rename = menu->addAction("Rename");
+  auto rename = menu->addAction(translate("assets", "Rename"));
   rename->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(rename, &QAction::triggered, this, [this, swatch] {
     start_rename(swatch, [this, swatch] (const QString& name) {
       rename_swatch(swatch, name);
     });
   });
-  auto remove = menu->addAction("Delete");
+  auto remove = menu->addAction(translate("assets", "Delete"));
   remove->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(remove, &QAction::triggered, this, [this, swatch] {
     delete_swatch(swatch);
@@ -1304,22 +1279,22 @@ QMenu* AssetsPanel::make_swatch_menu(const SwatchId& swatch, QWidget* parent) {
 QMenu* AssetsPanel::make_character_style_menu(
     const CharacterStyleId& style, QWidget* parent) {
   auto menu = new QMenu(parent);
-  auto remove_font = menu->addAction("Remove font");
+  auto remove_font = menu->addAction(translate("assets", "Remove font"));
   remove_font->setEnabled(false);
   menu->addSeparator();
-  auto edit = menu->addAction("Edit");
+  auto edit = menu->addAction(translate("assets", "Edit"));
   edit->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(edit, &QAction::triggered, this, [this, style] {
     edit_character_style(style);
   });
   menu->addSeparator();
-  auto highlight = menu->addAction("Highlight on canvas");
+  auto highlight = menu->addAction(translate("assets", "Highlight on canvas"));
   highlight->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(highlight, &QAction::triggered, this, [this, style] {
     highlight_instances(style);
   });
   menu->addSeparator();
-  auto group = menu->addAction("New group from element");
+  auto group = menu->addAction(translate("assets", "New group from element"));
   group->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(group, &QAction::triggered, this, [this, style] {
     group_assets({style});
@@ -1327,14 +1302,14 @@ QMenu* AssetsPanel::make_character_style_menu(
   menu->addSeparator();
   add_move_menu(*menu, "Move to...", {style});
   menu->addSeparator();
-  auto rename = menu->addAction("Rename");
+  auto rename = menu->addAction(translate("assets", "Rename"));
   rename->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(rename, &QAction::triggered, this, [this, style] {
     start_rename(style, [this, style] (const QString& name) {
       rename_character_style(style, name);
     });
   });
-  auto remove = menu->addAction("Delete");
+  auto remove = menu->addAction(translate("assets", "Delete"));
   remove->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(remove, &QAction::triggered, this, [this, style] {
     delete_character_style(style);
@@ -1477,13 +1452,13 @@ bool AssetsPanel::highlight_instances(const NodeId& asset) {
   for(auto& swatch : resources.m_swatches) {
     if(swatch.m_id == asset) {
       instances = find_swatch_instances(document, swatch);
-      message = "0 objects use this color";
+      message = translate("assets", "0 objects use this color");
     }
   }
   for(auto& style : resources.m_character_styles) {
     if(style.m_id == asset) {
       instances = find_character_style_instances(document, style);
-      message = "0 objects use this character style";
+      message = translate("assets", "0 objects use this character style");
     }
   }
   if(instances.empty()) {
@@ -1582,7 +1557,7 @@ std::vector<QString> AssetsPanel::get_group_names(AssetSection section) const {
 QMenu* AssetsPanel::make_group_menu(
     const std::string& group, QWidget* parent) {
   auto menu = new QMenu(parent);
-  auto subgroup = menu->addAction("Create subgroup");
+  auto subgroup = menu->addAction(translate("assets", "Create subgroup"));
   subgroup->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(subgroup, &QAction::triggered, this, [this, group] {
     auto command = std::make_unique<AddAssetGroupCommand>(group);
@@ -1592,17 +1567,17 @@ QMenu* AssetsPanel::make_group_menu(
     }
   });
   menu->addSeparator();
-  auto rename = menu->addAction("Rename group");
+  auto rename = menu->addAction(translate("assets", "Rename group"));
   rename->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(rename, &QAction::triggered, this, [this, group] {
     start_group_rename(group);
   });
-  auto ungroup = menu->addAction("Ungroup");
+  auto ungroup = menu->addAction(translate("assets", "Ungroup"));
   ungroup->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(ungroup, &QAction::triggered, this, [this, group] {
     run(std::make_unique<RemoveAssetGroupCommand>(group, false));
   });
-  auto remove = menu->addAction("Delete");
+  auto remove = menu->addAction(translate("assets", "Delete"));
   remove->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(remove, &QAction::triggered, this, [this, group] {
     run(std::make_unique<RemoveAssetGroupCommand>(group, true));
@@ -1618,7 +1593,7 @@ QMenu* AssetsPanel::make_selection_menu(QWidget* parent) {
       return find_section(m_document->get_resources(), id) ==
         find_section(m_document->get_resources(), selected.front());
     });
-  auto group = menu->addAction("New group from selection");
+  auto group = menu->addAction(translate("assets", "New group from selection"));
   group->setEnabled(m_editor && is_one_section);
   QObject::connect(group, &QAction::triggered, this, [this, selected] {
     group_assets(selected);
@@ -1627,10 +1602,11 @@ QMenu* AssetsPanel::make_selection_menu(QWidget* parent) {
   if(is_one_section) {
     add_move_menu(*menu, "Move selected items to", selected);
   } else {
-    menu->addAction("Move selected items to")->setEnabled(false);
+    menu->addAction(translate("assets", "Move selected items to"))->
+      setEnabled(false);
   }
   menu->addSeparator();
-  auto remove = menu->addAction("Delete");
+  auto remove = menu->addAction(translate("assets", "Delete"));
   remove->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(remove, &QAction::triggered, this, [this, selected] {
     delete_assets(selected);
@@ -1776,52 +1752,18 @@ QMenu* AssetsPanel::make_asset_menu(const NodeId& id, QWidget* parent) {
 
 void AssetsPanel::add_move_menu(QMenu& menu, const QString& title,
     const std::vector<NodeId>& assets) {
-  auto submenu = menu.addMenu(title);
+  auto action = menu.addAction(translate("assets", title));
   if(!m_editor || !m_document || assets.empty()) {
-    submenu->setEnabled(false);
+    action->setEnabled(false);
     return;
   }
-  auto& resources = m_document->get_resources();
-  auto section = find_section(resources, assets.front());
-  auto destinations = std::vector<std::pair<std::string, QString>>();
-  destinations.emplace_back(section, section == COLOR_SECTION ?
-    QString("Colors") : QString("Character Styles"));
-  auto groups = std::vector<std::pair<std::string, QString>>();
-  for(auto& group : resources.m_asset_groups) {
-    auto root = group.m_parent;
-    for(auto depth = 0; depth != 256; ++depth) {
-      auto parent = std::find_if(resources.m_asset_groups.begin(),
-        resources.m_asset_groups.end(), [&] (const auto& candidate) {
-          return candidate.m_id == root;
-        });
-      if(parent == resources.m_asset_groups.end()) {
-        break;
-      }
-      root = parent->m_parent;
+  QObject::connect(action, &QAction::triggered, this, [this, assets] {
+    if(!m_editor) {
+      return;
     }
-    if(root == section) {
-      groups.emplace_back(group.m_id, QString::fromStdString(group.m_name));
-    }
-  }
-  std::stable_sort(groups.begin(), groups.end(),
-    [] (const auto& left, const auto& right) {
-      return left.second.localeAwareCompare(right.second) < 0;
-    });
-  destinations.insert(destinations.end(), groups.begin(), groups.end());
-  for(auto& [group, name] : destinations) {
-    auto is_in = std::all_of(assets.begin(), assets.end(),
-      [&] (const auto& asset) {
-        return find_asset_group(resources, asset) == group;
-      });
-    auto action = submenu->addAction(name);
-    action->setCheckable(true);
-    action->setChecked(is_in);
-    action->setEnabled(!is_in);
-    QObject::connect(action, &QAction::triggered, this,
-      [this, assets, group] {
-        move_assets(assets, group);
-      });
-  }
+    auto dialog = new AssetMoveDialog(*m_editor, assets, this);
+    dialog->popup(QCursor::pos());
+  });
 }
 
 void AssetsPanel::start_group_rename(const std::string& group) {

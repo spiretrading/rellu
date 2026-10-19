@@ -242,6 +242,12 @@ namespace Rellu {
      */
     std::vector<std::u16string> m_repeat_data;
 
+    /**
+     * Whether the text is drawn mirrored top to bottom within its bounds,
+     * as Adobe XD draws text flipped vertically.
+     */
+    bool m_is_flipped_vertically = false;
+
     bool operator ==(const Text&) const = default;
   };
 

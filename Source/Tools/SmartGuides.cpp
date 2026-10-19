@@ -17,6 +17,7 @@ namespace {
   constexpr auto OBJECTS_PER_BIN = std::size_t(4);
   constexpr auto MAXIMUM_BINS = std::size_t(4096);
   constexpr auto MINIMUM_WIDE_BINS = std::size_t(4);
+  constexpr auto DASH_LENGTH = 2.0;
 
   struct Interval {
     double m_start;
@@ -121,6 +122,243 @@ namespace {
       }
     }
     return Interval(0, 0);
+  }
+
+  enum class Cardinal : unsigned char {
+    NW,
+    N,
+    NE,
+    E,
+    SE,
+    S,
+    SW,
+    W
+  };
+
+  struct Measurement {
+    Rect m_bounds;
+    Cardinal m_start;
+    Cardinal m_direction;
+    double m_length;
+    std::optional<Cardinal> m_projection;
+    double m_projection_length = 0;
+  };
+
+  Point get_point(const Rect& bounds, Cardinal cardinal) {
+    auto center = bounds.get_center();
+    switch(cardinal) {
+      case Cardinal::NW:
+        return bounds.get_top_left();
+      case Cardinal::N:
+        return Point(center.m_x, bounds.get_top());
+      case Cardinal::NE:
+        return Point(bounds.get_right(), bounds.get_top());
+      case Cardinal::E:
+        return Point(bounds.get_right(), center.m_y);
+      case Cardinal::SE:
+        return Point(bounds.get_right(), bounds.get_bottom());
+      case Cardinal::S:
+        return Point(center.m_x, bounds.get_bottom());
+      case Cardinal::SW:
+        return Point(bounds.get_left(), bounds.get_bottom());
+      default:
+        return Point(bounds.get_left(), center.m_y);
+    }
+  }
+
+  Point get_direction(Cardinal cardinal) {
+    if(cardinal == Cardinal::N) {
+      return Point(0, -1);
+    } else if(cardinal == Cardinal::E) {
+      return Point(1, 0);
+    } else if(cardinal == Cardinal::S) {
+      return Point(0, 1);
+    }
+    return Point(-1, 0);
+  }
+
+  LabelSide get_side(const Measurement& measurement) {
+    auto start = measurement.m_start;
+    if(measurement.m_direction == Cardinal::N ||
+        measurement.m_direction == Cardinal::S) {
+      if(start == Cardinal::NE || start == Cardinal::SE) {
+        return LabelSide::TRAILING;
+      }
+      return LabelSide::LEADING;
+    }
+    if(start == Cardinal::SW || start == Cardinal::SE) {
+      return LabelSide::TRAILING;
+    }
+    return LabelSide::LEADING;
+  }
+
+  bool contains(const Rect& outer, const Rect& inner) {
+    return inner.get_left() >= outer.get_left() &&
+      inner.get_right() <= outer.get_right() &&
+      inner.get_top() >= outer.get_top() &&
+      inner.get_bottom() <= outer.get_bottom();
+  }
+
+  std::vector<Measurement> measure_inner(const Rect& inner, const Rect& outer) {
+    if(inner == outer) {
+      return {};
+    }
+    return {
+      Measurement(inner, Cardinal::N, Cardinal::N,
+        inner.get_top() - outer.get_top()),
+      Measurement(inner, Cardinal::E, Cardinal::E,
+        outer.get_right() - inner.get_right()),
+      Measurement(inner, Cardinal::S, Cardinal::S,
+        outer.get_bottom() - inner.get_bottom()),
+      Measurement(inner, Cardinal::W, Cardinal::W,
+        inner.get_left() - outer.get_left())};
+  }
+
+  std::vector<Measurement> measure_corners(
+      const Rect& selection, const Rect& target) {
+    auto measurements = std::vector<Measurement>();
+    auto all = unite(selection, target);
+    auto corners = std::vector<Point>();
+    for(auto& rect : {selection, target}) {
+      for(auto cardinal : {Cardinal::NW, Cardinal::NE, Cardinal::SE,
+          Cardinal::SW}) {
+        corners.push_back(get_point(rect, cardinal));
+      }
+    }
+    for(auto cardinal : {Cardinal::NW, Cardinal::NE, Cardinal::SE,
+        Cardinal::SW}) {
+      auto corner = get_point(all, cardinal);
+      if(std::find(corners.begin(), corners.end(), corner) != corners.end()) {
+        continue;
+      }
+      auto is_upper = selection.get_top() < target.get_top();
+      auto& upper = is_upper ? selection : target;
+      auto& lower = is_upper ? target : selection;
+      auto is_deeper = selection.get_bottom() > target.get_bottom();
+      auto& deeper = is_deeper ? selection : target;
+      auto& shallower = is_deeper ? target : selection;
+      if(cardinal == Cardinal::NW) {
+        measurements.push_back(Measurement(upper, cardinal, Cardinal::W,
+          upper.get_left() - corner.m_x));
+        measurements.push_back(Measurement(lower, cardinal, Cardinal::N,
+          lower.get_top() - corner.m_y));
+      } else if(cardinal == Cardinal::NE) {
+        measurements.push_back(Measurement(upper, cardinal, Cardinal::E,
+          corner.m_x - upper.get_right()));
+        measurements.push_back(Measurement(lower, cardinal, Cardinal::N,
+          lower.get_top() - corner.m_y));
+      } else if(cardinal == Cardinal::SE) {
+        measurements.push_back(Measurement(deeper, cardinal, Cardinal::E,
+          corner.m_x - deeper.get_right()));
+        measurements.push_back(Measurement(shallower, cardinal, Cardinal::S,
+          corner.m_y - shallower.get_bottom()));
+      } else {
+        measurements.push_back(Measurement(deeper, cardinal, Cardinal::W,
+          deeper.get_left() - corner.m_x));
+        measurements.push_back(Measurement(shallower, cardinal, Cardinal::S,
+          corner.m_y - shallower.get_bottom()));
+      }
+    }
+    return measurements;
+  }
+
+  Measurement measure_across(
+      const Rect& selection, const Rect& target, bool is_vertical) {
+    auto along = [&] (const Rect& rect) {
+      return is_vertical ? get_along(rect, false) : get_along(rect, true);
+    };
+    auto across = [&] (const Rect& rect) {
+      return is_vertical ? get_along(rect, true) : get_along(rect, false);
+    };
+    auto before = is_vertical ? Cardinal::N : Cardinal::W;
+    auto after = is_vertical ? Cardinal::S : Cardinal::E;
+    auto measurement = Measurement(selection, before, before, 0);
+    auto from = along(selection);
+    auto to = along(target);
+    if(is_vertical ? from.m_end <= to.m_start : from.m_end < to.m_start) {
+      measurement.m_direction = after;
+      measurement.m_length = to.m_start - from.m_end;
+    } else {
+      measurement.m_length = from.m_start - to.m_end;
+    }
+    auto from_across = across(selection);
+    auto to_across = across(target);
+    auto from_center = get_middle(from_across);
+    auto to_center = get_middle(to_across);
+    if(from_center >= to_across.m_start && from_center <= to_across.m_end) {
+      measurement.m_start = measurement.m_direction;
+    } else if(to_center >= from_across.m_start &&
+        to_center <= from_across.m_end) {
+      measurement.m_bounds = target;
+      measurement.m_direction =
+        measurement.m_direction == before ? after : before;
+      measurement.m_start = measurement.m_direction;
+    } else {
+      auto is_lower = to_across.m_start < from_across.m_start;
+      if(is_vertical) {
+        if(measurement.m_direction == Cardinal::N) {
+          measurement.m_start = is_lower ? Cardinal::NW : Cardinal::NE;
+        } else {
+          measurement.m_start = is_lower ? Cardinal::SW : Cardinal::SE;
+        }
+      } else if(measurement.m_direction == Cardinal::W) {
+        measurement.m_start = is_lower ? Cardinal::NW : Cardinal::SW;
+      } else {
+        measurement.m_start = is_lower ? Cardinal::NE : Cardinal::SE;
+      }
+    }
+    return measurement;
+  }
+
+  std::vector<Measurement> measure_apart(
+      const Rect& selection, const Rect& target) {
+    auto center = selection.get_center();
+    auto horizontal = Measurement(selection, Cardinal::W, Cardinal::W,
+      selection.get_left() - target.get_right());
+    if(selection.get_right() < target.get_left()) {
+      horizontal.m_start = Cardinal::E;
+      horizontal.m_direction = Cardinal::E;
+      horizontal.m_length = target.get_left() - selection.get_right();
+    }
+    auto vertical = Measurement(selection, Cardinal::S, Cardinal::S,
+      target.get_top() - selection.get_bottom());
+    if(target.get_bottom() < selection.get_top()) {
+      vertical.m_start = Cardinal::N;
+      vertical.m_direction = Cardinal::N;
+      vertical.m_length = selection.get_top() - target.get_bottom();
+    }
+    horizontal.m_projection = vertical.m_direction;
+    horizontal.m_projection_length =
+      vertical.m_length + (center.m_y - selection.get_top());
+    vertical.m_projection = horizontal.m_direction;
+    vertical.m_projection_length =
+      horizontal.m_length + (center.m_x - selection.get_left());
+    return {horizontal, vertical};
+  }
+
+  std::vector<Measurement> measure_selection(
+      const Rect& selection, const Rect& target) {
+    auto is_overlapping_x =
+      std::max(selection.get_left(), target.get_left()) <=
+        std::min(selection.get_right(), target.get_right());
+    auto is_overlapping_y =
+      std::max(selection.get_top(), target.get_top()) <=
+        std::min(selection.get_bottom(), target.get_bottom());
+    if(contains(selection, target)) {
+      return measure_inner(target, selection);
+    } else if(contains(target, selection)) {
+      return measure_inner(selection, target);
+    } else if(selection.get_left() < target.get_right() &&
+        selection.get_right() > target.get_left() &&
+        selection.get_top() < target.get_bottom() &&
+        selection.get_bottom() > target.get_top()) {
+      return measure_corners(selection, target);
+    } else if(is_overlapping_x) {
+      return {measure_across(selection, target, true)};
+    } else if(is_overlapping_y) {
+      return {measure_across(selection, target, false)};
+    }
+    return measure_apart(selection, target);
   }
 
   QColor to_qcolor(Color color) {
@@ -277,33 +515,20 @@ void SmartGuides::measure(
             std::max(from_across.m_end, to_across.m_end))));
       }
     }
-    auto is_overlapping = from_across.m_start <= to_across.m_end &&
-      to_across.m_start <= from_across.m_end;
-    auto across = get_middle(from_across, to_across);
-    auto add = [&] (double start, double end, double edge) {
-      if(!(end - start > TOLERANCE)) {
-        return;
-      }
-      m_measured_distances.push_back(GuideDistance(
-        make_point(is_x, start, across), make_point(is_x, end, across)));
-      if(!is_overlapping) {
-        auto bound = to_across.m_start;
-        if(across > to_across.m_end) {
-          bound = to_across.m_end;
-        }
-        m_measured_lines.push_back(GuideLine(
-          make_point(is_x, edge, bound), make_point(is_x, edge, across)));
-      }
-    };
-    if(from.m_end <= to.m_start) {
-      add(from.m_end, to.m_start, to.m_start);
-    } else if(to.m_end <= from.m_start) {
-      add(to.m_end, from.m_start, to.m_end);
-    } else if(is_overlapping) {
-      add(std::min(from.m_start, to.m_start),
-        std::max(from.m_start, to.m_start), to.m_start);
-      add(std::min(from.m_end, to.m_end), std::max(from.m_end, to.m_end),
-        to.m_end);
+  }
+  for(auto& measurement : measure_selection(*selection, target)) {
+    if(!(measurement.m_length > TOLERANCE)) {
+      continue;
+    }
+    auto start = get_point(measurement.m_bounds, measurement.m_start);
+    auto end = start +
+      get_direction(measurement.m_direction) * measurement.m_length;
+    m_measured_distances.push_back(
+      GuideDistance(start, end, get_side(measurement)));
+    if(measurement.m_projection && measurement.m_projection_length > 0) {
+      m_measured_lines.push_back(GuideLine(end, end +
+        get_direction(*measurement.m_projection) *
+          measurement.m_projection_length));
     }
   }
 }
@@ -314,7 +539,15 @@ void SmartGuides::draw(const Matrix& view, CanvasOverlay& overlay) const {
     draw_line(view, line, ALIGNMENT_COLOR, overlay);
   }
   for(auto& line : m_measured_lines) {
-    draw_line(view, line, DISTANCE_COLOR, overlay);
+    auto start = view.map(line.m_start);
+    auto end = view.map(line.m_end);
+    auto length = distance(start, end);
+    for(auto offset = 0.0; offset < length; offset += 2 * DASH_LENGTH) {
+      overlay.m_shapes.push_back(make_overlay_line(
+        interpolate(start, end, offset / length), interpolate(start, end,
+          std::min(offset + DASH_LENGTH, length) / length), LINE_WIDTH,
+        DISTANCE_COLOR));
+    }
   }
   for(auto& line : m_measured_edges) {
     draw_line(view, line, ALIGNMENT_COLOR, overlay);
@@ -487,7 +720,9 @@ void SmartGuides::add_artboard(const NodeId& id) {
   auto& frame = artboard->m_frame;
   add_target(frame, true, false);
   for(auto& guide : artboard->m_guides) {
-    if(guide.m_orientation == Orientation::HORIZONTAL) {
+    if(!m_context->get_guide_settings().m_is_visible) {
+      break;
+    } else if(guide.m_orientation == Orientation::HORIZONTAL) {
       add_line(false, frame.m_y + guide.m_position);
     } else {
       add_line(true, frame.m_x + guide.m_position);
@@ -766,9 +1001,24 @@ void SmartGuides::draw_distance(const Matrix& view,
   }
   auto label = get_label(format_distance(distance.get_length()), scale);
   auto size = Point(label->width(), label->height()) / scale;
-  auto center = interpolate(start, end, 0.5);
+  auto bounds = m_context->get_size();
+  auto clamp = [&] (Point point) {
+    if(!(bounds.m_width > 0) || !(bounds.m_height > 0)) {
+      return point;
+    }
+    return Point(std::clamp(point.m_x, 0.0, bounds.m_width),
+      std::clamp(point.m_y, 0.0, bounds.m_height));
+  };
+  auto center = interpolate(clamp(start), clamp(end), 0.5);
+  auto is_trailing = distance.m_side == LabelSide::TRAILING;
   if(std::abs(end.m_x - start.m_x) >= std::abs(end.m_y - start.m_y)) {
-    center.m_y -= LABEL_OFFSET + FONT_ASCENT / 2;
+    if(is_trailing) {
+      center.m_y += LABEL_OFFSET + FONT_ASCENT / 2;
+    } else {
+      center.m_y -= LABEL_OFFSET + FONT_ASCENT / 2;
+    }
+  } else if(is_trailing) {
+    center.m_x += LABEL_OFFSET + size.m_x / 2 - LABEL_PADDING;
   } else {
     center.m_x -= LABEL_OFFSET + size.m_x / 2 - LABEL_PADDING;
   }
@@ -776,12 +1026,20 @@ void SmartGuides::draw_distance(const Matrix& view,
 }
 
 std::string Rellu::format_distance(double distance) {
-  auto text = std::format("{:.2f}", std::abs(distance));
-  while(text.back() == '0') {
-    text.pop_back();
+  auto value = std::abs(distance);
+  if(value != std::floor(value)) {
+    value = std::floor(value * 10 + 0.5) / 10;
   }
-  if(text.back() == '.') {
-    text.pop_back();
+  auto text = std::format("{:.1f}", value);
+  if(text.ends_with(".0")) {
+    text.resize(text.size() - 2);
+  }
+  auto point = text.find('.');
+  if(point == std::string::npos) {
+    point = text.size();
+  }
+  for(auto i = point; i > 3; i -= 3) {
+    text.insert(i - 3, 1, ',');
   }
   return text;
 }

@@ -221,6 +221,27 @@ TEST_SUITE("Shapes") {
     REQUIRE(make_polygon_vertices(2, bounds).empty());
   }
 
+  TEST_CASE("star") {
+    auto square = make_polygon_vertices(4, Rect(0, 0, 8, 8), 50);
+    REQUIRE(square.size() == 8);
+    REQUIRE(is_near(square[0], Point(8, 0)));
+    REQUIRE(is_near(square[1], Point(6, 4)));
+    REQUIRE(is_near(square[2], Point(8, 8)));
+    REQUIRE(is_near(square[3], Point(4, 6)));
+    REQUIRE(is_near(square[7], Point(4, 2)));
+    REQUIRE(make_polygon_vertices(4, Rect(0, 0, 8, 8), 100) ==
+      make_polygon_vertices(4, Rect(0, 0, 8, 8)));
+    auto ratio = 100 * std::cos(2 * std::numbers::pi / 5) /
+      std::cos(std::numbers::pi / 5) / std::cos(std::numbers::pi / 5);
+    auto pentagram = make_polygon_vertices(5, Rect(0, 0, 30, 20), ratio);
+    REQUIRE(pentagram.size() == 10);
+    auto corner = pentagram[4] - pentagram[0];
+    auto inner = pentagram[1] - pentagram[0];
+    REQUIRE(std::abs(cross(corner, inner)) < 1e-9);
+    auto bounds = Rect(1, 2, 30, 40);
+    REQUIRE(is_near(get_bounds(make_polygon(5, bounds, 0, 40)), bounds));
+  }
+
   TEST_CASE("xd_hexagon") {
     auto vertices = make_polygon_vertices(6, Rect(0, 0, 80, 80));
     REQUIRE(vertices.size() == 6);

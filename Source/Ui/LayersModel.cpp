@@ -5,8 +5,10 @@
 #include <QColor>
 #include <QFont>
 #include <QRegularExpression>
+#include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Ui/LayersModel.hpp"
 #include "Rellu/Ui/NodeDescription.hpp"
+#include "Rellu/Ui/Translation.hpp"
 #include "Icons.hpp"
 
 using namespace Rellu;
@@ -198,9 +200,9 @@ QVariant LayersModel::data(const QModelIndex& index, int role) const {
       return get_layer_icon(*displayed, is_reference);
     } else if(role == Qt::ToolTipRole) {
       auto type = displayed ? get_type_name(*displayed) :
-        QString("Unresolved reference");
+        translate("layers", "Unresolved reference");
       if(is_reference && displayed) {
-        return QString("%1 (reference)").arg(type);
+        return translate("layers", "%1 (reference)").arg(type);
       }
       return type;
     } else if(role == Qt::FontRole && is_reference) {
@@ -211,16 +213,18 @@ QVariant LayersModel::data(const QModelIndex& index, int role) const {
       return QColor(0x9A, 0x9F, 0xA6);
     }
   } else if(index.column() == VISIBILITY) {
-    if(role == Qt::DecorationRole) {
+    if(is_inside_compound(*m_document, node->get_id())) {
+      return QVariant();
+    } else if(role == Qt::DecorationRole) {
       return get_visibility_icon(header->m_is_visible);
     } else if(role == Qt::ToolTipRole) {
-      return QString(header->m_is_visible ? "Visible" : "Hidden");
+      return translate("layers", header->m_is_visible ? "Visible" : "Hidden");
     }
   } else if(index.column() == LOCK) {
     if(role == Qt::DecorationRole && header->m_is_locked) {
       return get_lock_icon();
     } else if(role == Qt::ToolTipRole && header->m_is_locked) {
-      return QString("Locked");
+      return translate("layers", "Locked");
     }
   }
   return QVariant();
@@ -232,11 +236,11 @@ QVariant LayersModel::headerData(
     return QVariant();
   }
   if(section == NAME) {
-    return QString("Name");
+    return translate("layers", "Name");
   } else if(section == VISIBILITY) {
-    return QString("Visible");
+    return translate("layers", "Visible");
   } else if(section == LOCK) {
-    return QString("Locked");
+    return translate("layers", "Locked");
   }
   return QVariant();
 }

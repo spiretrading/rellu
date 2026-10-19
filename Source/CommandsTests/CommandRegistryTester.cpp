@@ -76,6 +76,34 @@ TEST_SUITE("CommandRegistry") {
       get_label() == "Show");
   }
 
+  TEST_CASE("unhideable") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto operand = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto compound = Shape();
+      compound.m_geometry = CompoundShape(CompoundOperation::UNION,
+        Shared(make_rectangle(Rect(0, 0, 5, 5))));
+      auto id = transaction.append(
+        scene.m_artboard, make_header("Compound"), compound);
+      operand = transaction.append(
+        id, make_header("Operand"), make_rectangle_shape(5, 5));
+      transaction.commit();
+    }
+    auto history = History(document);
+    auto registry = CommandRegistry();
+    add_standard_commands(registry);
+    REQUIRE(!registry.make("object.toggle_visibility", document, {operand}));
+    REQUIRE(!registry.make(
+      "object.toggle_visibility", document, {scene.m_artboard}));
+    history.execute(registry.make("object.toggle_visibility", document,
+      {operand, scene.m_artboard, scene.m_rectangle}));
+    REQUIRE(!document.get(scene.m_rectangle).m_header.m_is_visible);
+    REQUIRE(document.get(operand).m_header.m_is_visible);
+    REQUIRE(document.get(scene.m_artboard).m_header.m_is_visible);
+  }
+
   TEST_CASE("custom") {
     auto document = Document();
     auto scene = build_scene(document);

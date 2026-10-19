@@ -135,11 +135,12 @@ void SceneBuilder::add_text(
   auto& outline = get_text_outline(node);
   auto& clip = placement.m_clip;
   auto first = list.size();
+  auto local = placement.m_transform * outline.m_mirror;
   auto inverse = std::optional<Matrix>();
   auto transform = Matrix();
   if(m_device_transform) {
     inverse = invert(*m_device_transform);
-    transform = *m_device_transform * to_single(placement.m_transform);
+    transform = *m_device_transform * to_single(local);
   }
   if(inverse && !placement.m_projection &&
       TextRasterizer::is_supported(transform)) {
@@ -157,21 +158,19 @@ void SceneBuilder::add_text(
       }
     }
     auto outlined = TextLayout();
-    auto local = invert(transform);
+    auto device = invert(transform);
     for(auto& glyph : outline.m_layout.m_glyphs) {
       if(TextRasterizer::is_outlined(glyph, transform)) {
         outlined.m_glyphs.push_back(glyph);
       } else if(!glyph.m_typeface->get_color_layers(glyph.m_index).empty()) {
         auto& colored = outlined.m_glyphs.emplace_back(glyph);
         colored.m_origin =
-          local->map(TextRasterizer::get_origin(glyph, transform));
+          device->map(TextRasterizer::get_origin(glyph, transform));
       }
     }
-    add_glyphs(outlined, to_single(placement.m_transform),
-      placement.m_opacity, clip, list);
+    add_glyphs(outlined, to_single(local), placement.m_opacity, clip, list);
   } else if(placement.m_projection) {
-    add_glyphs(outline.m_layout, placement.m_transform, placement.m_opacity,
-      clip, list);
+    add_glyphs(outline.m_layout, local, placement.m_opacity, clip, list);
   } else {
     for(auto i = std::size_t(0); i != outline.m_fills.size(); ++i) {
       auto& fill = outline.m_fills[i];
@@ -180,12 +179,12 @@ void SceneBuilder::add_text(
       }
       auto color = fill.m_color;
       color.m_alpha *= placement.m_opacity;
-      list.push_back(FillCommand(outline.m_paths[i], placement.m_transform,
-        SolidPaint(color), clip));
+      list.push_back(
+        FillCommand(outline.m_paths[i], local, SolidPaint(color), clip));
     }
   }
-  add_effects(list, first, node.get_text()->m_style.m_effects,
-    placement.m_transform, placement.m_clip);
+  add_effects(list, first, node.get_text()->m_style.m_effects, local,
+    placement.m_clip);
 }
 
 SceneBuilder::TextOutline& SceneBuilder::get_text_outline(const Node& node) {
@@ -200,6 +199,12 @@ SceneBuilder::TextOutline& SceneBuilder::get_text_outline(const Node& node) {
         std::make_shared<const Path>(std::move(fill.m_path)));
     }
     outline.m_rasters.clear();
+    outline.m_mirror = Matrix();
+    if(auto& text = *node.get_text(); text.m_is_flipped_vertically) {
+      auto bounds = measure_text(text, get_default_font_library());
+      outline.m_mirror =
+        Matrix(1, 0, 0, -1, 0, 2 * bounds.m_y + bounds.m_height);
+    }
   }
   outline.m_generation = m_generation;
   return outline;

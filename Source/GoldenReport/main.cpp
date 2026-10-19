@@ -11,6 +11,7 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -195,10 +196,13 @@ namespace {
       }
       if(auto shape = source->get_shape()) {
         auto& style = shape->m_style;
-        add_fill(style.m_fill);
+        auto poster = shape->m_video ?
+          std::optional<Fill>(shape->m_video->m_poster) : std::nullopt;
+        auto& fill = poster ? *poster : style.m_fill;
+        add_fill(fill);
         add_effects(style.m_effects);
         auto count = 0;
-        if(!std::holds_alternative<NoFill>(style.m_fill) &&
+        if(!std::holds_alternative<NoFill>(fill) &&
             !std::holds_alternative<LineShape>(shape->m_geometry)) {
           ++count;
         }

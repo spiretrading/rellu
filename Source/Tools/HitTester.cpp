@@ -146,8 +146,8 @@ namespace {
       rule = generated->get_fill_rule();
     }
     auto open = is_open(geometry);
-    auto is_filled = !std::holds_alternative<NoFill>(style.m_fill) &&
-      !std::holds_alternative<LineShape>(geometry);
+    auto is_filled = (!std::holds_alternative<NoFill>(style.m_fill) ||
+      shape.m_video) && !std::holds_alternative<LineShape>(geometry);
     auto is_inside = std::optional<bool>();
     auto test_inside = [&] {
       if(!is_inside) {
@@ -444,14 +444,18 @@ NodeId HitTester::hit(const NodeId& id, Point point, const Matrix& parent,
     return NodeId();
   }
   auto node = m_document->find(id);
-  if(!node || (node->m_header.m_is_locked && !is_locked_hit)) {
+  if(!node) {
+    return NodeId();
+  }
+  auto placement = place(*node);
+  if(!placement ||
+      (placement->m_source->m_header.m_is_locked && !is_locked_hit)) {
     return NodeId();
   }
   auto& extent = measure(id, depth);
   if(!extent.m_local) {
     return NodeId();
   }
-  auto placement = place(*node);
   auto world = parent * placement->m_transform;
   auto inverse = invert(world);
   if(!inverse) {

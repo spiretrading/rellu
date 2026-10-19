@@ -6,6 +6,7 @@
 #include "Rellu/Commands/ArtboardPlacement.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Tools/ArtboardCreation.hpp"
 #include "Rellu/Tools/ArtboardTool.hpp"
 
@@ -16,7 +17,7 @@ namespace {
     public:
       DrawArtboardCommand(
           NodeHeader header, Artboard artboard, bool is_capturing)
-        : m_insert("Artboard", NodeId(), std::move(header),
+        : m_insert("Draw Artboard", NodeId(), std::move(header),
             std::move(artboard)),
           m_is_capturing(is_capturing) {}
 
@@ -51,7 +52,7 @@ namespace {
 }
 
 ArtboardTool::ArtboardTool()
-  : DrawTool("Artboard \xE2\x80\x93 ") {}
+  : DrawTool(std::string(localize("name", "Artboard")) + " \xE2\x80\x93 ") {}
 
 std::unique_ptr<Command> ArtboardTool::make_command(ToolContext& context,
     NodeHeader header, Point start, Point end,
@@ -63,9 +64,10 @@ std::unique_ptr<Command> ArtboardTool::make_command(ToolContext& context,
   if(auto node = context.get_document().find(header.m_id)) {
     header.m_name = node->m_header.m_name;
   } else {
-    header.m_name =
-      make_artboard_name(context.get_document(), "Artboard", false);
+    header.m_name = make_artboard_name(
+      context.get_document(), localize("name", "Artboard"), false);
   }
+  header.m_constraints.m_is_enabled = false;
   auto artboard = Artboard();
   artboard.m_frame = box;
   artboard.m_background = SolidFill(make_color(255, 255, 255));

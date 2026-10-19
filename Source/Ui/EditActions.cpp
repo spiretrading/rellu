@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <exception>
 #include <memory>
 #include <utility>
@@ -9,12 +10,13 @@
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Ui/EditActions.hpp"
+#include "Rellu/Ui/Translation.hpp"
 
 using namespace Rellu;
 
 namespace {
-  QString escape(const std::string& label) {
-    return QString::fromStdString(label).replace("&", "&&");
+  QString escape(const QString& label) {
+    return QString(label).replace("&", "&&");
   }
 
   const QMimeData* get_system_data() {
@@ -26,9 +28,10 @@ namespace {
 
   QString make_history_text(const QString& text, const std::string& label) {
     if(label.empty()) {
-      return text;
+      return translate("menu", text);
     }
-    return QString("%1 %2").arg(text, escape(label));
+    return translate("menu", text + " %1").arg(
+      escape(translate("history", QString::fromStdString(label))));
   }
 }
 
@@ -128,13 +131,18 @@ void EditActions::set_error_handler(ErrorHandler handler) {
   m_error_handler = std::move(handler);
 }
 
+void EditActions::set_paste_handler(PasteHandler handler) {
+  m_paste_handler = std::move(handler);
+  update();
+}
+
 void EditActions::update() {
   auto document = m_editor ? &m_editor->get_document() : nullptr;
   auto& undo = m_actions->get("edit.undo");
   auto& redo = m_actions->get("edit.redo");
   if(!m_editor) {
-    undo.setText("Undo");
-    redo.setText("Redo");
+    undo.setText(translate("menu", "Undo"));
+    redo.setText(translate("menu", "Redo"));
     for(auto& name : m_names) {
       m_actions->set_enabled(name, false);
     }
@@ -150,10 +158,15 @@ void EditActions::update() {
   m_actions->set_enabled("edit.copy", is_copyable);
   m_actions->set_enabled("edit.cut", is_copyable &&
     m_commands->make("edit.delete", *document, nodes));
-  m_actions->set_enabled("edit.paste",
-    !m_clipboard.is_empty() || (get_system_data() &&
-      Clipboard::is_loadable(*get_system_data())));
-  m_actions->set_enabled("edit.paste_appearance", !nodes.empty());
+  auto data = get_system_data();
+  m_actions->set_enabled("edit.paste", !m_clipboard.is_empty() ||
+    (data && (Clipboard::is_loadable(*data) ||
+      (m_paste_handler && m_paste_handler(*data, false)))));
+  m_actions->set_enabled("edit.paste_appearance", !nodes.empty() &&
+    std::none_of(nodes.begin(), nodes.end(), [&] (const auto& id) {
+      auto node = document->find(id);
+      return node && node->get_shape() && node->get_shape()->m_video;
+    }));
   m_actions->set_enabled("edit.select_all", true);
   m_actions->set_enabled(
     "edit.deselect_all", !m_editor->get_selection().is_empty());
@@ -162,9 +175,10 @@ void EditActions::update() {
     m_actions->set_enabled(name, static_cast<bool>(command));
     if(command && (name == "object.toggle_lock" ||
         name == "object.toggle_visibility" || name == "object.ungroup")) {
-      m_actions->get(name).setText(escape(command->get_label()));
+      m_actions->get(name).setText(escape(
+        translate("menu", QString::fromStdString(command->get_label()))));
     } else if(!command && name == "object.ungroup") {
-      m_actions->get(name).setText("Ungroup");
+      m_actions->get(name).setText(translate("menu", "Ungroup"));
     }
   }
 }
@@ -226,6 +240,9 @@ void EditActions::copy() {
 void EditActions::paste() {
   run([&] {
     if(auto data = get_system_data()) {
+      if(m_paste_handler && m_paste_handler(*data, true)) {
+        return;
+      }
       m_clipboard.load(*data, m_measurer);
     }
     auto target = PasteTarget();

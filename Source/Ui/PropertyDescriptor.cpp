@@ -15,6 +15,7 @@
 #include "Rellu/Ui/LayoutProperties.hpp"
 #include "Rellu/Ui/NodeDescription.hpp"
 #include "Rellu/Ui/PropertyDescriptor.hpp"
+#include "Rellu/Ui/Translation.hpp"
 
 using namespace Rellu;
 
@@ -137,9 +138,29 @@ namespace {
     return shape && std::holds_alternative<LineShape>(shape->m_geometry);
   }
 
-  bool is_point_text(const Node& node) {
-    auto text = node.get_text();
-    return text && std::holds_alternative<PositionedFrame>(text->m_frame);
+  std::pair<bool, bool> get_fixed_dimensions(const Node& node) {
+    if(auto text = node.get_text()) {
+      if(std::holds_alternative<PositionedFrame>(text->m_frame)) {
+        return std::pair(true, true);
+      }
+      return std::pair(
+        false, std::holds_alternative<AutoHeightFrame>(text->m_frame));
+    }
+    auto group = node.get_group();
+    if(!group) {
+      return std::pair(false, false);
+    }
+    auto is_width_fixed = false;
+    auto is_height_fixed = false;
+    if(auto& scroll = group->m_scroll_group) {
+      is_width_fixed = scroll->m_direction == ScrollDirection::VERTICAL;
+      is_height_fixed = scroll->m_direction == ScrollDirection::HORIZONTAL;
+    }
+    if(auto& stack = group->m_stack) {
+      is_width_fixed |= stack->m_orientation == Orientation::HORIZONTAL;
+      is_height_fixed |= stack->m_orientation == Orientation::VERTICAL;
+    }
+    return std::pair(is_width_fixed, is_height_fixed);
   }
 
   PropertyDescriptor make_boolean(const Node& node) {
@@ -173,7 +194,7 @@ namespace {
     auto is_linked = static_cast<bool>(definition.m_link);
     add(section, "name", "Name", to_qstring(definition.m_name)).
       m_is_read_only = !instance.m_is_main || is_linked;
-    auto states = QStringList({"Default State"});
+    auto states = QStringList({translate("inspector", "Default State")});
     auto index = 0;
     for(auto& state : definition.m_states) {
       if(state.m_id == instance.m_state &&
@@ -214,10 +235,12 @@ namespace {
     }
     auto origin = frame ? frame->get_top_left() : transform.map(Point(0, 0));
     if(frame) {
+      auto [is_width_fixed, is_height_fixed] =
+        get_fixed_dimensions(displayed);
       add(section, "width", "W", frame->m_width).m_is_read_only =
-        is_point_text(displayed);
+        is_width_fixed;
       add(section, "height", "H", frame->m_height).m_is_read_only =
-        is_point_text(displayed);
+        is_height_fixed;
     }
     add(section, "lock_aspect", "Lock Aspect",
       static_cast<bool>(node.m_header.m_aspect_lock));
@@ -444,21 +467,22 @@ namespace {
     } else if(auto polygon = std::get_if<PolygonShape>(&shape.m_geometry)) {
       add(section, "corners", "Corner Count", polygon->m_corner_count);
       add(section, "corner_radius", "Corner Radius", polygon->m_corner_radius);
-      add(section, "star_ratio", "Star Ratio", 1.0).m_is_read_only = true;
+      add(section, "star_ratio", "Star Ratio", polygon->m_star_ratio / 100);
       return section;
     }
     return std::nullopt;
   }
 
   PropertyDescriptor make_fill(const Fill& fill) {
+    auto paint = enable_fill(fill);
     auto section =
-      make_property("fill", "Fill", make_choice(fill.index(), FILL_TYPES));
+      make_property("fill", "Fill", make_choice(paint.index(), FILL_TYPES));
     add(section, "enabled", "Apply Fill",
       !std::holds_alternative<NoFill>(fill));
-    add(section, "paint", "Fill", fill);
-    if(auto solid = std::get_if<SolidFill>(&fill)) {
+    add(section, "paint", "Fill", paint);
+    if(auto solid = std::get_if<SolidFill>(&paint)) {
       add(section, "color", "Color", solid->m_color);
-    } else if(auto gradient = std::get_if<GradientFill>(&fill)) {
+    } else if(auto gradient = std::get_if<GradientFill>(&paint)) {
       auto& stops = add(section, "stops", "Stops",
         static_cast<int>(gradient->m_stops.size()));
       for(auto i = std::size_t(0); i != gradient->m_stops.size(); ++i) {
@@ -466,7 +490,7 @@ namespace {
         add(stops, std::to_string(i),
           QString("At %1").arg(format_number(stop.m_offset)), stop.m_color);
       }
-    } else if(auto image = std::get_if<ImageFill>(&fill)) {
+    } else if(auto image = std::get_if<ImageFill>(&paint)) {
       add(section, "image", "Image", to_qstring(to_string(image->m_image)));
     }
     return section;

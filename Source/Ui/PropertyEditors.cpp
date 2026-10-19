@@ -5,6 +5,8 @@
 #include <utility>
 #include <variant>
 #include "Rellu/Commands/ArtboardCommands.hpp"
+#include "Rellu/Commands/Components.hpp"
+#include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/CornerRadiusCommands.hpp"
 #include "Rellu/Commands/EffectCommands.hpp"
 #include "Rellu/Commands/HeaderCommands.hpp"
@@ -38,13 +40,10 @@ namespace {
       void apply(
           const Document& document, Transaction& transaction) override {
         for(auto& id : m_nodes) {
-          auto node = document.find(id);
-          if(!node || node->m_header.m_blend_mode == m_blend_mode) {
-            continue;
-          }
-          auto header = node->m_header;
-          header.m_blend_mode = m_blend_mode;
-          transaction.replace_header(std::move(header));
+          edit_rendered_header(document, transaction, id,
+            [&] (const auto&, auto& header) {
+              header.m_blend_mode = m_blend_mode;
+            });
         }
       }
 
@@ -137,8 +136,8 @@ namespace {
       if(targets.size() == 1) {
         auto& id = targets.front();
         if(auto artboard = document.get(id).get_artboard()) {
-          return make_resize_command(
-            targets, artboard->m_frame, resize(artboard->m_frame));
+          return make_resize_command(targets, artboard->m_frame,
+            resize(artboard->m_frame), measurer);
         }
         auto local =
           get_local_bounds(document, id, BoundsType::GEOMETRY, measurer);
@@ -149,14 +148,15 @@ namespace {
         }
         return std::make_unique<TransformCommand>(std::move(targets),
           world * make_rect_mapping(*local, resize(*local)) * *inverse,
-          "Resize");
+          "Resize", TransformMode::RESIZE, ResizeRule::RESPONSIVE, measurer);
       }
       auto bounds =
         get_world_bounds(document, targets, BoundsType::GEOMETRY, measurer);
       if(!bounds) {
         return nullptr;
       }
-      return make_resize_command(std::move(targets), *bounds, resize(*bounds));
+      return make_resize_command(
+        std::move(targets), *bounds, resize(*bounds), measurer);
     };
   }
 
@@ -194,18 +194,21 @@ namespace {
     };
   }
 
+  const Fill* find_fill(const Node& node) {
+    if(auto shape = node.get_shape()) {
+      return &shape->m_style.m_fill;
+    } else if(auto text = node.get_text()) {
+      return &text->m_style.m_fill;
+    } else if(auto artboard = node.get_artboard()) {
+      return &artboard->m_background;
+    }
+    return nullptr;
+  }
+
   std::optional<Color> find_fill_color(
       const Document& document, const std::vector<NodeId>& nodes) {
     for(auto& id : nodes) {
-      auto& node = document.get(id);
-      auto fill = static_cast<const Fill*>(nullptr);
-      if(auto shape = node.get_shape()) {
-        fill = &shape->m_style.m_fill;
-      } else if(auto text = node.get_text()) {
-        fill = &text->m_style.m_fill;
-      } else if(auto artboard = node.get_artboard()) {
-        fill = &artboard->m_background;
-      }
+      auto fill = find_fill(document.get(id));
       if(!fill) {
         continue;
       }
@@ -245,12 +248,33 @@ namespace {
     auto is_enabled = std::get_if<bool>(&value);
     if(!is_enabled || nodes.empty()) {
       return nullptr;
-    } else if(!*is_enabled) {
-      return std::make_unique<SetFillCommand>(nodes, NoFill());
     }
     auto color =
       find_fill_color(document, nodes).value_or(make_color(255, 255, 255));
-    return std::make_unique<SetFillCommand>(nodes, SolidFill(color));
+    auto commands = std::vector<std::unique_ptr<Command>>();
+    for(auto& id : nodes) {
+      auto fill = Fill(NoFill());
+      if(auto current = find_fill(document.get(id))) {
+        if(!*is_enabled) {
+          fill = disable_fill(*current);
+        } else {
+          fill = enable_fill(*current);
+          if(std::holds_alternative<NoFill>(fill)) {
+            fill = SolidFill(color);
+          }
+        }
+      } else if(*is_enabled) {
+        fill = SolidFill(color);
+      }
+      commands.push_back(std::make_unique<SetFillCommand>(
+        std::vector(1, id), std::move(fill)));
+    }
+    if(commands.size() == 1) {
+      return std::move(commands.front());
+    }
+    auto label = commands.front()->get_label();
+    return std::make_unique<CompositeCommand>(
+      std::move(label), std::move(commands));
   }
 
   std::vector<double> get_dashes(
@@ -403,25 +427,27 @@ namespace {
   }
 
   PropertySetter make_constraint_setter(
-      std::optional<bool> ConstraintsEdit::* member) {
+      std::optional<bool> ConstraintsEdit::* member, TextMeasurer measurer) {
     return make_bool_setter(
       [=] (const Document&, const std::vector<NodeId>& nodes, bool flag) {
         auto edit = ConstraintsEdit();
         edit.*member = flag;
-        return std::make_unique<SetConstraintsCommand>(nodes, edit);
+        return std::make_unique<SetConstraintsCommand>(nodes, edit, measurer);
       });
   }
 
-  std::unique_ptr<Command> set_resize_mode(const Document& document,
-      const std::vector<NodeId>& nodes, const PropertyValue& value) {
-    auto choice = std::get_if<Choice>(&value);
-    if(!choice || nodes.empty() || choice->m_index < 0 ||
-        choice->m_index > 1) {
-      return nullptr;
-    }
-    auto edit = ConstraintsEdit();
-    edit.m_is_custom = choice->m_index == 1;
-    return std::make_unique<SetConstraintsCommand>(nodes, edit);
+  PropertySetter make_resize_mode_setter(TextMeasurer measurer) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      auto choice = std::get_if<Choice>(&value);
+      if(!choice || nodes.empty() || choice->m_index < 0 ||
+          choice->m_index > 1) {
+        return nullptr;
+      }
+      auto edit = ConstraintsEdit();
+      edit.m_is_custom = choice->m_index == 1;
+      return std::make_unique<SetConstraintsCommand>(nodes, edit, measurer);
+    };
   }
 
   PropertySetter make_effect_setter(EffectKind kind, auto edit) {
@@ -810,6 +836,19 @@ PropertyEditors Rellu::make_standard_property_editors(TextMeasurer measurer) {
         nodes, static_cast<int>(std::lround(*count)));
     }, SetCornerCountCommand::MINIMUM_CORNERS,
     SetCornerCountCommand::MAXIMUM_CORNERS));
+  auto star_ratio = make_number_editor(
+    [] (const Document&, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      auto ratio = get_number(value);
+      if(!ratio || nodes.empty()) {
+        return nullptr;
+      }
+      return std::make_unique<SetStarRatioCommand>(nodes, *ratio * 100);
+    }, SetStarRatioCommand::MINIMUM_RATIO / 100,
+    SetStarRatioCommand::MAXIMUM_RATIO / 100);
+  star_ratio.m_scale = 100;
+  star_ratio.m_suffix = "%";
+  editors.add("geometry.star_ratio", std::move(star_ratio));
   editors.add("transform.lock_aspect", make_editor(make_bool_setter(
     [=] (const Document&, const std::vector<NodeId>& nodes, bool flag) {
       return std::make_unique<SetAspectLockCommand>(nodes, flag, measurer);
@@ -819,20 +858,22 @@ PropertyEditors Rellu::make_standard_property_editors(TextMeasurer measurer) {
       return std::make_unique<SetFixedPositionCommand>(nodes, flag);
     })));
   editors.add("layout.responsive",
-    make_editor(make_constraint_setter(&ConstraintsEdit::m_is_enabled)));
-  editors.add("layout.responsive.mode", make_editor(set_resize_mode));
+    make_editor(
+      make_constraint_setter(&ConstraintsEdit::m_is_enabled, measurer)));
+  editors.add("layout.responsive.mode",
+    make_editor(make_resize_mode_setter(measurer)));
   editors.add("layout.responsive.top",
-    make_editor(make_constraint_setter(&ConstraintsEdit::m_top)));
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_top, measurer)));
   editors.add("layout.responsive.right",
-    make_editor(make_constraint_setter(&ConstraintsEdit::m_right)));
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_right, measurer)));
   editors.add("layout.responsive.bottom",
-    make_editor(make_constraint_setter(&ConstraintsEdit::m_bottom)));
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_bottom, measurer)));
   editors.add("layout.responsive.left",
-    make_editor(make_constraint_setter(&ConstraintsEdit::m_left)));
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_left, measurer)));
   editors.add("layout.responsive.width",
-    make_editor(make_constraint_setter(&ConstraintsEdit::m_width)));
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_width, measurer)));
   editors.add("layout.responsive.height",
-    make_editor(make_constraint_setter(&ConstraintsEdit::m_height)));
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_height, measurer)));
   editors.add("layout.scrolling", make_editor(set_scrolling));
   editors.add("layout.viewport_height",
     make_number_editor(set_viewport_height, 1.0, std::nullopt));

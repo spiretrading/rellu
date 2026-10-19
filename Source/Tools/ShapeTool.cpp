@@ -1,32 +1,35 @@
 #include <cmath>
 #include <numbers>
+#include <string>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Tools/ShapeTool.hpp"
 
 using namespace Rellu;
 
 namespace {
-  const char* get_prefix(ShapeKind kind) {
+  std::string get_prefix(ShapeKind kind) {
+    auto name = "Line";
     if(kind == ShapeKind::RECTANGLE) {
-      return "Rectangle ";
+      name = "Rectangle";
     } else if(kind == ShapeKind::ELLIPSE) {
-      return "Ellipse ";
+      name = "Ellipse";
     } else if(kind == ShapeKind::POLYGON) {
-      return "Polygon ";
+      name = "Polygon";
     }
-    return "Line ";
+    return std::string(localize("name", name)) + ' ';
   }
 
   const char* get_label(ShapeKind kind) {
     if(kind == ShapeKind::RECTANGLE) {
-      return "Rectangle";
+      return "Draw Rectangle";
     } else if(kind == ShapeKind::ELLIPSE) {
-      return "Ellipse";
+      return "Draw Ellipse";
     } else if(kind == ShapeKind::POLYGON) {
-      return "Polygon";
+      return "Draw Polygon";
     }
-    return "Line";
+    return "Draw Line";
   }
 
   double get_sign(double value) {

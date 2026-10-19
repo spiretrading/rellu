@@ -7,6 +7,7 @@
 #include <QPainter>
 #include <QVBoxLayout>
 #include "Rellu/Ui/ArtboardPresetsPanel.hpp"
+#include "Rellu/Ui/Translation.hpp"
 #include "Colors.hpp"
 
 using namespace Rellu;
@@ -42,12 +43,14 @@ namespace {
             m_handler(std::move(handler)),
             m_is_hovered(false) {
         setObjectName("artboard_preset");
-        setAccessibleName(QString::fromStdString(preset.m_name));
+        auto label =
+          translate("presets", QString::fromStdString(preset.m_name));
+        setAccessibleName(label);
         setFixedHeight(ROW_HEIGHT);
         auto layout = new QHBoxLayout(this);
         layout->setContentsMargins(NAME_MARGIN, 0, MARGIN, 0);
         layout->setSpacing(8);
-        auto name = new QLabel(QString::fromStdString(preset.m_name));
+        auto name = new QLabel(label);
         name->setObjectName("row_label");
         name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         layout->addWidget(name, 1);
@@ -102,7 +105,8 @@ ArtboardPresetsPanel::ArtboardPresetsPanel(QWidget* parent)
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
   for(auto& group : get_artboard_presets()) {
-    auto heading = new QLabel(QString::fromStdString(group.m_name));
+    auto heading = new QLabel(
+      translate("presets", QString::fromStdString(group.m_name)));
     heading->setObjectName("section_heading");
     heading->setContentsMargins(MARGIN, 0, MARGIN, 0);
     heading->setFixedHeight(ROW_HEIGHT);

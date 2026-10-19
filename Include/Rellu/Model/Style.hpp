@@ -1,6 +1,7 @@
 #ifndef RELLU_MODEL_STYLE_HPP
 #define RELLU_MODEL_STYLE_HPP
 #include <optional>
+#include <type_traits>
 #include <variant>
 #include <vector>
 #include "Rellu/Geometry/Color.hpp"
@@ -13,11 +14,6 @@
 #include "Rellu/Model/NodeId.hpp"
 
 namespace Rellu {
-
-  /** A fill that paints nothing. */
-  struct NoFill {
-    bool operator ==(const NoFill&) const = default;
-  };
 
   /** A fill of a single color. */
   struct SolidFill {
@@ -102,8 +98,39 @@ namespace Rellu {
     bool operator ==(const ImageFill& fill) const;
   };
 
+  /** The paint of a fill. */
+  using FillPaint = std::variant<SolidFill, GradientFill, ImageFill>;
+
+  /**
+   * A fill that paints nothing, which is a fill turned off when it keeps
+   * the paint it had.
+   */
+  struct NoFill {
+
+    /** The paint restored when the fill is turned back on, if any. */
+    std::optional<FillPaint> m_paint;
+
+    bool operator ==(const NoFill&) const = default;
+  };
+
   /** The paint filling the interior of a node. */
   using Fill = std::variant<NoFill, SolidFill, GradientFill, ImageFill>;
+
+  /**
+   * Turns a fill off, keeping its paint.
+   * @param fill The fill.
+   * @return A NoFill keeping the <i>fill</i>'s paint, or the <i>fill</i>
+   *         itself if it is already off.
+   */
+  Fill disable_fill(const Fill& fill);
+
+  /**
+   * Turns a fill back on.
+   * @param fill The fill.
+   * @return The paint the <i>fill</i> keeps, or the <i>fill</i> itself if it
+   *         is on or keeps no paint.
+   */
+  Fill enable_fill(const Fill& fill);
 
   /** The line painted along a node's outline. */
   struct Stroke {
@@ -218,6 +245,26 @@ namespace Rellu {
       equals(m_vertical_scale, fill.m_vertical_scale) &&
       m_is_flipped_horizontally == fill.m_is_flipped_horizontally &&
       m_is_flipped_vertically == fill.m_is_flipped_vertically;
+  }
+
+  inline Fill disable_fill(const Fill& fill) {
+    return std::visit([&] (const auto& paint) -> Fill {
+      using Type = std::decay_t<decltype(paint)>;
+      if constexpr(std::is_same_v<Type, NoFill>) {
+        return paint;
+      } else {
+        return NoFill(FillPaint(paint));
+      }
+    }, fill);
+  }
+
+  inline Fill enable_fill(const Fill& fill) {
+    if(auto none = std::get_if<NoFill>(&fill); none && none->m_paint) {
+      return std::visit([] (const auto& paint) -> Fill {
+        return paint;
+      }, *none->m_paint);
+    }
+    return fill;
   }
 
   inline bool Stroke::operator ==(const Stroke& stroke) const {

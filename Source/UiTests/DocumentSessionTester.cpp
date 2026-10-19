@@ -138,6 +138,25 @@ TEST_SUITE("DocumentSession") {
     REQUIRE(reopened.get_canvas().empty());
   }
 
+  TEST_CASE("id") {
+    auto directory = QTemporaryDir();
+    REQUIRE(directory.isValid());
+    auto document = Document();
+    build_test_document(document);
+    auto session = DocumentSession(document, QString(), XdTextLayout());
+    REQUIRE(session.get_id().empty());
+    auto path = directory.filePath("Design.xd");
+    session.save(path);
+    auto id = session.get_id();
+    REQUIRE(!id.empty());
+    auto reopened = Document();
+    import_xd(to_path(path), reopened);
+    auto opened = DocumentSession(reopened, path, XdTextLayout());
+    REQUIRE(opened.get_id() == id);
+    opened.save(directory.filePath("Copy.xd"));
+    REQUIRE(opened.get_id() == id);
+  }
+
   TEST_CASE("failed_save") {
     auto directory = QTemporaryDir();
     REQUIRE(directory.isValid());

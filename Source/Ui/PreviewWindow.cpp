@@ -18,6 +18,7 @@
 #include "Rellu/Text/TextLayout.hpp"
 #include "Rellu/Ui/PreviewWindow.hpp"
 #include "Rellu/Ui/TextMeasurement.hpp"
+#include "Rellu/Ui/Translation.hpp"
 
 using namespace Rellu;
 
@@ -155,7 +156,7 @@ PreviewWindow::PreviewWindow(QWidget* parent)
       m_zoom(1),
       m_offset(0, 0) {
   setObjectName("preview_window");
-  setWindowTitle("Preview");
+  setWindowTitle(translate("preview", "Preview"));
   auto layout = new QVBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->addWidget(m_view);

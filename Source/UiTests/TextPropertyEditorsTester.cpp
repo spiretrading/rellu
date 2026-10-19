@@ -260,6 +260,26 @@ TEST_SUITE("TextPropertyEditors") {
     REQUIRE(!is_valid_hyperlink("ftp://example.com"));
   }
 
+  TEST_CASE("hyperlink_validity") {
+    REQUIRE(check_hyperlink(" , ") == HyperlinkValidity::EMPTY);
+    for(auto url : {"example.com", "ftp://example.com", "https:example.com",
+        "HTTPS://example.com"}) {
+      REQUIRE(check_hyperlink(url) == HyperlinkValidity::INVALID_PROTOCOL);
+    }
+    for(auto url : {"https://", "https://example", "https://localhost",
+        "https://example.c", "https://exa mple.com", "https://exa_mple.com",
+        "https://ex-.com", "https://.com", "https://1.2.3.4",
+        "https://example.com:8080", "https://example.com:abc", "mailto:",
+        "mailto:abc"}) {
+      REQUIRE(check_hyperlink(url) == HyperlinkValidity::INVALID_DOMAIN);
+    }
+    for(auto url : {"https://example.com", "https://example.zzzz",
+        "https://www.ex-ample.co.uk", "https://example.com/a b",
+        " ,#https://example.com ", "mailto:someone@example.com"}) {
+      REQUIRE(check_hyperlink(url) == HyperlinkValidity::VALID);
+    }
+  }
+
   TEST_CASE("fonts") {
     auto document = Document();
     auto ids = build_test_document(document);

@@ -1,16 +1,51 @@
+#include <exception>
 #include <filesystem>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <QFileInfo>
 #include "Rellu/Io/XdOpaque.hpp"
+#include "Rellu/Io/XdPackage.hpp"
+#include "Rellu/Io/XdPatch.hpp"
 #include "Rellu/Io/XdWriter.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
+#include "Rellu/Ui/Translation.hpp"
 
 using namespace Rellu;
+
+namespace {
+  const auto ID_KEY = std::string_view("uxdesign#id");
+
+  std::string read_id(const Document& document) {
+    auto data = decode_package_data(document.get_opaque().get_bytes());
+    auto encoding = std::string_view(data.m_manifest);
+    if(encoding.empty()) {
+      return std::string();
+    }
+    auto manifest = decode_value(encoding);
+    if(auto id = manifest.find(ID_KEY)) {
+      return std::string(id->to_string());
+    }
+    return std::string();
+  }
+
+  std::string read_id(const QString& path) {
+    try {
+      auto package = XdPackage(std::filesystem::path(path.toStdU16String()));
+      return package.get_manifest().value(QString::fromUtf8(
+        ID_KEY.data(), static_cast<qsizetype>(ID_KEY.size()))).toString().
+          toStdString();
+    } catch(const std::exception&) {
+      return std::string();
+    }
+  }
+}
 
 DocumentSession::DocumentSession(
   Document& document, QString path, XdTextLayout layout)
   : m_document(&document),
     m_path(std::move(path)),
+    m_id(read_id(document)),
     m_layout(std::move(layout)),
     m_editor(document) {
   m_editor.get_history().set_compound_filter([] (const Node& compound) {
@@ -33,9 +68,13 @@ const QString& DocumentSession::get_path() const {
 
 QString DocumentSession::get_name() const {
   if(m_path.isEmpty()) {
-    return "Untitled";
+    return translate("Untitled");
   }
   return QFileInfo(m_path).completeBaseName();
+}
+
+const std::string& DocumentSession::get_id() const {
+  return m_id;
 }
 
 bool DocumentSession::is_dirty() const {
@@ -48,6 +87,7 @@ void DocumentSession::save(const QString& path) {
   options.m_name = QFileInfo(path).completeBaseName().toStdString();
   write_xd(*m_document, std::filesystem::path(path.toStdU16String()), options);
   m_path = path;
+  m_id = read_id(path);
   m_editor.get_history().mark_clean();
 }
 

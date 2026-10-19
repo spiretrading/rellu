@@ -46,9 +46,13 @@ TEST_SUITE("HyperlinkStatus") {
     REQUIRE(!message.isHidden());
     REQUIRE(message.text() == "URL protocol must be https:// or mailto:");
     REQUIRE(line->toolTip() == "www.example.com");
+    REQUIRE(!line->styleSheet().isEmpty());
+    line->setText("https://localhost");
+    REQUIRE(message.text() == "URL includes an invalid domain");
     line->setText("https://www.example.com");
     REQUIRE(!icon.pixmap().isNull());
     REQUIRE(message.isHidden());
+    REQUIRE(line->styleSheet().isEmpty());
     line->setText("");
     REQUIRE(icon.pixmap().isNull());
     line->setText("HTTPS://EXAMPLE.COM");

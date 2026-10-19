@@ -45,6 +45,16 @@ TEST_SUITE("EditActions") {
     }
     auto document = Document();
     auto ids = build_test_document(document);
+    auto video = Shape();
+    video.m_geometry = RectangleShape(Rect(0, 0, 64, 48));
+    video.m_video = Video(ImageFill(), generate_node_id(), false);
+    auto video_id = NodeId();
+    {
+      auto transaction = Transaction(document);
+      video_id =
+        transaction.append(ids.m_artboard, make_header("Video"), video);
+      transaction.commit();
+    }
     auto editor = Editor(document);
     fixture.m_edit_actions->set_editor(&editor);
     REQUIRE(!fixture.is_enabled("edit.undo"));
@@ -69,6 +79,9 @@ TEST_SUITE("EditActions") {
     REQUIRE(fixture.is_enabled("arrange.bring_to_front"));
     REQUIRE(actions.get("object.toggle_lock").text() == "Lock");
     REQUIRE(actions.get("object.toggle_visibility").text() == "Hide");
+    REQUIRE(fixture.is_enabled("edit.paste_appearance"));
+    editor.get_selection().select(video_id);
+    REQUIRE(!fixture.is_enabled("edit.paste_appearance"));
     editor.get_selection().select(ids.m_card);
     REQUIRE(fixture.is_enabled("object.ungroup"));
     editor.get_selection().select(ids.m_artboard);

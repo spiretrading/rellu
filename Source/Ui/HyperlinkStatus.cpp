@@ -3,6 +3,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include "Rellu/Ui/Translation.hpp"
 #include "HyperlinkStatus.hpp"
 
 using namespace Rellu;
@@ -11,7 +12,7 @@ namespace {
   constexpr auto ICON_SIZE = 16;
   constexpr auto ICON_SCALE = 2;
   const auto VALID_COLOR = QColor(0x26, 0x8E, 0x6C);
-  const auto INVALID_COLOR = QColor(0xD7, 0x37, 0x3F);
+  const auto INVALID_COLOR = QColor(0xCB, 0x6D, 0x0F);
 
   QPixmap make_pixmap(auto paint) {
     auto pixmap = QPixmap(ICON_SIZE * ICON_SCALE, ICON_SIZE * ICON_SCALE);
@@ -52,6 +53,17 @@ namespace {
   }
 }
 
+QString Rellu::get_hyperlink_message(HyperlinkValidity validity) {
+  if(validity == HyperlinkValidity::INVALID_PROTOCOL) {
+    return translate("inspector", "URL protocol must be https:// or mailto:");
+  } else if(validity == HyperlinkValidity::INVALID_DOMAIN) {
+    return translate("inspector", "URL includes an invalid domain");
+  } else if(validity == HyperlinkValidity::INVALID) {
+    return translate("inspector", "Invalid URL");
+  }
+  return QString();
+}
+
 QWidget* Rellu::add_hyperlink_status(QWidget* row, QLineEdit& field) {
   auto container = new QWidget();
   auto layout = new QVBoxLayout(container);
@@ -65,24 +77,30 @@ QWidget* Rellu::add_hyperlink_status(QWidget* row, QLineEdit& field) {
   if(auto row_layout = qobject_cast<QBoxLayout*>(row->layout())) {
     row_layout->addWidget(icon);
   }
-  auto message = new QLabel(HYPERLINK_PROTOCOL_MESSAGE);
+  auto message = new QLabel();
   message->setObjectName("hyperlink_message");
   message->setWordWrap(true);
-  message->setStyleSheet(
-    QString("color: %1;").arg(INVALID_COLOR.name()));
+  message->setStyleSheet(QString("color: %1; font-style: italic;").arg(
+    INVALID_COLOR.name()));
   layout->addWidget(message);
   auto update = [icon, message, field = &field] {
     auto url = field->text();
     field->setToolTip(url);
-    if(url.trimmed().isEmpty()) {
+    auto validity = check_hyperlink(url);
+    if(validity == HyperlinkValidity::EMPTY) {
       icon->clear();
-      message->hide();
-    } else if(is_valid_hyperlink(url)) {
+    } else if(validity == HyperlinkValidity::VALID) {
       icon->setPixmap(make_check());
-      message->hide();
     } else {
       icon->setPixmap(make_warning());
-      message->show();
+    }
+    message->setText(get_hyperlink_message(validity));
+    message->setHidden(message->text().isEmpty());
+    if(message->isHidden()) {
+      field->setStyleSheet(QString());
+    } else {
+      field->setStyleSheet(QString("border-bottom: 1px solid %1;").arg(
+        INVALID_COLOR.name()));
     }
   };
   QObject::connect(&field, &QLineEdit::textChanged, icon,

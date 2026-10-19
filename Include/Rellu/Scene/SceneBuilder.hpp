@@ -191,6 +191,7 @@ namespace Rellu {
         std::vector<TextFill> m_fills;
         std::vector<std::shared_ptr<const Path>> m_paths;
         std::vector<std::pair<Matrix, std::vector<TextRaster>>> m_rasters;
+        Matrix m_mirror;
         std::uint64_t m_generation;
       };
       struct Segment {

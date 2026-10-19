@@ -285,18 +285,28 @@ TEST_SUITE("PropertyInspector") {
     auto fill =qobject_cast<QCheckBox*>(inspector.find_field("fill.enabled"));
     REQUIRE(fill);
     REQUIRE(fill->isChecked());
+    auto paint = document.get(ids.m_background).get_shape()->m_style.m_fill;
     fill->click();
     QCoreApplication::processEvents();
-    REQUIRE(get_text(inspector, "fill") == "None");
-    REQUIRE(!find_property(inspector.get_properties(), "fill.color"));
+    REQUIRE(get_text(inspector, "fill.enabled") == "No");
+    REQUIRE(document.get(ids.m_background).get_shape()->m_style.m_fill ==
+      disable_fill(paint));
     REQUIRE(history.get_undo_count() == 2);
+    fill = qobject_cast<QCheckBox*>(inspector.find_field("fill.enabled"));
+    REQUIRE(fill);
+    fill->click();
+    QCoreApplication::processEvents();
+    REQUIRE(get_text(inspector, "fill.enabled") == "Yes");
+    REQUIRE(document.get(ids.m_background).get_shape()->m_style.m_fill ==
+      paint);
+    REQUIRE(history.get_undo_count() == 3);
     auto border =
       qobject_cast<QCheckBox*>(inspector.find_field("stroke.enabled"));
     REQUIRE(border);
     border->click();
     QCoreApplication::processEvents();
     REQUIRE(get_text(inspector, "stroke.enabled") == "Yes");
-    REQUIRE(history.get_undo_count() == 3);
+    REQUIRE(history.get_undo_count() == 4);
   }
 
   TEST_CASE("multiple_selection") {
@@ -513,9 +523,17 @@ TEST_SUITE("PropertyInspector") {
     auto inspector = PropertyInspector();
     make_editable(inspector, editor);
     editor.get_selection().select(ids.m_background);
+    REQUIRE(get_text(inspector, "layout.responsive.mode") == "Auto");
+    auto responsive = qobject_cast<QAbstractButton*>(
+      inspector.find_field("layout.responsive"));
+    REQUIRE(responsive);
+    responsive->click();
+    QCoreApplication::processEvents();
+    REQUIRE(
+      !document.get(ids.m_background).m_header.m_constraints.m_is_enabled);
     REQUIRE(!find_property(
       inspector.get_properties(), "layout.responsive.mode"));
-    auto responsive = qobject_cast<QAbstractButton*>(
+    responsive = qobject_cast<QAbstractButton*>(
       inspector.find_field("layout.responsive"));
     REQUIRE(responsive);
     responsive->click();
@@ -537,8 +555,11 @@ TEST_SUITE("PropertyInspector") {
     auto width = qobject_cast<QCheckBox*>(
       inspector.find_field("layout.responsive.width"));
     REQUIRE(width);
+    auto is_fixed =
+      document.get(ids.m_background).m_header.m_constraints.m_width;
     width->click();
-    REQUIRE(document.get(ids.m_background).m_header.m_constraints.m_width);
+    REQUIRE(document.get(ids.m_background).m_header.m_constraints.m_width ==
+      !is_fixed);
   }
 
   TEST_CASE("locked_selection") {
@@ -557,6 +578,28 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(!inspector.find_section("transform")->isEnabled());
     REQUIRE(!get_line(inspector, "appearance.opacity").isEnabled());
     REQUIRE(!inspector.open_color_picker("fill.paint"));
+  }
+
+  TEST_CASE("disabled_fill_picker") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(ids.m_background);
+    auto paint = document.get(ids.m_background).get_shape()->m_style.m_fill;
+    qobject_cast<QCheckBox*>(inspector.find_field("fill.enabled"))->click();
+    QCoreApplication::processEvents();
+    REQUIRE(document.get(ids.m_background).get_shape()->m_style.m_fill ==
+      disable_fill(paint));
+    REQUIRE(inspector.open_color_picker("fill.paint"));
+    auto& picker = inspector.get_color_picker();
+    REQUIRE(picker.get_color() == std::get<SolidFill>(paint).m_color);
+    picker.apply_color(make_color(0, 128, 0));
+    picker.hide();
+    REQUIRE(document.get(ids.m_background).get_shape()->m_style.m_fill ==
+      Fill(SolidFill(make_color(0, 128, 0))));
+    REQUIRE(get_text(inspector, "fill.enabled") == "Yes");
   }
 
   TEST_CASE("color_picker") {

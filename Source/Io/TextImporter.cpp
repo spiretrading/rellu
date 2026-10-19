@@ -332,6 +332,7 @@ void Rellu::add_text_importer(XdImporter& importer) {
           }
         }
       }
+      text.m_is_flipped_vertically = ux->get_bool("flipY"_L1, false);
       ux->ignore({"singleTextObject"_L1, "repeatOverrides"_L1});
     }
     if(auto paragraphs = text_json->get_array("paragraphs"_L1)) {

@@ -106,6 +106,8 @@ namespace Rellu {
       XdGenerator& operator =(const XdGenerator&) = delete;
       void find_inherited();
       const Overrides* find_scope(const Node& node) const;
+      std::function<bool (const NodeId&)> make_root_recorder(
+        const Overrides& overrides) const;
       XdValue make_ux(const Node& node) const;
       XdValue make_style(const Node& node, const Style* style) const;
       XdValue make_text(const Node& node, const Text& text) const;

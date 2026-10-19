@@ -148,7 +148,7 @@ void PathEditTool::press(ToolContext& context, const PointerEvent& event) {
     auto edited = *path;
     auto inserted = split_segment(edited.m_contours[position->m_contour],
       position->m_position.m_segment, position->m_position.m_t);
-    context.get_editor().merge(make_path_command("Add Point", edited));
+    context.get_editor().merge(make_path_command("Add Anchor Point", edited));
     m_is_applied = true;
     m_base = edited;
     m_selection = std::vector{AnchorIndex(position->m_contour, inserted)};
@@ -231,7 +231,8 @@ void PathEditTool::double_click(
     auto& contour = path->m_contours[index->m_contour];
     set_smooth(contour, index->m_anchor,
       !is_smooth(contour.m_anchors[index->m_anchor]));
-    context.get_editor().merge(make_path_command("Edit Path", *path));
+    context.get_editor().merge(
+      make_path_command("Convert Point Type", *path));
     context.get_editor().get_history().seal();
     m_selection = std::vector{*index};
     return;
@@ -392,7 +393,7 @@ void PathEditTool::move_points(ToolContext& context, Point delta) {
     anchor.m_in = anchor.m_in + local;
     anchor.m_out = anchor.m_out + local;
   }
-  context.get_editor().merge(make_path_command("Edit Path", edited));
+  context.get_editor().merge(make_path_command("Move Anchor Point", edited));
   m_is_applied = true;
 }
 
@@ -429,7 +430,8 @@ void PathEditTool::update_handle(
         anchor.m_point + direction * distance(anchor.m_point, opposite);
     }
   }
-  context.get_editor().merge(make_path_command("Edit Path", edited));
+  context.get_editor().merge(
+    make_path_command("Move Control Point", edited));
   m_is_applied = true;
 }
 

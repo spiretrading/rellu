@@ -12,12 +12,14 @@
 #include <QMouseEvent>
 #include <QStyledItemDelegate>
 #include <QVBoxLayout>
+#include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Ui/ContextMenus.hpp"
 #include "Rellu/Ui/LayersPanel.hpp"
 #include "Rellu/Ui/NodeDescription.hpp"
+#include "Rellu/Ui/Translation.hpp"
 #include "Colors.hpp"
 #include "Icons.hpp"
 
@@ -109,8 +111,8 @@ LayersPanel::LayersPanel(QWidget* parent)
   search_layout->setContentsMargins(16, 12, 16, 0);
   search_layout->setSpacing(4);
   m_search->setObjectName("search_field");
-  m_search->setPlaceholderText("All Items");
-  m_search->setAccessibleName("Search Layers");
+  m_search->setPlaceholderText(translate("layers", "All Items"));
+  m_search->setAccessibleName(translate("layers", "Search Layers"));
   m_search->setClearButtonEnabled(true);
   m_search->addAction(get_icon(Glyph::SEARCH), QLineEdit::LeadingPosition);
   search_layout->addWidget(m_search, 1);
@@ -123,13 +125,13 @@ LayersPanel::LayersPanel(QWidget* parent)
   m_filter_button->setIcon(get_icon(Glyph::CHEVRON_DOWN));
   m_filter_button->setIconSize(QSize(16, 16));
   m_filter_button->setFixedSize(24, 24);
-  m_filter_button->setToolTip("Filter");
-  m_filter_button->setAccessibleName("Filter");
+  m_filter_button->setToolTip(translate("layers", "Filter"));
+  m_filter_button->setAccessibleName(translate("layers", "Filter"));
   m_filter_button->setPopupMode(QToolButton::InstantPopup);
   auto filters = new QMenu(m_filter_button);
   auto group = new QActionGroup(filters);
   for(auto& [filter, label] : FILTERS) {
-    auto action = filters->addAction(label);
+    auto action = filters->addAction(translate("layers", label));
     action->setCheckable(true);
     action->setChecked(filter == LayerFilter::ALL);
     group->addAction(action);
@@ -149,7 +151,7 @@ LayersPanel::LayersPanel(QWidget* parent)
   m_back->setIcon(get_icon(Glyph::CHEVRON_LEFT));
   m_back->setIconSize(QSize(14, 14));
   m_back->setFixedSize(20, 20);
-  m_back->setToolTip("Back");
+  m_back->setToolTip(translate("layers", "Back"));
   heading_layout->addWidget(m_back);
   m_heading->setObjectName("layers_heading");
   heading_layout->addWidget(m_heading, 1);
@@ -247,7 +249,7 @@ void LayersPanel::set_filter(LayerFilter filter) {
   m_filter = filter;
   for(auto& entry : FILTERS) {
     if(entry.first == filter) {
-      m_search->setPlaceholderText(entry.second);
+      m_search->setPlaceholderText(translate("layers", entry.second));
     }
   }
   if(auto menu = m_filter_button->menu()) {
@@ -274,10 +276,15 @@ bool LayersPanel::is_filtered_out(const NodeId& id) {
 
 bool LayersPanel::toggle_visibility(const NodeId& id) {
   auto document = m_model->get_document();
-  if(!m_editor || !document || !document->find(id)) {
+  if(!m_editor || !document || !document->find(id) ||
+      is_inside_compound(*document, id)) {
     return false;
   }
-  auto is_visible = document->get(id).m_header.m_is_visible;
+  auto header = find_rendered_header(*document, id);
+  if(!header) {
+    return false;
+  }
+  auto is_visible = header->m_is_visible;
   try {
     return static_cast<bool>(m_editor->execute(
       std::make_unique<SetVisibilityCommand>(std::vector{id}, !is_visible)));
@@ -291,7 +298,11 @@ bool LayersPanel::toggle_lock(const NodeId& id) {
   if(!m_editor || !document || !document->find(id)) {
     return false;
   }
-  auto is_locked = document->get(id).m_header.m_is_locked;
+  auto header = find_rendered_header(*document, id);
+  if(!header) {
+    return false;
+  }
+  auto is_locked = header->m_is_locked;
   try {
     return static_cast<bool>(m_editor->execute(
       std::make_unique<SetLockCommand>(std::vector{id}, !is_locked)));
@@ -591,7 +602,7 @@ void LayersPanel::update_scope() {
     m_scope = NodeId();
     m_view->setRootIsDecorated(true);
     m_view->setItemsExpandable(true);
-    m_heading->setText("ARTBOARDS");
+    m_heading->setText(translate("layers", "ARTBOARDS"));
     m_back->setVisible(false);
     apply_filter(QModelIndex());
     m_is_filtered = true;
@@ -624,7 +635,7 @@ void LayersPanel::update_scope() {
   m_view->setRootIsDecorated(!m_scope.is_nil());
   m_view->setItemsExpandable(!m_scope.is_nil());
   if(m_scope.is_nil()) {
-    m_heading->setText("ARTBOARDS");
+    m_heading->setText(translate("layers", "ARTBOARDS"));
     m_back->setVisible(false);
   } else {
     m_heading->setText(

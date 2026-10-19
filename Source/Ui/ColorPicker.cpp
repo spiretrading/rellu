@@ -17,6 +17,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include "Rellu/Ui/ColorPicker.hpp"
+#include "Rellu/Ui/Translation.hpp"
 #include "Colors.hpp"
 #include "Icons.hpp"
 
@@ -142,7 +143,7 @@ namespace {
   QLineEdit* make_field(const QString& name, int width) {
     auto field = new QLineEdit();
     field->setObjectName("number_field");
-    field->setAccessibleName(name);
+    field->setAccessibleName(translate("color_picker", name));
     field->setFixedWidth(width);
     return field;
   }
@@ -520,8 +521,10 @@ ColorPicker::ColorPicker(QWidget* parent)
   layout->setContentsMargins(MARGIN, 12, MARGIN, 14);
   layout->setSpacing(12);
   m_type->setObjectName("underlined_choice");
-  m_type->setAccessibleName("Fill Type");
-  m_type->addItems(TYPES);
+  m_type->setAccessibleName(translate("color_picker", "Fill Type"));
+  for(auto& type : TYPES) {
+    m_type->addItem(translate("color_picker", type));
+  }
   m_type->setFixedWidth(150);
   QObject::connect(m_type, &QComboBox::activated, this, [this] (int index) {
     apply_type(index);
@@ -542,8 +545,10 @@ ColorPicker::ColorPicker(QWidget* parent)
   values_layout->setContentsMargins(0, 0, 0, 0);
   values_layout->setSpacing(8);
   m_model_box->setObjectName("underlined_choice");
-  m_model_box->setAccessibleName("Color Model");
-  m_model_box->addItems(MODELS);
+  m_model_box->setAccessibleName(translate("color_picker", "Color Model"));
+  for(auto& model : MODELS) {
+    m_model_box->addItem(translate("color_picker", model));
+  }
   m_model_box->setFixedWidth(54);
   QObject::connect(m_model_box, &QComboBox::activated, this,
     [this] (int index) {
@@ -551,7 +556,7 @@ ColorPicker::ColorPicker(QWidget* parent)
     });
   values_layout->addWidget(m_model_box);
   m_hex->setObjectName("number_field");
-  m_hex->setAccessibleName("Hex");
+  m_hex->setAccessibleName(translate("color_picker", "Hex"));
   values_layout->addWidget(m_hex, 1);
   QObject::connect(m_hex, &QLineEdit::editingFinished, this, [this] {
     commit_fields();
@@ -575,8 +580,8 @@ ColorPicker::ColorPicker(QWidget* parent)
   dropper->setIcon(get_icon(Glyph::EYEDROPPER));
   dropper->setIconSize(QSize(18, 18));
   dropper->setFixedSize(26, 26);
-  dropper->setToolTip("Pick color from screen");
-  dropper->setAccessibleName("Pick color from screen");
+  dropper->setToolTip(translate("color_picker", "Pick color from screen"));
+  dropper->setAccessibleName(dropper->toolTip());
   QObject::connect(dropper, &QToolButton::clicked, this, [this] {
     pick_from_screen();
   });
@@ -895,8 +900,9 @@ void ColorPicker::rebuild_swatches() {
   add->setIcon(get_icon(Glyph::PLUS));
   add->setIconSize(QSize(18, 18));
   add->setFixedSize(SWATCH_SIZE + 4, SWATCH_SIZE + 4);
-  add->setToolTip("Add color to Document Assets");
-  add->setAccessibleName("Add to Assets");
+  add->setToolTip(
+    translate("color_picker", "Add color to Document Assets"));
+  add->setAccessibleName(translate("color_picker", "Add to Assets"));
   add->setEnabled(static_cast<bool>(m_add_handler));
   QObject::connect(add, &QToolButton::clicked, this, [this] {
     if(m_add_handler) {

@@ -13,6 +13,7 @@
 #include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/Subscription.hpp"
 #include "Rellu/Tools/ArtboardTitles.hpp"
+#include "Rellu/Tools/GuideSettings.hpp"
 #include "Rellu/Tools/HitTester.hpp"
 #include "Rellu/Tools/SnapService.hpp"
 
@@ -150,6 +151,27 @@ namespace Rellu {
        */
       std::uint64_t get_revision() const;
 
+      /** Returns how artboard guides are shown. */
+      const GuideSettings& get_guide_settings() const;
+
+      /**
+       * Sets how artboard guides are shown.
+       * @param settings The settings.
+       */
+      void set_guide_settings(GuideSettings settings);
+
+      /**
+       * Returns the guide being dragged, drawn by the tool dragging it in
+       * place of where the document has it, or none.
+       */
+      const std::optional<GuideReference>& get_dragged_guide() const;
+
+      /**
+       * Sets the guide being dragged.
+       * @param guide The guide, or none.
+       */
+      void set_dragged_guide(std::optional<GuideReference> guide);
+
     private:
       Editor* m_editor;
       HitTester* m_hit_tester;
@@ -164,6 +186,8 @@ namespace Rellu {
       ViewNavigator m_navigator;
       std::optional<std::string> m_tool_request;
       std::uint64_t m_revision;
+      GuideSettings m_guide_settings;
+      std::optional<GuideReference> m_dragged_guide;
       Subscription m_subscription;
 
       ToolContext(const ToolContext&) = delete;

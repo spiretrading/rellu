@@ -186,6 +186,57 @@ TEST_SUITE("Compounds") {
     REQUIRE(get_result(document, inner) == inner_result);
   }
 
+  TEST_CASE("group_operand") {
+    auto document = Document();
+    auto transaction = std::optional<Transaction>(std::in_place, document);
+    auto stored = make_rectangle(Rect(0, 0, 1, 1));
+    auto compound = transaction->append(NodeId(), make_header(),
+      make_compound(CompoundOperation::UNION, stored));
+    transaction->append(compound, make_header(),
+      make_rectangle_shape(SQUARE));
+    auto group = transaction->append(compound,
+      make_header(make_translation(10, 0)), Group());
+    auto inner = transaction->append(group, make_header(),
+      make_rectangle_shape(SQUARE));
+    transaction->commit();
+    document.clear_history();
+    auto history = History(document);
+    REQUIRE(history.execute(std::make_unique<TranslateCommand>(
+      std::vector{inner}, Point(5, 5))));
+    REQUIRE(get_result(document, compound) ==
+      make_union(SQUARE, SQUARE, Point(15, 5)));
+    REQUIRE(history.execute(std::make_unique<TranslateCommand>(
+      std::vector{group}, Point(10, 0))));
+    REQUIRE(get_result(document, compound) ==
+      make_union(SQUARE, SQUARE, Point(25, 5)));
+    REQUIRE(history.undo());
+    REQUIRE(history.undo());
+    REQUIRE(get_result(document, compound) == stored);
+  }
+
+  TEST_CASE("reference_operand") {
+    auto document = Document();
+    auto transaction = std::optional<Transaction>(std::in_place, document);
+    auto stored = make_rectangle(Rect(0, 0, 1, 1));
+    auto master = transaction->insert_root(make_header(), Group());
+    auto source = transaction->append(master,
+      make_header(make_translation(10, 0)), make_rectangle_shape(SQUARE));
+    auto compound = transaction->append(NodeId(), make_header(),
+      make_compound(CompoundOperation::UNION, stored));
+    transaction->append(compound, make_header(),
+      make_rectangle_shape(SQUARE));
+    transaction->append(compound, make_header(), Reference(source));
+    transaction->commit();
+    document.clear_history();
+    auto history = History(document);
+    REQUIRE(history.execute(std::make_unique<ShapeCommand>(
+      source, make_rectangle_shape(Rect(0, 0, 20, 30)))));
+    REQUIRE(get_result(document, compound) == make_union(
+      SQUARE, Rect(0, 0, 20, 30), Point(10, 0)));
+    REQUIRE(history.undo());
+    REQUIRE(get_result(document, compound) == stored);
+  }
+
   TEST_CASE("filter") {
     auto document = Document();
     auto sample = make_sample(document);

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 #include <optional>
@@ -15,6 +16,10 @@ using namespace Rellu;
 
 namespace {
   constexpr auto TOLERANCE = 1e-9;
+  constexpr auto FIT_TOLERANCE = 0.001;
+  constexpr auto MINIMUM_FONT_SIZE = 1.0;
+  constexpr auto MAXIMUM_FONT_SIZE = 1000.0;
+  constexpr auto FONT_STEP = 5.0;
 
   std::optional<Point> get_axis_scale(const Matrix& matrix) {
     auto magnitude = std::abs(matrix.m_a) + std::abs(matrix.m_d);
@@ -81,8 +86,65 @@ namespace {
   }
 
   void reshape(const Document& document, Transaction& transaction,
-    const NodeId& id, const Matrix& transform, Matrix local,
-    Matrix composed);
+    const NodeId& id, const Matrix& transform, Matrix local, Matrix composed,
+    const TextMeasurer& measurer);
+
+  bool is_point_text(const Node& node) {
+    auto text = node.get_text();
+    return text && std::holds_alternative<PositionedFrame>(text->m_frame);
+  }
+
+  int compare_fit(const Rect& bounds, Size target) {
+    auto width = bounds.m_width - target.m_width;
+    auto height = bounds.m_height - target.m_height;
+    if(width < -FIT_TOLERANCE && height < -FIT_TOLERANCE) {
+      return -1;
+    } else if(width > FIT_TOLERANCE || height > FIT_TOLERANCE) {
+      return 1;
+    }
+    return 0;
+  }
+
+  Text fit_font(const Text& text, Size target, const TextMeasurer& measurer) {
+    auto maximum = text.m_runs.empty() ? text.m_base_style.m_font.m_size : 0;
+    for(auto& run : text.m_runs) {
+      maximum = std::max(maximum, run.m_style.m_font.m_size);
+    }
+    maximum = std::max(maximum, MINIMUM_FONT_SIZE);
+    auto resize = [&] (double size) {
+      auto scale = [&] (double value, double minimum) {
+        return std::max(std::round(value / maximum * size), minimum);
+      };
+      auto font = [&] (double value) {
+        return std::min(scale(value, MINIMUM_FONT_SIZE), MAXIMUM_FONT_SIZE);
+      };
+      auto fitted = text;
+      fitted.m_base_style.m_font.m_size = font(text.m_base_style.m_font.m_size);
+      for(auto& run : fitted.m_runs) {
+        run.m_style.m_font.m_size = font(run.m_style.m_font.m_size);
+      }
+      if(auto& height = fitted.m_paragraph_style.m_line_height) {
+        *height = scale(*height, *height == 0 ? 0 : 1);
+      }
+      auto& spacing = fitted.m_paragraph_style.m_paragraph_spacing;
+      spacing = scale(spacing, spacing == 0 ? 0 : 1);
+      fitted.m_layout = std::nullopt;
+      return fitted;
+    };
+    auto size = maximum;
+    auto fitted = resize(size);
+    while(compare_fit(measurer(fitted), target) < 0 &&
+        size < MAXIMUM_FONT_SIZE) {
+      size += FONT_STEP;
+      fitted = resize(size);
+    }
+    while(compare_fit(measurer(fitted), target) > 0 &&
+        size > MINIMUM_FONT_SIZE) {
+      size -= 1;
+      fitted = resize(size);
+    }
+    return fitted;
+  }
 
   bool is_mirrorable(const Node& node) {
     if(node.get_shape()) {
@@ -133,7 +195,8 @@ namespace {
             return mirrored;
           }
           mirrored.m_vertices = make_polygon_vertices(shape.m_corner_count,
-            Rect(0, 0, shape.m_size.m_width, shape.m_size.m_height));
+            Rect(0, 0, shape.m_size.m_width, shape.m_size.m_height),
+            shape.m_star_ratio);
         }
         for(auto& vertex : mirrored.m_vertices) {
           vertex = reflection.map(vertex);
@@ -196,13 +259,14 @@ namespace {
   }
 
   void mirror_children(const Document& document, Transaction& transaction,
-      const std::vector<NodeId>& children, const Matrix& reflection) {
+      const std::vector<NodeId>& children, const Matrix& reflection,
+      const TextMeasurer& measurer) {
     for(auto& child : children) {
       auto transform = get_transform(document, child);
       auto composed = reflection * transform;
       if(auto inverse = invert(transform)) {
         reshape(document, transaction, child, transform,
-          *inverse * reflection * transform, composed);
+          *inverse * reflection * transform, composed, measurer);
       } else {
         set_transform(document, transaction, child, composed);
       }
@@ -225,7 +289,8 @@ namespace {
   }
 
   void mirror_content(const Document& document, Transaction& transaction,
-      const NodeId& id, Point center, bool is_horizontal, bool is_vertical) {
+      const NodeId& id, Point center, bool is_horizontal, bool is_vertical,
+      const TextMeasurer& measurer) {
     auto reflection = make_reflection(center, is_horizontal, is_vertical);
     auto& node = document.get(id);
     auto children = node.m_children;
@@ -239,7 +304,8 @@ namespace {
         std::holds_alternative<CompoundShape>(payload.m_geometry);
       transaction.replace_payload(id, std::move(payload));
       if(is_compound) {
-        mirror_children(document, transaction, children, reflection);
+        mirror_children(
+          document, transaction, children, reflection, measurer);
       }
     } else if(auto group = node.get_group()) {
       if(group->m_mask) {
@@ -249,19 +315,20 @@ namespace {
         }
         transaction.replace_payload(id, std::move(payload));
       }
-      mirror_children(document, transaction, children, reflection);
+      mirror_children(document, transaction, children, reflection, measurer);
     }
   }
 
   void scale_children(const Document& document, Transaction& transaction,
-      const std::vector<NodeId>& children, Point scale) {
+      const std::vector<NodeId>& children, Point scale,
+      const TextMeasurer& measurer) {
     auto matrix = make_scale(scale.m_x, scale.m_y);
     for(auto& child : children) {
       auto transform = get_transform(document, child);
       auto composed = matrix * transform;
       if(auto inverse = invert(transform)) {
         reshape(document, transaction, child, transform,
-          *inverse * matrix * transform, composed);
+          *inverse * matrix * transform, composed, measurer);
       } else {
         set_transform(document, transaction, child, composed);
       }
@@ -269,7 +336,7 @@ namespace {
   }
 
   void scale_content(const Document& document, Transaction& transaction,
-      const NodeId& id, Point scale) {
+      const NodeId& id, Point scale, const TextMeasurer& measurer) {
     if(is_unit(scale)) {
       return;
     }
@@ -282,7 +349,7 @@ namespace {
         std::holds_alternative<CompoundShape>(payload.m_geometry);
       transaction.replace_payload(id, std::move(payload));
       if(is_compound) {
-        scale_children(document, transaction, children, scale);
+        scale_children(document, transaction, children, scale, measurer);
       }
     } else if(auto text = node.get_text()) {
       auto payload = *text;
@@ -291,6 +358,9 @@ namespace {
           area->m_size.m_height * scale.m_y);
       } else if(auto frame = std::get_if<AutoHeightFrame>(&payload.m_frame)) {
         frame->m_width *= scale.m_x;
+      }
+      if(std::abs(scale.m_x - 1) > TOLERANCE) {
+        payload.m_layout = std::nullopt;
       }
       transaction.replace_payload(id, std::move(payload));
     } else if(auto group = node.get_group()) {
@@ -302,17 +372,40 @@ namespace {
         }
         transaction.replace_payload(id, std::move(payload));
       }
-      scale_children(document, transaction, children, scale);
+      scale_children(document, transaction, children, scale, measurer);
+    }
+  }
+
+  void fit_point_text(const Document& document, Transaction& transaction,
+      const NodeId& id, const Matrix& base, const Matrix& local,
+      const TextMeasurer& measurer) {
+    auto& text = *document.get(id).get_text();
+    auto bounds = measurer(text);
+    auto target = local.map(bounds);
+    auto payload = text;
+    if(std::abs(target.m_width - bounds.m_width) > TOLERANCE ||
+        std::abs(target.m_height - bounds.m_height) > TOLERANCE) {
+      payload = fit_font(text, target.get_size(), measurer);
+    }
+    auto fitted = measurer(payload);
+    auto transform = base * make_translation(
+      target.m_x - fitted.m_x, target.m_y - fitted.m_y);
+    if(payload != text) {
+      transaction.replace_payload(id, std::move(payload));
+    }
+    if(transform != get_transform(document, id)) {
+      set_transform(document, transaction, id, transform);
     }
   }
 
   void reshape(const Document& document, Transaction& transaction,
       const NodeId& id, const Matrix& transform, Matrix local,
-      Matrix composed) {
+      Matrix composed, const TextMeasurer& measurer) {
     auto scale = get_axis_scale(local);
     auto base = transform;
     if(scale && (scale->m_x < 0 || scale->m_y < 0)) {
-      if(auto bounds = get_local_bounds(document, id)) {
+      if(auto bounds = get_local_bounds(
+          document, id, BoundsType::GEOMETRY, measurer)) {
         auto& node = document.get(id);
         auto center = bounds->get_center();
         if(node.get_text()) {
@@ -324,7 +417,7 @@ namespace {
         } else {
           if(is_mirrorable(node)) {
             mirror_content(document, transaction, id, center,
-              scale->m_x < 0, scale->m_y < 0);
+              scale->m_x < 0, scale->m_y < 0, measurer);
           }
           auto mapped = local.map(*bounds);
           scale = Point(std::abs(scale->m_x), std::abs(scale->m_y));
@@ -341,7 +434,10 @@ namespace {
       if(updated != transform) {
         set_transform(document, transaction, id, updated);
       }
-      scale_content(document, transaction, id, *scale);
+      scale_content(document, transaction, id, *scale, measurer);
+    } else if(scale && scale->m_x > 0 && scale->m_y > 0 &&
+        is_point_text(document.get(id))) {
+      fit_point_text(document, transaction, id, base, local, measurer);
     } else if(composed != transform) {
       set_transform(document, transaction, id, composed);
     }
@@ -423,7 +519,8 @@ void Rellu::translate_node(const Document& document,
 }
 
 void Rellu::transform_node(const Document& document,
-    Transaction& transaction, const NodeId& id, const Matrix& mapping) {
+    Transaction& transaction, const NodeId& id, const Matrix& mapping,
+    const TextMeasurer& measurer) {
   if(document.get(id).get_artboard()) {
     transform_artboard(document, transaction, id, mapping);
     return;
@@ -438,7 +535,7 @@ void Rellu::transform_node(const Document& document,
   auto composed = relative * transform;
   if(auto inverse = invert(transform)) {
     reshape(document, transaction, id, transform,
-      *inverse * relative * transform, composed);
+      *inverse * relative * transform, composed, measurer);
   } else {
     set_transform(document, transaction, id, composed);
   }
@@ -533,10 +630,18 @@ TransformCommand::TransformCommand(std::vector<NodeId> nodes,
 
 TransformCommand::TransformCommand(std::vector<NodeId> nodes,
   const Matrix& mapping, std::string label, TransformMode mode) noexcept
+  : TransformCommand(std::move(nodes), mapping, std::move(label), mode,
+      ResizeRule::PROPORTIONAL, estimate_text_bounds) {}
+
+TransformCommand::TransformCommand(std::vector<NodeId> nodes,
+  const Matrix& mapping, std::string label, TransformMode mode,
+  ResizeRule rule, TextMeasurer measurer) noexcept
   : m_nodes(std::move(nodes)),
     m_mapping(mapping),
     m_label(std::move(label)),
-    m_mode(mode) {}
+    m_mode(mode),
+    m_rule(rule),
+    m_measurer(std::move(measurer)) {}
 
 const std::vector<NodeId>& TransformCommand::get_nodes() const {
   return m_nodes;
@@ -544,6 +649,10 @@ const std::vector<NodeId>& TransformCommand::get_nodes() const {
 
 const Matrix& TransformCommand::get_mapping() const {
   return m_mapping;
+}
+
+ResizeRule TransformCommand::get_rule() const {
+  return m_rule;
 }
 
 std::string TransformCommand::get_label() const {
@@ -564,15 +673,19 @@ void TransformCommand::apply(
     }
     return;
   }
+  auto sizes = std::vector<std::pair<NodeId, Size>>();
   for(auto& id : nodes) {
-    auto size = std::optional<Size>();
-    if(is_artboard(id)) {
-      size = document.get(id).get_artboard()->m_frame.get_size();
+    if(auto artboard = document.get(id).get_artboard()) {
+      sizes.emplace_back(id, artboard->m_frame.get_size());
     }
-    transform_node(document, transaction, id, m_mapping);
-    if(m_mode == TransformMode::RESIZE && size &&
-        document.get(id).get_artboard()->m_frame.get_size() != *size) {
-      update_artboard_contents(document, transaction, id);
+  }
+  resize_nodes(document, transaction, nodes, m_mapping, m_rule,
+    m_mode == TransformMode::DRAG, m_measurer);
+  if(m_mode == TransformMode::RESIZE) {
+    for(auto& [id, size] : sizes) {
+      if(document.get(id).get_artboard()->m_frame.get_size() != size) {
+        update_artboard_contents(document, transaction, id);
+      }
     }
   }
 }
@@ -593,9 +706,11 @@ std::unique_ptr<TranslateCommand> Rellu::make_nudge_command(
 }
 
 std::unique_ptr<TransformCommand> Rellu::make_resize_command(
-    std::vector<NodeId> nodes, const Rect& from, const Rect& to) {
-  return std::make_unique<TransformCommand>(
-    std::move(nodes), make_rect_mapping(from, to), "Resize");
+    std::vector<NodeId> nodes, const Rect& from, const Rect& to,
+    const TextMeasurer& measurer) {
+  return std::make_unique<TransformCommand>(std::move(nodes),
+    make_rect_mapping(from, to), "Resize", TransformMode::RESIZE,
+    ResizeRule::RESPONSIVE, measurer);
 }
 
 std::unique_ptr<TransformCommand> Rellu::make_bounds_command(
@@ -611,7 +726,8 @@ std::unique_ptr<TransformCommand> Rellu::make_bounds_command(
     return nullptr;
   }
   return std::make_unique<TransformCommand>(std::vector{id},
-    world * make_rect_mapping(*local, bounds) * *inverse, "Resize");
+    world * make_rect_mapping(*local, bounds) * *inverse, "Resize",
+    TransformMode::RESIZE, ResizeRule::RESPONSIVE, measurer);
 }
 
 std::unique_ptr<TransformCommand> Rellu::make_rotate_command(

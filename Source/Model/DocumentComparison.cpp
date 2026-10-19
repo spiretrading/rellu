@@ -148,6 +148,7 @@ namespace {
     collector.check(
       left.m_geometry == right.m_geometry, subject, "geometry");
     compare(left.m_style, right.m_style, subject + ": style", collector);
+    collector.check(left.m_video == right.m_video, subject, "video");
   }
 
   void compare(const Text& left, const Text& right,
@@ -163,6 +164,9 @@ namespace {
     collector.check(left.m_layout == right.m_layout, subject, "layout");
     collector.check(left.m_repeat_data == right.m_repeat_data, subject,
       "repeat data");
+    collector.check(
+      left.m_is_flipped_vertically == right.m_is_flipped_vertically, subject,
+      "vertical flip");
   }
 
   void compare(const Reference& left, const Reference& right,

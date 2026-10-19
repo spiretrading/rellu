@@ -1,6 +1,7 @@
 #ifndef RELLU_MODEL_ARTBOARD_HPP
 #define RELLU_MODEL_ARTBOARD_HPP
 #include <optional>
+#include <string>
 #include <vector>
 #include "Rellu/Geometry/Color.hpp"
 #include "Rellu/Geometry/Equality.hpp"
@@ -110,6 +111,9 @@ namespace Rellu {
     /** The offset of the guide from the artboard's origin. */
     double m_position = 0;
 
+    /** The guide's identifier, or empty if it has none. */
+    std::string m_id;
+
     bool operator ==(const Guide& guide) const;
   };
 
@@ -151,7 +155,7 @@ namespace Rellu {
 
   inline bool Guide::operator ==(const Guide& guide) const {
     return m_orientation == guide.m_orientation &&
-      equals(m_position, guide.m_position);
+      equals(m_position, guide.m_position) && m_id == guide.m_id;
   }
 
   inline bool Artboard::operator ==(const Artboard& artboard) const {

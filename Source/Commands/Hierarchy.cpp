@@ -3,6 +3,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include "Rellu/Commands/Hierarchy.hpp"
 
 using namespace Rellu;
@@ -94,6 +95,20 @@ NodeId Rellu::find_artboard(const Document& document, const NodeId& id) {
     current = document.find(current->m_parent);
   }
   return NodeId();
+}
+
+bool Rellu::is_inside_compound(const Document& document, const NodeId& id) {
+  auto current = document.find(id);
+  while(current && !current->m_parent.is_nil()) {
+    current = document.find(current->m_parent);
+    if(current) {
+      if(auto shape = current->get_shape();
+          shape && std::holds_alternative<CompoundShape>(shape->m_geometry)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 std::size_t Rellu::get_index(const Document& document, const NodeId& id) {

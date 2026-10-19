@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 #include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Scene/SceneBuilder.hpp"
+#include "Rellu/Text/FontLibrary.hpp"
 
 using namespace Rellu;
 
@@ -50,6 +51,25 @@ TEST_SUITE("SceneBuilder") {
     REQUIRE(bounds.get_bottom() <= 0.5);
     REQUIRE(bounds.get_top() < -10);
     REQUIRE(!fill.m_clip);
+  }
+
+  TEST_CASE("flipped_text") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto text = make_text(make_color(255, 0, 0));
+    text.m_is_flipped_vertically = true;
+    transaction.append(NodeId(), make_header(make_translation(5, 30)), text);
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto list = builder.build();
+    REQUIRE(list.size() == 1);
+    auto& fill = get_fill(list, 0);
+    auto bounds = measure_text(text, get_default_font_library());
+    REQUIRE(fill.m_transform == make_translation(5, 30) *
+      Matrix(1, 0, 0, -1, 0, 2 * bounds.m_y + bounds.m_height));
+    auto drawn = get_bounds(transform(*fill.m_path, fill.m_transform));
+    REQUIRE(drawn.get_top() >= 30 + bounds.get_top() - 0.5);
+    REQUIRE(drawn.get_bottom() <= 30 + bounds.get_bottom() + 0.5);
   }
 
   TEST_CASE("rasterized_text") {

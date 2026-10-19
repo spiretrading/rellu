@@ -5,6 +5,7 @@
 #include <vector>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Command.hpp"
+#include "Rellu/Commands/ResponsiveResize.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
@@ -58,7 +59,8 @@ namespace Rellu {
   /**
    * Applies a mapping in document space to a node, resizing its geometry
    * rather than scaling its transform where the mapping scales along the
-   * node's own axes. A mapping that mirrors along those axes, as a resize
+   * node's own axes, and fitting the font sizes of point text to the bounds
+   * it is mapped to. A mapping that mirrors along those axes, as a resize
    * past the opposite side or a flip does, mirrors the geometry and fills
    * of shapes and the contents of plain and mask groups, mirrors the
    * transform of text, which Adobe XD shows as a rotation of 180 degrees,
@@ -68,9 +70,11 @@ namespace Rellu {
    * @param transaction The open transaction on the <i>document</i>.
    * @param id The node's id.
    * @param mapping The mapping in document space.
+   * @param measurer The function measuring text.
    */
   void transform_node(const Document& document, Transaction& transaction,
-    const NodeId& id, const Matrix& mapping);
+    const NodeId& id, const Matrix& mapping,
+    const TextMeasurer& measurer = estimate_text_bounds);
 
   /**
    * Moves the nodes on the pasteboard that overlap an artboard's frame into
@@ -128,12 +132,13 @@ namespace Rellu {
       std::string m_label;
   };
 
-  /** Applies a mapping in document space to nodes, as by transform_node. */
+  /** Applies a mapping in document space to nodes, as by resize_nodes. */
   class TransformCommand : public Command {
     public:
 
       /**
-       * Constructs a TransformCommand in the RESIZE mode.
+       * Constructs a TransformCommand in the RESIZE mode scaling the
+       * contents of containers.
        * @param nodes The nodes to transform.
        * @param mapping The mapping in document space.
        * @param label The label naming the operation.
@@ -142,7 +147,7 @@ namespace Rellu {
         std::string label) noexcept;
 
       /**
-       * Constructs a TransformCommand.
+       * Constructs a TransformCommand scaling the contents of containers.
        * @param nodes The nodes to transform.
        * @param mapping The mapping in document space.
        * @param label The label naming the operation.
@@ -151,11 +156,27 @@ namespace Rellu {
       TransformCommand(std::vector<NodeId> nodes, const Matrix& mapping,
         std::string label, TransformMode mode) noexcept;
 
+      /**
+       * Constructs a TransformCommand.
+       * @param nodes The nodes to transform.
+       * @param mapping The mapping in document space.
+       * @param label The label naming the operation.
+       * @param mode The way the mapping is applied.
+       * @param rule The way the contents of containers follow.
+       * @param measurer The function measuring text.
+       */
+      TransformCommand(std::vector<NodeId> nodes, const Matrix& mapping,
+        std::string label, TransformMode mode, ResizeRule rule,
+        TextMeasurer measurer) noexcept;
+
       /** Returns the nodes transformed. */
       const std::vector<NodeId>& get_nodes() const;
 
       /** Returns the mapping in document space. */
       const Matrix& get_mapping() const;
+
+      /** Returns the way the contents of containers follow. */
+      ResizeRule get_rule() const;
 
       std::string get_label() const override;
       void apply(const Document& document, Transaction& transaction) override;
@@ -171,6 +192,8 @@ namespace Rellu {
       Matrix m_mapping;
       std::string m_label;
       TransformMode m_mode;
+      ResizeRule m_rule;
+      TextMeasurer m_measurer;
   };
 
   /**
@@ -184,17 +207,21 @@ namespace Rellu {
 
   /**
    * Makes a command labelled Resize mapping a rect in document space, such
-   * as the selection's bounds, onto another.
+   * as the selection's bounds, onto another, laying out the contents of
+   * containers by their constraints.
    * @param nodes The nodes to resize.
    * @param from The rect before resizing.
    * @param to The rect after resizing.
+   * @param measurer The function measuring text.
    */
   std::unique_ptr<TransformCommand> make_resize_command(
-    std::vector<NodeId> nodes, const Rect& from, const Rect& to);
+    std::vector<NodeId> nodes, const Rect& from, const Rect& to,
+    const TextMeasurer& measurer = estimate_text_bounds);
 
   /**
    * Makes a command labelled Resize setting a node's bounds in its local
-   * space, so that it is resized along its own axes.
+   * space, so that it is resized along its own axes, laying out the contents
+   * of containers by their constraints.
    * @param document The document holding the node.
    * @param id The node's id.
    * @param bounds The new bounds in the node's local space.

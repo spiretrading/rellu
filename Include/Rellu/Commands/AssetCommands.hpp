@@ -138,17 +138,24 @@ namespace Rellu {
   };
 
   /**
-   * Adds a group of assets named New group first within another group,
+   * Adds a group of assets first within another group or a section,
    * labelled Create Asset Group, as Create subgroup does.
    */
   class AddAssetGroupCommand : public Command {
     public:
 
       /**
-       * Constructs an AddAssetGroupCommand.
-       * @param parent The id of the group to hold the new group.
+       * Constructs an AddAssetGroupCommand naming the group New group.
+       * @param parent The id of the group or section to hold the new group.
        */
       explicit AddAssetGroupCommand(std::string parent) noexcept;
+
+      /**
+       * Constructs an AddAssetGroupCommand.
+       * @param parent The id of the group or section to hold the new group.
+       * @param name The new group's name.
+       */
+      AddAssetGroupCommand(std::string parent, std::string name) noexcept;
 
       /** Returns the id of the group made. */
       const std::string& get_group() const;
@@ -158,6 +165,7 @@ namespace Rellu {
 
     private:
       std::string m_parent;
+      std::string m_name;
       std::string m_group;
   };
 

@@ -328,7 +328,8 @@ TEST_SUITE("Transaction") {
         make_rectangle_shape(1, 1));
     });
     require_invalid(document, [&] (auto& transaction) {
-      transaction.append(sample.m_compound, make_header("Child"), Group());
+      transaction.append(
+        sample.m_compound, make_header("Child"), make_text(u"Text"));
     });
     auto reference = NodeId();
     require_invalid(document, [&] (auto& transaction) {
@@ -627,8 +628,12 @@ TEST_SUITE("Transaction") {
       compound, make_header("Operand"), make_compound_shape());
     transaction.append(
       operand, make_header("Nested"), make_rectangle_shape(1, 1));
+    auto group =
+      transaction.append(compound, make_header("Group"), Group());
+    auto reference = transaction.append(
+      compound, make_header("Reference"), Reference(operand));
     REQUIRE(document.get_children(compound) ==
-      std::vector<NodeId>({operand}));
+      std::vector<NodeId>({operand, group, reference}));
     transaction.commit();
   }
 }

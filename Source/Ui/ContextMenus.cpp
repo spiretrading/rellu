@@ -1,6 +1,7 @@
 #include <utility>
 #include <vector>
 #include "Rellu/Ui/ContextMenus.hpp"
+#include "Rellu/Ui/Translation.hpp"
 
 using namespace Rellu;
 
@@ -15,8 +16,8 @@ namespace {
   const auto SEPARATOR = Entry(nullptr, nullptr, false, false);
 
   bool is_component_ungroup(const QAction& action) {
-    return action.text().startsWith("Ungroup Component") ||
-      action.text().startsWith("Unlink Component");
+    return action.text().startsWith(translate("menu", "Ungroup Component")) ||
+      action.text().startsWith(translate("menu", "Unlink Component"));
   }
 
   std::vector<Entry> make_entries(
@@ -91,7 +92,7 @@ namespace {
       menu.addAction(&action);
       return;
     }
-    auto entry = menu.addAction(QString::fromUtf8(text));
+    auto entry = menu.addAction(translate("menu", QString::fromUtf8(text)));
     entry->setEnabled(action.isEnabled());
     QObject::connect(entry, &QAction::triggered, &action, [&action] {
       action.trigger();

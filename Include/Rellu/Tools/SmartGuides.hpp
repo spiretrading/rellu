@@ -29,6 +29,16 @@ namespace Rellu {
     bool operator ==(const GuideLine&) const = default;
   };
 
+  /** Lists the sides of a distance its label is drawn on. */
+  enum class LabelSide : unsigned char {
+
+    /** Above a horizontal distance, left of a vertical one. */
+    LEADING,
+
+    /** Below a horizontal distance, right of a vertical one. */
+    TRAILING
+  };
+
   /**
    * A distance drawn by smart guides, a line labelled with its length, in
    * document space.
@@ -40,6 +50,9 @@ namespace Rellu {
 
     /** The end of the line. */
     Point m_end = Point(0, 0);
+
+    /** The side the label is drawn on. */
+    LabelSide m_side = LabelSide::LEADING;
 
     /** Returns the length labelled. */
     double get_length() const;
@@ -54,9 +67,13 @@ namespace Rellu {
    * artboard's guides and visible layout or square grid, and to the spacing
    * between its neighbours. Cyan lines show what lined up and the edges a
    * measured selection shares, and magenta distances without end caps,
-   * labelled with a plain number centred above them, or left of them when
-   * vertical, show equal spacing and the measurements taken while Alt is
-   * held. Holding Ctrl suspends snapping.
+   * labelled with a plain number, show equal spacing and the measurements
+   * taken while Alt is held, with dashed magenta lines projecting a
+   * measurement to an object it does not face. A label lies centred above
+   * a horizontal distance or left of a vertical one, except that a
+   * horizontal measurement starting at a bottom corner is labelled below
+   * it and a vertical one starting at a right corner to its right, kept
+   * within the view. Holding Ctrl suspends snapping.
    */
   class SmartGuides : public SnapService {
     public:
@@ -208,8 +225,8 @@ namespace Rellu {
   };
 
   /**
-   * Formats a distance as smart guides label it, rounded to two decimals
-   * without trailing zeros.
+   * Formats a distance as smart guides label it, rounded to one decimal
+   * without a trailing zero, its thousands separated by commas.
    * @param distance The distance in document units.
    */
   std::string format_distance(double distance);

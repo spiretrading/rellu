@@ -96,10 +96,35 @@ namespace Rellu {
     const std::vector<NodeId>& nodes, TextSelection* selection,
     std::string label, TextStyleEditor editor, TextLayouter layouter);
 
+  /** Lists how Adobe XD judges the URL of a hyperlink. */
+  enum class HyperlinkValidity : unsigned char {
+
+    /** There is no URL. */
+    EMPTY,
+
+    /** The URL is accepted. */
+    VALID,
+
+    /** The URL starts with neither https:// nor mailto:. */
+    INVALID_PROTOCOL,
+
+    /** The URL's domain is not a host name XD accepts. */
+    INVALID_DOMAIN,
+
+    /** The URL can not be parsed. */
+    INVALID
+  };
+
+  /**
+   * Judges a hyperlink's URL as Adobe XD does once leading spaces, commas
+   * and number signs and trailing spaces are ignored.
+   * @param url The URL.
+   */
+  HyperlinkValidity check_hyperlink(const QString& url);
+
   /**
    * Tests whether Adobe XD shows a URL as valid rather than warning about
-   * its protocol: empty, or starting with https:// or mailto: once leading
-   * spaces, commas and number signs and trailing spaces are ignored.
+   * it, as it does for an empty URL.
    * @param url The URL.
    */
   bool is_valid_hyperlink(const QString& url);

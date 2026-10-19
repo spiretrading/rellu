@@ -27,9 +27,11 @@
 #include <QTimer>
 #include <QToolButton>
 #include "Rellu/Commands/AssetCommands.hpp"
+#include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
+#include "Rellu/Ui/Translation.hpp"
 #include "Colors.hpp"
 #include "HyperlinkStatus.hpp"
 #include "Icons.hpp"
@@ -270,7 +272,7 @@ namespace {
   };
 
   QLabel* make_label(const QString& text, const char* name = "field_label") {
-    auto label = new QLabel(text);
+    auto label = new QLabel(translate("inspector", text));
     label->setObjectName(name);
     return label;
   }
@@ -310,8 +312,8 @@ namespace {
     button->setIcon(get_icon(glyph));
     button->setIconSize(QSize(ICON_SIZE, ICON_SIZE));
     button->setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE);
-    button->setToolTip(tip);
-    button->setAccessibleName(tip);
+    button->setToolTip(translate("inspector", tip));
+    button->setAccessibleName(translate("inspector", tip));
     return button;
   }
 
@@ -369,7 +371,7 @@ namespace {
     auto button = new QToolButton();
     button->setObjectName("text_button");
     button->setFocusPolicy(Qt::NoFocus);
-    button->setText(text);
+    button->setText(translate("inspector", text));
     if(glyph) {
       button->setIcon(get_icon(*glyph));
       button->setIconSize(QSize(18, 18));
@@ -389,7 +391,7 @@ namespace {
     auto probe = PropertyDescriptor();
     probe.m_path = path;
     auto editor = binding.m_editor(probe);
-    button->setAccessibleName(text);
+    button->setAccessibleName(translate("inspector", text));
     button->setEnabled(binding.m_is_enabled && editor);
     if(editor) {
       QObject::connect(button, &QToolButton::clicked, button,
@@ -416,11 +418,12 @@ namespace {
     auto header = static_cast<QHBoxLayout*>(nullptr);
     if(!title.isEmpty()) {
       auto row = make_row(header, 6);
-      header->addWidget(make_label(title.toUpper(), "section_heading"));
+      auto heading = translate("inspector.section", title);
+      header->addWidget(make_label(heading.toUpper(), "section_heading"));
       if(has_info) {
         auto info = new QLabel();
         info->setPixmap(get_icon(Glyph::INFO).pixmap(QSize(14, 14)));
-        info->setToolTip(title);
+        info->setToolTip(heading);
         header->addWidget(info);
       }
       header->addStretch(1);
@@ -448,7 +451,7 @@ namespace {
     }
     auto line = new FieldLine();
     line->setObjectName("number_field");
-    line->setAccessibleName(property->m_label);
+    line->setAccessibleName(translate("inspector", property->m_label));
     line->setEnabled(binding.m_is_enabled);
     line->setReadOnly(!editor);
     if(width > 0) {
@@ -529,15 +532,16 @@ namespace {
   }
 
   QWidget* make_text_field(const Binding& binding, const std::string& path,
-      const QString& placeholder, bool is_entered = false) {
+      const QString& text, bool is_entered = false) {
     auto property = binding.m_find(path);
     if(!property) {
       return nullptr;
     }
+    auto placeholder = translate("inspector", text);
     auto editor = binding.m_editor(*property);
     auto line = new FieldLine();
     line->setObjectName("text_field");
-    line->setAccessibleName(property->m_label);
+    line->setAccessibleName(translate("inspector", property->m_label));
     line->setPlaceholderText(placeholder);
     line->setEnabled(binding.m_is_enabled);
     line->setReadOnly(!editor);
@@ -578,9 +582,9 @@ namespace {
       return nullptr;
     }
     auto editor = binding.m_editor(*property);
-    auto box = new QCheckBox(text);
+    auto box = new QCheckBox(translate("inspector", text));
     box->setFocusPolicy(Qt::NoFocus);
-    box->setAccessibleName(property->m_label);
+    box->setAccessibleName(translate("inspector", property->m_label));
     box->setEnabled(binding.m_is_enabled && editor);
     if(editor) {
       QObject::connect(box, &QCheckBox::clicked, box,
@@ -611,7 +615,7 @@ namespace {
     }
     auto editor = binding.m_editor(*property);
     auto toggle = new Switch();
-    toggle->setAccessibleName(property->m_label);
+    toggle->setAccessibleName(translate("inspector", property->m_label));
     toggle->setEnabled(binding.m_is_enabled && editor);
     if(editor) {
       QObject::connect(toggle, &QAbstractButton::clicked, toggle,
@@ -639,7 +643,7 @@ namespace {
     auto box = new ChoiceBox();
     box->setObjectName(name);
     box->setFocusPolicy(Qt::NoFocus);
-    box->setAccessibleName(property->m_label);
+    box->setAccessibleName(translate("inspector", property->m_label));
     box->setPlaceholderText(EM_DASH);
     auto options = QStringList();
     if(auto choice = std::get_if<Choice>(&property->m_value)) {
@@ -647,8 +651,15 @@ namespace {
     } else {
       options.push_back(to_text(property->m_value));
     }
+    auto is_translated = std::holds_alternative<Choice>(property->m_value) &&
+      path != "text.family" && path != "text.style" &&
+      path != "component.state";
     for(auto i = 0; i != options.size(); ++i) {
-      box->addItem(options[i], i);
+      if(is_translated) {
+        box->addItem(translate("inspector." + path, options[i]), i);
+      } else {
+        box->addItem(options[i], i);
+      }
       if(path.ends_with("blend_mode") &&
           BLEND_SEPARATORS.contains(options[i])) {
         box->insertSeparator(box->count());
@@ -834,7 +845,7 @@ namespace {
     auto editor = property ? binding.m_editor(*property) : nullptr;
     button->setEnabled(binding.m_is_enabled);
     if(property) {
-      button->setAccessibleName(property->m_label);
+      button->setAccessibleName(translate("inspector", property->m_label));
     }
     if(editor) {
       QObject::connect(button, &QToolButton::clicked, button,
@@ -910,7 +921,7 @@ namespace {
     auto row = make_row(layout, 16);
     auto slider = new QSlider(Qt::Horizontal);
     slider->setObjectName("opacity_slider");
-    slider->setAccessibleName(property->m_label);
+    slider->setAccessibleName(translate("inspector", property->m_label));
     slider->setFocusPolicy(Qt::NoFocus);
     auto scale = display.m_scale;
     slider->setRange(static_cast<int>(std::lround(minimum * scale)),
@@ -1201,8 +1212,8 @@ namespace {
       button->setObjectName("text_button");
       button->setFocusPolicy(Qt::NoFocus);
       button->setCheckable(true);
-      button->setText(text);
-      button->setAccessibleName(text);
+      button->setText(translate("inspector.layout.resize", text));
+      button->setAccessibleName(button->text());
       button->setEnabled(binding.m_is_enabled && editor);
       layout->addWidget(button, 1);
       buttons->push_back(button);
@@ -1402,7 +1413,7 @@ namespace {
       auto row = make_row(layout, 16);
       auto slider = new QSlider(Qt::Horizontal);
       slider->setObjectName("opacity_slider");
-      slider->setAccessibleName("Opacity");
+      slider->setAccessibleName(translate("inspector", "Opacity"));
       slider->setFocusPolicy(Qt::NoFocus);
       slider->setRange(0, 100);
       layout->addWidget(slider, 1);
@@ -1524,7 +1535,7 @@ namespace {
     auto layout = static_cast<QHBoxLayout*>(nullptr);
     auto row = make_row(layout, 14);
     if(auto box = make_check(binding, "grid.visible")) {
-      box->setToolTip("Show/Hide Grid");
+      box->setToolTip(translate("inspector", "Show/Hide Grid"));
       layout->addWidget(box);
     }
     if(auto type = make_combo(binding, "grid.type")) {
@@ -1716,7 +1727,7 @@ namespace {
     layout->addWidget(make_label(label));
     auto box = new ChoiceBox();
     box->setObjectName("choice_field");
-    box->addItem(value);
+    box->addItem(translate("inspector", value));
     box->setEnabled(false);
     layout->addWidget(box);
     return widget;
@@ -2017,7 +2028,7 @@ void PropertyInspector::rebuild() {
       make_static_combo("Link Access", "Anyone with the link"));
     auto create = new QToolButton();
     create->setObjectName("text_button");
-    create->setText("Create Link");
+    create->setText(translate("inspector", "Create Link"));
     create->setEnabled(false);
     frame.m_layout->addWidget(create);
     m_layout->addWidget(frame.m_widget);
@@ -2279,8 +2290,8 @@ bool PropertyInspector::find_lock() const {
     return false;
   }
   return std::any_of(m_nodes.begin(), m_nodes.end(), [&] (const auto& id) {
-    auto node = m_document->find(id);
-    return node && node->m_header.m_is_locked;
+    auto header = find_rendered_header(*m_document, id);
+    return header && header->m_is_locked;
   });
 }
 

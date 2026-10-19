@@ -57,7 +57,7 @@ TEST_SUITE("PropertyDescriptor") {
     REQUIRE(get_text(properties, "transform.height") == "812");
     REQUIRE(get_text(properties, "transform.orientation") == "Portrait");
     REQUIRE(!find_property(properties, "transform.rotation"));
-    REQUIRE(get_text(properties, "layout.responsive") == "No");
+    REQUIRE(get_text(properties, "layout.responsive") == "Yes");
     REQUIRE(get_text(properties, "layout.scrolling") == "None");
     REQUIRE(!find_property(properties, "appearance.opacity"));
     REQUIRE(get_text(properties, "fill") == "Solid");
@@ -195,7 +195,11 @@ TEST_SUITE("PropertyDescriptor") {
     REQUIRE(get_text(properties, "geometry.corners") == "6");
     REQUIRE(get_text(properties, "geometry.corner_radius") == "0");
     REQUIRE(get_text(properties, "geometry.star_ratio") == "1");
-    REQUIRE(is_read_only(properties, "geometry.star_ratio"));
+    REQUIRE(!is_read_only(properties, "geometry.star_ratio"));
+    polygon.m_star_ratio = 40;
+    auto star = add_shape(document, ids.m_artboard, polygon);
+    REQUIRE(get_text(extract_properties(document, star),
+      "geometry.star_ratio") == "0.4");
     REQUIRE(!find_property(properties, "geometry.radii"));
   }
 
@@ -352,7 +356,7 @@ TEST_SUITE("PropertyDescriptor") {
     REQUIRE(get_text(properties, "fill.paint") == "Solid");
     auto artboard = extract_properties(document, ids.m_artboard);
     REQUIRE(get_text(artboard, "transform.lock_aspect") == "No");
-    REQUIRE(get_text(artboard, "layout.responsive") == "No");
+    REQUIRE(get_text(artboard, "layout.responsive") == "Yes");
     REQUIRE(!find_property(artboard, "layout.responsive.mode"));
     REQUIRE(to_text(Fill(GradientFill())) == "Gradient");
   }

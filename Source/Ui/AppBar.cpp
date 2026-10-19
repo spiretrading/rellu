@@ -4,6 +4,7 @@
 #include <QHBoxLayout>
 #include <QMenu>
 #include "Rellu/Ui/AppBar.hpp"
+#include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "Icons.hpp"
 
@@ -22,16 +23,17 @@ namespace {
     button->setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE);
     button->setIconSize(QSize(ICON_SIZE, ICON_SIZE));
     button->setIcon(get_icon(glyph));
-    button->setToolTip(tip);
-    button->setAccessibleName(tip);
+    button->setToolTip(translate("app_bar", tip));
+    button->setAccessibleName(translate("app_bar", tip));
     return button;
   }
 
   QToolButton* make_workspace_button(const QString& label) {
     auto button = new QToolButton();
     button->setObjectName("workspace_button");
-    button->setText(label);
-    button->setAccessibleName(QString("%1 Workspace").arg(label));
+    button->setText(translate("app_bar", label));
+    button->setAccessibleName(
+      translate("app_bar", QString("%1 Workspace").arg(label)));
     button->setCheckable(true);
     button->setAutoRaise(true);
     button->setFocusPolicy(Qt::NoFocus);
@@ -99,7 +101,7 @@ AppBar::AppBar(QWidget* parent)
   zoom_layout->setContentsMargins(0, 0, 0, 0);
   zoom_layout->setSpacing(0);
   m_zoom_field->setObjectName("zoom_field");
-  m_zoom_field->setAccessibleName("Zoom");
+  m_zoom_field->setAccessibleName(translate("app_bar", "Zoom"));
   m_zoom_field->setFixedWidth(ZOOM_FIELD_WIDTH);
   m_zoom_field->setFrame(false);
   zoom_layout->addWidget(m_zoom_field);
@@ -110,7 +112,7 @@ AppBar::AppBar(QWidget* parent)
   presets->setObjectName("zoom_presets");
   auto menu = new QMenu(presets);
   for(auto preset : ZOOM_PRESETS) {
-    auto text = format_zoom(preset);
+    auto text = translate("app_bar", format_zoom(preset));
     if(preset == 1) {
       text += "\t" + to_xd_shortcut_text(QKeySequence("Ctrl+1"));
     } else if(preset == 2) {

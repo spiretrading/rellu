@@ -111,13 +111,11 @@ TEST_SUITE("AssetsPanel") {
     auto menu = std::unique_ptr<QMenu>(
       panel.make_component_menu(ids.m_component, nullptr));
     auto actions = menu->actions();
-    REQUIRE(actions.size() == 3);
+    REQUIRE(actions.size() == 2);
     REQUIRE(actions[0]->text() == "Edit Main Component");
-    REQUIRE(actions[1]->text() == "Swap Component");
-    REQUIRE(actions[2]->text() == "Rename");
+    REQUIRE(actions[1]->text() == "Rename");
     REQUIRE(actions[0]->isEnabled());
-    REQUIRE(!actions[1]->isEnabled());
-    REQUIRE(actions[2]->isEnabled());
+    REQUIRE(actions[1]->isEnabled());
     actions[0]->trigger();
     REQUIRE(edited == std::vector{ids.m_component});
     REQUIRE(panel.rename_component(ids.m_component, "Primary"));
@@ -126,7 +124,6 @@ TEST_SUITE("AssetsPanel") {
     REQUIRE(panel.get_entries(AssetSection::COMPONENTS) ==
       std::vector<QString>({"Primary"}));
     REQUIRE(!panel.rename_component(ids.m_component, " "));
-    REQUIRE(!panel.swap_component(ids.m_component));
   }
 
   TEST_CASE("colors") {

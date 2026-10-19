@@ -25,8 +25,9 @@ namespace Rellu {
    * entered goes in that group, as find_drawing_parent finds. With a single
    * path selected, clicking one of
    * its open ends continues it and clicking a segment adds a point. Every
-   * point is one undoable step, and abandoning the tool keeps the points
-   * placed.
+   * point is one undoable step, labelled as Adobe XD labels it: Draw Path,
+   * Add Anchor Point, Close Path or Convert Point Type, and abandoning the
+   * tool keeps the points placed.
    */
   class PenTool : public Tool {
     public:

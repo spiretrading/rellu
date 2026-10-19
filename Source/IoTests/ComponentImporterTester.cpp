@@ -95,6 +95,7 @@ TEST_SUITE("ComponentImporter") {
     REQUIRE(state.m_id == STATE_ID);
     REQUIRE(state.m_name == "Hover State");
     REQUIRE(state.m_tree == STATE_ID);
+    REQUIRE(state.m_size == Size(143, 26));
     REQUIRE(state.m_sync_map ==
       std::map<NodeId, NodeId>({{STATE_SHAPE_ID, MASTER_SHAPE_ID}}));
     REQUIRE(state.m_overrides.m_removed == std::vector<NodeId>({REMOVED_ID}));
@@ -127,5 +128,44 @@ TEST_SUITE("ComponentImporter") {
     auto& other = *document.get(DEFAULT_ID).get_group()->m_component_instance;
     REQUIRE(other.m_state.is_nil());
     REQUIRE(other.m_overrides == Overrides());
+    REQUIRE(instance.m_overrides.m_owners.empty());
+  }
+
+  TEST_CASE("group_overrides") {
+    auto package = make_package();
+    package.m_pasteboard = parse_json_array(R"([{"type": "group",
+      "id": "345b49ae-25ab-4510-8001-2278ccf9c1bc", "meta": {"ux": {
+      "symbolId": "d631c702-7e61-4081-a819-f8a7b1f06234", "width": 26,
+      "height": 20, "syncMap": {}, "symbolOverrides": {
+      "addedGuids": ["c940ed89-d252-42cc-a4e5-b534fe0c9979"]}}},
+      "group": {"children": [{"type": "shape",
+      "id": "c940ed89-d252-42cc-a4e5-b534fe0c9979", "shape": {
+      "type": "rect", "x": 0, "y": 0, "width": 26, "height": 20}},
+      {"type": "group", "id": "9d8aedae-2c61-4929-b5c8-90430c38cbc8",
+      "meta": {"ux": {"symbolOverrides": {"propertyNames": ["visible"],
+      "addedGuids": ["6c2f63b5-7a43-4f0c-9f43-7c1ab1b5d2e1"],
+      "removedGuids": ["1eed2b25-c194-40b8-95c6-ee825a833333"],
+      "reorderedGuids": {"6c2f63b5-7a43-4f0c-9f43-7c1ab1b5d2e1":
+      "f18b6781-d8cc-429d-888f-bb4f3f9e0da7"}}}}, "group": {"children": [
+      {"type": "shape", "id": "6c2f63b5-7a43-4f0c-9f43-7c1ab1b5d2e1",
+      "shape": {"type": "rect", "x": 0, "y": 0, "width": 1,
+      "height": 1}}]}}]}}])");
+    auto document = Document();
+    auto report = import_package(package, document);
+    REQUIRE(report.m_unconsumed.empty());
+    auto group = id("9d8aedae-2c61-4929-b5c8-90430c38cbc8");
+    auto added = id("6c2f63b5-7a43-4f0c-9f43-7c1ab1b5d2e1");
+    auto& overrides =
+      document.get(INSTANCE_ID).get_group()->m_component_instance->
+        m_overrides;
+    REQUIRE(overrides.m_added ==
+      std::vector<NodeId>({INSTANCE_SHAPE_ID, added}));
+    REQUIRE(overrides.m_removed == std::vector<NodeId>({REMOVED_ID}));
+    REQUIRE(overrides.m_reordered ==
+      std::map<NodeId, NodeId>({{added, MASTER_SHAPE_ID}}));
+    REQUIRE(overrides.m_properties ==
+      std::map<NodeId, std::vector<std::string>>({{group, {"visible"}}}));
+    REQUIRE(overrides.m_owners == std::map<NodeId, NodeId>({{added, group},
+      {REMOVED_ID, group}}));
   }
 }

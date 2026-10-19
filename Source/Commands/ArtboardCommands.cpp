@@ -19,6 +19,8 @@ namespace {
   constexpr auto FALLBACK_COLUMNS = 12;
   constexpr auto FALLBACK_GUTTER = 16.0;
   constexpr auto FALLBACK_MARGIN = 140.0;
+  constexpr auto MINIMUM_GRID_HEIGHT = 2.0;
+  constexpr auto MINIMUM_COLUMN_WIDTH = 1.0;
 
   GridOverride make_override(
       double width, int columns, double gutter, double margin) {
@@ -181,6 +183,36 @@ namespace {
 std::vector<GridOverride> Rellu::get_built_in_overrides() {
   return {make_override(312, 1, 0, 28), make_override(599, 4, 10, 36),
     make_override(834, 8, 16, 80), make_override(1024, 12, 16, 120)};
+}
+
+void Rellu::fit_layout_grid(LayoutGrid& grid, Size size) {
+  auto& margins = grid.m_margins;
+  auto excess =
+    margins.m_top + margins.m_bottom + MINIMUM_GRID_HEIGHT - size.m_height;
+  if(excess > 0) {
+    if(margins.m_bottom > excess) {
+      margins.m_bottom -= excess;
+    } else {
+      excess -= margins.m_bottom;
+      margins.m_bottom = 0;
+      margins.m_top = std::max(0.0, margins.m_top - excess);
+    }
+  }
+  if(grid.m_default_width == size.m_width) {
+    return;
+  }
+  grid.m_default_width = size.m_width;
+  auto count = std::max(grid.m_column_count, 1);
+  auto space = size.m_width - margins.m_left - margins.m_right;
+  if(count > 1) {
+    space -= grid.m_gutter * (count - 1);
+  }
+  auto shortfall = space - count * MINIMUM_COLUMN_WIDTH;
+  if(shortfall < 0 && count > 1) {
+    grid.m_gutter =
+      std::max(0.0, grid.m_gutter + std::floor(shortfall / (count - 1)));
+  }
+  fit_margins(grid, size.m_width);
 }
 
 LayoutGrid Rellu::make_default_grid(

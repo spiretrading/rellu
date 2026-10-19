@@ -1,9 +1,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <limits>
+#include <memory>
 #include <numbers>
 #include <utility>
+#include <vector>
+#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QInputMethod>
 #include <QInputMethodEvent>
@@ -15,6 +19,8 @@
 #include <QResizeEvent>
 #include <QStyleHints>
 #include <QWheelEvent>
+#include "Rellu/Commands/CompositeCommand.hpp"
+#include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Rendering/StripRasterizer.hpp"
 #include "Rellu/Tools/PathEditTool.hpp"
 #include "Rellu/Ui/TextMeasurement.hpp"
@@ -30,6 +36,29 @@ namespace {
   constexpr auto SCENE_BUDGET = std::chrono::milliseconds(8);
   constexpr auto CURSOR_SIZE = 24;
   constexpr auto PREPARATION_BUDGET = std::chrono::milliseconds(8);
+  constexpr auto TITLE_PADDING = 1;
+  constexpr auto TITLE_SLACK = 12.0;
+  const auto TITLE_STYLE = QString(
+    "QLineEdit { border: 1px solid #2680EB; padding: 0px 1px; "
+    "background: white; color: #2680EB; }");
+
+  class TitleEditor : public QLineEdit {
+    public:
+      std::function<void ()> m_cancel;
+
+      explicit TitleEditor(QWidget* parent)
+        : QLineEdit(parent) {}
+
+    protected:
+      void keyPressEvent(QKeyEvent* event) override {
+        if(event->key() == Qt::Key_Escape && m_cancel) {
+          event->accept();
+          m_cancel();
+          return;
+        }
+        QLineEdit::keyPressEvent(event);
+      }
+  };
 
   double get_level(double zoom) {
     return std::exp2(std::ceil(std::log2(zoom)));
@@ -134,7 +163,8 @@ DocumentView::DocumentView(QWidget* parent)
       m_level(1),
       m_is_fitting(false),
       m_is_space_pressed(false),
-      m_is_panning(false) {
+      m_is_panning(false),
+      m_title_editor(nullptr) {
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
   setAttribute(Qt::WA_InputMethodEnabled);
@@ -158,6 +188,7 @@ DocumentView::DocumentView(QWidget* parent)
 }
 
 DocumentView::~DocumentView() {
+  finish_rename(false);
   m_preparation.stop();
   m_caret_timer.stop();
   m_tool_subscription.release();
@@ -170,6 +201,7 @@ const Document* DocumentView::get_document() const {
 }
 
 void DocumentView::set_document(std::unique_ptr<Document> document) {
+  finish_rename(false);
   get_renderer().set_draw_list(nullptr);
   get_renderer().set_overlay(CanvasOverlay());
   m_tool_subscription.release();
@@ -197,6 +229,7 @@ Editor* DocumentView::get_editor() const {
 }
 
 void DocumentView::set_editor(Editor* editor) {
+  finish_rename(false);
   m_shared_editor = editor;
   attach_tools();
   update_view();
@@ -224,6 +257,13 @@ void DocumentView::fit() {
 void DocumentView::zoom_to(const Rect& region) {
   m_is_fitting = false;
   frame(region);
+}
+
+void DocumentView::center_on(Point point) {
+  m_is_fitting = false;
+  m_offset = Point(width() / 2.0 - m_zoom * point.m_x,
+    height() / 2.0 - m_zoom * point.m_y);
+  update_view();
 }
 
 void DocumentView::set_zoom(double zoom) {
@@ -341,6 +381,11 @@ void DocumentView::mouseDoubleClickEvent(QMouseEvent* event) {
   if(event->button() == Qt::MiddleButton ||
       (event->button() == Qt::LeftButton && m_is_space_pressed)) {
     mousePressEvent(event);
+    return;
+  }
+  if(event->button() == Qt::LeftButton && !m_is_space_pressed &&
+      start_rename(Point(event->position().x(), event->position().y()))) {
+    event->accept();
     return;
   }
   if(forward(event, [&] (const auto& pointer) {
@@ -517,6 +562,7 @@ void DocumentView::update_view() {
   if(m_tools) {
     m_tools->set_view(view, devicePixelRatio(), Size(width(), height()));
   }
+  place_title_editor();
   update();
 }
 
@@ -636,4 +682,89 @@ bool DocumentView::forward(QMouseEvent* event, auto handler) {
   update_cursor();
   event->accept();
   return true;
+}
+
+bool DocumentView::start_rename(Point position) {
+  if(!m_tools || !m_editor) {
+    return false;
+  }
+  auto& titles = m_tools->get_context().get_titles();
+  auto id = titles.find(position);
+  auto node = m_document ? m_document->find(id) : nullptr;
+  if(!node || node->m_header.m_is_locked) {
+    return false;
+  }
+  finish_rename(true);
+  m_editor->get_selection().select(id);
+  m_renamed = id;
+  auto editor = new TitleEditor(this);
+  editor->m_cancel = [this] {
+    finish_rename(false);
+  };
+  editor->setStyleSheet(TITLE_STYLE);
+  editor->setFrame(false);
+  editor->setFont(titles.get_font());
+  editor->setTextMargins(TITLE_PADDING, 0, TITLE_PADDING, 0);
+  editor->setText(QString::fromStdString(node->m_header.m_name));
+  QObject::connect(editor, &QLineEdit::editingFinished, this, [this] {
+    finish_rename(true);
+  });
+  QObject::connect(editor, &QLineEdit::textChanged, this, [this] {
+    place_title_editor();
+  });
+  m_title_editor = editor;
+  titles.set_hidden(id);
+  place_title_editor();
+  editor->show();
+  editor->selectAll();
+  editor->setFocus(Qt::MouseFocusReason);
+  update();
+  return true;
+}
+
+void DocumentView::finish_rename(bool is_committed) {
+  if(!m_title_editor) {
+    return;
+  }
+  auto editor = std::exchange(m_title_editor, nullptr);
+  auto id = std::exchange(m_renamed, NodeId());
+  auto text = editor->text().toStdString();
+  editor->disconnect(this);
+  editor->hide();
+  editor->deleteLater();
+  if(m_tools) {
+    m_tools->get_context().get_titles().set_hidden(NodeId());
+  }
+  auto node = m_document ? m_document->find(id) : nullptr;
+  if(is_committed && m_editor && node &&
+      !QString::fromStdString(text).trimmed().isEmpty() &&
+      text != node->m_header.m_name) {
+    auto commands = std::vector<std::unique_ptr<Command>>();
+    commands.push_back(std::make_unique<RenameCommand>(id, text));
+    m_editor->execute(std::make_unique<CompositeCommand>(
+      "Rename Artboard", std::move(commands)));
+  }
+  setFocus();
+  update();
+}
+
+void DocumentView::place_title_editor() {
+  if(!m_title_editor || !m_tools) {
+    return;
+  }
+  auto& titles = m_tools->get_context().get_titles();
+  auto node = m_document ? m_document->find(m_renamed) : nullptr;
+  auto artboard = node ? node->get_artboard() : nullptr;
+  if(!artboard) {
+    return;
+  }
+  auto frame = get_renderer().get_view().map(artboard->m_frame);
+  auto metrics = QFontMetricsF(titles.get_font());
+  auto width = metrics.horizontalAdvance(m_title_editor->text()) +
+    TITLE_SLACK;
+  auto height = ArtboardTitles::HEIGHT + 2 * TITLE_PADDING + 2;
+  m_title_editor->setGeometry(static_cast<int>(std::floor(frame.m_x)) -
+    TITLE_PADDING - 1, static_cast<int>(std::floor(frame.m_y -
+      ArtboardTitles::GAP - ArtboardTitles::HEIGHT)) - TITLE_PADDING - 1,
+    static_cast<int>(std::ceil(width)), static_cast<int>(height));
 }

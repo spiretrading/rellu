@@ -6,6 +6,8 @@
 #include <set>
 #include <utility>
 #include <variant>
+#include <QRegularExpression>
+#include <QUrl>
 #include "Rellu/Text/TextLayout.hpp"
 #include "Rellu/Ui/TextPropertyEditors.hpp"
 
@@ -25,6 +27,28 @@ namespace {
       return static_cast<double>(*integer);
     }
     return std::nullopt;
+  }
+
+  bool is_label_character(QChar c) {
+    return c == '-' || (c.unicode() < 0x80 ?
+      (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') : c.isLetterOrNumber());
+  }
+
+  bool is_valid_domain(const QString& domain) {
+    auto labels = domain.split('.');
+    if(labels.size() < 2) {
+      return false;
+    }
+    for(auto& label : labels) {
+      if(label.isEmpty() || label.startsWith('-') || label.endsWith('-') ||
+          !std::all_of(label.begin(), label.end(), is_label_character)) {
+        return false;
+      }
+    }
+    auto& top = labels.back();
+    return top.size() >= 2 && std::all_of(top.begin(), top.end(),
+      [] (const auto& c) { return c.isLetter(); });
   }
 
   std::optional<int> get_index(const PropertyValue& value, int count) {
@@ -451,15 +475,48 @@ QStringList Rellu::list_font_families(const FontLibrary& library) {
   return list;
 }
 
-bool Rellu::is_valid_hyperlink(const QString& url) {
+HyperlinkValidity Rellu::check_hyperlink(const QString& url) {
   auto start = qsizetype(0);
   while(start != url.size() && (url[start].isSpace() || url[start] == ',' ||
       url[start] == '#')) {
     ++start;
   }
   auto trimmed = url.mid(start).trimmed();
-  return trimmed.isEmpty() || trimmed.startsWith("https://") ||
-    trimmed.startsWith("mailto:");
+  if(trimmed.isEmpty()) {
+    return HyperlinkValidity::EMPTY;
+  }
+  auto domain = QString();
+  if(trimmed.startsWith("https://")) {
+    domain = trimmed.mid(8);
+    auto end = domain.indexOf(QRegularExpression("[/?#]"));
+    if(end != -1) {
+      domain.truncate(end);
+    }
+  } else if(trimmed.startsWith("mailto:")) {
+    auto address = trimmed.mid(7);
+    if(auto end = address.indexOf('?'); end != -1) {
+      address.truncate(end);
+    }
+    auto at = address.lastIndexOf('@');
+    if(at <= 0) {
+      return HyperlinkValidity::INVALID_DOMAIN;
+    }
+    domain = address.mid(at + 1);
+  } else {
+    return HyperlinkValidity::INVALID_PROTOCOL;
+  }
+  if(!is_valid_domain(domain)) {
+    return HyperlinkValidity::INVALID_DOMAIN;
+  } else if(!QUrl(trimmed).isValid()) {
+    return HyperlinkValidity::INVALID;
+  }
+  return HyperlinkValidity::VALID;
+}
+
+bool Rellu::is_valid_hyperlink(const QString& url) {
+  auto validity = check_hyperlink(url);
+  return validity == HyperlinkValidity::EMPTY ||
+    validity == HyperlinkValidity::VALID;
 }
 
 QStringList Rellu::list_font_styles(

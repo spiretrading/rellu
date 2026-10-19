@@ -443,6 +443,72 @@ TEST_SUITE("Clipboard") {
     REQUIRE(!clipboard.make_paste_appearance_command({ids.m_card}));
   }
 
+  TEST_CASE("group_appearance") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    {
+      auto loose = *document.get(ids.m_loose).get_shape();
+      std::get<RectangleShape>(loose.m_geometry).m_radii =
+        CornerRadii(3, 3, 3, 3);
+      loose.m_style.m_stroke = Stroke(make_color(0, 255, 0), 4);
+      loose.m_style.m_effects.push_back(DropShadow(Point(0, 3), 6,
+        make_color(0, 0, 0), true));
+      auto label = *document.get(ids.m_label).get_text();
+      label.m_style.m_fill = SolidFill(make_color(255, 0, 0));
+      auto transaction = Transaction(document);
+      transaction.replace_payload(ids.m_loose, loose);
+      transaction.replace_payload(ids.m_label, label);
+      transaction.commit();
+    }
+    auto editor = Editor(document);
+    auto clipboard = Clipboard();
+    REQUIRE(clipboard.copy(document, {ids.m_card}));
+    REQUIRE(editor.execute(
+      clipboard.make_paste_appearance_command({ids.m_loose})));
+    auto& loose = *document.get(ids.m_loose).get_shape();
+    REQUIRE(loose.m_style.m_fill == Fill(SolidFill(make_color(255, 0, 0))));
+    REQUIRE(loose.m_style.m_effects.empty());
+    REQUIRE(std::get<RectangleShape>(loose.m_geometry).m_radii ==
+      CornerRadii(0, 0, 0, 0));
+    REQUIRE(loose.m_style.m_stroke->m_is_enabled);
+    REQUIRE(loose.m_style.m_stroke->m_color == make_color(0, 255, 0));
+  }
+
+  TEST_CASE("paste_into_visible_artboard") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto clipboard = Clipboard();
+    REQUIRE(clipboard.copy(document, {ids.m_ellipse}));
+    auto target = make_target({}, Rect(300, 400, 400, 200));
+    target.m_focus = ids.m_artboard;
+    REQUIRE(editor.execute(clipboard.make_paste_command(target)));
+    auto& copy = document.get(editor.get_selection().get_primary());
+    REQUIRE(copy.m_parent == ids.m_artboard);
+    REQUIRE(*get_world_bounds(document, copy.get_id()) ==
+      Rect(383, 497, 10, 6));
+  }
+
+  TEST_CASE("image_on_pasteboard") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto clipboard = Clipboard();
+    auto image = QImage(50, 40, QImage::Format_RGBA8888);
+    image.fill(QColor(255, 128, 0));
+    auto data = QMimeData();
+    data.setImageData(image);
+    REQUIRE(clipboard.load(data));
+    auto target = make_target({}, Rect(2000, 2000, 600, 600));
+    target.m_focus = ids.m_artboard;
+    REQUIRE(editor.execute(clipboard.make_paste_command(target)));
+    auto& picture = document.get(editor.get_selection().get_primary());
+    REQUIRE(picture.m_parent.is_nil());
+    REQUIRE(document.is_on_canvas(picture.get_id()));
+    REQUIRE(*get_world_bounds(document, picture.get_id()) ==
+      Rect(2275, 2280, 50, 40));
+  }
+
   TEST_CASE("image_appearance") {
     auto document = Document();
     auto ids = build_test_document(document);

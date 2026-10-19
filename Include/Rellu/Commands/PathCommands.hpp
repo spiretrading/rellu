@@ -151,10 +151,54 @@ namespace Rellu {
   };
 
   /**
+   * Tests whether Outline Stroke changes a node: a shape other than a
+   * compound shape or its operand whose border is enabled, or a group or
+   * mask group holding such a node.
+   * @param document The document holding the node.
+   * @param id The node's id.
+   */
+  bool is_outline_strokable(const Document& document, const NodeId& id);
+
+  /**
+   * Turns the borders of shapes into filled paths as Adobe XD's Outline
+   * Stroke does, labelled Outline Stroke, acting on the shapes within
+   * groups and mask groups. A shape without a fill, or a line, is replaced
+   * by a path of the same id and name filled with its border's color.
+   * Otherwise the path, named after the shape followed by - Outline, is
+   * placed above the shape, whose border is disabled, along with copies of
+   * its interactions, and the two are grouped under the shape's name,
+   * opacity and blend mode when the shape is translucent, blended or in a
+   * stack. The path keeps the shape's disabled border and its hidden
+   * shadows and blur, which are hidden on a shape kept too.
+   */
+  class OutlineStrokeCommand : public Command {
+    public:
+
+      /**
+       * Constructs an OutlineStrokeCommand.
+       * @param nodes The nodes to outline, those that cannot be outlined
+       *        staying selected.
+       */
+      explicit OutlineStrokeCommand(std::vector<NodeId> nodes) noexcept;
+
+      std::string get_label() const override;
+      void apply(const Document& document, Transaction& transaction) override;
+      std::optional<std::vector<NodeId>> get_selection() const override;
+
+    private:
+      std::vector<NodeId> m_nodes;
+      std::vector<NodeId> m_selection;
+
+      void outline(const Document& document, Transaction& transaction,
+        const NodeId& id, std::vector<NodeId>& results);
+  };
+
+  /**
    * Adds the commands of Adobe XD's Object > Path menu acting on targets:
    * object.path.add, object.path.subtract, object.path.intersect and
    * object.path.exclude, which combine two or more shapes or change the
-   * operation of a single compound shape, and object.path.convert.
+   * operation of a single compound shape, object.path.convert and
+   * object.path.outline_stroke.
    * @param registry The registry to add to.
    */
   void add_path_commands(CommandRegistry& registry);

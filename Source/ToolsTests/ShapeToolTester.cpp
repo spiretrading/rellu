@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 #include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Tools/ShapeTool.hpp"
 #include "Rellu/Tools/ToolManager.hpp"
 #include "../CommandsTests/Fixture.hpp"
@@ -47,6 +48,20 @@ namespace {
 }
 
 TEST_SUITE("ShapeTool") {
+  TEST_CASE("localized_name") {
+    set_language(Language::GERMAN);
+    auto document = Document();
+    build_artboard(document);
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    tools.set_tool("rectangle");
+    drag(tools, Point(150, 150), Point(250, 200));
+    auto name = get_drawn(editor).m_header.m_name;
+    set_language(Language::ENGLISH);
+    REQUIRE(name == "Rechteck 1");
+  }
+
   TEST_CASE("rectangle") {
     auto document = Document();
     auto artboard = build_artboard(document);
@@ -64,7 +79,7 @@ TEST_SUITE("ShapeTool") {
       ShapeGeometry(RectangleShape(Rect(0, 0, 100, 50))));
     REQUIRE(node.get_shape()->m_style == make_default_style());
     REQUIRE(editor.get_history().get_undo_count() == 1);
-    REQUIRE(editor.get_history().get_undo_label() == "Rectangle");
+    REQUIRE(editor.get_history().get_undo_label() == "Draw Rectangle");
     REQUIRE(tools.get_tool_name() == "rectangle");
     drag(tools, Point(800, 600), Point(820, 640));
     auto& loose = get_drawn(editor);
@@ -128,7 +143,7 @@ TEST_SUITE("ShapeTool") {
     REQUIRE(get_geometry(node) ==
       ShapeGeometry(EllipseShape(Point(30, 15), 30, 15)));
     REQUIRE(node.get_shape()->m_style == make_default_style());
-    REQUIRE(editor.get_history().get_undo_label() == "Ellipse");
+    REQUIRE(editor.get_history().get_undo_label() == "Draw Ellipse");
     drag(tools, Point(200, 200), Point(240, 210), Qt::ShiftModifier);
     REQUIRE(get_geometry(get_drawn(editor)) ==
       ShapeGeometry(EllipseShape(Point(20, 20), 20, 20)));
@@ -148,7 +163,7 @@ TEST_SUITE("ShapeTool") {
     REQUIRE(get_geometry(node) ==
       ShapeGeometry(PolygonShape(3, Size(60, 50))));
     REQUIRE(node.get_shape()->m_style == make_default_style());
-    REQUIRE(editor.get_history().get_undo_label() == "Polygon");
+    REQUIRE(editor.get_history().get_undo_label() == "Draw Polygon");
   }
 
   TEST_CASE("line") {
@@ -166,7 +181,7 @@ TEST_SUITE("ShapeTool") {
     REQUIRE(get_geometry(node) ==
       ShapeGeometry(LineShape(Point(100, 0), Point(0, 50))));
     REQUIRE(node.get_shape()->m_style == make_default_line_style());
-    REQUIRE(editor.get_history().get_undo_label() == "Line");
+    REQUIRE(editor.get_history().get_undo_label() == "Draw Line");
     drag(tools, Point(150, 150), Point(250, 170), Qt::ShiftModifier);
     REQUIRE(get_geometry(get_drawn(editor)) ==
       ShapeGeometry(LineShape(Point(0, 0), Point(100, 0))));

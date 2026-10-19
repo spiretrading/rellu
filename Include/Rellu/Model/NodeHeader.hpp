@@ -22,7 +22,7 @@ namespace Rellu {
   struct Constraints {
 
     /** Whether the constraints apply at all. */
-    bool m_is_enabled = false;
+    bool m_is_enabled = true;
 
     /** Whether the constraints were set explicitly rather than inferred. */
     bool m_is_custom = false;
