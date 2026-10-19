@@ -1,10 +1,13 @@
 #include <algorithm>
 #include <stdexcept>
+#include <string>
+#include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
+#include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/StackCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
@@ -724,6 +727,96 @@ TEST_SUITE("ComponentCommands") {
       history.execute(std::make_unique<DuplicateCommand>(std::vector{first}));
     REQUIRE(document.get(duplicate->get_selection()->front()).m_header.
       m_name == "Component 1 \xE2\x80\x93 3");
+  }
+
+  TEST_CASE("copied_artboard_names") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto command = history.execute(std::make_unique<MakeComponentCommand>(
+      std::vector{parts.m_rectangle, parts.m_label}));
+    auto component =
+      static_cast<const MakeComponentCommand&>(*command).get_component();
+    add_instance(history, component, parts.m_artboard, 200, 20);
+    auto duplicate = history.execute(
+      std::make_unique<DuplicateCommand>(std::vector{parts.m_artboard}));
+    auto copy = duplicate->get_selection()->front();
+    auto names = std::vector<std::string>();
+    for(auto& instance : find_instances(document, component)) {
+      if(find_artboard(document, instance) == copy) {
+        names.push_back(document.get(instance).m_header.m_name);
+      }
+    }
+    std::ranges::sort(names);
+    REQUIRE(names == std::vector<std::string>({"Component 1 \xE2\x80\x93 3",
+      "Component 1 \xE2\x80\x93 4"}));
+  }
+
+  TEST_CASE("auto_named_group") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    history.execute(std::make_unique<RenameCommand>(parts.m_group, "Group 2"));
+    auto component = make_component(history, parts.m_group);
+    auto& main = document.get(parts.m_group);
+    REQUIRE(main.m_header.m_name == "Component 1 \xE2\x80\x93 1");
+    auto& made = document.get_resources().m_components.at(component);
+    REQUIRE(made.m_name == "Component 1");
+    REQUIRE(document.get(made.m_master).m_header.m_name == "Component 1");
+    auto duplicate = history.execute(
+      std::make_unique<DuplicateCommand>(std::vector{parts.m_group}));
+    auto copy = duplicate->get_selection()->front();
+    REQUIRE(document.get(copy).m_header.m_name ==
+      "Component 1 \xE2\x80\x93 2");
+    duplicate =
+      history.execute(std::make_unique<DuplicateCommand>(std::vector{copy}));
+    REQUIRE(document.get(duplicate->get_selection()->front()).m_header.
+      m_name == "Component 1 \xE2\x80\x93 3");
+  }
+
+  TEST_CASE("custom_named_group") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto component = make_component(history, parts.m_group);
+    REQUIRE(document.get_resources().m_components.at(component).m_name ==
+      "Button");
+    auto duplicate = history.execute(
+      std::make_unique<DuplicateCommand>(std::vector{parts.m_group}));
+    REQUIRE(document.get(duplicate->get_selection()->front()).m_header.
+      m_name == "Button \xE2\x80\x93 1");
+  }
+
+  TEST_CASE("stack_item") {
+    auto document = Document();
+    auto artboard = NodeId();
+    auto stack = NodeId();
+    auto items = std::vector<NodeId>();
+    {
+      auto transaction = Transaction(document);
+      auto board = Artboard();
+      board.m_frame = Rect(0, 0, 400, 300);
+      artboard = transaction.append(NodeId(), make_header("Artboard"), board);
+      stack = transaction.append(artboard, make_header("Group 1"), Group());
+      for(auto i = 0; i != 3; ++i) {
+        items.push_back(transaction.append(stack, make_header(
+          "Rectangle " + std::to_string(i + 1), make_translation(0, i * 92)),
+          make_rectangle_shape(50, 30)));
+      }
+      transaction.commit();
+      document.clear_history();
+    }
+    auto history = History(document);
+    history.execute(std::make_unique<SetStackCommand>(
+      std::vector{stack}, Orientation::VERTICAL, estimate_text_bounds));
+    auto command = history.execute(std::make_unique<MakeComponentCommand>(
+      std::vector{items[1]}));
+    auto& made = static_cast<const MakeComponentCommand&>(*command);
+    auto& spacing = document.get(stack).get_group()->m_stack->m_spacing;
+    REQUIRE(spacing.size() == 2);
+    REQUIRE(spacing.at(made.get_main()) == 62);
+    REQUIRE(spacing.at(items[0]) == 62);
+    REQUIRE(!spacing.contains(items[2]));
   }
 
   TEST_CASE("measurer") {

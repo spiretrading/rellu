@@ -398,15 +398,15 @@ bool PreviewPlayer::release(Point position) {
   if(!is_tap) {
     return false;
   }
-  auto matches = find_all(position, TAP);
-  if(!matches.empty()) {
-    return perform(*matches.front().second, matches.front().first);
-  }
   if(m_link_handler) {
     if(auto url = find_text_link(position); !url.empty()) {
       m_link_handler(url);
       return true;
     }
+  }
+  auto matches = find_all(position, TAP);
+  if(!matches.empty()) {
+    return perform(*matches.front().second, matches.front().first);
   }
   if(!m_overlays.empty()) {
     auto& top = m_overlays.back();

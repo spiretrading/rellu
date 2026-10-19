@@ -74,7 +74,7 @@ void load_paint() {
   divisor = dot(fetch(base + 4.0).xyz, point) + 1.0;
   paint = vec4(dot(first.xyz, point), dot(second.xyz, point), first.w,
     second.w);
-  if(first.w > 2.5) {
+  if(first.w > 2.5 && first.w < 4.5) {
     vec4 third = fetch(base + 2.0);
     vec4 fourth = fetch(base + 3.0);
     extra = vec4(third.x * position.x + third.y,
@@ -109,6 +109,11 @@ float get_radial_offset() {
   return (b - sqrt(max(b * b - a * c, 0.0))) / a;
 }
 
+float get_angular_offset() {
+  vec2 position = paint.xy - extra.xy;
+  return fract(atan(position.y, position.x) / 6.283185307179586 - extra.z);
+}
+
 vec4 sample_texture() {
   float footprint = max(length(gradient.xy * extra.zw),
     length(gradient.zw * extra.zw));
@@ -130,9 +135,11 @@ float get_bounds_coverage() {
 vec4 get_paint() {
   if(paint.z < 0.5) {
     return vec4(1.0);
-  } else if(paint.z < 2.5) {
+  } else if(paint.z < 2.5 || paint.z > 4.5) {
     float offset = paint.x;
-    if(paint.z > 1.5) {
+    if(paint.z > 4.5) {
+      offset = get_angular_offset();
+    } else if(paint.z > 1.5) {
       offset = get_radial_offset();
     }
     offset = clamp(offset, 0.0, 1.0);
@@ -154,7 +161,7 @@ vec4 get_paint() {
 void main() {
   load_paint();
   paint.xy /= divisor;
-  if(paint.z > 2.5) {
+  if(paint.z > 2.5 && paint.z < 4.5) {
     gradient /= divisor;
   }
   fragment_color = v_color * get_paint() * get_coverage();

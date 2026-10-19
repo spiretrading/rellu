@@ -1,6 +1,7 @@
 #ifndef RELLU_UI_TEXT_ACTIONS_HPP
 #define RELLU_UI_TEXT_ACTIONS_HPP
 #include <optional>
+#include <string>
 #include <vector>
 #include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Editor/Editor.hpp"
@@ -19,10 +20,17 @@ namespace Rellu {
    * object.text.increase_size and object.text.decrease_size. Each applies as
    * the TEXT section does: to the range selected in the text being edited,
    * to the style of the text typed at its caret, or to the whole of the
-   * selected text nodes. Bold and Italic switch to the face of the font's
-   * family with or without a bold weight or italic slant. The actions are
-   * enabled while text is selected, the toggles checked while the style
-   * the TEXT section shows has their property.
+   * selected text nodes, each labelled after its menu item. Bold switches
+   * each face lighter than semibold to the bold face of its family and each
+   * bold or heavier face to the regular one, keeping its slant and leaving
+   * semibold faces as they are; when the text holds both kinds, only the
+   * faces becoming bold change. Italic likewise switches each face to the
+   * opposite slant at the nearest weight, only the faces becoming italic
+   * changing when the text holds both kinds. Increase and Decrease Font Size
+   * step the size of each run. The toggles set their property unless all of
+   * the text has it, in which case they clear it. The actions are enabled
+   * while text is selected, the toggles checked while the style the TEXT
+   * section shows has their property.
    */
   class TextActions {
     public:
@@ -67,7 +75,9 @@ namespace Rellu {
       TextActions& operator =(const TextActions&) = delete;
       std::vector<NodeId> get_texts() const;
       std::optional<TextStyle> get_style() const;
-      void apply(TextStyleEdit edit);
+      std::vector<TextStyle> get_styles() const;
+      void apply(TextStyleEdit edit, std::string label);
+      void apply(std::string label, TextStyleEditor editor);
       void toggle_weight();
       void toggle_slant();
       void change_size(double delta);

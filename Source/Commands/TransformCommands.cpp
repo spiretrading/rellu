@@ -1,10 +1,12 @@
 #include <cmath>
+#include <numbers>
 #include <optional>
 #include <type_traits>
 #include <utility>
 #include <variant>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
+#include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Geometry/Shapes.hpp"
@@ -87,8 +89,7 @@ namespace {
       return true;
     } else if(auto group = node.get_group()) {
       return !group->m_repeat_grid && !group->m_scroll_group &&
-        !group->m_stack && !group->m_padding &&
-        !group->m_component_instance && !group->m_mask;
+        !group->m_stack && !group->m_padding && !group->m_component_instance;
     }
     return false;
   }
@@ -154,6 +155,26 @@ namespace {
         std::get_if<RadialGradient>(&gradient.m_geometry)) {
       radial->m_center = reflection.map(radial->m_center);
       radial->m_focus = reflection.map(radial->m_focus);
+    } else if(auto angular =
+        std::get_if<AngularGradient>(&gradient.m_geometry)) {
+      auto radians = angular->m_rotation * std::numbers::pi / 180;
+      auto direction = reflection.map(angular->m_center +
+        Point(std::cos(radians), std::sin(radians))) -
+          reflection.map(angular->m_center);
+      angular->m_center = reflection.map(angular->m_center);
+      angular->m_rotation =
+        std::atan2(direction.m_y, direction.m_x) * 180 / std::numbers::pi;
+      if(reflection.m_a * reflection.m_d - reflection.m_b * reflection.m_c <
+          0 && !gradient.m_stops.empty()) {
+        auto stops = gradient.m_stops;
+        std::reverse(stops.begin(), stops.end());
+        for(auto& stop : stops) {
+          stop.m_offset = 1 - stop.m_offset;
+        }
+        stops.front().m_offset = 0;
+        stops.back().m_offset = 1;
+        gradient.m_stops = std::move(stops);
+      }
     }
   }
 
@@ -188,6 +209,21 @@ namespace {
     }
   }
 
+  MaskShape mirror_mask_shape(
+      const MaskShape& shape, const Matrix& reflection) {
+    auto mirrored = shape;
+    if(auto inverse = invert(shape.m_transform)) {
+      auto local = *inverse * reflection * shape.m_transform;
+      if(get_axis_scale(local)) {
+        mirrored.m_geometry = mirror_geometry(
+          shape.m_geometry, local, local.m_a < 0, local.m_d < 0);
+        return mirrored;
+      }
+    }
+    mirrored.m_transform = reflection * shape.m_transform;
+    return mirrored;
+  }
+
   void mirror_content(const Document& document, Transaction& transaction,
       const NodeId& id, Point center, bool is_horizontal, bool is_vertical) {
     auto reflection = make_reflection(center, is_horizontal, is_vertical);
@@ -205,7 +241,14 @@ namespace {
       if(is_compound) {
         mirror_children(document, transaction, children, reflection);
       }
-    } else if(node.get_group()) {
+    } else if(auto group = node.get_group()) {
+      if(group->m_mask) {
+        auto payload = *group;
+        for(auto& mask : payload.m_mask->m_shapes) {
+          mask = mirror_mask_shape(mask, reflection);
+        }
+        transaction.replace_payload(id, std::move(payload));
+      }
       mirror_children(document, transaction, children, reflection);
     }
   }
@@ -267,23 +310,34 @@ namespace {
       const NodeId& id, const Matrix& transform, Matrix local,
       Matrix composed) {
     auto scale = get_axis_scale(local);
+    auto base = transform;
     if(scale && (scale->m_x < 0 || scale->m_y < 0)) {
       if(auto bounds = get_local_bounds(document, id)) {
-        if(is_mirrorable(document.get(id))) {
-          mirror_content(document, transaction, id, bounds->get_center(),
-            scale->m_x < 0, scale->m_y < 0);
+        auto& node = document.get(id);
+        auto center = bounds->get_center();
+        if(node.get_text()) {
+          auto reflection =
+            make_reflection(center, scale->m_x < 0, scale->m_y < 0);
+          base = transform * reflection;
+          local = reflection * local;
+          scale = get_axis_scale(local);
+        } else {
+          if(is_mirrorable(node)) {
+            mirror_content(document, transaction, id, center,
+              scale->m_x < 0, scale->m_y < 0);
+          }
+          auto mapped = local.map(*bounds);
+          scale = Point(std::abs(scale->m_x), std::abs(scale->m_y));
+          local = Matrix(scale->m_x, 0, 0, scale->m_y,
+            mapped.m_x - scale->m_x * bounds->m_x,
+            mapped.m_y - scale->m_y * bounds->m_y);
+          composed = transform * local;
         }
-        auto mapped = local.map(*bounds);
-        scale = Point(std::abs(scale->m_x), std::abs(scale->m_y));
-        local = Matrix(scale->m_x, 0, 0, scale->m_y,
-          mapped.m_x - scale->m_x * bounds->m_x,
-          mapped.m_y - scale->m_y * bounds->m_y);
-        composed = transform * local;
       }
     }
     if(scale && scale->m_x > 0 && scale->m_y > 0 &&
         is_scalable(document.get(id), *scale)) {
-      auto updated = transform * make_translation(local.m_tx, local.m_ty);
+      auto updated = base * make_translation(local.m_tx, local.m_ty);
       if(updated != transform) {
         set_transform(document, transaction, id, updated);
       }
@@ -291,6 +345,13 @@ namespace {
     } else if(composed != transform) {
       set_transform(document, transaction, id, composed);
     }
+  }
+
+  bool overlaps(const Rect& left, const Rect& right) {
+    return left.get_left() < right.get_right() &&
+      right.get_left() < left.get_right() &&
+      left.get_top() < right.get_bottom() &&
+      right.get_top() < left.get_bottom();
   }
 
   void transform_artboard(const Document& document, Transaction& transaction,
@@ -383,6 +444,50 @@ void Rellu::transform_node(const Document& document,
   }
 }
 
+void Rellu::update_artboard_contents(
+    const Document& document, Transaction& transaction, const NodeId& id) {
+  auto node = document.find(id);
+  if(!node || !node->get_artboard()) {
+    return;
+  }
+  auto frame = node->get_artboard()->m_frame;
+  auto captured = std::vector<NodeId>();
+  for(auto& child : document.get_canvas()) {
+    if(!document.get(child).get_artboard()) {
+      if(auto bounds = get_world_bounds(document, child);
+          bounds && overlaps(*bounds, frame)) {
+        captured.push_back(child);
+      }
+    }
+  }
+  auto released = std::vector<std::pair<NodeId, Rect>>();
+  for(auto& child : node->m_children) {
+    if(auto bounds = get_world_bounds(document, child);
+        bounds && !overlaps(*bounds, frame)) {
+      released.emplace_back(child, *bounds);
+    }
+  }
+  if(!captured.empty()) {
+    auto count = document.get(id).m_children.size();
+    ReparentCommand(std::move(captured), id, count).apply(
+      document, transaction);
+  }
+  for(auto& [child, bounds] : released) {
+    auto parent = NodeId();
+    auto& canvas = document.get_canvas();
+    for(auto i = canvas.rbegin(); i != canvas.rend(); ++i) {
+      auto artboard = document.get(*i).get_artboard();
+      if(*i != id && artboard && overlaps(bounds, artboard->m_frame)) {
+        parent = *i;
+        break;
+      }
+    }
+    auto count = document.get_children(parent).size();
+    ReparentCommand(std::vector{child}, parent, count).apply(
+      document, transaction);
+  }
+}
+
 TranslateCommand::TranslateCommand(std::vector<NodeId> nodes, Point delta)
   : TranslateCommand(std::move(nodes), delta, "Move") {}
 
@@ -423,9 +528,15 @@ bool TranslateCommand::merge(const Command& command) {
 
 TransformCommand::TransformCommand(std::vector<NodeId> nodes,
   const Matrix& mapping, std::string label) noexcept
+  : TransformCommand(
+      std::move(nodes), mapping, std::move(label), TransformMode::RESIZE) {}
+
+TransformCommand::TransformCommand(std::vector<NodeId> nodes,
+  const Matrix& mapping, std::string label, TransformMode mode) noexcept
   : m_nodes(std::move(nodes)),
     m_mapping(mapping),
-    m_label(std::move(label)) {}
+    m_label(std::move(label)),
+    m_mode(mode) {}
 
 const std::vector<NodeId>& TransformCommand::get_nodes() const {
   return m_nodes;
@@ -441,8 +552,28 @@ std::string TransformCommand::get_label() const {
 
 void TransformCommand::apply(
     const Document& document, Transaction& transaction) {
-  for(auto& id : get_top_level(document, m_nodes)) {
+  auto nodes = get_top_level(document, m_nodes);
+  auto is_artboard = [&] (const NodeId& id) {
+    return static_cast<bool>(document.get(id).get_artboard());
+  };
+  if(m_mode == TransformMode::SETTLE) {
+    for(auto& id : nodes) {
+      if(is_artboard(id)) {
+        update_artboard_contents(document, transaction, id);
+      }
+    }
+    return;
+  }
+  for(auto& id : nodes) {
+    auto size = std::optional<Size>();
+    if(is_artboard(id)) {
+      size = document.get(id).get_artboard()->m_frame.get_size();
+    }
     transform_node(document, transaction, id, m_mapping);
+    if(m_mode == TransformMode::RESIZE && size &&
+        document.get(id).get_artboard()->m_frame.get_size() != *size) {
+      update_artboard_contents(document, transaction, id);
+    }
   }
 }
 

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <doctest/doctest.h>
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Text/TextLayout.hpp"
@@ -99,9 +100,60 @@ TEST_SUITE("TextPropertyEditors") {
       document, ids.m_label, estimate_text_bounds, &selection);
     REQUIRE(find_property(properties, "text.size")->m_value ==
       PropertyValue(30.0));
-    REQUIRE(find_property(properties, "text.hyperlink")->m_is_read_only);
+    REQUIRE(!find_property(properties, "text.hyperlink")->m_is_read_only);
     selection.set(ids.m_label, 4, 4);
     REQUIRE(!selection.get_pending_style());
+  }
+
+  TEST_CASE("caret_line_spacing") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto editors = make_editors(editor);
+    {
+      auto transaction = Transaction(document);
+      auto text = get_text(document, ids.m_label);
+      text.m_base_style = get_default_text_style();
+      text.m_runs.clear();
+      transaction.replace_payload(ids.m_label, text);
+      transaction.commit();
+    }
+    auto& selection = editor.get_text_selection();
+    selection.set(ids.m_label, 3, 3);
+    REQUIRE(!apply(editor, editors, "text.size", ids.m_label, 40.0));
+    auto& library = get_default_font_library();
+    auto properties = extract_properties(
+      document, ids.m_label, make_text_measurer(library), &selection);
+    REQUIRE(find_property(properties, "text.size")->m_value ==
+      PropertyValue(40.0));
+    REQUIRE(find_property(properties, "text.line_height")->m_value ==
+      PropertyValue(53.0));
+    REQUIRE(get_text(document, ids.m_label).m_base_style.m_font.m_size == 20);
+    selection.clear();
+    for(auto [size, spacing] : {std::pair(15.0, 20.0), std::pair(16.0, 21.0),
+        std::pair(20.0, 27.0), std::pair(30.0, 40.0), std::pair(40.0, 53.0)}) {
+      REQUIRE(apply(editor, editors, "text.size", ids.m_label, size));
+      auto described = extract_properties(
+        document, ids.m_label, make_text_measurer(library), &selection);
+      REQUIRE(find_property(described, "text.line_height")->m_value ==
+        PropertyValue(spacing));
+    }
+  }
+
+  TEST_CASE("last_style") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto editors = make_editors(editor);
+    auto& selection = editor.get_text_selection();
+    REQUIRE(selection.get_last_style() == get_default_text_style());
+    REQUIRE(apply(editor, editors, "text.size", ids.m_label, 30.0));
+    REQUIRE(selection.get_last_style() ==
+      get_text(document, ids.m_label).m_runs.front().m_style);
+    REQUIRE(apply(editor, editors, "text.paragraph_spacing", ids.m_label,
+      20.0));
+    REQUIRE(selection.get_last_paragraph_style().m_paragraph_spacing == 20);
+    REQUIRE(selection.get_last_style().m_font.m_size == 30);
   }
 
   TEST_CASE("empty_text") {
@@ -162,12 +214,26 @@ TEST_SUITE("TextPropertyEditors") {
     auto& selection = editor.get_text_selection();
     selection.set(ids.m_label, 0, 5);
     REQUIRE(apply(editor, editors, "text.hyperlink", ids.m_label,
-      QString(" https://example.com ")));
+      QString("HTTPS://EXAMPLE.COM")));
+    REQUIRE(get_text(document, ids.m_label).m_runs.front().m_hyperlink ==
+      "HTTPS://EXAMPLE.COM");
+    REQUIRE(apply(editor, editors, "text.hyperlink", ids.m_label,
+      QString("")));
+    REQUIRE(get_text(document, ids.m_label).m_runs.size() == 1);
+    REQUIRE(!get_text(document, ids.m_label).m_runs.front().m_style.
+      m_is_underlined);
+    REQUIRE(editor.get_history().get_undo_label() == "Text Hyperlink");
+    REQUIRE(apply(editor, editors, "text.hyperlink", ids.m_label,
+      QString("https://example.com")));
     auto& runs = get_text(document, ids.m_label).m_runs;
     REQUIRE(runs.size() == 2);
     REQUIRE(runs.front().m_hyperlink == "https://example.com");
+    REQUIRE(runs.front().m_style.m_is_underlined);
+    REQUIRE(runs.front().m_style.m_color == runs.back().m_style.m_color);
     REQUIRE(runs.back().m_hyperlink.empty());
-    REQUIRE(editor.get_history().get_undo_label() == "Change Hyperlink");
+    REQUIRE(!runs.back().m_style.m_is_underlined);
+    REQUIRE(editor.get_history().get_undo_label() == "Text Hyperlink");
+    REQUIRE(selection.get_last_style() == get_default_text_style());
     auto properties = extract_properties(
       document, ids.m_label, estimate_text_bounds, &selection);
     auto hyperlink = find_property(properties, "text.hyperlink");
@@ -177,11 +243,21 @@ TEST_SUITE("TextPropertyEditors") {
     selection.clear();
     REQUIRE(find_property(extract_properties(document, ids.m_label),
       "text.hyperlink")->m_is_mixed);
-    selection.set(ids.m_label, 2, 2);
+    selection.set(ids.m_label, 8, 8);
     REQUIRE(!apply(editor, editors, "text.hyperlink", ids.m_label,
-      QString("https://other.com")));
-    REQUIRE(get_text(document, ids.m_label).m_runs.front().m_hyperlink ==
-      "https://example.com");
+      QString("mailto:someone@example.com")));
+    REQUIRE(selection.get_pending_hyperlink() ==
+      std::optional<std::string>("mailto:someone@example.com"));
+    REQUIRE(selection.get_pending_style()->m_is_underlined);
+    auto pending = extract_properties(
+      document, ids.m_label, estimate_text_bounds, &selection);
+    REQUIRE(find_property(pending, "text.hyperlink")->m_value ==
+      PropertyValue(QString("mailto:someone@example.com")));
+    REQUIRE(get_text(document, ids.m_label).m_runs.back().m_hyperlink.empty());
+    REQUIRE(is_valid_hyperlink(""));
+    REQUIRE(is_valid_hyperlink(" ,#https://example.com "));
+    REQUIRE(!is_valid_hyperlink("HTTPS://example.com"));
+    REQUIRE(!is_valid_hyperlink("ftp://example.com"));
   }
 
   TEST_CASE("fonts") {
@@ -195,8 +271,10 @@ TEST_SUITE("TextPropertyEditors") {
     REQUIRE(font.m_family == "Roboto");
     REQUIRE(font.m_style == "Bold");
     REQUIRE(font.m_postscript_name == "Roboto-Bold");
+    REQUIRE(editor.get_history().get_undo_label() == "Font Style");
     REQUIRE(apply(editor, editors, "text.family", ids.m_label,
       QString("Open Sans")));
+    REQUIRE(editor.get_history().get_undo_label() == "Font Family");
     auto& changed =
       get_text(document, ids.m_label).m_runs.front().m_style.m_font;
     REQUIRE(changed.m_family == "Open Sans");
@@ -215,7 +293,9 @@ TEST_SUITE("TextPropertyEditors") {
     auto editors = make_editors(editor);
     REQUIRE(apply(editor, editors, "text.alignment", ids.m_label,
       Choice(1, QStringList())));
+    REQUIRE(editor.get_history().get_undo_label() == "Text Align");
     REQUIRE(apply(editor, editors, "text.line_height", ids.m_label, 24.0));
+    REQUIRE(editor.get_history().get_undo_label() == "Line Spacing");
     REQUIRE(apply(editor, editors, "text.paragraph_spacing", ids.m_label,
       6.0));
     auto& style = get_text(document, ids.m_label).m_paragraph_style;
@@ -250,6 +330,43 @@ TEST_SUITE("TextPropertyEditors") {
     REQUIRE(std::get<AutoHeightFrame>(text.m_frame).m_width ==
       std::ceil(width));
     REQUIRE(measure_lines(text, library).size() == 2);
+  }
+
+  TEST_CASE("auto_height_width") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto editors = make_editors(editor);
+    auto& library = get_default_font_library();
+    auto contents = {u"Hello world", u"The quick brown fox jumps",
+      u"Wavy AVA tyre, yes.", u"lorem ipsum dolor sit amet", u"a b c d e f",
+      u"Typography Kerning: AWAY To Ty"};
+    auto fonts = {Font("Segoe UI", "Regular", "SegoeUI", 20),
+      Font("Segoe UI", "Bold", "SegoeUI-Bold", 15),
+      Font("Roboto", "Regular", "Roboto-Regular", 13),
+      Font("Arial", "Regular", "ArialMT", 17.5),
+      Font("Open Sans", "Regular", "OpenSans-Regular", 11)};
+    for(auto& content : contents) {
+      for(auto& font : fonts) {
+        {
+          auto transaction = Transaction(document);
+          auto text = get_text(document, ids.m_label);
+          text.m_content = Shared(std::u16string(content));
+          text.m_frame = PositionedFrame();
+          text.m_base_style.m_font = font;
+          text.m_runs.clear();
+          text.m_layout = std::nullopt;
+          transaction.replace_payload(ids.m_label, text);
+          transaction.commit();
+        }
+        REQUIRE(apply(editor, editors, "text.frame", ids.m_label,
+          Choice(1, QStringList())));
+        auto& text = get_text(document, ids.m_label);
+        auto width = std::get<AutoHeightFrame>(text.m_frame).m_width;
+        REQUIRE(width == std::round(width));
+        REQUIRE(measure_lines(text, library).size() == 1);
+      }
+    }
   }
 
   TEST_CASE("descriptors") {

@@ -14,6 +14,7 @@
 #include "Rellu/Commands/StyleCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Model/Transaction.hpp"
+#include "Rellu/Ui/ColorPicker.hpp"
 #include "Rellu/Ui/PropertyEditors.hpp"
 
 using namespace Rellu;
@@ -232,10 +233,8 @@ namespace {
       return std::make_unique<SetFillCommand>(nodes, SolidFill(color));
     } else if(choice->m_index == 2) {
       auto gradient = GradientFill();
-      gradient.m_geometry = LinearGradient(Point(0, 0), Point(1, 0));
-      gradient.m_stops.push_back(GradientStop(0, color));
-      gradient.m_stops.push_back(
-        GradientStop(1, make_color(255, 255, 255)));
+      gradient.m_geometry = LinearGradient(Point(0.5, 0), Point(0.5, 1));
+      gradient.m_stops = make_default_stops(color);
       return std::make_unique<SetFillCommand>(nodes, std::move(gradient));
     }
     return nullptr;
@@ -536,7 +535,8 @@ namespace {
         if(auto& grid = artboard->m_layout_grid) {
           return grid->m_margins;
         }
-        return make_default_grid(*artboard).m_margins;
+        return make_default_grid(
+          *artboard, document.get_resources().m_grid_defaults).m_margins;
       }
     }
     return std::nullopt;
@@ -621,6 +621,22 @@ namespace {
         }
         return false;
       })));
+    editors.add("grid.use_default", make_editor(make_grid_setter(
+      [] (const Document&, const std::vector<NodeId>&, GridEdit& edit,
+          const PropertyValue&) {
+        edit.m_is_default = true;
+        return true;
+      })));
+    editors.add("grid.make_default", make_editor(
+      [] (const Document& document, const std::vector<NodeId>& nodes,
+          const PropertyValue&) -> std::unique_ptr<Command> {
+        for(auto& id : nodes) {
+          if(document.get(id).get_artboard()) {
+            return std::make_unique<MakeGridDefaultCommand>(id);
+          }
+        }
+        return nullptr;
+      }));
     editors.add("grid.size", make_number_editor(
       make_grid_number_setter(&GridEdit::m_square_size), 1.0, std::nullopt));
     editors.add("grid.color", make_editor(make_grid_setter(

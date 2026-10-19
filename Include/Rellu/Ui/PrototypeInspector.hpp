@@ -2,6 +2,7 @@
 #define RELLU_UI_PROTOTYPE_INSPECTOR_HPP
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -20,19 +21,23 @@ namespace Rellu {
   /**
    * The property inspector of Adobe XD's Prototype mode, editing the
    * interactions of the selected node: the INTERACTION section with its +
-   * adding an interaction, a row per interaction when there are several,
-   * and the Trigger, Type, Destination, Animation, Easing and Duration of
-   * the one being edited, with the fields particular to its trigger and
-   * action (the delay of a time trigger, the keys of a key trigger, the
-   * address of a hyperlink, the position of an overlay, the state of a
-   * state change, Preserve Scroll Position); the FLOW section of an
-   * artboard; and the SCROLLING section. The triggers and action types
+   * adding an interaction like the one last edited, a row per interaction
+   * when there are several, and the Trigger and, under ACTION, the Type,
+   * Destination, Animation, Easing and Duration of the one being edited,
+   * with the fields particular to its trigger and action (the delay of a
+   * time trigger, the keys of a key trigger, the address of a hyperlink,
+   * the position of an overlay, Preserve Scroll Position) and the ACTION
+   * row adding a second action; the TEXT HYPERLINKS section of text with
+   * links, editing the address of each; the FLOW section of an artboard;
+   * and the SCROLLING section. The triggers, action types and destinations
    * offered depend on the node as in Adobe XD: Time only for an artboard,
-   * Hover only within a component with states. Voice triggers and the
-   * Scroll To, Audio Playback and Speech Playback actions are listed but
-   * unavailable. Each change is one undoable step.
-   * Without an interaction to edit, the fields show Adobe XD's placeholder
-   * values, disabled.
+   * Hover only within a component with several states, Tap, Drag, Hover
+   * and Time once per node, the other states of a component with states
+   * before the artboards other than the node's own. Voice triggers, second
+   * actions and the Scroll To, Audio Playback and Speech Playback actions
+   * are listed but unavailable. Each change is one undoable step. Without
+   * an interaction to edit, the fields show Adobe XD's placeholder values,
+   * disabled.
    */
   class PrototypeInspector : public QWidget {
     public:
@@ -109,6 +114,7 @@ namespace Rellu {
       Subscription m_selection_subscription;
       NodeId m_node;
       InteractionId m_current;
+      std::optional<Interaction> m_last;
       bool m_is_pending;
       QScrollArea* m_scroll;
       QWidget* m_content;

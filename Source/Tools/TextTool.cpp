@@ -190,6 +190,7 @@ void TextTool::edit(ToolContext& context, const NodeId& id,
   m_goal = std::nullopt;
   m_preedit = std::nullopt;
   m_is_caret_visible = true;
+  m_session = id;
   selection.set(id, anchor, caret);
 }
 
@@ -319,8 +320,7 @@ void TextTool::press(ToolContext& context, const PointerEvent& event) {
       m_gesture = Gesture::SELECT;
       return;
     }
-    commit(context);
-    context.request_tool("select");
+    end(context);
     return;
   }
   auto position = context.to_document(event.m_position);
@@ -328,6 +328,12 @@ void TextTool::press(ToolContext& context, const PointerEvent& event) {
   auto id = context.get_hit_tester().hit(
     position, HIT_TOLERANCE / context.get_zoom());
   if(auto node = document.find(id); node && node->get_text()) {
+    auto& edit_context = editor.get_context();
+    if(edit_context.resolve(id) != id &&
+        !is_control(event.m_modifiers) && edit_context.enter(node->m_parent)) {
+      editor.get_selection().select(id);
+      return;
+    }
     edit(context, id, 0, 0);
     auto index = hit(context, event.m_position);
     select(context, index, index, true);
@@ -377,8 +383,7 @@ void TextTool::release(ToolContext& context, const PointerEvent& event) {
   } else if(gesture == Gesture::FRAME) {
     m_current_document = context.to_document(event.m_position);
     auto frame = make_rect(m_press_document, m_current_document);
-    create(context, frame, frame.m_width >= MINIMUM_FRAME &&
-      frame.m_height >= MINIMUM_FRAME);
+    create(context, frame, frame.m_width >= MINIMUM_FRAME);
   }
 }
 
@@ -393,8 +398,17 @@ void TextTool::double_click(ToolContext& context, const PointerEvent& event) {
     return;
   }
   m_gesture = Gesture::NONE;
-  auto word =
-    find_word(*text->m_content, hit(context, event.m_position));
+  auto& content = *text->m_content;
+  auto index = hit(context, event.m_position);
+  auto& lines = get_geometry(context).m_lines;
+  if(auto local = to_local(context, event.m_position); local &&
+      index != 0 && !lines.empty()) {
+    auto& line = lines[find_line(lines, index)];
+    if(index > line.m_start && local->m_x < get_caret_x(line, index)) {
+      index = get_previous_grapheme(content, index);
+    }
+  }
+  auto word = find_word(content, index);
   select(context, word.first, word.second, true);
   m_double_click = std::chrono::steady_clock::now();
   m_double_click_position = event.m_position;
@@ -404,7 +418,17 @@ bool TextTool::key_press(ToolContext& context, const KeyEvent& event) {
   sync(context);
   auto text = find_text(context);
   if(!text) {
-    if(event.m_key != Qt::Key_Escape) {
+    if((event.m_key == Qt::Key_Return || event.m_key == Qt::Key_Enter) &&
+        m_gesture == Gesture::NONE) {
+      auto& document = context.get_document();
+      for(auto& id : context.get_editor().get_selection().get_nodes()) {
+        if(auto node = document.find(id); node && node->get_text()) {
+          edit(context, id, 0, node->get_text()->m_content->size());
+          return true;
+        }
+      }
+      return false;
+    } else if(event.m_key != Qt::Key_Escape) {
       return false;
     }
     if(m_gesture != Gesture::NONE) {
@@ -419,8 +443,7 @@ bool TextTool::key_press(ToolContext& context, const KeyEvent& event) {
   auto range = get_range(context);
   auto key = event.m_key;
   if(key == Qt::Key_Escape) {
-    commit(context);
-    context.request_tool("select");
+    end(context);
     return true;
   } else if(key == Qt::Key_Backspace || key == Qt::Key_Delete) {
     if(range.m_start == range.m_end) {
@@ -451,7 +474,7 @@ bool TextTool::key_press(ToolContext& context, const KeyEvent& event) {
       return false;
     }
     if(is_shift(event.m_modifiers)) {
-      insert(context, u"\u2028");
+      insert(context, u"\v");
     } else {
       insert(context, u"\n");
     }
@@ -726,14 +749,19 @@ std::optional<OverlayImage> TextTool::get_highlight(
 Text TextTool::type(const ToolContext& context, const Text& text,
     TextRange range, std::u16string_view inserted) const {
   auto result = replace_text(text, range, inserted);
-  auto& pending =
-    context.get_editor().get_text_selection().get_pending_style();
-  if(!pending || inserted.empty()) {
+  auto& selection = context.get_editor().get_text_selection();
+  auto& pending = selection.get_pending_style();
+  auto& hyperlink = selection.get_pending_hyperlink();
+  if((!pending && !hyperlink) || inserted.empty()) {
     return result;
   }
+  auto edit = TextStyleEdit();
+  if(pending) {
+    edit = make_style_edit(*pending);
+  }
+  edit.m_hyperlink = hyperlink;
   return edit_text_style(result,
-    TextRange(range.m_start, range.m_start + inserted.size()),
-    make_style_edit(*pending));
+    TextRange(range.m_start, range.m_start + inserted.size()), edit);
 }
 
 void TextTool::replace(ToolContext& context, TextRange range,
@@ -787,25 +815,38 @@ void TextTool::create(ToolContext& context, Rect frame, bool is_area) {
   top_left = Point(std::round(top_left.m_x), std::round(top_left.m_y));
   bottom_right =
     Point(std::round(bottom_right.m_x), std::round(bottom_right.m_y));
+  auto& selection = editor.get_text_selection();
+  auto& last = selection.get_last_style();
   auto style = get_default_text_style();
+  style.m_font = last.m_font;
+  style.m_letter_spacing = last.m_letter_spacing;
+  style.m_color = last.m_color;
   auto text = Text();
   text.m_content = Shared(std::u16string());
   text.m_base_style = style;
   text.m_style.m_fill = SolidFill(style.m_color);
+  text.m_paragraph_style = selection.get_last_paragraph_style();
   if(is_area) {
-    text.m_frame = AreaFrame(Size(std::max(bottom_right.m_x - top_left.m_x,
-      MINIMUM_FRAME), std::max(bottom_right.m_y - top_left.m_y,
-        MINIMUM_FRAME)));
+    text.m_frame = AutoHeightFrame(
+      std::max(bottom_right.m_x - top_left.m_x, MINIMUM_FRAME));
   } else {
     text.m_frame = PositionedFrame();
   }
   auto header = NodeHeader();
   header.m_id = generate_node_id();
-  header.m_transform = make_translation(top_left.m_x, top_left.m_y);
+  auto offset = get_stack_offset(document, parent, header.m_id,
+    make_translation(top_left.m_x, top_left.m_y).map(
+      context.get_text_measurer()(text)), frame.get_top_left());
+  header.m_transform = make_translation(
+    top_left.m_x + offset.m_x, top_left.m_y + offset.m_y);
   auto id = header.m_id;
   editor.get_history().seal();
+  auto is_held = hold_drawn_layout(context, parent, id);
   editor.execute(std::make_unique<EditTextCommand>(
     TextInsertion(parent, std::move(header)), std::move(text)));
+  if(is_held) {
+    editor.get_history().release_layout();
+  }
   if(!document.find(id)) {
     return;
   }
@@ -813,7 +854,17 @@ void TextTool::create(ToolContext& context, Rect frame, bool is_area) {
   m_goal = std::nullopt;
   m_preedit = std::nullopt;
   m_is_caret_visible = true;
-  editor.get_text_selection().set(id, 0, 0);
+  m_session = id;
+  selection.set(id, 0, 0);
+}
+
+void TextTool::end(ToolContext& context) {
+  auto is_handed_over =
+    context.get_editor().get_text_selection().get_node() != m_session;
+  commit(context);
+  if(is_handed_over) {
+    context.request_tool("select");
+  }
 }
 
 void TextTool::finish(ToolContext& context) {
@@ -830,13 +881,19 @@ void TextTool::finish(ToolContext& context) {
         preedit.m_start, EditKind::INSERT);
     }
   }
-  if(auto text = find_edited(context); text && text->m_content->empty()) {
-    editor.merge(std::make_unique<EditTextCommand>(selection.get_node()));
+  if(auto text = find_edited(context)) {
+    auto style = selection.get_pending_style().value_or(
+      get_style(*text, selection.get_range()));
+    selection.set_last_style(std::move(style), text->m_paragraph_style);
+    if(text->m_content->empty()) {
+      editor.merge(std::make_unique<EditTextCommand>(selection.get_node()));
+    }
   }
   editor.get_history().seal();
   m_last_edit = EditKind::NONE;
   m_goal = std::nullopt;
   m_double_click = std::nullopt;
+  m_session = NodeId();
   selection.clear();
 }
 

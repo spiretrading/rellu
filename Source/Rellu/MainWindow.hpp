@@ -1,8 +1,13 @@
 #ifndef RELLU_MAIN_WINDOW_HPP
 #define RELLU_MAIN_WINDOW_HPP
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 #include <QMainWindow>
+#include <QPainter>
+#include <QPointF>
+#include <QPolygonF>
 #include <QMenuBar>
 #include <QStackedWidget>
 #include <QString>
@@ -13,6 +18,7 @@
 #include "Rellu/Model/Subscription.hpp"
 #include "Rellu/Ui/ActionRegistry.hpp"
 #include "Rellu/Ui/AppBar.hpp"
+#include "Rellu/Ui/ArtboardPresetsPanel.hpp"
 #include "Rellu/Ui/AssetsPanel.hpp"
 #include "Rellu/Ui/ComponentActions.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
@@ -69,8 +75,9 @@ namespace Rellu {
       bool make_new();
 
       /**
-       * Replaces the current document with its file's saved contents,
-       * discarding its unsaved changes, as File &gt; Revert to Saved does.
+       * Asks to confirm, then replaces the current document with its file's
+       * saved contents, discarding its unsaved changes, as File &gt; Revert
+       * to Saved does.
        * @return <code>true</code> iff the document was reloaded.
        */
       bool revert();
@@ -115,10 +122,35 @@ namespace Rellu {
       PluginsPanel* m_plugins;
       PropertyInspector* m_inspector;
       PrototypeInspector* m_prototype_inspector;
+      ArtboardPresetsPanel* m_presets;
       PreviewWindow* m_preview;
       QWidget* m_inspector_frame;
       RecentFiles m_recent_files;
       TextMeasurer m_measurer;
+      enum class GradientPart : unsigned char {
+        NONE,
+        CENTER,
+        ROTATION,
+        STOP
+      };
+      struct GradientTarget {
+        GradientFill m_fill;
+        Matrix m_to_view;
+        Matrix m_from_view;
+      };
+      struct GradientDrag {
+        GradientPart m_part = GradientPart::NONE;
+        int m_stop = 0;
+        double m_rotation = 0;
+        double m_angle = 0;
+        Point m_offset = Point(0, 0);
+      };
+      static constexpr auto DEFAULT_ROTATION_HANDLE_ANGLE = -90.0;
+      QWidget* m_highlight;
+      std::vector<NodeId> m_highlighted;
+      QWidget* m_gradient_overlay;
+      GradientDrag m_gradient_drag;
+      double m_rotation_handle_angle;
       std::unique_ptr<DocumentSession> m_session;
       Subscription m_history_subscription;
       Subscription m_selection_subscription;
@@ -134,6 +166,7 @@ namespace Rellu {
       void set_workspace(Workspace workspace);
       void toggle_preview();
       void restore_settings();
+      void set_language(const std::string& language);
       void save_settings() const;
       void update_recent_files();
       void prompt_open();
@@ -145,12 +178,24 @@ namespace Rellu {
       void update_title();
       void update_selection_actions();
       void reveal(const NodeId& id);
+      void show_region(const Rect& region);
+      void update_presets();
       void zoom_to_selection();
       double get_zoom() const;
       void update_zoom();
       void add_asset_actions();
       void update_asset_actions();
       bool is_caption(QPoint position) const;
+      bool select_for_context_menu(QPoint position);
+      void set_highlights(std::vector<NodeId> nodes);
+      std::optional<GradientTarget> find_gradient_target() const;
+      void paint_gradient_editor(QPainter& painter);
+      QPointF get_rotation_handle(const GradientTarget& target) const;
+      bool handle_gradient_event(
+        ColorPicker::CanvasEvent event, QPointF position);
+      void update_gradient_editor();
+      std::vector<QPolygonF> get_highlight_outlines() const;
+      void update_grid_actions();
   };
 }
 

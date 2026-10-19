@@ -10,6 +10,7 @@
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Model/Subscription.hpp"
 #include "Rellu/Ui/ActionRegistry.hpp"
+#include "Rellu/Ui/AppBar.hpp"
 #include "Rellu/Ui/Clipboard.hpp"
 
 namespace Rellu {
@@ -35,6 +36,12 @@ namespace Rellu {
        * or none when it is unknown.
        */
       using ViewProvider = std::function<std::optional<Rect> ()>;
+
+      /**
+       * The type of function bringing a region of the document into view.
+       * @param region The region in document coordinates.
+       */
+      using RevealHandler = std::function<void (const Rect& region)>;
 
       /**
        * Sets the handlers of the actions, which are disabled until an
@@ -72,6 +79,20 @@ namespace Rellu {
       void set_view_provider(ViewProvider provider);
 
       /**
+       * Sets the function bringing into view the artboards duplicated or
+       * pasted, as Adobe XD scrolls to them.
+       * @param handler The function.
+       */
+      void set_reveal_handler(RevealHandler handler);
+
+      /**
+       * Sets the workspace shown, which decides whether duplicating and
+       * pasting copy interactions.
+       * @param workspace The workspace.
+       */
+      void set_workspace(Workspace workspace);
+
+      /**
        * Sets the function measuring text when what is copied is measured.
        * @param measurer The function.
        */
@@ -93,6 +114,8 @@ namespace Rellu {
       Clipboard m_clipboard;
       ErrorHandler m_error_handler;
       ViewProvider m_view_provider;
+      RevealHandler m_reveal_handler;
+      Workspace m_workspace;
       TextMeasurer m_measurer;
       QMetaObject::Connection m_clipboard_connection;
       Subscription m_selection_subscription;
@@ -109,6 +132,10 @@ namespace Rellu {
       void cut();
       void copy();
       void paste();
+      void paste_appearance();
+      void duplicate();
+      std::optional<Rect> get_view() const;
+      void reveal_artboards();
   };
 }
 

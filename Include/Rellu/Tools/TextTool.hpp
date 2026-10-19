@@ -61,20 +61,28 @@ namespace Rellu {
   /**
    * Creates and edits text as Adobe XD's text tool does. A click creates
    * point text whose first baseline starts at the click and a drag creates
-   * area text, both in XD's default style; a click on existing text edits
-   * it. While editing, the pointer places the caret and selects by
-   * character, a double click selects a word and a triple click a
-   * paragraph; keys move the caret by character, word, line and text, Shift
-   * extending the selection; typing, deleting, the clipboard and input
-   * methods edit the selection, text typed at a caret taking the
-   * TextSelection's pending style if set, and typing a run of characters is
-   * one undoable step until the caret moves. The selection is highlighted
-   * in solid blue with its characters drawn in white. Escape or a click
-   * outside the text ends editing and requests the tool named select,
-   * removing the text if it is empty, as does selecting other nodes. The
-   * text edited and its selection are the editor's TextSelection, so that
-   * another tool hands text over for editing by setting it and requesting
-   * this tool.
+   * Auto Height text as wide as the drag, both taking the font, character
+   * spacing, color and paragraph style of the text edited or styled most
+   * recently. A click on existing text edits it, or when the text lies in a
+   * container not entered and Ctrl is up, enters the container and selects
+   * the text; Enter edits the selected text, all of it selected. While
+   * editing, the pointer places the caret and selects by character, a
+   * double click selects a word or punctuation mark with the spaces
+   * following it and a triple click a paragraph; keys move the caret by
+   * character, word, line and text, Shift extending the selection; typing,
+   * deleting, the clipboard and input methods edit the selection, text
+   * typed at a caret taking the TextSelection's pending style and hyperlink
+   * if set, and typing a run of characters is one undoable step until the
+   * caret moves. Enter breaks the paragraph and Shift+Enter inserts a
+   * vertical tab, which also starts a paragraph. The selection is
+   * highlighted in solid blue with its characters drawn in white. Editing
+   * ends, removing the text if it is empty, on Escape or a click outside
+   * the text, leaving the text selected, and on selecting other nodes.
+   * Ending the editing of text handed over by another tool requests the
+   * tool named select, while text this tool began editing leaves this tool
+   * active. The text edited and its selection are the editor's
+   * TextSelection, so that another tool hands text over for editing by
+   * setting it and requesting this tool.
    */
   class TextTool : public Tool {
     public:
@@ -219,6 +227,7 @@ namespace Rellu {
       bool m_is_caret_visible;
       std::optional<std::chrono::steady_clock::time_point> m_double_click;
       Point m_double_click_position;
+      NodeId m_session;
       mutable Geometry m_geometry;
       mutable Highlight m_highlight;
 
@@ -244,6 +253,7 @@ namespace Rellu {
       void apply(ToolContext& context, Text text, std::size_t caret,
         EditKind kind);
       void create(ToolContext& context, Rect frame, bool is_area);
+      void end(ToolContext& context);
       void finish(ToolContext& context);
       void copy(const ToolContext& context) const;
       bool navigate(ToolContext& context, const KeyEvent& event);

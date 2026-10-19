@@ -1045,7 +1045,8 @@ bool Rellu::reorder_children(const Document& document,
 
 NodeId Rellu::copy_into(const Document& document, Transaction& transaction,
     const NodeId& source, const NodeId& parent) {
-  auto duplicate = DuplicateCommand(std::vector{source});
+  auto duplicate =
+    DuplicateCommand(std::vector{source}, Point(0, 0), DuplicateMode::CLONE);
   duplicate.apply(document, transaction);
   if(duplicate.get_copies().empty()) {
     return NodeId();

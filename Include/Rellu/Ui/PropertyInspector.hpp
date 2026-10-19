@@ -95,6 +95,14 @@ namespace Rellu {
       void set_workspace(Workspace workspace);
 
       /**
+       * Shows a widget below the sections of the design workspace, taking
+       * ownership of it.
+       * @param footer The widget, or <code>nullptr</code> for none.
+       * @param is_exclusive Whether the sections are hidden while it shows.
+       */
+      void set_footer(QWidget* footer, bool is_exclusive);
+
+      /**
        * Returns the id of the primary node inspected, or nil if there is
        * none.
        */
@@ -150,6 +158,12 @@ namespace Rellu {
       ColorPicker& get_color_picker();
 
       /**
+       * Returns the path of the property the color picker edits, or empty
+       * if it is closed.
+       */
+      const std::string& get_picked_path() const;
+
+      /**
        * Opens the color picker editing a property, as clicking its swatch
        * does.
        * @param path The property's path, such as fill.paint or stroke.color.
@@ -190,6 +204,8 @@ namespace Rellu {
       QWidget* m_content;
       QVBoxLayout* m_layout;
       ColorPicker* m_picker;
+      QWidget* m_footer;
+      bool m_is_footer_exclusive;
 
       void attach(Document* document);
       void refresh();

@@ -204,10 +204,14 @@ TEST_SUITE("TextEditing") {
   TEST_CASE("word_range") {
     auto content = std::u16string(u"Hello, big  world\nnext");
     REQUIRE(find_word(content, 2) == Range(0, 5));
-    REQUIRE(find_word(content, 5) == Range(0, 5));
+    REQUIRE(find_word(content, 5) == Range(5, 7));
+    REQUIRE(find_word(content, 8) == Range(7, 12));
     REQUIRE(find_word(content, 11) == Range(10, 12));
     REQUIRE(find_word(content, 17) == Range(12, 17));
     REQUIRE(find_word(content, 22) == Range(18, 22));
+    auto vertical = std::u16string(u"one two\vthree");
+    REQUIRE(find_word(vertical, 1) == Range(0, 4));
+    REQUIRE(find_word(vertical, 5) == Range(4, 7));
   }
 
   TEST_CASE("paragraph_range") {

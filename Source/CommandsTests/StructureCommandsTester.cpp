@@ -1,4 +1,6 @@
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <doctest/doctest.h>
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Fixture.hpp"
@@ -11,6 +13,14 @@ namespace {
     auto transaction = Transaction(document);
     auto header = document.get(id).m_header;
     header.m_opacity = opacity;
+    transaction.replace_header(header);
+    transaction.commit();
+  }
+
+  void rename(Document& document, const NodeId& id, std::string name) {
+    auto transaction = Transaction(document);
+    auto header = document.get(id).m_header;
+    header.m_name = std::move(name);
     transaction.replace_header(header);
     transaction.commit();
   }
@@ -222,7 +232,8 @@ TEST_SUITE("StructureCommands") {
     auto history = History(document);
     auto command = require_undoable(history,
       std::make_unique<DuplicateCommand>(
-        std::vector{scene.m_instance, scene.m_rectangle}));
+        std::vector{scene.m_instance, scene.m_rectangle}, Point(0, 0),
+        DuplicateMode::PROTOTYPE));
     REQUIRE(history.get_undo_label() == "Duplicate");
     auto& duplicate = static_cast<const DuplicateCommand&>(*command);
     auto& mapping = duplicate.get_mapping();
@@ -256,6 +267,64 @@ TEST_SUITE("StructureCommands") {
     REQUIRE(interactions.back().m_id != scene.m_interaction);
     REQUIRE(interactions.back().m_action ==
       Action(ArtboardTransition(scene.m_artboard)));
+    history.execute(
+      std::make_unique<DuplicateCommand>(std::vector{scene.m_rectangle}));
+    REQUIRE(document.get_prototype().m_interactions.size() == 2);
+  }
+
+  TEST_CASE("duplicate_names") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    rename(document, scene.m_rectangle, "Rectangle 1");
+    rename(document, scene.m_group, "Group 4");
+    rename(document, scene.m_ellipse, "Ellipse 1");
+    rename(document, scene.m_mask, "Mask Group 2");
+    rename(document, scene.m_path, "Path 1");
+    auto history = History(document);
+    auto command = history.execute(std::make_unique<DuplicateCommand>(
+      std::vector{scene.m_rectangle, scene.m_group, scene.m_mask,
+        scene.m_instance, scene.m_loose}));
+    auto& mapping = static_cast<const DuplicateCommand&>(*command).
+      get_mapping();
+    auto get_name = [&] (const NodeId& id) {
+      return document.get(mapping.at(id)).m_header.m_name;
+    };
+    REQUIRE(get_name(scene.m_rectangle) == "Rectangle 2");
+    REQUIRE(get_name(scene.m_group) == "Group 5");
+    REQUIRE(get_name(scene.m_ellipse) == "Ellipse 1");
+    REQUIRE(get_name(scene.m_text) == "Text");
+    REQUIRE(get_name(scene.m_mask) == "Mask Group 3");
+    REQUIRE(get_name(scene.m_path) == "Path 2");
+    REQUIRE(get_name(scene.m_instance) == "Button \xE2\x80\x93 1");
+    REQUIRE(get_name(scene.m_loose) == "Loose");
+    auto unnamed = history.execute(std::make_unique<DuplicateCommand>(
+      std::vector{scene.m_rectangle}, Point(0, 0), DuplicateMode::CLONE));
+    REQUIRE(document.get(unnamed->get_selection()->front()).m_header.
+      m_name == "Rectangle 1");
+  }
+
+  TEST_CASE("duplicate_artboards") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto history = History(document);
+    auto command = require_undoable(history, std::make_unique<DuplicateCommand>(
+      std::vector{scene.m_artboard}, Rect(0, 0, 2000, 1000),
+      DuplicateMode::DESIGN));
+    auto copy = command->get_selection()->front();
+    auto& node = document.get(copy);
+    REQUIRE(node.m_header.m_name == "Artboard \xE2\x80\x93 1");
+    REQUIRE(node.get_artboard()->m_frame == Rect(570, 50, 400, 300));
+    REQUIRE(document.get_canvas() ==
+      std::vector{scene.m_artboard, copy, scene.m_loose});
+    REQUIRE(document.get(node.m_children.front()).m_header.m_name ==
+      "Rectangle");
+    REQUIRE(get_world_transform(document, node.m_children.front()) ==
+      make_translation(580, 60));
+    auto over = history.execute(
+      std::make_unique<DuplicateCommand>(std::vector{scene.m_artboard}));
+    auto& overlapping = document.get(over->get_selection()->front());
+    REQUIRE(overlapping.m_header.m_name == "Artboard \xE2\x80\x93 2");
+    REQUIRE(overlapping.get_artboard()->m_frame == Rect(100, 50, 400, 300));
   }
 
   TEST_CASE("duplicate_references") {

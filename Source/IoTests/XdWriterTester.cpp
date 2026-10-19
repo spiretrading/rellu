@@ -106,8 +106,31 @@ namespace {
     auto transaction = Transaction(document);
     built.m_image = transaction.add_image(
       ImageResource(NodeId(), "image/png", Shared(make_png())));
-    built.m_swatch = transaction.add_swatch(
-      ColorSwatch(NodeId(), "Primary", make_color(0, 0, 255)));
+    auto swatch_id = generate_node_id();
+    built.m_swatch = transaction.add_swatch(ColorSwatch(swatch_id, "Primary",
+      make_color(0, 0, 255), std::vector<GradientStop>(),
+      std::vector{AssetPlacement("a1b2", "n")}));
+    auto angular = Shape();
+    angular.m_geometry = RectangleShape(Rect(0, 0, 40, 40));
+    auto sweep = GradientFill();
+    sweep.m_geometry = AngularGradient(Point(0.25, 0.5), 30);
+    sweep.m_stops = {GradientStop(0, make_color(52, 120, 246)),
+      GradientStop(1, make_color(26, 60, 123))};
+    angular.m_style.m_fill = std::move(sweep);
+    auto defaults = GridDefaults();
+    defaults.m_grid = LayoutGrid();
+    defaults.m_grid->m_type = GridType::LAYOUT;
+    defaults.m_grid->m_column_count = 6;
+    defaults.m_grid->m_default_width = 770;
+    defaults.m_grid->m_square_size = Size(8, 8);
+    defaults.m_grid->m_column_color = make_argb_color(0x4000FFFF);
+    defaults.m_overrides = std::vector{GridOverride(312, 1, 0,
+      Margins(0, 28, 0, 28), make_argb_color(0x4000FFFF),
+      make_argb_color(0x4000FFFF))};
+    transaction.set_grid_defaults(std::move(defaults));
+    transaction.set_asset_groups({AssetGroup("a1b2", "Brand", "h",
+      "groupColors", std::vector<std::string>(),
+      std::vector{to_string(swatch_id)})});
     auto style = CharacterStyle();
     style.m_name = "Body";
     style.m_style.m_font = Font("Roboto", "Medium", "Roboto-Medium", 12);
@@ -121,6 +144,8 @@ namespace {
     artboard.m_guides.push_back(Guide(Orientation::VERTICAL, 16));
     built.m_artboard =
       transaction.append(NodeId(), make_header("Home"), artboard);
+    transaction.append(
+      built.m_artboard, make_header("Sweep"), std::move(angular));
     auto rectangle = make_rectangle_shape(10, 20);
     std::get<RectangleShape>(rectangle.m_geometry).m_radii =
       CornerRadii(1, 2, 3, 4);
@@ -534,7 +559,67 @@ TEST_SUITE("XdWriter") {
     REQUIRE(entry.value("action"_L1) == "hyperlink"_L1);
     REQUIRE(entry.value("triggerEvent"_L1) == "tap"_L1);
     REQUIRE(entry.value("properties"_L1).toObject() ==
-      QJsonObject({{"hyperlinkUrl", "https://www.example.com"}}));
+      QJsonObject({{"hyperlinkUrl", "https://www.example.com"},
+        {"voiceLocale", "en-us"}}));
+  }
+
+  TEST_CASE("state_transition") {
+    auto document = Document();
+    auto built = build(document);
+    auto interactions = XdPackage(write_xd(document)).read_interactions();
+    auto list = interactions.value("interactions"_L1).toObject().value(
+      QString::fromStdString(to_string(built.m_instance))).toArray();
+    REQUIRE(list.size() == 1);
+    auto entry = list.first().toObject();
+    REQUIRE(entry.value("action"_L1) == "state-transition"_L1);
+    auto properties = entry.value("properties"_L1).toObject();
+    REQUIRE(properties.keys() == QStringList({"destination", "duration",
+      "easing", "transition", "voiceLocale"}));
+    REQUIRE(properties.value("voiceLocale"_L1) == "en-us"_L1);
+  }
+
+  TEST_CASE("repeat_grid_edit") {
+    auto document = Document();
+    auto grid = NodeId();
+    auto cells = std::vector<NodeId>();
+    auto texts = std::vector<NodeId>();
+    {
+      auto transaction = Transaction(document);
+      auto payload = Group();
+      payload.m_repeat_grid =
+        RepeatGrid(Size(24, 21), 20, 19, 3, 1, Size(112, 21));
+      grid = transaction.append(
+        NodeId(), make_header("Repeat Grid 1"), payload);
+      for(auto i = 0; i != 3; ++i) {
+        auto header = make_header("");
+        header.m_transform = make_translation(i * 44, 0);
+        cells.push_back(transaction.append(grid, header, Group()));
+        texts.push_back(transaction.append(
+          cells.back(), make_header("Text"), make_text_payload(u"Text")));
+      }
+      transaction.commit();
+    }
+    {
+      auto transaction = Transaction(document);
+      auto text = *document.get(texts[1]).get_text();
+      text.m_content = Shared(std::u16string(u"hi"));
+      text.m_runs.front().m_length = 2;
+      transaction.replace_payload(texts[1], Box<Text>(std::move(text)));
+      transaction.commit();
+    }
+    auto package = XdPackage(write_xd(document));
+    for(auto& cell : cells) {
+      REQUIRE(get_ux(find_written(package, cell)).value(
+        "disableNaming"_L1).toBool());
+    }
+    for(auto& text : texts) {
+      REQUIRE(!get_ux(find_written(package, text)).contains(
+        "repeatOverrides"_L1));
+    }
+    REQUIRE(find_written(package, texts[1]).value("text"_L1).toObject().value(
+      "rawText"_L1) == "hi"_L1);
+    REQUIRE(find_written(package, texts[0]).value("text"_L1).toObject().value(
+      "rawText"_L1) == "Text"_L1);
   }
 
   TEST_CASE("main_component") {
@@ -761,6 +846,52 @@ TEST_SUITE("XdWriter") {
     grid.m_repeat_grid = RepeatGrid(Size(50, 50), 10, 10, 2, 3, Size(110, 170));
     auto grid_id =
       transaction.append(NodeId(), make_header("Repeat Grid 1"), grid);
+    auto add_compound = [&] (CompoundOperation operation, std::string name) {
+      auto compound = Shape();
+      compound.m_geometry = CompoundShape(
+        operation, Shared(*parse_svg_path("M 0 0 L 5 0 L 5 5 Z")));
+      auto id =
+        transaction.append(NodeId(), make_header(std::move(name)), compound);
+      transaction.append(id, make_header("A"), make_rectangle_shape(5, 5));
+      transaction.append(id, make_header("B"), make_rectangle_shape(5, 5));
+      return id;
+    };
+    auto intersection =
+      add_compound(CompoundOperation::INTERSECT, "Intersection 1");
+    auto exclusion = add_compound(CompoundOperation::EXCLUDE, "Exclusion 2");
+    auto subtraction =
+      add_compound(CompoundOperation::SUBTRACT, "Subtraction 1");
+    auto union_id = add_compound(CompoundOperation::UNION, "Union 4");
+    auto add_mask = [&] (std::string name) {
+      auto mask = Group();
+      mask.m_mask = Mask();
+      mask.m_mask->m_shapes.push_back(
+        MaskShape(Matrix(), EllipseShape(Point(10, 10), 10, 10)));
+      auto id =
+        transaction.append(NodeId(), make_header(std::move(name)), mask);
+      transaction.append(id, make_header("A"), make_rectangle_shape(5, 5));
+      return id;
+    };
+    auto mask_group = add_mask("Mask Group 1");
+    auto masked_group = add_mask("Group 3");
+    auto master = transaction.insert_root(make_header("Component 1"), Group());
+    transaction.append(master, make_header("A"), make_rectangle_shape(5, 5));
+    auto component = Component();
+    component.m_name = "Component 1";
+    component.m_master = master;
+    component.m_size = Size(5, 5);
+    auto component_id = transaction.add_component(component);
+    auto add_instance = [&] (std::string name) {
+      auto instance = Group();
+      instance.m_component_instance =
+        ComponentInstance(component_id, StateId(), Size(5, 5));
+      return transaction.append(
+        NodeId(), make_header(std::move(name)), instance);
+    };
+    auto numbered = add_instance("Component 1 \xE2\x80\x93 2");
+    auto plain = add_instance("Component 1");
+    auto symbol = add_instance("Symbol 3");
+    auto card = add_instance("Card \xE2\x80\x93 2");
     transaction.commit();
     auto package = XdPackage(write_xd(document));
     auto get_key = [&] (const NodeId& id) {
@@ -774,5 +905,15 @@ TEST_SUITE("XdWriter") {
     REQUIRE(get_key(text) == "SHAPE_GROUP");
     REQUIRE(get_key(renamed).empty());
     REQUIRE(get_key(grid_id) == "SHAPE_REPEAT_GRID");
+    REQUIRE(get_key(intersection) == "SHAPE_INTERSECT");
+    REQUIRE(get_key(exclusion) == "SHAPE_EXCLUDE");
+    REQUIRE(get_key(subtraction) == "SHAPE_SUBTRACT");
+    REQUIRE(get_key(union_id) == "SHAPE_UNION");
+    REQUIRE(get_key(mask_group) == "SHAPE_MASK");
+    REQUIRE(get_key(masked_group) == "SHAPE_GROUP");
+    REQUIRE(get_key(numbered) == "SHAPE_COMPONENT");
+    REQUIRE(get_key(plain) == "SHAPE_COMPONENT");
+    REQUIRE(get_key(symbol) == "SHAPE_SYMBOL");
+    REQUIRE(get_key(card).empty());
   }
 }

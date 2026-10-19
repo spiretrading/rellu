@@ -2,7 +2,9 @@
 #include <utility>
 #include <variant>
 #include "Rellu/Commands/Bounds.hpp"
+#include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
+#include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Tools/DrawTool.hpp"
 #include "Rellu/Tools/PenTool.hpp"
 
@@ -333,8 +335,15 @@ void PenTool::start(ToolContext& context, Point point) {
   auto id = header.m_id;
   auto shape = Shape(PathShape(Shared(std::move(outline)), FillRule::NON_ZERO),
     make_default_path_style());
-  if(!context.get_editor().execute(std::make_unique<InsertNodeCommand>(
-      "Pen", parent, std::move(header), std::move(shape)))) {
+  auto commands = std::vector<std::unique_ptr<Command>>();
+  commands.push_back(std::make_unique<InsertNodeCommand>(
+    "Pen", parent, std::move(header), std::move(shape)));
+  if(auto index = get_stack_index(document, parent, id, point)) {
+    commands.push_back(
+      std::make_unique<ReparentCommand>(std::vector{id}, parent, *index));
+  }
+  if(!context.get_editor().execute(
+      std::make_unique<CompositeCommand>("Pen", std::move(commands)))) {
     return;
   }
   m_is_drawing = true;

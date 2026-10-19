@@ -2,6 +2,7 @@
 #include <cmath>
 #include <set>
 #include <doctest/doctest.h>
+#include "Rellu/Text/TextEditing.hpp"
 #include "Rellu/Text/TextLayout.hpp"
 
 using namespace Rellu;
@@ -249,7 +250,7 @@ TEST_SUITE("TextLayout") {
   }
 
   TEST_CASE("fallback_emboldening") {
-    auto text = make_text(u"a➔b");
+    auto text = make_text(u"a\u2794b");
     auto regular = lay_out(text, get_library());
     text.m_base_style.m_font = Font("Arial", "Bold", "Arial-BoldMT", 20);
     auto bold = lay_out(text, get_library());
@@ -257,7 +258,7 @@ TEST_SUITE("TextLayout") {
     REQUIRE(bold.m_glyphs.size() == 3);
     auto& typeface = *bold.m_glyphs[1].m_typeface;
     REQUIRE(&typeface == regular.m_glyphs[1].m_typeface.get());
-    auto advance = typeface.shape(u"➔", 0, 1).front().m_advance;
+    auto advance = typeface.shape(u"\u2794", 0, 1).front().m_advance;
     auto units = typeface.get_units_per_em();
     auto get_advance = [] (const TextLayout& layout) {
       return layout.m_glyphs[2].m_origin.m_x - layout.m_glyphs[1].m_origin.m_x;
@@ -268,7 +269,7 @@ TEST_SUITE("TextLayout") {
   }
 
   TEST_CASE("color_glyph") {
-    auto layout = lay_out(make_text(u"✅"), get_library());
+    auto layout = lay_out(make_text(u"\u2705"), get_library());
     REQUIRE(layout.m_glyphs.size() == 1);
     auto& glyph = layout.m_glyphs.front();
     REQUIRE(!glyph.m_typeface->get_color_layers(glyph.m_index).empty());
@@ -283,7 +284,7 @@ TEST_SUITE("TextLayout") {
   TEST_CASE("fallback_line_metrics") {
     auto plain = make_text(u"a");
     plain.m_frame = AutoHeightFrame(200);
-    auto fallback = make_text(u"a✅");
+    auto fallback = make_text(u"a\u2705");
     fallback.m_frame = AutoHeightFrame(200);
     auto emoji = lay_out(fallback, get_library());
     auto& typeface = *emoji.m_glyphs[1].m_typeface;
@@ -363,5 +364,51 @@ TEST_SUITE("TextLayout") {
     REQUIRE(store_layout(text, get_library()) == stored);
     REQUIRE(get_baselines(lay_out(text, get_library())) ==
       get_baselines(unstored));
+  }
+
+  TEST_CASE("empty_paragraphs") {
+    auto text = make_text(u"ab\n\ncd\n");
+    auto stored = store_layout(text, get_library());
+    REQUIRE(stored.m_paragraphs.size() == 4);
+    auto line = get_ascent() + get_descent();
+    REQUIRE(stored.m_paragraphs[1].m_lines[0].m_runs ==
+      std::vector<StoredRun>({make_run(3, 3, Point(0, line))}));
+    REQUIRE(stored.m_paragraphs[3].m_lines[0].m_runs ==
+      std::vector<StoredRun>({make_run(0, 0, Point(0, 3 * line))}));
+    auto unstored = measure_lines(text, get_library());
+    text.m_layout = Shared(stored);
+    auto lines = measure_lines(text, get_library());
+    REQUIRE(lines.size() == 4);
+    REQUIRE(lines[3].m_start == 7);
+    REQUIRE(lines[3].m_end == 7);
+    REQUIRE(lines[3].m_baseline == unstored[3].m_baseline);
+    REQUIRE(hit_test(lines, *text.m_content, Point(0, 3 * line)) == 7);
+  }
+
+  TEST_CASE("empty_stored_layout") {
+    auto text = make_text(u"alpha beta gamma");
+    text.m_frame = AreaFrame(Size(70, 100));
+    auto unstored = lay_out(text, get_library());
+    text.m_layout = Shared(StoredLayout());
+    auto layout = lay_out(text, get_library());
+    REQUIRE(layout.m_glyphs.size() == unstored.m_glyphs.size());
+    REQUIRE(get_baselines(layout) == get_baselines(unstored));
+    REQUIRE(get_baselines(layout).size() > 1);
+  }
+
+  TEST_CASE("vertical_tab") {
+    auto text = make_text(u"one two\vthree\nfour");
+    text.m_paragraph_style.m_line_height = 20;
+    text.m_paragraph_style.m_paragraph_spacing = 20;
+    auto stored = store_layout(text, get_library());
+    REQUIRE(stored.m_paragraphs.size() == 3);
+    REQUIRE(stored.m_paragraphs[0].m_lines[0].m_runs ==
+      std::vector<StoredRun>({make_run(0, 7, Point(0, 0))}));
+    REQUIRE(stored.m_paragraphs[1].m_lines[0].m_runs ==
+      std::vector<StoredRun>({make_run(8, 13, Point(0, 40))}));
+    REQUIRE(stored.m_paragraphs[2].m_lines[0].m_runs ==
+      std::vector<StoredRun>({make_run(14, 18, Point(0, 80))}));
+    REQUIRE(get_baselines(lay_out(text, get_library())) ==
+      std::set<double>({0, 40, 80}));
   }
 }

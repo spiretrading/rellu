@@ -289,6 +289,17 @@ namespace {
             direction.m_y * matrix.m_ty - start * matrix.m_w0) / length),
           to_float(PaintKind::LINEAR)});
       }
+    } else if(auto angular =
+        std::get_if<AngularGradient>(&paint.m_geometry)) {
+      auto& matrix = *inverse;
+      record[0] = Texel({static_cast<float>(matrix.m_a),
+        static_cast<float>(matrix.m_c), static_cast<float>(matrix.m_tx),
+        to_float(PaintKind::ANGULAR)});
+      record[1] = Texel({static_cast<float>(matrix.m_b),
+        static_cast<float>(matrix.m_d), static_cast<float>(matrix.m_ty), 0});
+      record[2] = Texel({static_cast<float>(angular->m_center.m_x),
+        static_cast<float>(angular->m_center.m_y),
+        static_cast<float>(angular->m_rotation / 360), 0});
     } else {
       auto& radial = std::get<RadialGradient>(paint.m_geometry);
       if(!(radial.m_radius > 0)) {

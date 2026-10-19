@@ -383,6 +383,10 @@ namespace {
       append_differences(*revision.m_character_styles,
         resources.m_character_styles, changes.m_character_styles);
     }
+    if(revision.m_asset_groups) {
+      changes.m_is_asset_group_changed =
+        *revision.m_asset_groups != resources.m_asset_groups;
+    }
     auto& prototype = document.get_prototype();
     if(revision.m_interactions) {
       append_differences(*revision.m_interactions, prototype.m_interactions,
@@ -425,6 +429,8 @@ namespace {
     merge(revision.m_images, amendment.m_images);
     merge(revision.m_swatches, amendment.m_swatches);
     merge(revision.m_character_styles, amendment.m_character_styles);
+    merge(revision.m_asset_groups, amendment.m_asset_groups);
+    merge(revision.m_grid_defaults, amendment.m_grid_defaults);
     merge(revision.m_interactions, amendment.m_interactions);
     if(!revision.m_flows) {
       revision.m_home_artboard = std::move(amendment.m_home_artboard);
@@ -933,6 +939,22 @@ void Transaction::touch_image(const ImageId& id) {
   } else {
     m_revision.m_images.emplace_back(id, entry->second);
   }
+}
+
+void Transaction::set_asset_groups(std::vector<AssetGroup> groups) {
+  check_open();
+  if(!m_revision.m_asset_groups) {
+    m_revision.m_asset_groups = m_document->m_resources.m_asset_groups;
+  }
+  m_document->m_resources.m_asset_groups = std::move(groups);
+}
+
+void Transaction::set_grid_defaults(GridDefaults defaults) {
+  check_open();
+  if(!m_revision.m_grid_defaults) {
+    m_revision.m_grid_defaults = m_document->m_resources.m_grid_defaults;
+  }
+  m_document->m_resources.m_grid_defaults = std::move(defaults);
 }
 
 void Transaction::touch_swatches() {

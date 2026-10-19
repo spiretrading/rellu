@@ -190,7 +190,11 @@ std::unique_ptr<Command> Rellu::make_flip_command(const Document& document,
     const std::vector<NodeId>& nodes, bool is_horizontal,
     const TextMeasurer& measurer) {
   auto targets = get_flippable(document, get_existing(document, nodes));
-  if(targets.empty()) {
+  if(std::all_of(targets.begin(), targets.end(), [&] (const auto& id) {
+      auto group = document.get(id).get_group();
+      return group && (group->m_component_instance ||
+        group->m_repeat_grid || group->m_scroll_group);
+    })) {
     return nullptr;
   }
   auto bounds =

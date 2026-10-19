@@ -1,4 +1,8 @@
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
 #include <unordered_set>
 #include <utility>
 #include "Rellu/Commands/ArtboardCommands.hpp"
@@ -7,13 +11,88 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto DEFAULT_COLUMNS = 4;
-  constexpr auto DEFAULT_GUTTER = 10.0;
-  constexpr auto DEFAULT_MARGIN = 37.0;
   constexpr auto DEFAULT_SQUARE = 8.0;
   constexpr auto COLUMN_ALPHA = 64 / 255.0;
   constexpr auto SQUARE_ALPHA = 128 / 255.0;
   constexpr auto SQUARE_GREY = 199 / 255.0;
+
+  constexpr auto FALLBACK_COLUMNS = 12;
+  constexpr auto FALLBACK_GUTTER = 16.0;
+  constexpr auto FALLBACK_MARGIN = 140.0;
+
+  GridOverride make_override(
+      double width, int columns, double gutter, double margin) {
+    auto color = Color(0, 1, 1, COLUMN_ALPHA);
+    return GridOverride(width, columns, gutter, Margins(0, margin, 0, margin),
+      color, color);
+  }
+
+  const GridOverride* find_override(
+      const std::vector<GridOverride>& overrides, double width) {
+    auto found = static_cast<const GridOverride*>(nullptr);
+    for(auto& entry : overrides) {
+      if(entry.m_maximum_width && std::isfinite(*entry.m_maximum_width) &&
+          width <= *entry.m_maximum_width && (!found ||
+            *entry.m_maximum_width < *found->m_maximum_width)) {
+        found = &entry;
+      }
+    }
+    return found;
+  }
+
+  double round_column(double width, int count, double margins) {
+    auto whole = std::floor(width);
+    auto fraction = width - whole;
+    if(fraction <= 0.5 || (1 - fraction) * count > margins) {
+      return whole;
+    }
+    return whole + 1;
+  }
+
+  void fit_margins(LayoutGrid& grid, double width) {
+    auto& margins = grid.m_margins;
+    auto count = std::max(grid.m_column_count, 1);
+    auto space = width - margins.m_left - margins.m_right;
+    if(count > 1) {
+      space -= grid.m_gutter * (count - 1);
+    }
+    auto excess = space - std::max(1.0, round_column(space / count, count,
+      margins.m_left + margins.m_right)) * count;
+    auto is_even = margins.m_left == margins.m_right && count > 1;
+    if(excess == 0 || (excess == 1 && is_even)) {
+      return;
+    }
+    auto half = std::floor(excess / 2);
+    margins.m_left += half;
+    margins.m_right += is_even ? half : excess - half;
+    if(margins.m_left < 0) {
+      margins.m_right += margins.m_left;
+      margins.m_left = 0;
+    }
+    if(margins.m_right < 0) {
+      margins.m_left = std::max(0.0, margins.m_left + margins.m_right);
+      margins.m_right = 0;
+    }
+  }
+
+  void set_default_layout(
+      LayoutGrid& grid, double width, const GridDefaults& defaults) {
+    auto built_in = get_built_in_overrides();
+    auto& overrides = defaults.m_overrides ? *defaults.m_overrides : built_in;
+    auto fallback = make_override(std::numeric_limits<double>::infinity(),
+      FALLBACK_COLUMNS, FALLBACK_GUTTER, FALLBACK_MARGIN);
+    auto rule = find_override(overrides, width);
+    if(!rule) {
+      rule = &fallback;
+    }
+    grid.m_column_count = std::max(rule->m_column_count, 1);
+    grid.m_gutter = std::max(rule->m_gutter, 0.0);
+    grid.m_default_width = width;
+    grid.m_margins = rule->m_margins;
+    grid.m_column_color = rule->m_column_color;
+    grid.m_row_color = rule->m_row_color;
+    fit_margins(grid, width);
+  }
 
   template<typename T>
   void assign(T& target, const std::optional<T>& source) {
@@ -29,7 +108,15 @@ namespace {
     }
   }
 
-  void edit_grid(LayoutGrid& grid, double width, const GridEdit& edit) {
+  void edit_grid(LayoutGrid& grid, const Artboard& artboard,
+      const GridDefaults& defaults, const GridEdit& edit) {
+    auto width = artboard.m_frame.m_width;
+    if(edit.m_is_default.value_or(false)) {
+      auto replacement = make_default_grid(artboard, defaults);
+      replacement.m_is_visible = grid.m_is_visible;
+      replacement.m_type = grid.m_type;
+      grid = std::move(replacement);
+    }
     assign(grid.m_is_visible, edit.m_is_visible);
     assign(grid.m_type, edit.m_type);
     if(edit.m_column_count) {
@@ -91,27 +178,59 @@ namespace {
   }
 }
 
-LayoutGrid Rellu::make_default_grid(const Artboard& artboard) {
+std::vector<GridOverride> Rellu::get_built_in_overrides() {
+  return {make_override(312, 1, 0, 28), make_override(599, 4, 10, 36),
+    make_override(834, 8, 16, 80), make_override(1024, 12, 16, 120)};
+}
+
+LayoutGrid Rellu::make_default_grid(
+    const Artboard& artboard, const GridDefaults& defaults) {
   auto grid = LayoutGrid();
   grid.m_type = GridType::LAYOUT;
-  grid.m_column_count = DEFAULT_COLUMNS;
-  grid.m_gutter = DEFAULT_GUTTER;
-  grid.m_default_width = artboard.m_frame.m_width;
-  grid.m_margins.m_left = DEFAULT_MARGIN;
-  grid.m_margins.m_right = DEFAULT_MARGIN;
-  grid.m_column_color = Color(0, 1, 1, COLUMN_ALPHA);
-  grid.m_row_color = Color(0, 1, 1, COLUMN_ALPHA);
-  grid.m_square_size = Size(DEFAULT_SQUARE, DEFAULT_SQUARE);
-  grid.m_square_column_color =
-    Color(SQUARE_GREY, SQUARE_GREY, SQUARE_GREY, SQUARE_ALPHA);
-  grid.m_square_row_color = grid.m_square_column_color;
+  if(auto& base = defaults.m_grid) {
+    grid.m_square_size = base->m_square_size;
+    grid.m_square_column_color = base->m_square_column_color;
+    grid.m_square_row_color = base->m_square_row_color;
+  } else {
+    grid.m_square_size = Size(DEFAULT_SQUARE, DEFAULT_SQUARE);
+    grid.m_square_column_color =
+      Color(SQUARE_GREY, SQUARE_GREY, SQUARE_GREY, SQUARE_ALPHA);
+    grid.m_square_row_color = grid.m_square_column_color;
+  }
+  set_default_layout(grid, artboard.m_frame.m_width, defaults);
   return grid;
+}
+
+GridDefaults Rellu::make_grid_defaults(const LayoutGrid& grid, double width,
+    const GridDefaults& defaults) {
+  auto result = GridDefaults();
+  result.m_grid = grid;
+  result.m_grid->m_default_width = width;
+  result.m_grid->m_type = GridType::LAYOUT;
+  result.m_grid->m_is_visible = false;
+  auto overrides = defaults.m_overrides.value_or(get_built_in_overrides());
+  auto entry = std::find_if(overrides.begin(), overrides.end(),
+    [&] (const auto& entry) {
+      return entry.m_maximum_width && *entry.m_maximum_width == width;
+    });
+  if(entry == overrides.end()) {
+    overrides.push_back(GridOverride());
+    entry = overrides.end() - 1;
+    entry->m_maximum_width = width;
+  }
+  entry->m_column_count = grid.m_column_count;
+  entry->m_gutter = grid.m_gutter;
+  entry->m_margins = grid.m_margins;
+  entry->m_row_color = grid.m_row_color;
+  entry->m_column_color = grid.m_column_color;
+  result.m_overrides = std::move(overrides);
+  return result;
 }
 
 double Rellu::get_column_width(const LayoutGrid& grid, double width) {
   auto count = std::max(grid.m_column_count, 1);
-  return (width - grid.m_margins.m_left - grid.m_margins.m_right -
-    grid.m_gutter * (count - 1)) / count;
+  return std::floor((width - grid.m_margins.m_left - grid.m_margins.m_right -
+    grid.m_gutter * (count - 1)) / count);
 }
 
 SetGridCommand::SetGridCommand(
@@ -136,8 +255,10 @@ void SetGridCommand::apply(
       continue;
     }
     auto payload = *artboard;
-    auto grid = payload.m_layout_grid.value_or(make_default_grid(payload));
-    edit_grid(grid, payload.m_frame.m_width, m_edit);
+    auto& defaults = document.get_resources().m_grid_defaults;
+    auto grid =
+      payload.m_layout_grid.value_or(make_default_grid(payload, defaults));
+    edit_grid(grid, payload, defaults, m_edit);
     payload.m_layout_grid = std::move(grid);
     if(payload != *artboard) {
       transaction.replace_payload(id, std::move(payload));
@@ -151,6 +272,16 @@ bool SetGridCommand::merge(const Command& command) {
     return false;
   }
   auto& edit = grid->m_edit;
+  if(edit.m_is_default.value_or(false)) {
+    m_edit.m_column_count = std::nullopt;
+    m_edit.m_gutter = std::nullopt;
+    m_edit.m_column_width = std::nullopt;
+    m_edit.m_top = std::nullopt;
+    m_edit.m_right = std::nullopt;
+    m_edit.m_bottom = std::nullopt;
+    m_edit.m_left = std::nullopt;
+  }
+  assign(m_edit.m_is_default, edit.m_is_default);
   assign(m_edit.m_is_visible, edit.m_is_visible);
   assign(m_edit.m_type, edit.m_type);
   assign(m_edit.m_column_count, edit.m_column_count);
@@ -237,6 +368,30 @@ std::vector<NodeId> Rellu::get_target_artboards(
     }
   }
   return artboards;
+}
+
+MakeGridDefaultCommand::MakeGridDefaultCommand(const NodeId& artboard) noexcept
+  : m_artboard(artboard) {}
+
+std::string MakeGridDefaultCommand::get_label() const {
+  return "Make Default";
+}
+
+void MakeGridDefaultCommand::apply(
+    const Document& document, Transaction& transaction) {
+  auto node = document.find(m_artboard);
+  auto artboard = node ? node->get_artboard() : nullptr;
+  if(!artboard) {
+    throw std::invalid_argument("Unknown artboard.");
+  }
+  auto& defaults = document.get_resources().m_grid_defaults;
+  auto grid = artboard->m_layout_grid.value_or(
+    make_default_grid(*artboard, defaults));
+  auto replacement =
+    make_grid_defaults(grid, artboard->m_frame.m_width, defaults);
+  if(replacement != defaults) {
+    transaction.set_grid_defaults(std::move(replacement));
+  }
 }
 
 void Rellu::add_artboard_commands(CommandRegistry& registry) {

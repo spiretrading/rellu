@@ -1,4 +1,5 @@
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <doctest/doctest.h>
@@ -142,5 +143,33 @@ TEST_SUITE("EditActions") {
     auto foreign = other_editor.get_selection().get_primary();
     REQUIRE(other.is_on_canvas(foreign));
     REQUIRE(other.get(foreign).get_shape());
+  }
+
+  TEST_CASE("duplicate") {
+    auto fixture = Fixture();
+    auto& actions = fixture.m_actions;
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    fixture.m_edit_actions->set_editor(&editor);
+    fixture.m_edit_actions->set_view_provider([] {
+      return std::optional(Rect(0, 0, 2000, 1000));
+    });
+    auto revealed = std::optional<Rect>();
+    fixture.m_edit_actions->set_reveal_handler([&] (const auto& region) {
+      revealed = region;
+    });
+    editor.get_selection().select(ids.m_instance);
+    REQUIRE(actions.trigger("edit.duplicate"));
+    auto instance = editor.get_selection().get_primary();
+    REQUIRE(document.get(instance).m_header.m_name == "Button \xE2\x80\x93 1");
+    REQUIRE(!revealed);
+    editor.get_selection().select(ids.m_artboard);
+    REQUIRE(actions.trigger("edit.duplicate"));
+    REQUIRE(actions.get("edit.undo").text() == "Undo Duplicate");
+    auto& copy = document.get(editor.get_selection().get_primary());
+    REQUIRE(copy.m_header.m_name == "Home \xE2\x80\x93 1");
+    REQUIRE(copy.get_artboard()->m_frame == Rect(545, 50, 375, 812));
+    REQUIRE(revealed == copy.get_artboard()->m_frame);
   }
 }

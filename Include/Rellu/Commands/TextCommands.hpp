@@ -71,6 +71,10 @@ namespace Rellu {
     bool operator ==(const TextStyleEdit&) const = default;
   };
 
+  /** Computes the style edit applied to a span of text from its style. */
+  using TextStyleEditor =
+    std::function<TextStyleEdit (const TextStyle& style)>;
+
   /** The paragraph properties a paragraph style edit sets, absent ones kept. */
   struct ParagraphStyleEdit {
 
@@ -176,6 +180,19 @@ namespace Rellu {
     const Text& text, TextRange range, const TextStyleEdit& edit);
 
   /**
+   * Applies to each run of a range of a text the style edit computed from
+   * the run's style, splitting runs at the range's ends and merging
+   * neighbouring runs left equal. Editing the whole content also edits the
+   * base style.
+   * @param text The text.
+   * @param range The range to style, clamped to the content.
+   * @param editor Computes the properties to set.
+   * @return The edited text.
+   */
+  Text edit_text_style(
+    const Text& text, TextRange range, const TextStyleEditor& editor);
+
+  /**
    * Applies a paragraph style edit to a text.
    * @param text The text.
    * @param edit The properties to set.
@@ -202,7 +219,8 @@ namespace Rellu {
   /**
    * Sets the content and styles of a text node as typing does, optionally
    * renaming it, inserting it as the topmost child of a parent, or removing
-   * it. Labelled Add Text when inserting, Delete when removing, and Edit Text
+   * it. Labelled Create Auto Width Text when inserting point text, Draw Text
+   * when inserting text in a frame, Delete when removing, and Edit Text
    * otherwise. Typing into a text node merges into the step that created or
    * last edited it.
    */
@@ -252,7 +270,8 @@ namespace Rellu {
 
   /**
    * Applies a character style edit to text nodes, or to a range of one,
-   * labelled after the property set, such as Change Font Size.
+   * labelled as Adobe XD's TEXT section labels the property set, such as
+   * Font Size, unless given a label.
    */
   class SetTextStyleCommand : public Command {
     public:
@@ -264,9 +283,12 @@ namespace Rellu {
        * @param edit The properties to set.
        * @param layouter Computes the layout stored after an edit that
        *        changes the layout, or empty to discard the stored layout.
+       * @param label The label naming the operation, or empty to name it
+       *        after the property set.
        */
       SetTextStyleCommand(std::vector<NodeId> nodes, TextStyleEdit edit,
-        TextLayouter layouter = TextLayouter()) noexcept;
+        TextLayouter layouter = TextLayouter(),
+        std::string label = std::string()) noexcept;
 
       /**
        * Constructs a SetTextStyleCommand styling a range of a text node.
@@ -275,9 +297,12 @@ namespace Rellu {
        * @param edit The properties to set.
        * @param layouter Computes the layout stored after an edit that
        *        changes the layout, or empty to discard the stored layout.
+       * @param label The label naming the operation, or empty to name it
+       *        after the property set.
        */
       SetTextStyleCommand(const NodeId& id, TextRange range,
-        TextStyleEdit edit, TextLayouter layouter = TextLayouter()) noexcept;
+        TextStyleEdit edit, TextLayouter layouter = TextLayouter(),
+        std::string label = std::string()) noexcept;
 
       std::string get_label() const override;
       void apply(const Document& document, Transaction& transaction) override;
@@ -293,11 +318,57 @@ namespace Rellu {
       std::optional<TextRange> m_range;
       TextStyleEdit m_edit;
       TextLayouter m_layouter;
+      std::string m_label;
   };
 
   /**
-   * Applies a paragraph style edit to text nodes, labelled after the
-   * property set, such as Change Alignment.
+   * Applies to each run of text nodes, or of a range of one, the character
+   * style edit computed from the run's style, such as stepping every run's
+   * font size.
+   */
+  class RestyleTextCommand : public Command {
+    public:
+
+      /**
+       * Constructs a RestyleTextCommand styling whole text nodes.
+       * @param nodes The nodes to change; those that are not text are left
+       *        unchanged.
+       * @param label The label naming the operation.
+       * @param editor Computes the properties to set.
+       * @param layouter Computes the layout stored after an edit that
+       *        changes the layout, or empty to discard the stored layout.
+       */
+      RestyleTextCommand(std::vector<NodeId> nodes, std::string label,
+        TextStyleEditor editor,
+        TextLayouter layouter = TextLayouter()) noexcept;
+
+      /**
+       * Constructs a RestyleTextCommand styling a range of a text node.
+       * @param id The text node's id.
+       * @param range The range to style.
+       * @param label The label naming the operation.
+       * @param editor Computes the properties to set.
+       * @param layouter Computes the layout stored after an edit that
+       *        changes the layout, or empty to discard the stored layout.
+       */
+      RestyleTextCommand(const NodeId& id, TextRange range, std::string label,
+        TextStyleEditor editor,
+        TextLayouter layouter = TextLayouter()) noexcept;
+
+      std::string get_label() const override;
+      void apply(const Document& document, Transaction& transaction) override;
+
+    private:
+      std::vector<NodeId> m_nodes;
+      std::optional<TextRange> m_range;
+      std::string m_label;
+      TextStyleEditor m_editor;
+      TextLayouter m_layouter;
+  };
+
+  /**
+   * Applies a paragraph style edit to text nodes, labelled as Adobe XD's
+   * TEXT section labels the property set, such as Text Align.
    */
   class SetParagraphStyleCommand : public Command {
     public:
@@ -331,7 +402,8 @@ namespace Rellu {
 
   /**
    * Switches text nodes between Auto Width, Auto Height and Fixed Size,
-   * keeping where their text appears, labelled Change Text Frame.
+   * keeping where their text appears, labelled Convert To Auto Width,
+   * Convert To Auto Height or Convert To Fixed Size.
    */
   class SetTextFrameCommand : public Command {
     public:

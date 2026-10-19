@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -58,11 +59,14 @@ namespace Rellu {
 
   /**
    * The Document Assets panel, listing a document's colors, character styles
-   * and components, kept up to date as the document changes. With an editor,
+   * and components, kept up to date as the document changes, colors and
+   * character styles in their groups in Adobe XD's order. With an editor,
    * colors and character styles are added from the selection, applied to it
-   * by a click, edited, renamed and deleted, and components can be dragged
-   * onto the canvas, renamed, swapped for the selected instances and their
-   * main components edited.
+   * by a click (a color to the border with Alt), selected with Ctrl or
+   * Shift, renamed by a double-click, edited, grouped, highlighted on the
+   * canvas and deleted, and components can be dragged onto the canvas,
+   * renamed, swapped for the selected instances and their main components
+   * edited.
    */
   class AssetsPanel : public QWidget {
     public:
@@ -180,6 +184,85 @@ namespace Rellu {
       ColorPicker& get_color_picker();
 
       /**
+       * Sets the function listing the font styles of a family offered when
+       * editing a character style.
+       * @param styles The function returning the style names of a family.
+       */
+      void set_font_styles(
+        std::function<QStringList (const QString& family)> styles);
+
+      /**
+       * Sets the function outlining nodes on the canvas, called with the
+       * instances of an asset highlighted, or with none to stop.
+       * @param handler The function.
+       */
+      void set_highlight_handler(
+        std::function<void (const std::vector<NodeId>& nodes)> handler);
+
+      /**
+       * Sets the function showing a brief message, such as when an asset
+       * highlighted has no instance.
+       * @param handler The function.
+       */
+      void set_message_handler(
+        std::function<void (const QString& message)> handler);
+
+      /** Returns the colors and character styles selected, in order. */
+      const std::vector<NodeId>& get_selected_assets() const;
+
+      /**
+       * Selects colors and character styles.
+       * @param assets The ids of the assets.
+       */
+      void set_selected_assets(std::vector<NodeId> assets);
+
+      /**
+       * Outlines the visible nodes on the canvas using a color or character
+       * style, clearing the selection, as Highlight on canvas does.
+       * @param asset The id of the swatch or style.
+       * @return <code>true</code> iff an instance was found.
+       */
+      bool highlight_instances(const NodeId& asset);
+
+      /**
+       * Places colors or character styles in a new group named New group,
+       * as New group from element and New group from selection do.
+       * @param assets The ids of the assets, all of one section.
+       * @return The id of the group made, or empty if none was.
+       */
+      std::string group_assets(const std::vector<NodeId>& assets);
+
+      /**
+       * Moves colors or character styles to a group of their section.
+       * @param assets The ids of the assets, all of one section.
+       * @param group The id of the group, or of the section.
+       * @return <code>true</code> iff an asset moved.
+       */
+      bool move_assets(
+        const std::vector<NodeId>& assets, const std::string& group);
+
+      /**
+       * Renames a group of assets.
+       * @param group The group's id.
+       * @param name The new name.
+       * @return <code>true</code> iff the group was renamed.
+       */
+      bool rename_group(const std::string& group, const QString& name);
+
+      /**
+       * Deletes colors and character styles.
+       * @param assets The ids of the assets.
+       * @return <code>true</code> iff an asset was deleted.
+       */
+      bool delete_assets(const std::vector<NodeId>& assets);
+
+      /**
+       * Returns the names of the groups of a section in the order listed.
+       * @param section The section.
+       */
+      std::vector<QString> get_group_names(AssetSection section) const;
+
+      /**
        * Adds the distinct fill and border colors of the selection to the
        * assets, as Object &gt; Add Color to Assets does.
        * @return <code>true</code> iff a color was added.
@@ -269,8 +352,9 @@ namespace Rellu {
       void edit_character_style(const CharacterStyleId& style);
 
       /**
-       * Makes the menu of a color swatch: Apply as Fill, Apply as Border,
-       * Edit, Rename and Delete.
+       * Makes the menu of a color swatch: Copy with its hex value, Edit |
+       * Highlight on canvas | New group from element | Move to... | Rename,
+       * Delete.
        * @param swatch The swatch's id.
        * @param parent The menu's parent.
        * @return The menu.
@@ -278,13 +362,31 @@ namespace Rellu {
       QMenu* make_swatch_menu(const SwatchId& swatch, QWidget* parent);
 
       /**
-       * Makes the menu of a character style: Apply, Edit, Rename and Delete.
+       * Makes the menu of a character style: Remove font | Edit | Highlight
+       * on canvas | New group from element | Move to... | Rename, Delete.
        * @param style The style's id.
        * @param parent The menu's parent.
        * @return The menu.
        */
       QMenu* make_character_style_menu(
         const CharacterStyleId& style, QWidget* parent);
+
+      /**
+       * Makes the menu of several colors and character styles selected: New
+       * group from selection | Move selected items to | Delete.
+       * @param parent The menu's parent.
+       * @return The menu.
+       */
+      QMenu* make_selection_menu(QWidget* parent);
+
+      /**
+       * Makes the menu of a group of assets: Create subgroup | Rename group,
+       * Ungroup, Delete.
+       * @param group The group's id.
+       * @param parent The menu's parent.
+       * @return The menu.
+       */
+      QMenu* make_group_menu(const std::string& group, QWidget* parent);
 
       /**
        * Scrolls a color swatch into view and highlights it.
@@ -307,7 +409,13 @@ namespace Rellu {
       std::vector<SwatchId> m_swatches;
       std::vector<CharacterStyleId> m_character_styles;
       std::unordered_map<NodeId, QPointer<QWidget>> m_asset_rows;
+      std::unordered_map<std::string, QPointer<QWidget>> m_group_rows;
+      std::vector<std::vector<QString>> m_group_names;
+      std::vector<NodeId> m_selected;
       std::function<QStringList ()> m_font_families;
+      std::function<QStringList (const QString&)> m_font_styles;
+      std::function<void (const std::vector<NodeId>&)> m_highlight_handler;
+      std::function<void (const QString&)> m_message_handler;
       ColorPicker* m_picker;
       SwatchId m_edited_swatch;
       QPointer<StyleEditor> m_style_editor;
@@ -329,7 +437,17 @@ namespace Rellu {
       QWidget* make_component_row(const Component& component);
       QWidget* make_swatch_row(const ColorSwatch& swatch);
       QWidget* make_character_style_row(const CharacterStyle& style);
+      void add_entries(AssetSection section, const std::string& group,
+        QVBoxLayout& layout, int depth);
+      QWidget* make_group_row(const AssetGroup& group, QWidget& members,
+        int depth);
+      void click_asset(const NodeId& id, Qt::KeyboardModifiers modifiers);
+      QMenu* make_asset_menu(const NodeId& id, QWidget* parent);
+      void add_move_menu(QMenu& menu, const QString& title,
+        const std::vector<NodeId>& assets);
       void start_rename(const NodeId& id, std::function<void (QString)> done);
+      void start_group_rename(const std::string& group);
+      void update_selection();
       void highlight(const NodeId& id);
       bool run(std::unique_ptr<Command> command, bool is_merged = false);
       void invalidate_thumbnails(const ChangeSet& changes);

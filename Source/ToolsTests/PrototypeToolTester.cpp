@@ -191,7 +191,7 @@ TEST_SUITE("PrototypeTool") {
     auto& document = setup.m_document;
     auto& boards = setup.m_boards;
     setup.m_editor->execute(std::make_unique<AddInteractionCommand>(
-      make_empty_interaction(boards.m_button, false)));
+      make_empty_interaction(boards.m_button)));
     click(tools, Point(200, 175));
     drag(tools, Point(251, 176), Point(700, 200));
     auto interactions = get_interactions(document, boards.m_button);

@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 #include <QString>
 #include <QStringList>
@@ -20,16 +21,19 @@ namespace Rellu {
 
   /**
    * Adds the editors of the fields of Adobe XD's TEXT section:
-   * text.font_family and text.font_style (QString), text.size,
+   * text.family and text.style (QString), text.size,
    * text.letter_spacing, text.line_height and text.paragraph_spacing
    * (double), text.alignment, text.frame, text.transform and text.script
    * (Choice, in the order of the model's enumerations, text.frame in the
-   * order Auto Width, Fixed Size, Auto Height), text.underline and
+   * order Auto Width, Auto Height, Fixed Size), text.underline and
    * text.strikethrough (bool), text.color (Color) and text.hyperlink
    * (QString). A character property set while a range of the text node
    * edited is selected applies to that range; at a caret within its text it
-   * becomes part of the style of the text typed there, the hyperlink
-   * excepted, and otherwise it applies to the whole of every text node.
+   * becomes part of the style of the text typed there, and otherwise it
+   * applies to the whole of every text node. Setting a hyperlink underlines
+   * the text it links, and clearing it removes the underline. Every other
+   * style set becomes part of the styles new text takes. Each edit is
+   * labelled as Adobe XD labels the field, such as Font Size.
    * @param editors The editors to add to.
    * @param library The fonts that font names resolve with and text is laid
    *        out with, which must outlive the editors.
@@ -56,20 +60,49 @@ namespace Rellu {
   /**
    * Applies a character style edit as the TEXT section does: to the range
    * selected in the text being edited in place, at its caret within its
-   * text to the style of the text typed there, the hyperlink excepted, and
-   * otherwise to the whole of every text node.
+   * text to the style and hyperlink of the text typed there, and otherwise
+   * to the whole of every text node. The style set, unless it is a
+   * hyperlink, becomes the one new text takes.
    * @param document The document holding the nodes.
    * @param nodes The nodes to change.
    * @param selection The text being edited in place, or nullptr.
    * @param edit The properties to set.
    * @param layouter Computes the layout stored after an edit that changes
    *        the layout.
+   * @param label The label naming the operation, or empty to name it after
+   *        the property set.
    * @return The command applying the <i>edit</i> to the document, or nullptr
    *         if there is none to apply.
    */
   std::unique_ptr<Command> make_text_style_command(const Document& document,
     const std::vector<NodeId>& nodes, TextSelection* selection,
-    TextStyleEdit edit, TextLayouter layouter);
+    TextStyleEdit edit, TextLayouter layouter,
+    std::string label = std::string());
+
+  /**
+   * Applies to each run a character style edit computed from the run's
+   * style, where the TEXT section applies a style edit.
+   * @param document The document holding the nodes.
+   * @param nodes The nodes to change.
+   * @param selection The text being edited in place, or nullptr.
+   * @param label The label naming the operation.
+   * @param editor Computes the properties to set.
+   * @param layouter Computes the layout stored after an edit that changes
+   *        the layout.
+   * @return The command applying the edits to the document, or nullptr if
+   *         there is none to apply.
+   */
+  std::unique_ptr<Command> make_text_style_command(const Document& document,
+    const std::vector<NodeId>& nodes, TextSelection* selection,
+    std::string label, TextStyleEditor editor, TextLayouter layouter);
+
+  /**
+   * Tests whether Adobe XD shows a URL as valid rather than warning about
+   * its protocol: empty, or starting with https:// or mailto: once leading
+   * spaces, commas and number signs and trailing spaces are ignored.
+   * @param url The URL.
+   */
+  bool is_valid_hyperlink(const QString& url);
 
   /**
    * Makes the TextLayouter computing the layout Adobe XD stores, as laid out

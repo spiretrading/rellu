@@ -135,6 +135,9 @@ namespace Rellu {
     /** Whether the home artboard or the flows changed. */
     bool m_is_flow_changed = false;
 
+    /** Whether the groups of assets changed. */
+    bool m_is_asset_group_changed = false;
+
     /** Returns <code>true</code> iff nothing changed. */
     bool is_empty() const;
 
@@ -145,7 +148,8 @@ namespace Rellu {
     return m_inserted.empty() && m_removed.empty() && m_moved.empty() &&
       m_modified.empty() && m_components.empty() && m_images.empty() &&
       m_swatches.empty() && m_character_styles.empty() &&
-      m_interactions.empty() && !m_is_flow_changed;
+      m_interactions.empty() && !m_is_flow_changed &&
+      !m_is_asset_group_changed;
   }
 }
 

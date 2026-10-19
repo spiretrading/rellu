@@ -26,8 +26,8 @@ namespace Rellu {
     Matrix m_transform;
 
     /**
-     * The position of the node's origin within the artboard holding it, or
-     * none for an artboard or a node on the pasteboard.
+     * The position of the top left of the node's bounds within the artboard
+     * holding it, or none for an artboard or a node on the pasteboard.
      */
     std::optional<Point> m_offset;
   };
@@ -36,9 +36,9 @@ namespace Rellu {
   struct XdClipboardContent {
 
     /**
-     * The position of each node on the canvas that is not an artboard,
-     * in canvas order, within the artboard it was copied from, or none for
-     * a node copied from the pasteboard.
+     * The position of the top left of the bounds of each node on the canvas
+     * that is not an artboard, in canvas order, within the artboard it was
+     * copied from, or none for a node copied from the pasteboard.
      */
     std::vector<std::optional<Point>> m_offsets;
 

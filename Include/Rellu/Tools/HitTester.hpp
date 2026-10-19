@@ -62,8 +62,24 @@ namespace Rellu {
         Point point, double tolerance, bool is_locked_hit = false) const;
 
       /**
-       * Lists the visible, unlocked children of a container whose drawing
-       * meets a region.
+       * Finds the top-most node drawn at a point within a node, as hit does,
+       * but without the clipping of the node's artboard, so that the part
+       * of the node lying outside its artboard can be hit.
+       * @param id The node.
+       * @param point The point in document space.
+       * @param tolerance The distance in document units within which an
+       *        outline counts as hit.
+       * @param is_locked_hit Whether locked nodes and their descendants can
+       *        be hit.
+       * @return The deepest node within the node <i>id</i> drawn at the
+       *         <i>point</i>, as hit finds it, or nil if there is none.
+       */
+      NodeId hit_within(const NodeId& id, Point point, double tolerance,
+        bool is_locked_hit = false) const;
+
+      /**
+       * Lists the visible children of a container, locked ones included,
+       * whose drawing meets a region.
        * @param container The container, or nil for the canvas.
        * @param region The region in document space.
        * @param is_enclosed Whether a child must lie entirely within the

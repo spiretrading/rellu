@@ -173,6 +173,19 @@ namespace Rellu {
       void remove_character_style(const CharacterStyleId& id);
 
       /**
+       * Replaces the groups of assets.
+       * @param groups The groups in library order.
+       */
+      void set_asset_groups(std::vector<AssetGroup> groups);
+
+      /**
+       * Replaces the grids given to artboards. The change is kept but, as
+       * in Adobe XD, not recorded for undo on its own.
+       * @param defaults The grids.
+       */
+      void set_grid_defaults(GridDefaults defaults);
+
+      /**
        * Appends an interaction owned by an existing node.
        * @param interaction The interaction, whose id is generated if nil.
        * @return The interaction's id.

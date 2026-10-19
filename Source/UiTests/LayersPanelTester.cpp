@@ -184,9 +184,23 @@ TEST_SUITE("LayersPanel") {
     REQUIRE(!panel.is_filtered_out(ids.m_label));
     REQUIRE(panel.is_filtered_out(ids.m_background));
     REQUIRE(panel.is_filtered_out(ids.m_loose));
-    panel.set_filter(LayerFilter::COMPONENTS);
-    REQUIRE(!panel.is_filtered_out(ids.m_instance));
+    panel.set_filter(LayerFilter::SHAPES);
+    REQUIRE(!panel.is_filtered_out(ids.m_background));
     REQUIRE(panel.is_filtered_out(ids.m_label));
+    {
+      auto transaction = Transaction(document);
+      auto shape = *document.get(ids.m_ellipse).get_shape();
+      auto image = ImageFill();
+      image.m_image = generate_node_id();
+      shape.m_style.m_fill = image;
+      transaction.replace_payload(ids.m_ellipse, shape);
+      transaction.commit();
+    }
+    panel.set_filter(LayerFilter::IMAGES);
+    REQUIRE(!panel.is_filtered_out(ids.m_ellipse));
+    REQUIRE(panel.is_filtered_out(ids.m_background));
+    panel.set_filter(LayerFilter::VIDEO);
+    REQUIRE(panel.is_filtered_out(ids.m_ellipse));
     panel.set_filter(LayerFilter::ALL);
     REQUIRE(!panel.is_filtered_out(ids.m_label));
   }
@@ -243,7 +257,8 @@ TEST_SUITE("LayersPanel") {
         texts.push_back(action->text());
       }
     }
-    REQUIRE(texts == QStringList({"Copy", "Rename"}));
+    REQUIRE(texts == QStringList({"Copy", "Paste", "Rename",
+      "Export Batch...", "Export Selected..."}));
   }
 
   TEST_CASE("keyboard_navigation") {

@@ -1,8 +1,13 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <numbers>
+#include <optional>
+#include <tuple>
 #include <utility>
 #include <QAbstractButton>
 #include <QApplication>
@@ -16,12 +21,17 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
+#include <QPolygonF>
 #include <QPushButton>
 #include <QSettings>
 #include <QToolButton>
+#include <QTimer>
+#include <QToolTip>
 #include <QVBoxLayout>
 #include "Rellu/Commands/AlignCommands.hpp"
+#include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Commands/ComponentCommands.hpp"
@@ -31,6 +41,7 @@
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Io/XdImporters.hpp"
+#include "Rellu/Rendering/RenderPlan.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Ui/ComponentPropertyEditors.hpp"
 #include "Rellu/Ui/ContextMenus.hpp"
@@ -51,9 +62,23 @@ namespace {
   constexpr auto LEFT_PANEL_WIDTH = 407;
   constexpr auto MENU_ROW_HEIGHT = 32;
   constexpr auto CAPTION_BUTTON_WIDTH = 46;
+  constexpr auto HIT_TOLERANCE = 3.0;
+  constexpr auto HIGHLIGHT_WIDTH = 2.0;
+  constexpr auto HANDLE_RADIUS = 6.0;
+  constexpr auto HANDLE_TOLERANCE = 8.0;
+  constexpr auto ROTATION_HANDLE_DISTANCE = 20.0;
+  constexpr auto TRACK_SEGMENTS = 96;
+  const auto HANDLE_COLOR = QColor(0x26, 0x80, 0xEB);
+  constexpr auto MESSAGE_MARGIN = 48;
+  const auto HIGHLIGHT_COLOR = QColor(0x00, 0x90, 0xE9);
   const auto FILE_FILTER = QString("Adobe XD Files (*.xd);;All Files (*)");
   const auto PASTEBOARD = QColor(0xE4, 0xE4, 0xE4);
   const auto DEFAULT_PANEL = QString("layers");
+  const auto DEFAULT_LANGUAGE = QString("english");
+  const auto LANGUAGE_PREFIX = std::string("edit.preferences.language.");
+  constexpr auto LANGUAGES = std::to_array({"german", "english", "spanish",
+    "french", "italian", "japanese", "korean", "portuguese", "russian",
+    "chinese"});
 
   std::string get_recent_name(int index) {
     return "file.recent." + std::to_string(index);
@@ -129,6 +154,71 @@ namespace {
       CaptionKind m_kind;
   };
 
+  class HighlightOverlay : public QWidget {
+    public:
+      std::function<std::vector<QPolygonF> ()> m_outlines;
+
+      explicit HighlightOverlay(QWidget* parent)
+          : QWidget(parent) {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+        setAttribute(Qt::WA_TranslucentBackground);
+        hide();
+      }
+
+    protected:
+      void paintEvent(QPaintEvent*) override {
+        if(!m_outlines) {
+          return;
+        }
+        auto painter = QPainter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(HIGHLIGHT_COLOR, 2 * HIGHLIGHT_WIDTH));
+        painter.setBrush(Qt::NoBrush);
+        for(auto& outline : m_outlines()) {
+          auto path = QPainterPath();
+          path.addPolygon(outline);
+          path.closeSubpath();
+          painter.save();
+          painter.setClipPath(path);
+          painter.drawPath(path);
+          painter.restore();
+        }
+      }
+  };
+
+  class PaintOverlay : public QWidget {
+    public:
+      std::function<void (QPainter&)> m_paint;
+
+      explicit PaintOverlay(QWidget* parent)
+          : QWidget(parent) {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+        setAttribute(Qt::WA_TranslucentBackground);
+        hide();
+      }
+
+    protected:
+      void paintEvent(QPaintEvent*) override {
+        if(!m_paint) {
+          return;
+        }
+        auto painter = QPainter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        m_paint(painter);
+      }
+  };
+
+  QPointF to_qpoint(Point point) {
+    return QPointF(point.m_x, point.m_y);
+  }
+
+  double get_distance(QPointF left, QPointF right) {
+    auto delta = left - right;
+    return std::hypot(delta.x(), delta.y());
+  }
+
   QPixmap make_mark(double ratio) {
     auto size = 20;
     auto pixmap = QPixmap(static_cast<int>(size * ratio),
@@ -165,10 +255,14 @@ MainWindow::MainWindow(QWidget* parent)
       m_plugins(new PluginsPanel()),
       m_inspector(new PropertyInspector()),
       m_prototype_inspector(new PrototypeInspector()),
+      m_presets(new ArtboardPresetsPanel(m_inspector)),
       m_preview(nullptr),
       m_inspector_frame(new QWidget()),
       m_recent_files(MAXIMUM_RECENT_FILES),
-      m_measurer(make_text_measurer(get_default_font_library())) {
+      m_measurer(make_text_measurer(get_default_font_library())),
+      m_highlight(nullptr),
+      m_gradient_overlay(nullptr),
+      m_rotation_handle_angle(DEFAULT_ROTATION_HANDLE_ANGLE) {
   add_standard_commands(m_commands, m_measurer);
   add_align_commands(m_commands, m_measurer);
   add_path_commands(m_commands);
@@ -179,6 +273,21 @@ MainWindow::MainWindow(QWidget* parent)
   add_asset_commands(m_commands);
   m_view->get_renderer().set_background(PASTEBOARD);
   m_view->installEventFilter(this);
+  auto highlight = new HighlightOverlay(m_view);
+  highlight->m_outlines = [this] {
+    return get_highlight_outlines();
+  };
+  m_highlight = highlight;
+  auto gradient_overlay = new PaintOverlay(m_view);
+  gradient_overlay->m_paint = [this] (QPainter& painter) {
+    paint_gradient_editor(painter);
+  };
+  m_gradient_overlay = gradient_overlay;
+  m_inspector->get_color_picker().installEventFilter(this);
+  m_inspector->get_color_picker().set_canvas_handler(
+    [this] (auto event, auto position) {
+      return handle_gradient_event(event, position);
+    });
   m_inspector->set_measurer(m_measurer);
   auto editors = make_standard_property_editors(m_measurer);
   add_text_property_editors(editors, get_default_font_library(), m_measurer,
@@ -264,6 +373,18 @@ bool MainWindow::revert() {
     return false;
   }
   auto path = m_session->get_path();
+  auto box = QMessageBox(QMessageBox::Warning, "Rellu",
+    QString("Do you want to revert to the most recently saved version of the "
+      "document \"%1\"?").arg(QFileInfo(path).fileName()),
+    QMessageBox::NoButton, this);
+  box.setInformativeText("Your current changes will be lost.");
+  auto revert = box.addButton("Revert", QMessageBox::AcceptRole);
+  box.addButton(QMessageBox::Cancel);
+  box.setDefaultButton(revert);
+  box.exec();
+  if(box.clickedButton() != revert) {
+    return false;
+  }
   QApplication::setOverrideCursor(Qt::WaitCursor);
   auto document = std::make_unique<Document>();
   try {
@@ -333,19 +454,40 @@ void MainWindow::changeEvent(QEvent* event) {
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
   if(m_view && watched == m_view) {
+    if(event->type() == QEvent::Resize) {
+      m_highlight->setGeometry(m_view->rect());
+      m_gradient_overlay->setGeometry(m_view->rect());
+    } else if(event->type() == QEvent::MouseButtonPress) {
+      set_highlights({});
+    }
     if(event->type() == QEvent::Paint) {
       update_zoom();
+      if(m_highlight->isVisible()) {
+        m_highlight->update();
+      }
+      update_gradient_editor();
     } else if(event->type() == QEvent::ContextMenu && m_session) {
-      auto position = static_cast<QContextMenuEvent*>(event)->globalPos();
+      auto context = static_cast<QContextMenuEvent*>(event);
+      if(!select_for_context_menu(context->pos())) {
+        return true;
+      }
       auto menu = make_context_menu(m_actions, ContextMenuKind::CANVAS, this);
       menu->setAttribute(Qt::WA_DeleteOnClose);
       if(menu->isEmpty()) {
         menu->deleteLater();
       } else {
-        menu->popup(position);
+        menu->popup(context->globalPos());
       }
       return true;
     }
+  }
+  if(watched == &m_inspector->get_color_picker() &&
+      (event->type() == QEvent::Show || event->type() == QEvent::Hide)) {
+    m_gradient_drag = GradientDrag();
+    m_rotation_handle_angle = DEFAULT_ROTATION_HANDLE_ANGLE;
+    QTimer::singleShot(0, this, [this] {
+      update_gradient_editor();
+    });
   }
   return QMainWindow::eventFilter(watched, event);
 }
@@ -359,6 +501,65 @@ bool MainWindow::nativeEvent(
     return true;
   }
   return QMainWindow::nativeEvent(type, message, result);
+}
+
+bool MainWindow::select_for_context_menu(QPoint position) {
+  auto tools = m_view->get_tools();
+  auto inverse = invert(m_view->get_renderer().get_view());
+  if(!tools || !inverse) {
+    return true;
+  }
+  auto& editor = m_session->get_editor();
+  auto& document = m_session->get_document();
+  auto& selection = editor.get_selection();
+  auto location = Point(position.x(), position.y());
+  auto target = tools->get_context().get_titles().find(location);
+  auto background = NodeId();
+  if(target.is_nil()) {
+    auto hit = tools->get_hit_tester().hit(
+      inverse->map(location), HIT_TOLERANCE / get_zoom(), true);
+    if(!hit.is_nil() && document.get(hit).get_artboard()) {
+      background = hit;
+    } else if(!hit.is_nil()) {
+      auto& context = editor.get_context();
+      while(!context.get_container().is_nil() &&
+          !is_ancestor(document, context.get_container(), hit)) {
+        context.exit();
+      }
+      target = context.resolve(hit);
+    }
+  }
+  if(!target.is_nil()) {
+    if(!selection.contains(target)) {
+      selection.select(target);
+    }
+    return true;
+  }
+  selection.clear();
+  return background.is_nil();
+}
+
+void MainWindow::update_grid_actions() {
+  auto texts = std::to_array<std::tuple<const char*, GridType, const char*,
+      const char*>>({
+    std::tuple("view.layout_grid", GridType::LAYOUT, "Show Layout Grid",
+      "Hide Layout Grid"),
+    std::tuple("view.square_grid", GridType::SQUARE, "Show Square Grid",
+      "Hide Square Grid")});
+  for(auto& [name, type, show, hide] : texts) {
+    auto is_shown = false;
+    if(m_session) {
+      auto& document = m_session->get_document();
+      auto artboards = get_target_artboards(document,
+        m_session->get_editor().get_selection().get_nodes());
+      is_shown = !artboards.empty() && std::all_of(artboards.begin(),
+        artboards.end(), [&] (const auto& id) {
+          auto& grid = document.get(id).get_artboard()->m_layout_grid;
+          return grid && grid->m_is_visible && grid->m_type == type;
+        });
+    }
+    m_actions.get(name).setText(is_shown ? hide : show);
+  }
 }
 
 bool MainWindow::is_caption(QPoint position) const {
@@ -375,7 +576,263 @@ bool MainWindow::is_caption(QPoint position) const {
   return static_cast<bool>(qobject_cast<QLabel*>(child));
 }
 
+std::optional<MainWindow::GradientTarget>
+    MainWindow::find_gradient_target() const {
+  auto& picker = m_inspector->get_color_picker();
+  if(!m_session || !picker.isVisible() ||
+      m_inspector->get_picked_path() != "fill.paint" ||
+      m_inspector->get_nodes().size() != 1) {
+    return std::nullopt;
+  }
+  auto gradient = std::get_if<GradientFill>(&picker.get_fill());
+  if(!gradient || gradient->m_units != GradientUnits::OBJECT_BOUNDING_BOX ||
+      !gradient->m_transform.is_identity() ||
+      !std::holds_alternative<AngularGradient>(gradient->m_geometry)) {
+    return std::nullopt;
+  }
+  auto& document = m_session->get_document();
+  auto& id = m_inspector->get_nodes().front();
+  auto node = document.find(id);
+  if(!node || (!node->get_shape() && !node->get_text())) {
+    return std::nullopt;
+  }
+  auto bounds =
+    get_local_bounds(document, id, BoundsType::GEOMETRY, m_measurer);
+  if(!bounds || !(bounds->m_width > 0) || !(bounds->m_height > 0)) {
+    return std::nullopt;
+  }
+  auto to_view = m_view->get_renderer().get_view() *
+    get_world_transform(document, id) *
+    make_translation(bounds->m_x, bounds->m_y) *
+    make_scale(bounds->m_width, bounds->m_height);
+  auto from_view = invert(to_view);
+  if(!from_view) {
+    return std::nullopt;
+  }
+  return GradientTarget(*gradient, to_view, *from_view);
+}
+
+void MainWindow::paint_gradient_editor(QPainter& painter) {
+  auto target = find_gradient_target();
+  if(!target) {
+    return;
+  }
+  auto& angular = std::get<AngularGradient>(target->m_fill.m_geometry);
+  auto point_at = [&] (double turns) {
+    auto radians = 2 * std::numbers::pi * turns;
+    return to_qpoint(target->m_to_view.map(angular.m_center +
+      Point(0.5 * std::cos(radians), 0.5 * std::sin(radians))));
+  };
+  auto track = QPolygonF();
+  for(auto i = 0; i != TRACK_SEGMENTS; ++i) {
+    track.push_back(point_at(static_cast<double>(i) / TRACK_SEGMENTS));
+  }
+  painter.setBrush(Qt::NoBrush);
+  painter.setPen(QPen(QColor(0, 0, 0, 90), 3));
+  painter.drawPolygon(track);
+  painter.setPen(QPen(Qt::white, 1));
+  painter.drawPolygon(track);
+  auto center = to_qpoint(target->m_to_view.map(angular.m_center));
+  auto handle = get_rotation_handle(*target);
+  painter.setPen(QPen(HANDLE_COLOR, 1));
+  painter.drawLine(center, handle);
+  painter.setBrush(Qt::white);
+  painter.drawEllipse(handle, HANDLE_RADIUS - 2, HANDLE_RADIUS - 2);
+  painter.drawEllipse(center, HANDLE_RADIUS - 1, HANDLE_RADIUS - 1);
+  auto selected = m_inspector->get_color_picker().get_stop();
+  auto& stops = target->m_fill.m_stops;
+  for(auto i = 0; i != static_cast<int>(stops.size()); ++i) {
+    auto position =
+      point_at(stops[i].m_offset + angular.m_rotation / 360);
+    painter.setPen(QPen(i == selected ? HANDLE_COLOR : QColor(Qt::white),
+      i == selected ? 2.5 : 2));
+    painter.setBrush(QColor::fromRgbF(
+      static_cast<float>(stops[i].m_color.m_red),
+      static_cast<float>(stops[i].m_color.m_green),
+      static_cast<float>(stops[i].m_color.m_blue)));
+    painter.drawEllipse(position, HANDLE_RADIUS, HANDLE_RADIUS);
+  }
+}
+
+QPointF MainWindow::get_rotation_handle(const GradientTarget& target) const {
+  auto& angular = std::get<AngularGradient>(target.m_fill.m_geometry);
+  auto center = to_qpoint(target.m_to_view.map(angular.m_center));
+  auto radians = m_rotation_handle_angle * std::numbers::pi / 180;
+  auto direction = QPointF(std::cos(radians), std::sin(radians));
+  auto unit = target.m_from_view.map(
+    Point(center.x() + direction.x(), center.y() + direction.y()));
+  auto offset = get_angular_offset(angular, unit);
+  auto turns = 2 * std::numbers::pi * (offset + angular.m_rotation / 360);
+  auto edge = to_qpoint(target.m_to_view.map(angular.m_center +
+    Point(0.5 * std::cos(turns), 0.5 * std::sin(turns))));
+  return center + direction *
+    (get_distance(edge, center) + ROTATION_HANDLE_DISTANCE);
+}
+
+bool MainWindow::handle_gradient_event(
+    ColorPicker::CanvasEvent event, QPointF position) {
+  auto& picker = m_inspector->get_color_picker();
+  auto target = find_gradient_target();
+  if(event == ColorPicker::CanvasEvent::RELEASE) {
+    m_gradient_drag = GradientDrag();
+    return true;
+  }
+  if(!target) {
+    return false;
+  }
+  auto local = QPointF(m_view->mapFromGlobal(position.toPoint()));
+  auto unit = target->m_from_view.map(Point(local.x(), local.y()));
+  auto fill = target->m_fill;
+  auto& angular = std::get<AngularGradient>(fill.m_geometry);
+  auto center = to_qpoint(target->m_to_view.map(angular.m_center));
+  if(event == ColorPicker::CanvasEvent::PRESS) {
+    m_gradient_drag = GradientDrag();
+    auto& stops = fill.m_stops;
+    for(auto i = 0; i != static_cast<int>(stops.size()); ++i) {
+      auto turns = 2 * std::numbers::pi *
+        (stops[i].m_offset + angular.m_rotation / 360);
+      auto stop = to_qpoint(target->m_to_view.map(angular.m_center +
+        Point(0.5 * std::cos(turns), 0.5 * std::sin(turns))));
+      if(get_distance(stop, local) <= HANDLE_TOLERANCE) {
+        m_gradient_drag.m_part = GradientPart::STOP;
+        m_gradient_drag.m_stop = i;
+        picker.set_stop(i);
+        m_gradient_overlay->update();
+        return true;
+      }
+    }
+    if(get_distance(get_rotation_handle(*target), local) <=
+        HANDLE_TOLERANCE) {
+      m_gradient_drag.m_part = GradientPart::ROTATION;
+      m_gradient_drag.m_rotation = angular.m_rotation;
+      m_gradient_drag.m_angle = std::atan2(unit.m_y - angular.m_center.m_y,
+        unit.m_x - angular.m_center.m_x) * 180 / std::numbers::pi;
+      return true;
+    }
+    if(get_distance(center, local) <= HANDLE_TOLERANCE) {
+      m_gradient_drag.m_part = GradientPart::CENTER;
+      m_gradient_drag.m_offset = angular.m_center - unit;
+      return true;
+    }
+    auto offset = get_angular_offset(angular, unit);
+    auto turns =
+      2 * std::numbers::pi * (offset + angular.m_rotation / 360);
+    auto track = to_qpoint(target->m_to_view.map(angular.m_center +
+      Point(0.5 * std::cos(turns), 0.5 * std::sin(turns))));
+    if(get_distance(track, local) > HANDLE_TOLERANCE) {
+      return false;
+    }
+    auto index = static_cast<int>(std::upper_bound(stops.begin(),
+      stops.end(), offset, [] (double offset, const auto& stop) {
+        return offset < stop.m_offset;
+      }) - stops.begin());
+    stops.insert(stops.begin() + index,
+      GradientStop(offset, evaluate_gradient(target->m_fill.m_stops, offset)));
+    picker.apply_fill(fill);
+    picker.set_stop(index);
+    m_gradient_drag.m_part = GradientPart::STOP;
+    m_gradient_drag.m_stop = index;
+    m_gradient_overlay->update();
+    return true;
+  }
+  if(m_gradient_drag.m_part == GradientPart::CENTER) {
+    angular.m_center = unit + m_gradient_drag.m_offset;
+  } else if(m_gradient_drag.m_part == GradientPart::ROTATION) {
+    auto angle = std::atan2(unit.m_y - angular.m_center.m_y,
+      unit.m_x - angular.m_center.m_x) * 180 / std::numbers::pi;
+    angular.m_rotation =
+      m_gradient_drag.m_rotation + angle - m_gradient_drag.m_angle;
+    m_rotation_handle_angle = std::atan2(local.y() - center.y(),
+      local.x() - center.x()) * 180 / std::numbers::pi;
+  } else if(m_gradient_drag.m_part == GradientPart::STOP &&
+      m_gradient_drag.m_stop < static_cast<int>(fill.m_stops.size())) {
+    auto stop = fill.m_stops[m_gradient_drag.m_stop];
+    stop.m_offset = get_angular_offset(angular, unit);
+    fill.m_stops.erase(fill.m_stops.begin() + m_gradient_drag.m_stop);
+    auto index = static_cast<int>(std::upper_bound(fill.m_stops.begin(),
+      fill.m_stops.end(), stop.m_offset, [] (double offset, const auto& stop) {
+        return offset < stop.m_offset;
+      }) - fill.m_stops.begin());
+    fill.m_stops.insert(fill.m_stops.begin() + index, stop);
+    m_gradient_drag.m_stop = index;
+    picker.apply_fill(fill);
+    picker.set_stop(index);
+    m_gradient_overlay->update();
+    return true;
+  } else {
+    return true;
+  }
+  picker.apply_fill(fill);
+  m_gradient_overlay->update();
+  return true;
+}
+
+void MainWindow::update_gradient_editor() {
+  m_gradient_overlay->setGeometry(m_view->rect());
+  m_gradient_overlay->setVisible(static_cast<bool>(find_gradient_target()));
+  m_gradient_overlay->raise();
+  m_gradient_overlay->update();
+}
+
+void MainWindow::set_highlights(std::vector<NodeId> nodes) {
+  m_highlighted = std::move(nodes);
+  m_highlight->setGeometry(m_view->rect());
+  m_highlight->setVisible(!m_highlighted.empty());
+  m_highlight->raise();
+  m_highlight->update();
+}
+
+std::vector<QPolygonF> MainWindow::get_highlight_outlines() const {
+  auto outlines = std::vector<QPolygonF>();
+  if(!m_session) {
+    return outlines;
+  }
+  auto& document = m_session->get_document();
+  auto view = m_view->get_renderer().get_view();
+  for(auto& id : m_highlighted) {
+    if(!document.find(id)) {
+      continue;
+    }
+    auto bounds =
+      get_local_bounds(document, id, BoundsType::GEOMETRY, m_measurer);
+    if(!bounds) {
+      continue;
+    }
+    auto world = get_world_transform(document, id);
+    auto outline = QPolygonF();
+    for(auto corner : {bounds->get_top_left(),
+        Point(bounds->m_x + bounds->m_width, bounds->m_y),
+        Point(bounds->m_x + bounds->m_width, bounds->m_y + bounds->m_height),
+        Point(bounds->m_x, bounds->m_y + bounds->m_height)}) {
+      auto point = view.map(world.map(corner));
+      outline.push_back(QPointF(point.m_x, point.m_y));
+    }
+    outlines.push_back(std::move(outline));
+  }
+  return outlines;
+}
+
 void MainWindow::add_asset_actions() {
+  m_assets->set_highlight_handler([this] (const auto& nodes) {
+    set_highlights(nodes);
+  });
+  m_assets->set_message_handler([this] (const auto& message) {
+    QToolTip::showText(m_view->mapToGlobal(QPoint(m_view->width() / 2,
+      m_view->height() - MESSAGE_MARGIN)), message, m_view);
+  });
+  m_assets->set_font_styles([] (const QString& family) {
+    auto styles = QStringList();
+    for(auto& face : get_default_font_library().get_faces()) {
+      if(QString::fromStdString(face.m_names.m_typographic_family) ==
+          family) {
+        auto style = QString::fromStdString(face.m_names.m_typographic_style);
+        if(!style.isEmpty() && !styles.contains(style)) {
+          styles.push_back(style);
+        }
+      }
+    }
+    return styles;
+  });
   m_assets->set_font_families([] {
     auto families = QStringList();
     for(auto& face : get_default_font_library().get_faces()) {
@@ -538,12 +995,21 @@ void MainWindow::add_actions() {
   m_actions.set_handler("file.revert", [this] { revert(); });
   m_edit_actions = std::make_unique<EditActions>(m_actions, m_commands);
   m_edit_actions->set_text_measurer(m_measurer);
-  m_edit_actions->set_view_provider([this] () -> std::optional<Rect> {
+  auto view_provider = [this] () -> std::optional<Rect> {
     auto inverse = invert(m_view->get_renderer().get_view());
     if(!inverse || m_view->width() <= 0 || m_view->height() <= 0) {
       return std::nullopt;
     }
     return inverse->map(Rect(0, 0, m_view->width(), m_view->height()));
+  };
+  m_edit_actions->set_view_provider(view_provider);
+  m_presets->set_view_provider(view_provider);
+  m_presets->hide();
+  m_edit_actions->set_reveal_handler([this] (const auto& region) {
+    show_region(region);
+  });
+  m_presets->set_reveal_handler([this] (const auto& region) {
+    show_region(region);
   });
   m_edit_actions->set_error_handler([this] (const auto& message) {
     QMessageBox::warning(this, "Rellu", message);
@@ -592,9 +1058,14 @@ void MainWindow::add_actions() {
     activateWindow();
   });
   m_actions.set_handler("window.preview", [this] { toggle_preview(); });
-  m_actions.set_handler("edit.preferences.language.english", [this] {
-    m_actions.get("edit.preferences.language.english").setChecked(true);
-  });
+  for(auto language : LANGUAGES) {
+    auto name = std::string(language);
+    m_actions.set_handler(LANGUAGE_PREFIX + name, [this, name] {
+      set_language(name);
+      auto settings = QSettings();
+      settings.setValue("preferences/language", QString::fromStdString(name));
+    });
+  }
   for(auto button : m_app_bar->findChildren<QToolButton*>()) {
     if(button->accessibleName() == "Desktop Preview") {
       button->setEnabled(true);
@@ -660,6 +1131,7 @@ void MainWindow::update_tool() {
       m_toolbar->set_tool(tools->get_tool_name());
     }
   }
+  update_presets();
 }
 
 void MainWindow::show_panel(const std::string& name) {
@@ -700,6 +1172,8 @@ void MainWindow::set_workspace(Workspace workspace) {
       tool.m_name == "zoom");
   }
   m_inspector->set_workspace(workspace);
+  m_edit_actions->set_workspace(workspace);
+  update_presets();
   m_inspector->setVisible(workspace != Workspace::PROTOTYPE);
   m_prototype_inspector->setVisible(workspace == Workspace::PROTOTYPE);
   show_panel(m_toolbar->get_panel());
@@ -745,6 +1219,17 @@ void MainWindow::restore_settings() {
   }
   show_panel(settings.value("main_window/panel", DEFAULT_PANEL).toString().
     toStdString());
+  set_language(settings.value("preferences/language", DEFAULT_LANGUAGE).
+    toString().toStdString());
+}
+
+void MainWindow::set_language(const std::string& language) {
+  auto chosen = std::find(LANGUAGES.begin(), LANGUAGES.end(), language) ==
+    LANGUAGES.end() ? DEFAULT_LANGUAGE.toStdString() : language;
+  for(auto candidate : LANGUAGES) {
+    m_actions.get(LANGUAGE_PREFIX + candidate).setChecked(
+      chosen == candidate);
+  }
 }
 
 void MainWindow::save_settings() const {
@@ -849,6 +1334,7 @@ void MainWindow::install(
   m_assets->set_editor(&editor);
   m_inspector->set_editor(&editor);
   m_prototype_inspector->set_editor(&editor);
+  m_presets->set_editor(&editor);
   m_edit_actions->set_editor(&editor);
   m_component_actions->set_editor(&editor);
   m_text_actions->set_editor(&editor);
@@ -856,8 +1342,10 @@ void MainWindow::install(
   m_history_subscription = editor.get_history().subscribe([this] {
     update_title();
     update_asset_actions();
+    update_grid_actions();
   });
   m_selection_subscription = editor.get_selection().subscribe([this] {
+    set_highlights({});
     update_selection_actions();
   });
   if(auto tools = m_view->get_tools()) {
@@ -874,6 +1362,7 @@ void MainWindow::install(
 }
 
 void MainWindow::detach() {
+  set_highlights({});
   m_tool_subscription.release();
   m_history_subscription.release();
   m_selection_subscription.release();
@@ -889,6 +1378,7 @@ void MainWindow::detach() {
   }
   m_inspector->set_editor(nullptr);
   m_prototype_inspector->set_editor(nullptr);
+  m_presets->set_editor(nullptr);
   if(m_preview) {
     m_preview->close();
   }
@@ -927,6 +1417,8 @@ void MainWindow::update_selection_actions() {
   m_actions.set_enabled("view.zoom_selection", has_selection);
   m_actions.set_enabled("edit.rename", has_selection);
   update_asset_actions();
+  update_grid_actions();
+  update_presets();
 }
 
 void MainWindow::reveal(const NodeId& id) {
@@ -954,6 +1446,45 @@ void MainWindow::reveal(const NodeId& id) {
   auto center = bounds->get_center();
   m_view->zoom_to(Rect(center.m_x - size.m_width / 2,
     center.m_y - size.m_height / 2, size.m_width, size.m_height));
+}
+
+void MainWindow::show_region(const Rect& region) {
+  auto inverse = invert(m_view->get_renderer().get_view());
+  if(!inverse || m_view->width() <= 0 || m_view->height() <= 0) {
+    return;
+  }
+  auto visible = inverse->map(Rect(0, 0, m_view->width(), m_view->height()));
+  if(visible.contains(region)) {
+    return;
+  }
+  auto zoom = get_zoom();
+  auto size = Size(
+    std::max(m_view->width() - 2 * REVEAL_MARGIN, 1.0) / zoom,
+    std::max(m_view->height() - 2 * REVEAL_MARGIN, 1.0) / zoom);
+  if(region.m_width > size.m_width || region.m_height > size.m_height) {
+    m_view->zoom_to(region);
+    return;
+  }
+  auto center = region.get_center();
+  m_view->zoom_to(Rect(center.m_x - size.m_width / 2,
+    center.m_y - size.m_height / 2, size.m_width, size.m_height));
+}
+
+void MainWindow::update_presets() {
+  auto tools = m_view ? m_view->get_tools() : nullptr;
+  if(!m_session || !tools || tools->get_tool_name() != "artboard" ||
+      m_app_bar->get_workspace() != Workspace::DESIGN) {
+    m_inspector->set_footer(nullptr, false);
+    return;
+  }
+  auto& document = m_session->get_document();
+  auto& nodes = m_session->get_editor().get_selection().get_nodes();
+  auto has_artboard = std::any_of(nodes.begin(), nodes.end(),
+    [&] (const auto& id) {
+      auto node = document.find(id);
+      return node && node->get_artboard();
+    });
+  m_inspector->set_footer(m_presets, !has_artboard);
 }
 
 void MainWindow::zoom_to_selection() {

@@ -52,7 +52,7 @@ namespace {
     {"Same radius for all corners", "Different radius for each corner"});
   const auto BLUR_TYPES = QStringList({"Background Blur", "Object Blur"});
   const auto DEFAULT_STROKE_COLOR = make_color(0x70, 0x70, 0x70);
-  const auto DEFAULT_SHADOW_COLOR = make_color(0, 0, 0, 0.16);
+  const auto DEFAULT_SHADOW_COLOR = make_color(0, 0, 0, 41 / 255.0);
 
   QString format_number(double value) {
     if(std::abs(value) < 0.005) {
@@ -300,6 +300,9 @@ namespace {
       if(auto& pending = selection->get_pending_style()) {
         run.m_style = *pending;
       }
+      if(auto& hyperlink = selection->get_pending_hyperlink()) {
+        run.m_hyperlink = *hyperlink;
+      }
       return {run};
     }
     auto runs = std::vector<TextRun>();
@@ -393,10 +396,6 @@ namespace {
       is_run_mixed([] (const auto& left, const auto& right) {
         return left.m_hyperlink == right.m_hyperlink;
       });
-    if(selection && selection->get_range().m_start ==
-        selection->get_range().m_end) {
-      hyperlink.m_is_read_only = true;
-    }
     return section;
   }
 

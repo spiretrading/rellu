@@ -291,7 +291,8 @@ TEST_SUITE("SmartGuides") {
     REQUIRE(is_pink);
     auto position = overlay.m_images.back().m_position;
     REQUIRE(position.m_x == doctest::Approx(185 - label.width() / 4.0));
-    REQUIRE(position.m_y == doctest::Approx(125 - label.height() / 4.0));
+    REQUIRE(position.m_y == doctest::Approx(125 - SmartGuides::LABEL_OFFSET -
+      SmartGuides::FONT_ASCENT / 2 - label.height() / 4.0));
     auto alignments = std::size_t(0);
     auto distances = std::size_t(0);
     for(auto& shape : overlay.m_shapes) {
@@ -302,7 +303,7 @@ TEST_SUITE("SmartGuides") {
       }
     }
     REQUIRE(alignments == 3);
-    REQUIRE(distances == 2 * 4);
+    REQUIRE(distances == 2);
     tools.get_context().set_snap_service(snap);
   }
 
@@ -387,7 +388,11 @@ TEST_SUITE("SmartGuides") {
     REQUIRE(guides.get_measured_distances() ==
       std::vector{GuideDistance(Point(150, 125), Point(200, 125))});
     REQUIRE(guides.get_measured_lines().empty());
+    REQUIRE(guides.get_measured_edges() == std::vector{
+      GuideLine(Point(100, 100), Point(250, 100)),
+      GuideLine(Point(100, 150), Point(250, 150))});
     guides.measure(Rect(100, 100, 50, 50), Rect(0, 0, 400, 300));
+    REQUIRE(guides.get_measured_edges().empty());
     REQUIRE(guides.get_measured_distances() == std::vector{
       GuideDistance(Point(0, 125), Point(100, 125)),
       GuideDistance(Point(150, 125), Point(400, 125)),

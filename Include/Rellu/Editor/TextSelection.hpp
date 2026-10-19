@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <string>
 #include "Rellu/Commands/Signal.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Model/Document.hpp"
@@ -14,9 +15,10 @@ namespace Rellu {
   /**
    * The text node of a document being edited in place, if any, with its
    * caret and the anchor of the range selected from it, as UTF-16 indices,
-   * and the style set for the text typed at the caret. Editing ends when
-   * the node is removed, and the indices are kept within its content as it
-   * changes.
+   * the style and hyperlink set for the text typed at the caret, and the
+   * styles of the text edited or styled most recently, which new text
+   * takes. Editing ends when the node is removed, and the indices are kept
+   * within its content as it changes.
    */
   class TextSelection {
     public:
@@ -57,6 +59,40 @@ namespace Rellu {
       void set_pending_style(std::optional<TextStyle> style);
 
       /**
+       * Returns the URL set for the text typed at the caret to link to, or
+       * none to link as the text before it does.
+       */
+      const std::optional<std::string>& get_pending_hyperlink() const;
+
+      /**
+       * Sets the URL the text typed at the caret links to until the node,
+       * anchor or caret changes.
+       * @param hyperlink The URL, empty to link nowhere, or none to link as
+       *        the text before the caret does.
+       */
+      void set_pending_hyperlink(std::optional<std::string> hyperlink);
+
+      /**
+       * Returns the character style of the text edited or styled most
+       * recently, whose font, character spacing and color new text takes,
+       * Adobe XD's default before any.
+       */
+      const TextStyle& get_last_style() const;
+
+      /**
+       * Returns the paragraph style of the text edited or styled most
+       * recently, which new text takes.
+       */
+      const ParagraphStyle& get_last_paragraph_style() const;
+
+      /**
+       * Records the styles of the text edited or styled most recently.
+       * @param style The character style.
+       * @param paragraph The paragraph style.
+       */
+      void set_last_style(TextStyle style, ParagraphStyle paragraph);
+
+      /**
        * Edits a text node, selecting the range between two indices, clamped
        * to its content.
        * @param node The text node, or nil to end editing.
@@ -69,8 +105,8 @@ namespace Rellu {
       void clear();
 
       /**
-       * Subscribes an observer to every change of the node, anchor, caret or
-       * pending style.
+       * Subscribes an observer to every change of the node, anchor, caret,
+       * pending style or pending hyperlink.
        * @param observer The function called after each change.
        * @return The handle ending the subscription when released.
        */
@@ -82,6 +118,9 @@ namespace Rellu {
       std::size_t m_anchor;
       std::size_t m_caret;
       std::optional<TextStyle> m_pending_style;
+      std::optional<std::string> m_pending_hyperlink;
+      TextStyle m_last_style;
+      ParagraphStyle m_last_paragraph_style;
       Signal m_signal;
       Subscription m_subscription;
 

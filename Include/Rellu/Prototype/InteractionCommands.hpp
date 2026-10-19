@@ -7,39 +7,63 @@
 
 namespace Rellu {
 
-  /** The duration in seconds of a new interaction's animation. */
-  inline constexpr auto DEFAULT_DURATION = 0.3;
+  /**
+   * The duration in seconds of a new interaction's animation, 0.3 at the
+   * single precision Adobe XD stores durations with.
+   */
+  inline constexpr auto DEFAULT_DURATION = static_cast<double>(0.3f);
 
   /** The delay in seconds of a new time trigger. */
   inline constexpr auto DEFAULT_DELAY = 1.0;
 
   /**
-   * The duration in seconds of the animation of an interaction without a
-   * destination.
+   * The duration in seconds the INTERACTION section shows, disabled, before
+   * a node has an interaction.
    */
-  inline constexpr auto EMPTY_DURATION = 0.2;
+  inline constexpr auto PLACEHOLDER_DURATION = 0.2;
 
   /**
-   * Returns the animation Adobe XD gives a new interaction with a
+   * Returns a duration or delay at the single precision Adobe XD stores it
+   * with.
+   * @param seconds The duration or delay in seconds.
+   */
+  double to_stored_seconds(double seconds);
+
+  /**
+   * Returns the animation Adobe XD gives a new interaction wired to a
    * destination: a dissolve, easing out, over 0.3 seconds.
    */
   Animation make_default_animation();
 
   /**
-   * Returns the animation Adobe XD shows for an interaction without a
-   * destination: none, easing in, over 0.2 seconds.
+   * Returns the animation of an interaction Adobe XD adds with the + of the
+   * INTERACTION section: none, easing out, over 0.3 seconds.
    */
   Animation make_empty_animation();
 
   /**
    * Makes the interaction Adobe XD adds with the + of the INTERACTION
-   * section: a transition without a destination, triggered by a tap, or
-   * after a delay for an artboard.
+   * section before any interaction has been edited: a transition triggered
+   * by a tap, without a destination and with the empty animation.
    * @param owner The node the interaction is attached to.
-   * @param is_artboard Whether the owner is an artboard.
    * @return The interaction, with a nil id.
    */
-  Interaction make_empty_interaction(const NodeId& owner, bool is_artboard);
+  Interaction make_empty_interaction(const NodeId& owner);
+
+  /**
+   * Makes the interaction Adobe XD adds with the + of the INTERACTION
+   * section: the trigger, type and animation of the interaction last edited,
+   * without its destination, adjusted to the triggers the owner allows.
+   * @param document The document holding the owner.
+   * @param owner The node the interaction is attached to.
+   * @param has_states Whether the owner is within a component with more
+   *        than one state.
+   * @param last The interaction last edited, or <code>nullptr</code> for
+   *        none.
+   * @return The interaction, with a nil id.
+   */
+  Interaction make_new_interaction(const Document& document,
+    const NodeId& owner, bool has_states, const Interaction* last);
 
   /**
    * Makes the interaction Adobe XD creates when a wire is dragged from a

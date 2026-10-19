@@ -67,6 +67,14 @@ namespace {
       }
       return std::nullopt;
     }
+    if(auto angular = std::get_if<AngularGradient>(&start)) {
+      if(auto target = std::get_if<AngularGradient>(&end)) {
+        return AngularGradient(
+          interpolate(angular->m_center, target->m_center, progress),
+          interpolate(angular->m_rotation, target->m_rotation, progress));
+      }
+      return std::nullopt;
+    }
     auto& radial = std::get<RadialGradient>(start);
     if(auto target = std::get_if<RadialGradient>(&end)) {
       return RadialGradient(

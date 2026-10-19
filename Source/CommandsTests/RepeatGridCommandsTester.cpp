@@ -2,6 +2,7 @@
 #include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Commands/History.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
+#include "Rellu/Commands/TextCommands.hpp"
 #include "Fixture.hpp"
 
 using namespace Rellu;
@@ -203,6 +204,33 @@ TEST_SUITE("RepeatGridCommands") {
     REQUIRE(copy.m_runs.size() == 1);
     REQUIRE(copy.m_runs.front().m_length == 6);
     REQUIRE(copy.m_repeat_data.size() == 3);
+  }
+
+  TEST_CASE("cell_text_edit") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto history = History(document);
+    auto command = history.execute(
+      std::make_unique<RepeatGridCommand>(std::vector{board.m_text}));
+    auto grid = static_cast<const RepeatGridCommand&>(*command).get_grid();
+    history.execute(
+      std::make_unique<ResizeRepeatGridCommand>(grid, Size(140, 20)));
+    auto cells = document.get(grid).m_children;
+    REQUIRE(cells.size() == 3);
+    auto get_text = [&] (std::size_t index) -> const Text& {
+      return *document.get(
+        document.get(cells[index]).m_children.back()).get_text();
+    };
+    auto edited = replace_text(get_text(1), TextRange(0, 5), u"hi");
+    history.execute(std::make_unique<EditTextCommand>(
+      document.get(cells[1]).m_children.back(), std::move(edited)));
+    REQUIRE(*get_text(0).m_content == u"Label");
+    REQUIRE(*get_text(1).m_content == u"hi");
+    REQUIRE(*get_text(2).m_content == u"Label");
+    for(auto i = std::size_t(0); i != cells.size(); ++i) {
+      REQUIRE(get_text(i).m_repeat_data.empty());
+      REQUIRE(document.get(cells[i]).m_header.m_name.empty());
+    }
   }
 
   TEST_CASE("measurer") {

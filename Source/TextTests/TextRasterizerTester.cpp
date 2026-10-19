@@ -133,7 +133,7 @@ TEST_SUITE("TextRasterizer") {
   }
 
   TEST_CASE("color_glyphs") {
-    auto layout = make_layout(u"✅", Color(0, 0, 0, 1));
+    auto layout = make_layout(u"\u2705", Color(0, 0, 0, 1));
     REQUIRE(layout.m_glyphs.size() == 1);
     REQUIRE(get_default_text_rasterizer().rasterize(
       layout, make_translation(0, 20)).empty());

@@ -1,4 +1,5 @@
 #include <doctest/doctest.h>
+#include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Commands/StyleCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
@@ -138,6 +139,8 @@ TEST_SUITE("Editor") {
     auto& selection = editor.get_selection();
     auto everything = std::vector{scene.m_rectangle, scene.m_group,
       scene.m_mask, scene.m_instance, scene.m_loose};
+    editor.execute(std::make_unique<SetLockCommand>(
+      std::vector{scene.m_mask, scene.m_loose}, true));
     editor.select_all();
     REQUIRE(selection.get_nodes() == everything);
     editor.get_context().set_artboard(scene.m_artboard);

@@ -3,7 +3,9 @@
 #include <stdexcept>
 #include <unordered_set>
 #include <variant>
+#include "Rellu/Commands/ArtboardPlacement.hpp"
 #include "Rellu/Commands/Bounds.hpp"
+#include "Rellu/Commands/CopyNames.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
@@ -16,6 +18,16 @@ namespace {
 
   bool is_tree_root(const Document& document, const NodeId& id) {
     return document.get(id).m_parent.is_nil() && !document.is_on_canvas(id);
+  }
+
+  bool is_in_instance(const Document& document, const NodeId& id) {
+    for(auto node = document.find(id); node;
+        node = document.find(node->m_parent)) {
+      if(auto group = node->get_group(); group && group->m_component_instance) {
+        return true;
+      }
+    }
+    return false;
   }
 
   void place_after(Transaction& transaction, std::vector<NodeId>& children,
@@ -414,8 +426,20 @@ DuplicateCommand::DuplicateCommand(std::vector<NodeId> nodes)
   : DuplicateCommand(std::move(nodes), Point(0, 0)) {}
 
 DuplicateCommand::DuplicateCommand(std::vector<NodeId> nodes, Point offset)
+  : DuplicateCommand(std::move(nodes), offset, DuplicateMode::DESIGN) {}
+
+DuplicateCommand::DuplicateCommand(
+  std::vector<NodeId> nodes, Point offset, DuplicateMode mode)
   : m_nodes(std::move(nodes)),
-    m_offset(offset) {}
+    m_offset(offset),
+    m_mode(mode) {}
+
+DuplicateCommand::DuplicateCommand(
+  std::vector<NodeId> nodes, const Rect& view, DuplicateMode mode)
+  : m_nodes(std::move(nodes)),
+    m_offset(0, 0),
+    m_mode(mode),
+    m_view(view) {}
 
 const std::vector<NodeId>& DuplicateCommand::get_copies() const {
   return m_copies;
@@ -452,10 +476,26 @@ void DuplicateCommand::apply(
         collect_subtree(document, tree, m_mapping, trees));
     }
   }
+  auto is_placed = m_view && !roots.empty() &&
+    std::all_of(roots.begin(), roots.end(), [&] (const auto& id) {
+      return document.get(id).get_artboard();
+    });
+  auto offset = m_offset;
+  if(is_placed) {
+    auto bounds = Rect();
+    for(auto& root : roots) {
+      bounds = unite(bounds, document.get(root).get_artboard()->m_frame);
+    }
+    auto placed = place_artboards(document, m_nodes, *m_view, bounds);
+    offset = Point(placed.m_x - bounds.m_x, placed.m_y - bounds.m_y);
+  }
   for(auto& subtree : subtrees) {
     auto& root = subtree.front();
     auto parent = document.get(root).m_parent;
     auto index = get_index(document, root) + 1;
+    if(is_placed) {
+      index = get_artboard_index(document);
+    }
     auto copy = make_copy(document, root, m_mapping);
     m_copies.push_back(transaction.insert(
       parent, index, std::move(copy.first), std::move(copy.second)));
@@ -468,7 +508,9 @@ void DuplicateCommand::apply(
   }
   auto interactions = document.get_prototype().m_interactions;
   for(auto& interaction : interactions) {
-    if(m_mapping.contains(interaction.m_owner)) {
+    if(m_mapping.contains(interaction.m_owner) &&
+        (m_mode != DuplicateMode::DESIGN ||
+          is_in_instance(document, interaction.m_owner))) {
       interaction.m_id = NodeId();
       remap(interaction.m_owner, m_mapping);
       remap(interaction.m_action, m_mapping);
@@ -476,7 +518,21 @@ void DuplicateCommand::apply(
     }
   }
   for(auto& copy : m_copies) {
-    translate_node(document, transaction, copy, m_offset);
+    translate_node(document, transaction, copy, offset);
+  }
+  if(m_mode == DuplicateMode::CLONE) {
+    return;
+  }
+  for(auto& copy : m_copies) {
+    if(!is_placed) {
+      name_copy(document, transaction, copy, false);
+    }
+    auto& node = document.get(copy);
+    if(node.get_artboard()) {
+      auto header = node.m_header;
+      header.m_name = make_artboard_name(document, header.m_name, false);
+      transaction.replace_header(std::move(header));
+    }
   }
 }
 

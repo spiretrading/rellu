@@ -27,10 +27,24 @@ namespace {
   constexpr auto INDICATOR_WIDTH = 24;
   const auto FILTERS = std::to_array<std::pair<LayerFilter, const char*>>({
     std::pair(LayerFilter::ALL, "All Items"),
-    std::pair(LayerFilter::COMPONENTS, "Components"),
-    std::pair(LayerFilter::GROUPS, "Groups"),
+    std::pair(LayerFilter::IMAGES, "Images"),
     std::pair(LayerFilter::SHAPES, "Shapes"),
-    std::pair(LayerFilter::TEXT, "Text")});
+    std::pair(LayerFilter::TEXT, "Text"),
+    std::pair(LayerFilter::VIDEO, "Video")});
+
+  bool is_image(const Node& node) {
+    auto shape = node.get_shape();
+    return shape && std::holds_alternative<ImageFill>(shape->m_style.m_fill);
+  }
+
+  bool is_plain_shape(const Node& node) {
+    auto shape = node.get_shape();
+    if(!shape || std::holds_alternative<CompoundShape>(shape->m_geometry)) {
+      return false;
+    }
+    return !std::holds_alternative<RectangleShape>(shape->m_geometry) ||
+      !node.m_header.m_aspect_lock || !is_image(node);
+  }
 
   class Guard {
     public:
@@ -354,16 +368,15 @@ bool LayersPanel::is_match(const QModelIndex& index) const {
   if(!displayed) {
     return m_filter == LayerFilter::ALL;
   }
-  auto group = displayed->get_group();
   switch(m_filter) {
-    case LayerFilter::COMPONENTS:
-      return group && group->m_component_instance;
-    case LayerFilter::GROUPS:
-      return group && !group->m_component_instance;
+    case LayerFilter::IMAGES:
+      return is_image(*displayed);
     case LayerFilter::SHAPES:
-      return static_cast<bool>(displayed->get_shape());
+      return is_plain_shape(*displayed);
     case LayerFilter::TEXT:
       return static_cast<bool>(displayed->get_text());
+    case LayerFilter::VIDEO:
+      return false;
     default:
       return true;
   }

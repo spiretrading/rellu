@@ -11,13 +11,15 @@ TEST_SUITE("EffectCommands") {
       make_default_effect(EffectKind::DROP_SHADOW));
     REQUIRE(shadow.m_offset == Point(0, 3));
     REQUIRE(shadow.m_blur == 3);
-    REQUIRE(shadow.m_color == Color(0, 0, 0, 0.16));
+    REQUIRE(shadow.m_color == make_color(0, 0, 0, 41 / 255.0));
     REQUIRE(shadow.m_is_visible);
     REQUIRE(std::holds_alternative<InnerShadow>(
       make_default_effect(EffectKind::INNER_SHADOW)));
     auto blur = std::get<Blur>(make_default_effect(EffectKind::BLUR));
     REQUIRE(blur.m_is_background);
-    REQUIRE(blur.m_amount == 10);
+    REQUIRE(blur.m_amount == 30);
+    REQUIRE(blur.m_brightness == 15);
+    REQUIRE(blur.m_fill_opacity == 0);
   }
 
   TEST_CASE("add_effect") {

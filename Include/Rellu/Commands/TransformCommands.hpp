@@ -33,13 +33,37 @@ namespace Rellu {
   void translate_node(const Document& document, Transaction& transaction,
     const NodeId& id, Point delta);
 
+  /** Lists the ways a TransformCommand applies its mapping. */
+  enum class TransformMode : unsigned char {
+
+    /**
+     * Transforms the nodes, then updates the contents of the artboards
+     * resized, as an edit in the property inspector does.
+     */
+    RESIZE,
+
+    /**
+     * Transforms the nodes, leaving the contents of the artboards resized
+     * as they are, as a handle being dragged does.
+     */
+    DRAG,
+
+    /**
+     * Updates the contents of the artboards among the nodes without
+     * transforming anything, as releasing a dragged handle does.
+     */
+    SETTLE
+  };
+
   /**
    * Applies a mapping in document space to a node, resizing its geometry
    * rather than scaling its transform where the mapping scales along the
    * node's own axes. A mapping that mirrors along those axes, as a resize
-   * past the opposite side does, mirrors the geometry and fills of shapes
-   * and of the contents of plain groups, and only moves other nodes, so
-   * that no transform is left mirrored, as Adobe XD does.
+   * past the opposite side or a flip does, mirrors the geometry and fills
+   * of shapes and the contents of plain and mask groups, mirrors the
+   * transform of text, which Adobe XD shows as a rotation of 180 degrees,
+   * and only moves other nodes, such as component instances, whose
+   * contents are left as they are, as Adobe XD does.
    * @param document The document holding the node.
    * @param transaction The open transaction on the <i>document</i>.
    * @param id The node's id.
@@ -47,6 +71,21 @@ namespace Rellu {
    */
   void transform_node(const Document& document, Transaction& transaction,
     const NodeId& id, const Matrix& mapping);
+
+  /**
+   * Moves the nodes on the pasteboard that overlap an artboard's frame into
+   * the artboard on top of its children, keeping their order, and moves
+   * each of the artboard's children that no longer overlaps its frame on
+   * top of the topmost other artboard it overlaps, or else on top of the
+   * pasteboard, as Adobe XD does when an artboard is drawn or resized.
+   * Hidden and locked nodes move too, and every node keeps where it
+   * appears on the canvas.
+   * @param document The document holding the artboard.
+   * @param transaction The open transaction on the <i>document</i>.
+   * @param id The artboard's id.
+   */
+  void update_artboard_contents(
+    const Document& document, Transaction& transaction, const NodeId& id);
 
   /** Moves nodes by a displacement in document space. */
   class TranslateCommand : public Command {
@@ -94,13 +133,23 @@ namespace Rellu {
     public:
 
       /**
-       * Constructs a TransformCommand.
+       * Constructs a TransformCommand in the RESIZE mode.
        * @param nodes The nodes to transform.
        * @param mapping The mapping in document space.
        * @param label The label naming the operation.
        */
       TransformCommand(std::vector<NodeId> nodes, const Matrix& mapping,
         std::string label) noexcept;
+
+      /**
+       * Constructs a TransformCommand.
+       * @param nodes The nodes to transform.
+       * @param mapping The mapping in document space.
+       * @param label The label naming the operation.
+       * @param mode The way the mapping is applied.
+       */
+      TransformCommand(std::vector<NodeId> nodes, const Matrix& mapping,
+        std::string label, TransformMode mode) noexcept;
 
       /** Returns the nodes transformed. */
       const std::vector<NodeId>& get_nodes() const;
@@ -121,6 +170,7 @@ namespace Rellu {
       std::vector<NodeId> m_nodes;
       Matrix m_mapping;
       std::string m_label;
+      TransformMode m_mode;
   };
 
   /**

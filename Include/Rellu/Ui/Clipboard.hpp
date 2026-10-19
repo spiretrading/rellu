@@ -16,26 +16,26 @@ namespace Rellu {
   /** Where a paste places what a Clipboard holds. */
   struct PasteTarget {
 
-    /**
-     * The artboard that is selected or holds the selection, or nil. When it
-     * is in view, nodes copied from an artboard are pasted into it at the
-     * position they had in theirs.
-     */
-    NodeId m_artboard;
+    /** The selected nodes. */
+    std::vector<NodeId> m_selection;
 
-    /**
-     * The artboard most recently worked in, or nil. Content from another
-     * document copied from an artboard goes into it, at the position it had
-     * in its own, when no artboard is selected and it is in view.
-     */
+    /** The artboard most recently worked in, or nil. */
     NodeId m_focus;
+
+    /** The container entered for editing, or nil at the top level. */
+    NodeId m_container;
 
     /**
      * The region of the document in view, or none to treat the whole
-     * document as in view. Content copied from outside the view is pasted
-     * at its center.
+     * document as in view and keep content where it was copied.
      */
     std::optional<Rect> m_view;
+
+    /**
+     * Whether the prototype workspace is shown, where pasting copies every
+     * interaction rather than only those within component instances.
+     */
+    bool m_is_prototyping = false;
   };
 
   /**
@@ -109,24 +109,29 @@ namespace Rellu {
       /**
        * Makes a command labelled Paste inserting what is held with fresh ids,
        * every id referring within the copied set replaced by its copy's,
-       * along with the images and components the document lacks. As in
-       * Adobe XD, nodes copied from an artboard go to the same position in
-       * the target's artboard when it is in view; otherwise content copied
-       * within the view is placed where it was, in the container it was
-       * copied from, and other content at the center of the view, inside the
-       * topmost artboard it overlaps. Artboards pasted in place move right
-       * of the artboards they would overlap, artboards whose name is taken
-       * and groups named by number are given the next free name, and copies
-       * of a main component become instances.
+       * along with the images and components the document lacks, placed and
+       * named as Adobe XD pastes. Copies of a main component become
+       * instances.
        * @param target Where to paste.
        * @return The command, or <code>nullptr</code> if nothing is held.
        */
       std::unique_ptr<Command> make_paste_command(
         const PasteTarget& target = {}) const;
 
+      /**
+       * Makes a command labelled Paste Appearance giving nodes the
+       * appearance of what is held, as Adobe XD's Paste Appearance does when
+       * a single object or an image is held.
+       * @param nodes The nodes to change.
+       * @return The command, or <code>nullptr</code> if nothing applies.
+       */
+      std::unique_ptr<Command> make_paste_appearance_command(
+        std::vector<NodeId> nodes) const;
+
     private:
       struct Content;
       class PasteCommand;
+      class AppearanceCommand;
       std::shared_ptr<const Content> m_content;
 
       Clipboard(const Clipboard&) = delete;

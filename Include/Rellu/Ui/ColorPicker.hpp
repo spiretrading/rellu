@@ -5,6 +5,7 @@
 #include <QComboBox>
 #include <QFrame>
 #include <QLineEdit>
+#include <QPointF>
 #include <QRect>
 #include <QWidget>
 #include "Rellu/Geometry/Color.hpp"
@@ -32,7 +33,8 @@ namespace Rellu {
    * sliders, the value fields of a color model, the opacity, an eyedropper,
    * a button adding the color to the document's assets and the document's
    * color swatches. It edits a Fill, a solid fill when gradients are not
-   * offered, reporting every change as the user makes it.
+   * offered, reporting every change as the user makes it. An image fill is
+   * shown as a white solid color, which a change replaces.
    */
   class ColorPicker : public QFrame {
     public:
@@ -52,6 +54,31 @@ namespace Rellu {
 
       /** The type of function called when the picker closes. */
       using CloseHandler = std::function<void ()>;
+
+      /** Lists the events of a press outside the picker. */
+      enum class CanvasEvent : unsigned char {
+
+        /** The press. */
+        PRESS,
+
+        /** A move while pressed. */
+        MOVE,
+
+        /** The release. */
+        RELEASE
+      };
+
+      /**
+       * The type of function handling a press outside the picker, such as
+       * on a gradient's handles on the canvas, while the picker is open.
+       * @param event The event.
+       * @param position The pointer's position in global coordinates.
+       * @return <code>true</code> iff a press is handled, the picker then
+       *         staying open and the following moves and release going to
+       *         the function.
+       */
+      using CanvasHandler =
+        std::function<bool (CanvasEvent event, QPointF position)>;
 
       /**
        * Constructs a ColorPicker editing a black solid fill.
@@ -81,10 +108,22 @@ namespace Rellu {
       /**
        * Changes the type of fill as the user would with the dropdown,
        * reporting the change.
-       * @param index The index among Solid Color, Linear Gradient and Radial
-       *        Gradient.
+       * @param index The index among Solid Color, Linear Gradient, Radial
+       *        Gradient and Angular Gradient.
        */
       void apply_type(int index);
+
+      /**
+       * Changes the fill edited, reporting the change.
+       * @param fill The fill.
+       */
+      void apply_fill(const Fill& fill);
+
+      /**
+       * Sets the function handling presses outside the picker.
+       * @param handler The function.
+       */
+      void set_canvas_handler(CanvasHandler handler);
 
       /** Returns whether gradient fills are offered. */
       bool is_gradient_enabled() const;
@@ -148,6 +187,9 @@ namespace Rellu {
 
     protected:
       void hideEvent(QHideEvent* event) override;
+      void mousePressEvent(QMouseEvent* event) override;
+      void mouseMoveEvent(QMouseEvent* event) override;
+      void mouseReleaseEvent(QMouseEvent* event) override;
       void keyPressEvent(QKeyEvent* event) override;
 
     private:
@@ -163,11 +205,13 @@ namespace Rellu {
       bool m_is_gradient_enabled;
       bool m_is_picking;
       bool m_is_updating;
+      bool m_is_canvas_dragging;
       ColorModel m_model;
       std::vector<ColorSwatch> m_swatches;
       ChangeHandler m_change_handler;
       AddHandler m_add_handler;
       CloseHandler m_close_handler;
+      CanvasHandler m_canvas_handler;
       QComboBox* m_type;
       GradientBar* m_bar;
       SaturationSquare* m_square;
@@ -191,6 +235,13 @@ namespace Rellu {
       void commit_fields();
       void pick_from_screen();
   };
+
+  /**
+   * Returns the stops Adobe XD gives a solid color turned into a gradient:
+   * the color, then the color at half its red, green and blue values.
+   * @param color The solid color.
+   */
+  std::vector<GradientStop> make_default_stops(const Color& color);
 
   /**
    * Lets the user click anywhere on the screens to sample a pixel's color,

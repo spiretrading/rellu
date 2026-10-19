@@ -3,21 +3,15 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include "Rellu/Commands/Bounds.hpp"
+#include "Rellu/Commands/ArtboardPlacement.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
-#include "Rellu/Commands/StructureCommands.hpp"
+#include "Rellu/Commands/TransformCommands.hpp"
+#include "Rellu/Tools/ArtboardCreation.hpp"
 #include "Rellu/Tools/ArtboardTool.hpp"
 
 using namespace Rellu;
 
 namespace {
-  bool is_enclosed(const Rect& frame, const Rect& bounds) {
-    return bounds.get_left() >= frame.get_left() &&
-      bounds.get_right() <= frame.get_right() &&
-      bounds.get_top() >= frame.get_top() &&
-      bounds.get_bottom() <= frame.get_bottom();
-  }
-
   class DrawArtboardCommand : public Command {
     public:
       DrawArtboardCommand(
@@ -32,31 +26,9 @@ namespace {
 
       void apply(const Document& document, Transaction& transaction) override {
         m_insert.apply(document, transaction);
-        if(!m_is_capturing) {
-          return;
+        if(m_is_capturing) {
+          update_artboard_contents(document, transaction, m_insert.get_node());
         }
-        auto& id = m_insert.get_node();
-        auto node = document.find(id);
-        if(!node || !node->get_artboard()) {
-          return;
-        }
-        auto frame = node->get_artboard()->m_frame;
-        auto captured = std::vector<NodeId>();
-        for(auto& child : document.get_canvas()) {
-          auto loose = document.find(child);
-          if(child == id || !loose || loose->get_artboard()) {
-            continue;
-          }
-          if(auto bounds = get_world_bounds(document, child);
-              bounds && is_enclosed(frame, *bounds)) {
-            captured.push_back(child);
-          }
-        }
-        if(captured.empty()) {
-          return;
-        }
-        auto reparent = ReparentCommand(std::move(captured), id, 0);
-        reparent.apply(document, transaction);
       }
 
       bool merge(const Command& command) override {
@@ -88,6 +60,12 @@ std::unique_ptr<Command> ArtboardTool::make_command(ToolContext& context,
   if(!(box.m_width > 0) || !(box.m_height > 0)) {
     return nullptr;
   }
+  if(auto node = context.get_document().find(header.m_id)) {
+    header.m_name = node->m_header.m_name;
+  } else {
+    header.m_name =
+      make_artboard_name(context.get_document(), "Artboard", false);
+  }
   auto artboard = Artboard();
   artboard.m_frame = box;
   artboard.m_background = SolidFill(make_color(255, 255, 255));
@@ -113,10 +91,7 @@ void ArtboardTool::click(ToolContext& context, Point point) {
   auto& editor = context.get_editor();
   auto artboard = context.get_titles().find(context.to_view(point));
   if(artboard.is_nil()) {
-    artboard = find_drawing_parent(context.get_document(), point);
-  }
-  if(artboard.is_nil()) {
-    editor.get_selection().clear();
+    create_clicked_artboard(context, point);
     return;
   }
   auto& edit = editor.get_context();

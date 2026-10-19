@@ -1,36 +1,101 @@
-#include <initializer_list>
 #include <utility>
+#include <vector>
 #include "Rellu/Ui/ContextMenus.hpp"
 
 using namespace Rellu;
 
 namespace {
-  using Names = std::initializer_list<const char*>;
+  struct Entry {
+    const char* m_name;
+    const char* m_text;
+    bool m_is_shown_if_disabled;
+    bool m_is_shown_if_nothing_enabled;
+  };
 
-  void add_actions(
-      const ActionRegistry& actions, QMenu& menu, Names names) {
-    auto is_added = false;
-    for(auto name : names) {
-      if(auto action = actions.find(name); action && action->isEnabled() &&
-          action->isVisible()) {
-        if(!is_added && !menu.isEmpty()) {
-          menu.addSeparator();
-        }
-        menu.addAction(action);
-        is_added = true;
-      }
-    }
+  const auto SEPARATOR = Entry(nullptr, nullptr, false, false);
+
+  bool is_component_ungroup(const QAction& action) {
+    return action.text().startsWith("Ungroup Component") ||
+      action.text().startsWith("Unlink Component");
   }
 
-  void add_submenu(const ActionRegistry& actions, QMenu& menu,
-      const QString& title, Names names) {
-    auto submenu = new QMenu(title, &menu);
-    add_actions(actions, *submenu, names);
-    if(submenu->isEmpty()) {
-      delete submenu;
+  std::vector<Entry> make_entries(
+      const ActionRegistry& actions, ContextMenuKind kind) {
+    auto is_layers = kind == ContextMenuKind::LAYERS;
+    auto ungroup = actions.find("object.ungroup");
+    auto is_component = ungroup && is_component_ungroup(*ungroup);
+    auto ungroup_entry = Entry("object.ungroup", nullptr, false, true);
+    auto entries = std::vector<Entry>();
+    if(!is_layers) {
+      entries.push_back(Entry("edit.cut", nullptr, false, true));
+    }
+    entries.insert(entries.end(), {
+      Entry("edit.copy", nullptr, false, true),
+      Entry("edit.copy_svg", nullptr, false, true),
+      Entry("edit.paste", nullptr, true, true),
+      Entry("edit.paste_appearance", nullptr, false, true)});
+    if(is_layers) {
+      entries.push_back(Entry("edit.duplicate", nullptr, false, true));
+    }
+    entries.push_back(Entry("edit.delete", nullptr, false, true));
+    if(is_layers) {
+      entries.push_back(Entry("edit.rename", nullptr, false, true));
+    }
+    entries.insert(entries.end(), {SEPARATOR,
+      Entry("object.transform.reset_3d", nullptr, false, false), SEPARATOR,
+      Entry("object.toggle_lock", nullptr, false, true),
+      Entry("object.toggle_visibility", nullptr, false, true),
+      Entry("object.group", nullptr, false, true),
+      Entry("object.mask", nullptr, false, true)});
+    if(!is_component) {
+      entries.push_back(ungroup_entry);
+    }
+    entries.insert(entries.end(), {
+      Entry("object.path.outline_stroke", nullptr, false, false), SEPARATOR,
+      Entry("object.make_component", nullptr, false, true),
+      Entry("object.edit_main_component", nullptr, false, true),
+      Entry("object.previous_instance", nullptr, false, true),
+      Entry("object.reset_main_state", nullptr, false, true),
+      Entry("object.reveal_component", nullptr, false, true)});
+    if(is_component) {
+      entries.push_back(ungroup_entry);
+    }
+    entries.insert(entries.end(), {SEPARATOR,
+      Entry("object.add_color", nullptr, false, true),
+      Entry("object.add_character_style", nullptr, false, true),
+      Entry("object.reveal_color", nullptr, false, true),
+      Entry("object.reveal_character_style", nullptr, false, true),
+      SEPARATOR, Entry("object.mark_for_export", nullptr, false, true),
+      SEPARATOR});
+    if(!is_layers) {
+      entries.insert(entries.end(), {
+        Entry("arrange.bring_to_front", nullptr, false, true),
+        Entry("arrange.bring_forward", nullptr, false, true),
+        Entry("arrange.send_backward", nullptr, false, true),
+        Entry("arrange.send_to_back", nullptr, false, true), SEPARATOR,
+        Entry("object.align_to_pixel_grid", nullptr, false, true)});
+    } else {
+      entries.insert(entries.end(), {
+        Entry("file.export.batch", "Export Batch...", true, true),
+        Entry("file.export.selected", "Export Selected...", true, true)});
+    }
+    return entries;
+  }
+
+  bool is_enabled(QAction* action) {
+    return action && action->isEnabled() && action->isVisible();
+  }
+
+  void add_entry(QMenu& menu, QAction& action, const char* text) {
+    if(!text) {
+      menu.addAction(&action);
       return;
     }
-    menu.addMenu(submenu);
+    auto entry = menu.addAction(QString::fromUtf8(text));
+    entry->setEnabled(action.isEnabled());
+    QObject::connect(entry, &QAction::triggered, &action, [&action] {
+      action.trigger();
+    });
   }
 }
 
@@ -38,41 +103,34 @@ QMenu* Rellu::make_context_menu(
     const ActionRegistry& actions, ContextMenuKind kind, QWidget* parent) {
   auto menu = new QMenu(parent);
   menu->setObjectName("context_menu");
-  add_actions(actions, *menu, {"edit.cut", "edit.copy", "edit.paste",
-    "edit.paste_appearance"});
-  add_actions(actions, *menu, {"edit.duplicate", "edit.delete"});
-  if(kind == ContextMenuKind::LAYERS) {
-    add_actions(actions, *menu, {"edit.rename"});
+  auto entries = make_entries(actions, kind);
+  auto is_any_enabled = false;
+  for(auto& entry : entries) {
+    if(entry.m_name && is_enabled(actions.find(entry.m_name))) {
+      is_any_enabled = true;
+    }
   }
-  add_actions(actions, *menu,
-    {"object.toggle_lock", "object.toggle_visibility"});
-  add_actions(actions, *menu, {"object.group", "object.ungroup"});
-  add_actions(actions, *menu, {"object.make_component",
-    "object.edit_main_component", "object.reset_main_state"});
-  add_actions(actions, *menu, {"object.mark_for_export"});
-  add_actions(actions, *menu, {"object.add_color",
-    "object.add_character_style"});
-  add_actions(actions, *menu, {"object.mask", "object.repeat_grid"});
-  auto count = menu->actions().size();
-  menu->addSeparator();
-  add_submenu(actions, *menu, "Arrange", {"arrange.bring_to_front",
-    "arrange.bring_forward", "arrange.send_backward", "arrange.send_to_back"});
-  add_submenu(actions, *menu, "Align", {"object.align.left",
-    "object.align.center", "object.align.right", "object.align.top",
-    "object.align.middle", "object.align.bottom"});
-  add_submenu(actions, *menu, "Distribute", {"object.distribute.horizontally",
-    "object.distribute.vertically"});
-  add_submenu(actions, *menu, "Path", {"object.path.add",
-    "object.path.subtract", "object.path.intersect", "object.path.exclude",
-    "object.path.convert", "object.path.outline_stroke"});
-  add_submenu(actions, *menu, "Transform", {
-    "object.transform.flip_horizontally", "object.transform.flip_vertically",
-    "object.transform.reset_3d"});
-  if(menu->actions().size() == count + 1) {
-    menu->removeAction(menu->actions().back());
-  }
-  if(kind == ContextMenuKind::CANVAS && menu->isEmpty()) {
-    add_actions(actions, *menu, {"edit.select_all"});
+  auto is_separator_pending = false;
+  for(auto& entry : entries) {
+    if(!entry.m_name) {
+      is_separator_pending = !menu->isEmpty();
+      continue;
+    }
+    auto action = actions.find(entry.m_name);
+    if(!action || !action->isVisible()) {
+      continue;
+    }
+    auto is_shown = is_any_enabled ?
+      action->isEnabled() || entry.m_is_shown_if_disabled :
+      entry.m_is_shown_if_nothing_enabled;
+    if(!is_shown) {
+      continue;
+    }
+    if(is_separator_pending) {
+      menu->addSeparator();
+      is_separator_pending = false;
+    }
+    add_entry(*menu, *action, entry.m_text);
   }
   return menu;
 }

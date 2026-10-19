@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <exception>
 #include <memory>
+#include <string>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
@@ -26,14 +27,25 @@ namespace {
     }
   }
 
-  std::string make_state_name(
-      const Document& document, const ComponentId& id, const QString& base) {
+  std::string make_state_name(const Document& document, const ComponentId& id,
+      StateKind kind) {
     auto& component = document.get_resources().m_components.at(id);
-    auto name = base.toStdString();
     auto is_taken = [&] (const std::string& candidate) {
       return std::any_of(component.m_states.begin(), component.m_states.end(),
         [&] (const auto& state) { return state.m_name == candidate; });
     };
+    if(kind == StateKind::NEW) {
+      for(auto i = component.m_states.size() + 2;; ++i) {
+        auto candidate = "State " + std::to_string(i);
+        if(!is_taken(candidate)) {
+          return candidate;
+        }
+      }
+    }
+    auto name = std::string("Hover State");
+    if(kind == StateKind::TOGGLE) {
+      name = "Toggle State";
+    }
     if(!is_taken(name)) {
       return name;
     }
@@ -241,15 +253,9 @@ void ComponentActions::add_state(StateKind kind) {
   }
   auto& document = m_editor->get_document();
   auto component = get_instance_role(document.get(main))->m_component;
-  auto base = QString("New State");
-  if(kind == StateKind::HOVER) {
-    base = "Hover State";
-  } else if(kind == StateKind::TOGGLE) {
-    base = "Toggle State";
-  }
   try {
     m_editor->execute(std::make_unique<AddStateCommand>(
-      component, make_state_name(document, component, base), kind));
+      component, make_state_name(document, component, kind), kind));
   } catch(const std::exception&) {}
   update();
 }

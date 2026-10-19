@@ -33,7 +33,7 @@ TEST_SUITE("InteractionCommands") {
     REQUIRE(std::holds_alternative<TapTrigger>(interaction.m_trigger));
     REQUIRE(interaction.m_is_enabled);
     REQUIRE(interaction.m_action == Action(ArtboardTransition(destination,
-      Animation(Transition::DISSOLVE, Easing::EASE_OUT, 0.3))));
+      Animation(Transition::DISSOLVE, Easing::EASE_OUT, 0.30000001192092896))));
   }
 
   TEST_CASE("add") {
@@ -178,13 +178,45 @@ TEST_SUITE("InteractionCommands") {
 
   TEST_CASE("empty_interaction") {
     auto owner = generate_node_id();
-    auto interaction = make_empty_interaction(owner, false);
+    auto interaction = make_empty_interaction(owner);
     REQUIRE(interaction.m_owner == owner);
     REQUIRE(std::holds_alternative<TapTrigger>(interaction.m_trigger));
     REQUIRE(interaction.m_action == Action(ArtboardTransition(NodeId(),
-      Animation(Transition::NONE, Easing::EASE_IN, 0.2))));
-    REQUIRE(make_empty_interaction(owner, true).m_trigger ==
-      Trigger(TimeTrigger(DEFAULT_DELAY)));
+      Animation(Transition::NONE, Easing::EASE_OUT, 0.30000001192092896))));
+    REQUIRE(to_stored_seconds(0.2) == 0.20000000298023224);
+    REQUIRE(to_stored_seconds(0.5) == 0.5);
+  }
+
+  TEST_CASE("new_interaction") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto animation = Animation(Transition::SLIDE_UP, Easing::EASE_IN, 0.6);
+    REQUIRE(make_new_interaction(document, scene.m_artboard, false, nullptr) ==
+      make_empty_interaction(scene.m_artboard));
+    auto last = Interaction(NodeId(), scene.m_ellipse, TimeTrigger(2),
+      Overlay(scene.m_artboard, Point(5, 5), animation));
+    auto made = make_new_interaction(document, scene.m_artboard, false, &last);
+    REQUIRE(made.m_trigger == Trigger(TimeTrigger(2)));
+    REQUIRE(made.m_action == Action(Overlay(NodeId(), Point(0, 0), animation)));
+    made = make_new_interaction(document, scene.m_ellipse, false, &last);
+    REQUIRE(made.m_trigger == Trigger(TapTrigger()));
+    made = make_new_interaction(document, scene.m_rectangle, false, &last);
+    REQUIRE(made.m_trigger == Trigger(KeyTrigger()));
+    last.m_trigger = DragTrigger();
+    last.m_action = ArtboardTransition(scene.m_artboard, animation, true);
+    made = make_new_interaction(document, scene.m_ellipse, false, &last);
+    REQUIRE(made.m_trigger == Trigger(DragTrigger()));
+    REQUIRE(made.m_action == Action(ArtboardTransition(NodeId(), Animation(
+      Transition::AUTO_ANIMATE, Easing::EASE_IN, 0.6), true)));
+    last.m_trigger = HoverTrigger();
+    made = make_new_interaction(document, scene.m_ellipse, false, &last);
+    REQUIRE(made.m_trigger == Trigger(TapTrigger()));
+    REQUIRE(made.m_action ==
+      Action(ArtboardTransition(NodeId(), animation, true)));
+    made = make_new_interaction(document, scene.m_ellipse, true, &last);
+    REQUIRE(made.m_trigger == Trigger(HoverTrigger()));
+    REQUIRE(made.m_action == Action(StateTransition(StateId(), Animation(
+      Transition::AUTO_ANIMATE, Easing::EASE_IN, 0.6))));
   }
 
   TEST_CASE("inherited_id") {

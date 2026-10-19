@@ -412,7 +412,7 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(add->isEnabled());
     REQUIRE(add->menu()->actions().size() == 3);
     add->menu()->actions().front()->trigger();
-    REQUIRE(get_text(inspector, "component.state_name") == "New State");
+    REQUIRE(get_text(inspector, "component.state_name") == "State 2");
     auto& state_name = get_line(inspector, "component.state_name");
     state_name.setText("Pressed");
     Q_EMIT state_name.textEdited("Pressed");
@@ -456,15 +456,24 @@ TEST_SUITE("PropertyInspector") {
     blur->click();
     QCoreApplication::processEvents();
     REQUIRE(effects().size() == 2);
-    REQUIRE(get_line(inspector, "effects.blur.opacity").text() == "10%");
+    REQUIRE(get_line(inspector, "effects.blur.amount").text() == "30");
+    REQUIRE(get_line(inspector, "effects.blur.brightness").text() == "15");
+    REQUIRE(get_line(inspector, "effects.blur.opacity").text() == "0%");
+    enter(inspector, "effects.blur.amount", "12");
     auto type =
       qobject_cast<QComboBox*>(inspector.find_field("effects.blur.type"));
     REQUIRE(type);
     Q_EMIT type->activated(1);
     QCoreApplication::processEvents();
     REQUIRE(!std::get<Blur>(effects().back()).m_is_background);
+    REQUIRE(std::get<Blur>(effects().back()).m_amount == 12);
     REQUIRE(inspector.find_field("effects.blur.amount"));
     REQUIRE(!inspector.find_field("effects.blur.brightness"));
+    Q_EMIT qobject_cast<QComboBox*>(
+      inspector.find_field("effects.blur.type"))->activated(0);
+    QCoreApplication::processEvents();
+    REQUIRE(std::get<Blur>(effects().back()).m_amount == 12);
+    REQUIRE(std::get<Blur>(effects().back()).m_brightness == 15);
   }
 
   TEST_CASE("transform_toggles") {
@@ -602,13 +611,28 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(grid);
     REQUIRE(grid->m_is_visible);
     REQUIRE(get_line(inspector, "grid.columns").text() == "4");
-    REQUIRE(get_line(inspector, "grid.margin_linked").text() == "37");
+    REQUIRE(get_line(inspector, "grid.margin_linked").text() == "36");
     enter(inspector, "grid.columns", "6");
     REQUIRE(document.get(ids.m_artboard).get_artboard()->m_layout_grid->
       m_column_count == 6);
     enter(inspector, "grid.margin_linked", "20");
     REQUIRE(document.get(ids.m_artboard).get_artboard()->m_layout_grid->
       m_margins.m_right == 20);
+    REQUIRE(get_display(inspector, "grid.column_width").font().italic());
+    auto use_default = static_cast<QToolButton*>(nullptr);
+    for(auto button :
+        inspector.find_section("grid")->findChildren<QToolButton*>()) {
+      if(button->text() == "Use Default") {
+        use_default = button;
+      }
+    }
+    REQUIRE(use_default);
+    REQUIRE(use_default->isEnabled());
+    use_default->click();
+    QCoreApplication::processEvents();
+    REQUIRE(document.get(ids.m_artboard).get_artboard()->m_layout_grid->
+      m_column_count == 4);
+    REQUIRE(get_line(inspector, "grid.margin_linked").text() == "36");
     auto scrolling =
       qobject_cast<QComboBox*>(inspector.find_field("layout.scrolling"));
     REQUIRE(scrolling);

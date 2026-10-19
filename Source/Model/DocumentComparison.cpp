@@ -300,6 +300,12 @@ std::vector<std::string> Rellu::find_differences(
     "swatch", collector);
   compare_lists(left_resources.m_character_styles,
     right_resources.m_character_styles, "character style", collector);
+  if(left_resources.m_asset_groups != right_resources.m_asset_groups) {
+    collector.add("asset groups differ");
+  }
+  if(left_resources.m_grid_defaults != right_resources.m_grid_defaults) {
+    collector.add("grid defaults differ");
+  }
   auto& left_prototype = left.get_prototype();
   auto& right_prototype = right.get_prototype();
   compare_lists(left_prototype.m_interactions, right_prototype.m_interactions,

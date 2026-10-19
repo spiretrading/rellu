@@ -53,6 +53,55 @@ namespace {
     return static_cast<double>(argb);
   }
 
+  XdValue make_grid_color(const Color& color) {
+    auto json = XdValue::make_object();
+    json.set("value", to_argb(color));
+    return json;
+  }
+
+  XdValue make_grid_defaults(const GridDefaults& defaults) {
+    auto json = XdValue::make_object();
+    if(auto& grid = defaults.m_grid) {
+      auto& entry = json.set("defaultGrid", XdValue::make_object());
+      entry.set("rowStroke", make_grid_color(grid->m_square_row_color));
+      entry.set("columnStroke", make_grid_color(grid->m_square_column_color));
+      entry.set("rowSpacing", grid->m_square_size.m_height);
+      entry.set("columnSpacing", grid->m_square_size.m_width);
+      entry.set("defaultLayoutWidth", grid->m_default_width);
+      entry.set("columns", grid->m_column_count);
+      entry.set("gutter", grid->m_gutter);
+      entry.set("marginLeft", grid->m_margins.m_left);
+      entry.set("marginTop", grid->m_margins.m_top);
+      entry.set("marginRight", grid->m_margins.m_right);
+      entry.set("marginBottom", grid->m_margins.m_bottom);
+      entry.set("layoutRowStroke", make_grid_color(grid->m_row_color));
+      entry.set("layoutColumnStroke", make_grid_color(grid->m_column_color));
+    } else {
+      json.set("defaultGrid", XdValue());
+    }
+    if(auto& overrides = defaults.m_overrides) {
+      auto& list = json.set("layoutOverrides", XdValue::make_array());
+      for(auto& grid : *overrides) {
+        auto& entry = list.append(XdValue::make_object());
+        entry.set("rowStroke", make_grid_color(grid.m_row_color));
+        entry.set("columnStroke", make_grid_color(grid.m_column_color));
+        entry.set("columns", grid.m_column_count);
+        entry.set("gutter", grid.m_gutter);
+        entry.set("marginTop", grid.m_margins.m_top);
+        entry.set("marginLeft", grid.m_margins.m_left);
+        entry.set("marginBottom", grid.m_margins.m_bottom);
+        entry.set("marginRight", grid.m_margins.m_right);
+        if(grid.m_maximum_width) {
+          entry.set("media", XdValue::make_object()).set(
+            "maxWidth", *grid.m_maximum_width);
+        }
+      }
+    } else {
+      json.set("layoutOverrides", XdValue());
+    }
+    return json;
+  }
+
   XdValue make_matrix(const Matrix& matrix) {
     auto json = XdValue::make_object();
     json.set("a", matrix.m_a);
@@ -318,15 +367,24 @@ namespace {
         content.set("fx", radial->m_focus.m_x);
         content.set("fy", radial->m_focus.m_y);
       }
-      auto& resources = content.set("meta", XdValue::make_object()).set(
-        "ux", XdValue::make_object()).set(
-          "gradientResources", XdValue::make_object());
+      auto angular = std::get_if<AngularGradient>(&gradient->m_geometry);
+      if(angular) {
+        type = "angular";
+      }
+      auto& ux = content.set("meta", XdValue::make_object()).set(
+        "ux", XdValue::make_object());
+      auto& resources = ux.set("gradientResources", XdValue::make_object());
       resources.set("type", type);
       auto& stops = resources.set("stops", XdValue::make_array());
       for(auto& stop : gradient->m_stops) {
         auto& entry = stops.append(XdValue::make_object());
         entry.set("offset", stop.m_offset);
         entry.set("color", make_json_color(stop.m_color));
+      }
+      if(angular) {
+        ux.set("x", angular->m_center.m_x);
+        ux.set("y", angular->m_center.m_y);
+        ux.set("rotation", angular->m_rotation);
       }
     } else if(auto image = std::get_if<ImageFill>(&fill)) {
       json.set("type", "pattern");
@@ -544,7 +602,9 @@ namespace {
         std::get_if<StateTransition>(&interaction.m_action)) {
       action = "state-transition";
       set_animation(state->m_animation);
-      properties.set("destination", to_id(state->m_state));
+      if(!state->m_state.is_nil()) {
+        properties.set("destination", to_id(state->m_state));
+      }
     } else if(std::holds_alternative<PreviousArtboard>(
         interaction.m_action)) {
       action = "previous-artboard";
@@ -569,6 +629,7 @@ namespace {
       action = "hyperlink";
       properties.set("hyperlinkUrl", link->m_url);
     }
+    properties.set("voiceLocale", "en-us");
     json.set("triggerEvent", event);
     json.set("action", action);
     return json;
@@ -690,6 +751,14 @@ namespace {
       });
   }
 
+  bool has_instance_name(std::string_view name, std::string_view prefix) {
+    constexpr auto SEPARATOR = std::string_view(" \xE2\x80\x93 ");
+    auto position = name.rfind(SEPARATOR);
+    return position != std::string_view::npos &&
+      has_default_name(name.substr(0, position), prefix) &&
+      has_default_name(name.substr(position), SEPARATOR);
+  }
+
   std::string_view get_shape_name_key(
       const Shape& shape, std::string_view name) {
     auto& geometry = shape.m_geometry;
@@ -722,6 +791,12 @@ namespace {
       } else if(compound->m_operation == CompoundOperation::SUBTRACT &&
           has_default_name(name, "Subtraction ")) {
         return "SHAPE_SUBTRACT";
+      } else if(compound->m_operation == CompoundOperation::INTERSECT &&
+          has_default_name(name, "Intersection ")) {
+        return "SHAPE_INTERSECT";
+      } else if(compound->m_operation == CompoundOperation::EXCLUDE &&
+          has_default_name(name, "Exclusion ")) {
+        return "SHAPE_EXCLUDE";
       }
     }
     return {};
@@ -747,10 +822,15 @@ namespace {
       } else if(group->m_mask) {
         if(has_default_name(name, "Mask Group ")) {
           return "SHAPE_MASK";
+        } else if(has_default_name(name, "Group ")) {
+          return "SHAPE_GROUP";
         }
       } else if(is_component || group->m_component_instance) {
-        if(has_default_name(name, "Component ")) {
+        if(has_default_name(name, "Component ") ||
+            has_instance_name(name, "Component ")) {
           return "SHAPE_COMPONENT";
+        } else if(has_default_name(name, "Symbol ")) {
+          return "SHAPE_SYMBOL";
         }
       } else if(has_default_name(name, "Group ")) {
         return "SHAPE_GROUP";
@@ -825,7 +905,7 @@ namespace {
 
   XdValue make_element(std::string_view id, std::string_view name,
       std::string_view type, std::string_view representation,
-      XdValue content) {
+      XdValue content, const std::vector<AssetPlacement>& placements) {
     auto json = XdValue::make_object();
     json.set("id", id);
     json.set("type", type);
@@ -838,6 +918,35 @@ namespace {
     entry.set("type", representation);
     entry.set("relationship", "primary");
     entry.set("content", std::move(content));
+    if(!placements.empty()) {
+      auto& data = json.set("assetGroupData", XdValue::make_object());
+      for(auto& placement : placements) {
+        data.set(placement.m_group, placement.m_order);
+      }
+    }
+    return json;
+  }
+
+  XdValue make_strings(const std::vector<std::string>& strings) {
+    auto json = XdValue::make_array();
+    for(auto& entry : strings) {
+      json.append(entry);
+    }
+    return json;
+  }
+
+  XdValue make_group_data(const std::vector<AssetGroup>& groups) {
+    auto json = XdValue::make_object();
+    auto& list = json.set("groups", XdValue::make_array());
+    for(auto& group : groups) {
+      auto& entry = list.append(XdValue::make_object());
+      entry.set("name", group.m_name);
+      entry.set("id", group.m_id);
+      entry.set("order", group.m_order);
+      entry.set("parentId", group.m_parent);
+      entry.set("childrenIds", make_strings(group.m_children));
+      entry.set("elementIds", make_strings(group.m_elements));
+    }
     return json;
   }
 }
@@ -1070,7 +1179,8 @@ XdValue XdGenerator::make_resources(
     if(swatch.m_gradient.empty()) {
       elements.append(make_element(id, swatch.m_name,
         "application/vnd.adobe.element.color+dcx",
-        "application/vnd.adobe.xdcolor+json", make_json_color(swatch.m_color)));
+        "application/vnd.adobe.xdcolor+json", make_json_color(swatch.m_color),
+        swatch.m_placements));
     } else {
       auto stops = XdValue::make_array();
       for(auto& stop : swatch.m_gradient) {
@@ -1080,19 +1190,19 @@ XdValue XdGenerator::make_resources(
       }
       elements.append(make_element(id, swatch.m_name,
         "application/vnd.adobe.element.gradient+dcx",
-        "application/vnd.adobe.xdlineargradient+json", std::move(stops)));
+        "application/vnd.adobe.xdlineargradient+json", std::move(stops),
+        swatch.m_placements));
     }
   }
   for(auto& style : resources.m_character_styles) {
     elements.append(make_element(to_id(style.m_id), style.m_name,
       "application/vnd.adobe.element.characterstyle+dcx",
       "application/vnd.adobe.characterstyle+json",
-      make_character_style(style)));
+      make_character_style(style), style.m_placements));
   }
+  library.set("groupData", make_group_data(resources.m_asset_groups));
   ux.set("documentLibrary", std::move(library));
-  auto& defaults = ux.set("gridDefaults", XdValue::make_object());
-  defaults.set("defaultGrid", XdValue());
-  defaults.set("layoutOverrides", XdValue());
+  ux.set("gridDefaults", make_grid_defaults(resources.m_grid_defaults));
   ux.set("symbols", make_placeholders(symbols.size()));
   ux.set("symbolsMetadata", XdValue::make_object()).set(
     "usingNestedSymbolSyncing", true);

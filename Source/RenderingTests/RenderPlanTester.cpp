@@ -164,6 +164,21 @@ TEST_SUITE("RenderPlan") {
     REQUIRE(std::abs(get_radial_offset(outside, Point(0.999, 0))) < 1e-6);
   }
 
+  TEST_CASE("angular_offset") {
+    auto gradient = AngularGradient(Point(0.5, 0.5), 0);
+    REQUIRE(get_angular_offset(gradient, Point(1, 0.5)) == doctest::Approx(0));
+    REQUIRE(get_angular_offset(gradient, Point(0.5, 1)) ==
+      doctest::Approx(0.25));
+    REQUIRE(get_angular_offset(gradient, Point(0, 0.5)) ==
+      doctest::Approx(0.5));
+    REQUIRE(get_angular_offset(gradient, Point(0.5, 0)) ==
+      doctest::Approx(0.75));
+    auto rotated = AngularGradient(Point(0, 0), 90);
+    REQUIRE(get_angular_offset(rotated, Point(0, 1)) == doctest::Approx(0));
+    REQUIRE(get_angular_offset(rotated, Point(1, 0)) ==
+      doctest::Approx(0.75));
+  }
+
   TEST_CASE("blur_downsampling") {
     REQUIRE(get_blur_downsampling(0) == 1);
     REQUIRE(get_blur_downsampling(3.9) == 1);

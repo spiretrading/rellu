@@ -27,12 +27,16 @@ namespace Rellu {
    * tool named path_edit, as Enter does for a single selected shape, Ctrl
    * selects the deepest node, Shift toggles, a drag with Alt held moves a
    * copy of the selection, and a drag over empty canvas
-   * draws a marquee. The pointer hovering a node outlines it, a shape by
-   * its own outline and anything else by its box. The selection's box
-   * resizes by its handles, flipping what it holds when dragged past the
-   * opposite side, and rotates from just outside its corners. Locked nodes
-   * are selected by a click but not moved: their box is grey, with small
-   * grey handles that do nothing and a lock badge at its top left corner.
+   * draws a marquee. The pointer hovering an unlocked node outlines it, a
+   * shape by its own outline and anything else by its box. The selection's
+   * box resizes by its handles, flipping what it holds when dragged past
+   * the opposite side, and rotates from just outside its corners. Arrow
+   * keys nudge the selection, except stack items along their stack's
+   * direction. Locked nodes are selected by a click or a marquee but not
+   * moved: their box is grey, with small grey handles that do nothing and a
+   * lock badge at its top left corner. The part of a node lying outside its
+   * artboard is clicked or hovered only while it, or another node of its
+   * artboard, is selected, or while it is a child of the container entered.
    * Text in a fixed size frame shows the frame's bottom edge dashed.
    * A single selected rectangle also shows a corner radius
    * handle inside each corner, which rounds every corner alike, or only
@@ -159,6 +163,7 @@ namespace Rellu {
       double m_angle;
       double m_raw_angle;
       bool m_is_applied;
+      bool m_is_copied;
       NodeId m_scope;
       std::vector<NodeId> m_base;
       Rect m_marquee;
@@ -195,6 +200,7 @@ namespace Rellu {
       NodeId resolve_target(ToolContext& context, const NodeId& hit,
         Qt::KeyboardModifiers modifiers, bool is_entering) const;
       void begin_drag(ToolContext& context, const PointerEvent& event);
+      void copy(ToolContext& context);
       void update_move(ToolContext& context, const PointerEvent& event);
       void update_resize(ToolContext& context, const PointerEvent& event);
       void update_rotate(ToolContext& context, const PointerEvent& event);

@@ -7,6 +7,7 @@
 #include <vector>
 #include "Rellu/Geometry/Color.hpp"
 #include "Rellu/Geometry/Equality.hpp"
+#include "Rellu/Model/Artboard.hpp"
 #include "Rellu/Model/Component.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Model/Shared.hpp"
@@ -30,6 +31,45 @@ namespace Rellu {
     bool operator ==(const ImageResource&) const = default;
   };
 
+  /** The place of an asset among the members of a group of assets. */
+  struct AssetPlacement {
+
+    /**
+     * The id of the group, or of the section holding the asset outside
+     * any group, such as groupColors.
+     */
+    std::string m_group;
+
+    /** The key ordering the asset among the group's members. */
+    std::string m_order;
+
+    bool operator ==(const AssetPlacement&) const = default;
+  };
+
+  /** A named group of assets in the document's library. */
+  struct AssetGroup {
+
+    /** The group's identifier. */
+    std::string m_id;
+
+    /** The group's name. */
+    std::string m_name;
+
+    /** The key ordering the group among its parent's members. */
+    std::string m_order;
+
+    /** The id of the parent group, or of the section, such as groupColors. */
+    std::string m_parent;
+
+    /** The ids of the groups within the group. */
+    std::vector<std::string> m_children;
+
+    /** The ids of the assets within the group. */
+    std::vector<std::string> m_elements;
+
+    bool operator ==(const AssetGroup&) const = default;
+  };
+
   /** A named color in the document's library. */
   struct ColorSwatch {
 
@@ -44,6 +84,9 @@ namespace Rellu {
 
     /** The stops of a gradient swatch, or empty for a plain color. */
     std::vector<GradientStop> m_gradient;
+
+    /** The places of the swatch among the groups of assets. */
+    std::vector<AssetPlacement> m_placements;
 
     bool operator ==(const ColorSwatch&) const = default;
   };
@@ -66,6 +109,9 @@ namespace Rellu {
     /** The extra space after each paragraph. */
     double m_paragraph_spacing = 0;
 
+    /** The places of the style among the groups of assets. */
+    std::vector<AssetPlacement> m_placements;
+
     bool operator ==(const CharacterStyle& style) const;
   };
 
@@ -84,6 +130,12 @@ namespace Rellu {
     /** The character styles in library order. */
     std::vector<CharacterStyle> m_character_styles;
 
+    /** The groups of assets in library order. */
+    std::vector<AssetGroup> m_asset_groups;
+
+    /** The grids given to artboards. */
+    GridDefaults m_grid_defaults;
+
     bool operator ==(const Resources&) const = default;
   };
 
@@ -91,7 +143,8 @@ namespace Rellu {
     return m_id == style.m_id && m_name == style.m_name &&
       m_style == style.m_style &&
       equals(m_line_height, style.m_line_height) &&
-      equals(m_paragraph_spacing, style.m_paragraph_spacing);
+      equals(m_paragraph_spacing, style.m_paragraph_spacing) &&
+      m_placements == style.m_placements;
   }
 }
 

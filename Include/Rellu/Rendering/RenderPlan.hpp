@@ -43,7 +43,10 @@ namespace Rellu {
     TEXTURE,
 
     /** The alpha of a texture, multiplying the strip's color. */
-    TEXTURE_ALPHA
+    TEXTURE_ALPHA,
+
+    /** An angular gradient sweeping around a center. */
+    ANGULAR
   };
 
   /** Lists the pipelines a RenderPlan draws with. */

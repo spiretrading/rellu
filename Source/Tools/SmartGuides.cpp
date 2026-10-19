@@ -153,6 +153,10 @@ const std::vector<GuideLine>& SmartGuides::get_measured_lines() const {
   return m_measured_lines;
 }
 
+const std::vector<GuideLine>& SmartGuides::get_measured_edges() const {
+  return m_measured_edges;
+}
+
 const std::vector<GuideDistance>&
     SmartGuides::get_measured_distances() const {
   return m_measured_distances;
@@ -249,6 +253,7 @@ void SmartGuides::end() {
 void SmartGuides::measure(
     const std::optional<Rect>& selection, const Rect& target) {
   m_measured_lines.clear();
+  m_measured_edges.clear();
   m_measured_distances.clear();
   if(!selection) {
     return;
@@ -258,6 +263,20 @@ void SmartGuides::measure(
     auto to = get_along(target, is_x);
     auto from_across = get_across(*selection, is_x);
     auto to_across = get_across(target, is_x);
+    auto shared = std::vector<double>();
+    for(auto edge : {from.m_start, from.m_end}) {
+      if((std::abs(edge - to.m_start) <= TOLERANCE ||
+          std::abs(edge - to.m_end) <= TOLERANCE) &&
+          std::none_of(shared.begin(), shared.end(), [&] (const auto& other) {
+            return std::abs(other - edge) <= TOLERANCE;
+          })) {
+        shared.push_back(edge);
+        m_measured_edges.push_back(GuideLine(make_point(is_x, edge,
+          std::min(from_across.m_start, to_across.m_start)),
+          make_point(is_x, edge,
+            std::max(from_across.m_end, to_across.m_end))));
+      }
+    }
     auto is_overlapping = from_across.m_start <= to_across.m_end &&
       to_across.m_start <= from_across.m_end;
     auto across = get_middle(from_across, to_across);
@@ -296,6 +315,9 @@ void SmartGuides::draw(const Matrix& view, CanvasOverlay& overlay) const {
   }
   for(auto& line : m_measured_lines) {
     draw_line(view, line, DISTANCE_COLOR, overlay);
+  }
+  for(auto& line : m_measured_edges) {
+    draw_line(view, line, ALIGNMENT_COLOR, overlay);
   }
   for(auto& distance : m_distances) {
     draw_distance(view, distance, scale, overlay);
@@ -737,36 +759,18 @@ void SmartGuides::draw_distance(const Matrix& view,
   if(length == 0) {
     return;
   }
-  auto direction = (end - start) / length;
-  auto normal = Point(-direction.m_y, direction.m_x);
-  auto cap = normal * (CAP_LENGTH / 2);
   overlay.m_shapes.push_back(
-    make_overlay_line(start - cap, start + cap, LINE_WIDTH, DISTANCE_COLOR));
-  overlay.m_shapes.push_back(
-    make_overlay_line(end - cap, end + cap, LINE_WIDTH, DISTANCE_COLOR));
-  auto middle = interpolate(start, end, 0.5);
+    make_overlay_line(start, end, LINE_WIDTH, DISTANCE_COLOR));
   if(!(scale > 0)) {
-    overlay.m_shapes.push_back(
-      make_overlay_line(start, end, LINE_WIDTH, DISTANCE_COLOR));
     return;
   }
   auto label = get_label(format_distance(distance.get_length()), scale);
   auto size = Point(label->width(), label->height()) / scale;
-  auto get_extent = [&] (Point axis) {
-    return (std::abs(axis.m_x) * size.m_x + std::abs(axis.m_y) * size.m_y) /
-      2;
-  };
-  auto half = get_extent(direction);
-  auto center = middle;
-  if(length > 2 * half) {
-    overlay.m_shapes.push_back(make_overlay_line(
-      start, middle - direction * half, LINE_WIDTH, DISTANCE_COLOR));
-    overlay.m_shapes.push_back(make_overlay_line(
-      middle + direction * half, end, LINE_WIDTH, DISTANCE_COLOR));
+  auto center = interpolate(start, end, 0.5);
+  if(std::abs(end.m_x - start.m_x) >= std::abs(end.m_y - start.m_y)) {
+    center.m_y -= LABEL_OFFSET + FONT_ASCENT / 2;
   } else {
-    overlay.m_shapes.push_back(
-      make_overlay_line(start, end, LINE_WIDTH, DISTANCE_COLOR));
-    center = middle + normal * (get_extent(normal) + CAP_LENGTH / 2);
+    center.m_x -= LABEL_OFFSET + size.m_x / 2 - LABEL_PADDING;
   }
   overlay.m_images.push_back(OverlayImage(label, center - size / 2));
 }

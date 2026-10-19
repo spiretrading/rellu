@@ -7,7 +7,8 @@ using namespace Rellu;
 TextSelection::TextSelection(Document& document)
     : m_document(&document),
       m_anchor(0),
-      m_caret(0) {
+      m_caret(0),
+      m_last_style(get_default_text_style()) {
   m_subscription = document.subscribe([this] (const ChangeSet& changes) {
     on_change(changes);
   });
@@ -45,6 +46,32 @@ void TextSelection::set_pending_style(std::optional<TextStyle> style) {
   m_signal();
 }
 
+const std::optional<std::string>& TextSelection::get_pending_hyperlink() const {
+  return m_pending_hyperlink;
+}
+
+void TextSelection::set_pending_hyperlink(
+    std::optional<std::string> hyperlink) {
+  if(m_node.is_nil() || hyperlink == m_pending_hyperlink) {
+    return;
+  }
+  m_pending_hyperlink = std::move(hyperlink);
+  m_signal();
+}
+
+const TextStyle& TextSelection::get_last_style() const {
+  return m_last_style;
+}
+
+const ParagraphStyle& TextSelection::get_last_paragraph_style() const {
+  return m_last_paragraph_style;
+}
+
+void TextSelection::set_last_style(TextStyle style, ParagraphStyle paragraph) {
+  m_last_style = std::move(style);
+  m_last_paragraph_style = std::move(paragraph);
+}
+
 void TextSelection::set(
     const NodeId& node, std::size_t anchor, std::size_t caret) {
   auto size = std::size_t(0);
@@ -60,6 +87,7 @@ void TextSelection::set(
   m_anchor = anchor;
   m_caret = caret;
   m_pending_style = std::nullopt;
+  m_pending_hyperlink = std::nullopt;
   m_signal();
 }
 

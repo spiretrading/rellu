@@ -105,13 +105,7 @@ void Selection::select_all(const NodeId& container) {
   if(!container.is_nil() && !m_document->find(container)) {
     return;
   }
-  auto nodes = std::vector<NodeId>();
-  for(auto& child : m_document->get_children(container)) {
-    if(!m_document->get(child).m_header.m_is_locked) {
-      nodes.push_back(child);
-    }
-  }
-  select(nodes);
+  select(m_document->get_children(container));
 }
 
 void Selection::clear() {

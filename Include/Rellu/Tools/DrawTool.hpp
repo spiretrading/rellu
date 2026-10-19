@@ -1,5 +1,6 @@
 #ifndef RELLU_TOOLS_DRAW_TOOL_HPP
 #define RELLU_TOOLS_DRAW_TOOL_HPP
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -86,6 +87,7 @@ namespace Rellu {
     private:
       bool m_is_pressed;
       bool m_is_applied;
+      bool m_is_held;
       std::string m_prefix;
       Point m_press;
       Point m_start;
@@ -116,13 +118,57 @@ namespace Rellu {
 
   /**
    * Finds the container a node drawn from a point goes in, as Adobe XD
-   * does: the group entered, unless it is or lies within a repeat grid,
-   * stack or component instance, and otherwise the artboard given by
-   * find_drawing_parent.
+   * does: the container entered, such as a group, a stack, a component
+   * instance or a cell of a repeat grid, unless it is a repeat grid itself
+   * or it or a container of it is neither a group nor an artboard, and
+   * otherwise the artboard given by find_drawing_parent.
    * @param context The context drawn in.
    * @param point The point in document space.
    */
   NodeId find_drawing_parent(const ToolContext& context, Point point);
+
+  /**
+   * Keeps a node about to be drawn in a stack where it is drawn while the
+   * stack's other items make room for it, until the history's layout is
+   * released, when it takes the place in the stack its position calls for.
+   * @param context The context drawn in.
+   * @param parent The container the node is drawn in.
+   * @param id The node's id.
+   * @return <code>true</code> iff the <i>parent</i> is a stack and the node
+   *         is held.
+   */
+  bool hold_drawn_layout(
+    ToolContext& context, const NodeId& parent, const NodeId& id);
+
+  /**
+   * Returns the displacement that makes a node drawn in a stack take the
+   * place Adobe XD gives it once the history's layout is released: before
+   * the first other item ending past the point the drawing started at,
+   * along the stack's direction, or after every item.
+   * @param document The document drawn in.
+   * @param stack The container the node is drawn in.
+   * @param id The node's id.
+   * @param bounds The node's bounds in the <i>stack</i>'s space.
+   * @param point The point in document space the drawing started at.
+   * @return The displacement in the <i>stack</i>'s space, which is zero if
+   *         the <i>stack</i> is not a stack or has no other visible item.
+   */
+  Point get_stack_offset(const Document& document, const NodeId& stack,
+    const NodeId& id, const Rect& bounds, Point point);
+
+  /**
+   * Returns the position among a stack's children that gives a node drawn
+   * in the stack the place Adobe XD gives it, as get_stack_offset does.
+   * @param document The document drawn in.
+   * @param stack The container the node is drawn in.
+   * @param id The node's id.
+   * @param point The point in document space the drawing started at.
+   * @return The position among the <i>stack</i>'s children other than the
+   *         node, or <code>std::nullopt</code> if the <i>stack</i> is not a
+   *         stack or has no other visible item.
+   */
+  std::optional<std::size_t> get_stack_index(const Document& document,
+    const NodeId& stack, const NodeId& id, Point point);
 }
 
 #endif

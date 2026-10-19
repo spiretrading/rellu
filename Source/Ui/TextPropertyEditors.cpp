@@ -12,6 +12,11 @@
 using namespace Rellu;
 
 namespace {
+  constexpr auto MINIMUM_SIZE = 1.0;
+  constexpr auto MAXIMUM_SIZE = 1000.0;
+  constexpr auto MINIMUM_LETTER_SPACING = -299.0;
+  constexpr auto MAXIMUM_LETTER_SPACING = 9999.0;
+
   std::optional<double> get_number(const PropertyValue& value) {
     if(auto number = std::get_if<double>(&value); number &&
         std::isfinite(*number)) {
@@ -45,6 +50,29 @@ namespace {
       return nullptr;
     }
     return source();
+  }
+
+  const Text* find_first_text(
+      const Document& document, const std::vector<NodeId>& nodes) {
+    for(auto& id : nodes) {
+      if(auto node = document.find(id); node && node->get_text()) {
+        return node->get_text();
+      }
+    }
+    return nullptr;
+  }
+
+  void remember(const Document& document, const std::vector<NodeId>& nodes,
+      TextSelection* selection, const TextStyleEdit& edit) {
+    if(!selection || edit.m_hyperlink) {
+      return;
+    }
+    auto text = find_first_text(document, nodes);
+    auto style = find_text_style(document, nodes, selection);
+    if(text && style) {
+      selection->set_last_style(
+        edit_style(*style, edit), text->m_paragraph_style);
+    }
   }
 
   TextRange get_range(const Text& text, const TextSelection& selection) {
@@ -81,7 +109,7 @@ namespace {
   }
 
   PropertySetter make_style_setter(TextSelectionSource source,
-      TextLayouter layouter, auto make_edit) {
+      TextLayouter layouter, auto make_edit, std::string label = {}) {
     return [=] (const Document& document, const std::vector<NodeId>& nodes,
         const PropertyValue& value) -> std::unique_ptr<Command> {
       auto selection = find_selection(source);
@@ -90,7 +118,7 @@ namespace {
         return nullptr;
       }
       return make_text_style_command(
-        document, nodes, selection, std::move(*edit), layouter);
+        document, nodes, selection, std::move(*edit), layouter, label);
     };
   }
 
@@ -103,7 +131,8 @@ namespace {
       });
   }
 
-  PropertySetter make_paragraph_setter(TextLayouter layouter, auto make_edit) {
+  PropertySetter make_paragraph_setter(TextSelectionSource source,
+      TextLayouter layouter, auto make_edit) {
     return [=] (const Document& document, const std::vector<NodeId>& nodes,
         const PropertyValue& value) -> std::unique_ptr<Command> {
       if(nodes.empty()) {
@@ -112,6 +141,13 @@ namespace {
       auto edit = make_edit(value);
       if(!edit) {
         return nullptr;
+      }
+      if(auto selection = find_selection(source)) {
+        if(auto text = find_first_text(document, nodes)) {
+          selection->set_last_style(
+            *find_text_style(document, nodes, selection),
+            edit_paragraph_style(*text, *edit).m_paragraph_style);
+        }
       }
       return std::make_unique<SetParagraphStyleCommand>(
         nodes, std::move(*edit), layouter);
@@ -138,10 +174,12 @@ namespace {
   }
 
   PropertyEditor make_editor(PropertySetter setter,
-      std::optional<double> minimum = std::nullopt) {
+      std::optional<double> minimum = std::nullopt,
+      std::optional<double> maximum = std::nullopt) {
     auto editor = PropertyEditor();
     editor.m_setter = std::move(setter);
     editor.m_minimum = minimum;
+    editor.m_maximum = maximum;
     return editor;
   }
 }
@@ -162,7 +200,7 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
       auto font = style->m_font;
       font.m_family = family->trimmed().toStdString();
       return make_font_edit(*library, std::move(font));
-    })));
+    }, "Font Family")));
   editors.add("text.style", make_editor(make_style_setter(selection,
     layouter, [library = &library] (const Document& document,
         const std::vector<NodeId>& nodes, const TextSelection* selection,
@@ -175,7 +213,7 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
       auto font = style->m_font;
       font.m_style = name->trimmed().toStdString();
       return make_font_edit(*library, std::move(font));
-    })));
+    }, "Font Style")));
   editors.add("text.size", make_editor(make_simple_style_setter(selection,
     layouter, [] (const PropertyValue& value) -> std::optional<TextStyleEdit> {
       auto size = get_number(value);
@@ -183,9 +221,9 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
         return std::nullopt;
       }
       auto edit = TextStyleEdit();
-      edit.m_size = *size;
+      edit.m_size = std::min(*size, MAXIMUM_SIZE);
       return edit;
-    }), 1.0));
+    }), MINIMUM_SIZE, MAXIMUM_SIZE));
   editors.add("text.letter_spacing", make_editor(make_simple_style_setter(
     selection, layouter,
     [] (const PropertyValue& value) -> std::optional<TextStyleEdit> {
@@ -194,9 +232,10 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
         return std::nullopt;
       }
       auto edit = TextStyleEdit();
-      edit.m_letter_spacing = std::round(*spacing);
+      edit.m_letter_spacing = std::clamp(
+        std::round(*spacing), MINIMUM_LETTER_SPACING, MAXIMUM_LETTER_SPACING);
       return edit;
-    })));
+    }), MINIMUM_LETTER_SPACING, MAXIMUM_LETTER_SPACING));
   editors.add("text.color", make_editor(make_simple_style_setter(selection,
     layouter, [] (const PropertyValue& value) -> std::optional<TextStyleEdit> {
       auto color = std::get_if<Color>(&value);
@@ -258,10 +297,12 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
         return std::nullopt;
       }
       auto edit = TextStyleEdit();
-      edit.m_hyperlink = url->trimmed().toStdString();
+      edit.m_hyperlink = url->toStdString();
+      edit.m_is_underlined = !url->isEmpty();
       return edit;
     })));
-  editors.add("text.alignment", make_editor(make_paragraph_setter(layouter,
+  editors.add("text.alignment", make_editor(make_paragraph_setter(selection,
+    layouter,
     [] (const PropertyValue& value) -> std::optional<ParagraphStyleEdit> {
       auto index = get_index(value, 3);
       if(!index) {
@@ -271,7 +312,8 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
       edit.m_alignment = static_cast<TextAlignment>(*index);
       return edit;
     })));
-  editors.add("text.line_height", make_editor(make_paragraph_setter(layouter,
+  editors.add("text.line_height", make_editor(make_paragraph_setter(selection,
+    layouter,
     [] (const PropertyValue& value) -> std::optional<ParagraphStyleEdit> {
       auto height = get_number(value);
       if(!height) {
@@ -286,7 +328,7 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
       return edit;
     }), 0.0));
   editors.add("text.paragraph_spacing", make_editor(make_paragraph_setter(
-    layouter,
+    selection, layouter,
     [] (const PropertyValue& value) -> std::optional<ParagraphStyleEdit> {
       auto spacing = get_number(value);
       if(!spacing || *spacing < 0) {
@@ -338,27 +380,57 @@ std::optional<TextStyle> Rellu::find_text_style(const Document& document,
 
 std::unique_ptr<Command> Rellu::make_text_style_command(
     const Document& document, const std::vector<NodeId>& nodes,
-    TextSelection* selection, TextStyleEdit edit, TextLayouter layouter) {
+    TextSelection* selection, TextStyleEdit edit, TextLayouter layouter,
+    std::string label) {
   if(nodes.empty()) {
     return nullptr;
   }
+  remember(document, nodes, selection, edit);
   if(is_edited(document, nodes, selection)) {
     auto& text = *document.get(nodes.front()).get_text();
     if(is_caret(text, *selection)) {
-      if(!edit.m_hyperlink) {
-        selection->set_pending_style(edit_style(
-          *find_text_style(document, nodes, selection), edit));
+      selection->set_pending_style(edit_style(
+        *find_text_style(document, nodes, selection), edit));
+      if(edit.m_hyperlink) {
+        selection->set_pending_hyperlink(*edit.m_hyperlink);
       }
       return nullptr;
     }
     auto range = get_range(text, *selection);
     if(range.m_start != range.m_end) {
-      return std::make_unique<SetTextStyleCommand>(
-        nodes.front(), range, std::move(edit), std::move(layouter));
+      return std::make_unique<SetTextStyleCommand>(nodes.front(), range,
+        std::move(edit), std::move(layouter), std::move(label));
     }
   }
   return std::make_unique<SetTextStyleCommand>(
-    nodes, std::move(edit), std::move(layouter));
+    nodes, std::move(edit), std::move(layouter), std::move(label));
+}
+
+std::unique_ptr<Command> Rellu::make_text_style_command(
+    const Document& document, const std::vector<NodeId>& nodes,
+    TextSelection* selection, std::string label, TextStyleEditor editor,
+    TextLayouter layouter) {
+  if(nodes.empty()) {
+    return nullptr;
+  }
+  if(auto style = find_text_style(document, nodes, selection)) {
+    remember(document, nodes, selection, editor(*style));
+  }
+  if(is_edited(document, nodes, selection)) {
+    auto& text = *document.get(nodes.front()).get_text();
+    if(is_caret(text, *selection)) {
+      auto style = *find_text_style(document, nodes, selection);
+      selection->set_pending_style(edit_style(style, editor(style)));
+      return nullptr;
+    }
+    auto range = get_range(text, *selection);
+    if(range.m_start != range.m_end) {
+      return std::make_unique<RestyleTextCommand>(nodes.front(), range,
+        std::move(label), std::move(editor), std::move(layouter));
+    }
+  }
+  return std::make_unique<RestyleTextCommand>(nodes, std::move(label),
+    std::move(editor), std::move(layouter));
 }
 
 TextLayouter Rellu::make_text_layouter(const FontLibrary& library) {
@@ -377,6 +449,17 @@ QStringList Rellu::list_font_families(const FontLibrary& library) {
     return QString::compare(left, right, Qt::CaseInsensitive) < 0;
   });
   return list;
+}
+
+bool Rellu::is_valid_hyperlink(const QString& url) {
+  auto start = qsizetype(0);
+  while(start != url.size() && (url[start].isSpace() || url[start] == ',' ||
+      url[start] == '#')) {
+    ++start;
+  }
+  auto trimmed = url.mid(start).trimmed();
+  return trimmed.isEmpty() || trimmed.startsWith("https://") ||
+    trimmed.startsWith("mailto:");
 }
 
 QStringList Rellu::list_font_styles(

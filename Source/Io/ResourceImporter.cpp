@@ -142,6 +142,108 @@ namespace {
     return style;
   }
 
+  std::vector<std::string> read_strings(const QJsonValue& value) {
+    auto strings = std::vector<std::string>();
+    for(auto entry : value.toArray()) {
+      if(entry.isString()) {
+        strings.push_back(to_std_string(entry.toString()));
+      }
+    }
+    return strings;
+  }
+
+  std::vector<AssetPlacement> read_placements(const XdObject& element) {
+    auto placements = std::vector<AssetPlacement>();
+    auto data = element.get_json().value("assetGroupData"_L1).toObject();
+    for(auto entry = data.begin(); entry != data.end(); ++entry) {
+      if(entry->isString()) {
+        placements.push_back(AssetPlacement(to_std_string(entry.key()),
+          to_std_string(entry->toString())));
+      }
+    }
+    return placements;
+  }
+
+  void import_groups(const XdObject& library, XdImport& import) {
+    auto data = library.get_json().value("groupData"_L1).toObject();
+    auto groups = std::vector<AssetGroup>();
+    for(auto entry : data.value("groups"_L1).toArray()) {
+      auto json = entry.toObject();
+      auto group = AssetGroup();
+      group.m_id = to_std_string(json.value("id"_L1).toString());
+      group.m_name = to_std_string(json.value("name"_L1).toString());
+      group.m_order = to_std_string(json.value("order"_L1).toString());
+      group.m_parent = to_std_string(json.value("parentId"_L1).toString());
+      group.m_children = read_strings(json.value("childrenIds"_L1));
+      group.m_elements = read_strings(json.value("elementIds"_L1));
+      groups.push_back(std::move(group));
+    }
+    if(!groups.empty()) {
+      import.get_transaction().set_asset_groups(std::move(groups));
+    }
+  }
+
+  Color read_grid_color(const QJsonValue& value, const Color& fallback) {
+    if(auto color = to_argb_color(value.toObject().value("value"_L1).toDouble(
+        -1))) {
+      return *color;
+    }
+    return fallback;
+  }
+
+  Margins read_grid_margins(const QJsonObject& json) {
+    return Margins(json.value("marginTop"_L1).toDouble(),
+      json.value("marginRight"_L1).toDouble(),
+      json.value("marginBottom"_L1).toDouble(),
+      json.value("marginLeft"_L1).toDouble());
+  }
+
+  GridDefaults read_grid_defaults(const QJsonObject& json) {
+    auto defaults = GridDefaults();
+    auto none = Color(0, 0, 0, 0);
+    if(auto grid_json = json.value("defaultGrid"_L1); grid_json.isObject()) {
+      auto object = grid_json.toObject();
+      auto grid = LayoutGrid();
+      grid.m_type = GridType::LAYOUT;
+      grid.m_square_row_color =
+        read_grid_color(object.value("rowStroke"_L1), none);
+      grid.m_square_column_color =
+        read_grid_color(object.value("columnStroke"_L1), none);
+      grid.m_square_size = Size(object.value("columnSpacing"_L1).toDouble(),
+        object.value("rowSpacing"_L1).toDouble());
+      grid.m_default_width =
+        object.value("defaultLayoutWidth"_L1).toDouble();
+      grid.m_column_count = object.value("columns"_L1).toInt();
+      grid.m_gutter = object.value("gutter"_L1).toDouble();
+      grid.m_margins = read_grid_margins(object);
+      grid.m_row_color =
+        read_grid_color(object.value("layoutRowStroke"_L1), none);
+      grid.m_column_color =
+        read_grid_color(object.value("layoutColumnStroke"_L1), none);
+      defaults.m_grid = std::move(grid);
+    }
+    if(auto list = json.value("layoutOverrides"_L1); list.isArray()) {
+      auto overrides = std::vector<GridOverride>();
+      for(auto entry : list.toArray()) {
+        auto object = entry.toObject();
+        auto grid = GridOverride();
+        if(auto width = object.value("media"_L1).toObject().value(
+            "maxWidth"_L1); width.isDouble()) {
+          grid.m_maximum_width = width.toDouble();
+        }
+        grid.m_column_count = object.value("columns"_L1).toInt();
+        grid.m_gutter = object.value("gutter"_L1).toDouble();
+        grid.m_margins = read_grid_margins(object);
+        grid.m_row_color = read_grid_color(object.value("rowStroke"_L1), none);
+        grid.m_column_color =
+          read_grid_color(object.value("columnStroke"_L1), none);
+        overrides.push_back(std::move(grid));
+      }
+      defaults.m_overrides = std::move(overrides);
+    }
+    return defaults;
+  }
+
   void import_element(XdObject& element, XdImport& import,
       XdResourceIds& ids) {
     auto type = element.get_json().value("type"_L1).toString();
@@ -165,14 +267,14 @@ namespace {
         return;
       }
       add_swatch(import, ids, ColorSwatch(id, name, *color,
-        std::vector<GradientStop>()));
+        std::vector<GradientStop>(), read_placements(element)));
     } else if(type == "application/vnd.adobe.element.gradient+dcx"_L1) {
       auto content = representation->get_array("content"_L1);
       if(!content) {
         return;
       }
       auto swatch = ColorSwatch(id, name, Color(0, 0, 0, 1),
-        std::vector<GradientStop>());
+        std::vector<GradientStop>(), read_placements(element));
       for(auto i = std::size_t(0); i != content->get_size(); ++i) {
         auto stop = content->get_object(i);
         if(!stop) {
@@ -198,6 +300,7 @@ namespace {
       auto style = read_character_style(*content);
       style.m_id = id;
       style.m_name = name;
+      style.m_placements = read_placements(element);
       if(ids.m_character_styles.contains(id)) {
         return;
       }
@@ -219,6 +322,7 @@ namespace {
 
   void import_library(XdObject& library, XdImport& import,
       XdResourceIds& ids) {
+    import_groups(library, import);
     library.ignore({"version"_L1, "isStickerSheet"_L1, "hashedMetadata"_L1,
       "groupData"_L1});
     if(auto elements = library.get_array("elements"_L1)) {
@@ -266,6 +370,13 @@ void Rellu::add_resource_importer(XdImporter& importer) {
     }
     if(auto library = ux->get_object("documentLibrary"_L1)) {
       import_library(*library, import, ids);
+    }
+    if(auto defaults = ux->get_json().value("gridDefaults"_L1);
+        defaults.isObject()) {
+      auto grid_defaults = read_grid_defaults(defaults.toObject());
+      if(grid_defaults != GridDefaults()) {
+        import.get_transaction().set_grid_defaults(std::move(grid_defaults));
+      }
     }
     ux->ignore({"gridDefaults"_L1, "symbolsMetadata"_L1,
       "artboardGuidesGlobalSettings"_L1, "colorProfile"_L1});

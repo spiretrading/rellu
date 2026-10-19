@@ -8,6 +8,7 @@
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Command.hpp"
 #include "Rellu/Geometry/Point.hpp"
+#include "Rellu/Geometry/Rect.hpp"
 
 namespace Rellu {
 
@@ -171,6 +172,25 @@ namespace Rellu {
       std::vector<NodeId> m_nodes;
   };
 
+  /** Lists the ways a DuplicateCommand makes copies. */
+  enum class DuplicateMode : unsigned char {
+
+    /** Exact copies, with their names and every interaction they own. */
+    CLONE,
+
+    /**
+     * Copies named as Adobe XD names duplicates, owning only the
+     * interactions within component instances, as in the design workspace.
+     */
+    DESIGN,
+
+    /**
+     * Copies named as Adobe XD names duplicates, with every interaction
+     * they own, as in the prototype workspace.
+     */
+    PROTOTYPE
+  };
+
   /**
    * Copies nodes with their descendants, the state trees of the component
    * instances among them and the interactions they own, labelled Duplicate.
@@ -182,17 +202,38 @@ namespace Rellu {
     public:
 
       /**
-       * Constructs a DuplicateCommand placing copies over their originals.
+       * Constructs a DuplicateCommand placing copies over their originals,
+       * as Adobe XD duplicates in the design workspace.
        * @param nodes The nodes to copy, on the canvas or in a container.
        */
       explicit DuplicateCommand(std::vector<NodeId> nodes);
 
       /**
-       * Constructs a DuplicateCommand.
+       * Constructs a DuplicateCommand duplicating as Adobe XD does in the
+       * design workspace.
        * @param nodes The nodes to copy, on the canvas or in a container.
        * @param offset The displacement of the copies in document space.
        */
       DuplicateCommand(std::vector<NodeId> nodes, Point offset);
+
+      /**
+       * Constructs a DuplicateCommand.
+       * @param nodes The nodes to copy, on the canvas or in a container.
+       * @param offset The displacement of the copies in document space.
+       * @param mode How the copies are made.
+       */
+      DuplicateCommand(
+        std::vector<NodeId> nodes, Point offset, DuplicateMode mode);
+
+      /**
+       * Constructs a DuplicateCommand placing copies of artboards where
+       * Adobe XD's Duplicate places them.
+       * @param nodes The nodes to copy, on the canvas or in a container.
+       * @param view The region of the document in view.
+       * @param mode How the copies are made.
+       */
+      DuplicateCommand(
+        std::vector<NodeId> nodes, const Rect& view, DuplicateMode mode);
 
       /** Returns the copies made by the last application, in z order. */
       const std::vector<NodeId>& get_copies() const;
@@ -210,6 +251,8 @@ namespace Rellu {
     private:
       std::vector<NodeId> m_nodes;
       Point m_offset;
+      DuplicateMode m_mode;
+      std::optional<Rect> m_view;
       std::vector<NodeId> m_copies;
       std::unordered_map<NodeId, NodeId> m_mapping;
   };

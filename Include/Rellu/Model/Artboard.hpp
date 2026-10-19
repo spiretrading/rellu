@@ -60,6 +60,47 @@ namespace Rellu {
     bool operator ==(const LayoutGrid& grid) const;
   };
 
+  /** The layout grid Adobe XD gives artboards up to a width. */
+  struct GridOverride {
+
+    /** The widest artboard the grid applies to, or none for no limit. */
+    std::optional<double> m_maximum_width;
+
+    /** The number of columns. */
+    int m_column_count = 0;
+
+    /** The space between columns. */
+    double m_gutter = 0;
+
+    /** The space around the columns. */
+    Margins m_margins;
+
+    /** The color of the columns. */
+    Color m_column_color = Color(0, 0, 0, 0);
+
+    /** The color of the rows. */
+    Color m_row_color = Color(0, 0, 0, 0);
+
+    bool operator ==(const GridOverride&) const = default;
+  };
+
+  /** The grids Adobe XD gives artboards, as set by Make Default. */
+  struct GridDefaults {
+
+    /**
+     * The grid made the default, whose square grid applies to new grids, or
+     * none.
+     */
+    std::optional<LayoutGrid> m_grid;
+
+    /**
+     * The layout grids by artboard width, or none for Adobe XD's own.
+     */
+    std::optional<std::vector<GridOverride>> m_overrides;
+
+    bool operator ==(const GridDefaults&) const = default;
+  };
+
   /** A guide line on an artboard. */
   struct Guide {
 

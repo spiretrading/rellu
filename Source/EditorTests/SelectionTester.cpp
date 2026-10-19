@@ -115,8 +115,8 @@ TEST_SUITE("Selection") {
       header.m_is_visible = false;
     });
     selection.select_all(scene.m_artboard);
-    REQUIRE(selection.get_nodes() ==
-      std::vector{scene.m_rectangle, scene.m_group, scene.m_instance});
+    REQUIRE(selection.get_nodes() == std::vector{scene.m_rectangle,
+      scene.m_group, scene.m_mask, scene.m_instance});
     selection.select_all(NodeId());
     REQUIRE(selection.get_nodes() ==
       std::vector{scene.m_artboard, scene.m_loose});

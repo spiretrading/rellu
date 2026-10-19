@@ -43,7 +43,10 @@ TEST_SUITE("ResourceImporter") {
       "value": {"r": 255, "g": 187, "b": 0}}, {"mode": "RGB", "value": {
       "r": 0, "g": 102, "b": 255}, "alpha": 0.5}], "documentLibrary": {
       "version": 5, "isStickerSheet": false, "hashedMetadata": {},
-      "groupData": {"groups": []}, "elements": [{
+      "groupData": {"groups": [{"name": "Brand", "id": "g1", "order": "an",
+      "parentId": "groupColors", "childrenIds": [],
+      "elementIds": ["12c4c8f8-9852-4ac8-95a8-45b41e9a919a"]}]},
+      "elements": [{
       "id": "95cac2c3-b0fc-4791-96a9-b066dd1742a5",
       "type": "application/vnd.adobe.element.color+dcx", "name": "Gray",
       "created": 1, "modified": 2, "displayName": null, "index": 4,
@@ -53,6 +56,7 @@ TEST_SUITE("ResourceImporter") {
       "content": {"mode": "RGB", "value": {"r": 245, "g": 245, "b": 245}}}]},
       {"id": "12c4c8f8-9852-4ac8-95a8-45b41e9a919a",
       "type": "application/vnd.adobe.element.gradient+dcx", "name": "Fade",
+      "assetGroupData": {"g1": "n"},
       "representations": [{"content": [{"color": {"mode": "RGB", "value": {
       "r": 255, "g": 0, "b": 0}}, "stop": 0}, {"color": {"mode": "RGB",
       "value": {"r": 0, "g": 0, "b": 255}}, "stop": 1}]}]}]},
@@ -67,11 +71,18 @@ TEST_SUITE("ResourceImporter") {
     REQUIRE(swatches[0].m_id != swatches[1].m_id);
     REQUIRE(swatches[2] == ColorSwatch(
       *parse_node_id("95cac2c3-b0fc-4791-96a9-b066dd1742a5"), "Gray",
-      make_color(245, 245, 245), std::vector<GradientStop>()));
+      make_color(245, 245, 245), std::vector<GradientStop>(),
+      std::vector{AssetPlacement("groupColors", "b")}));
     REQUIRE(swatches[3].m_name == "Fade");
     REQUIRE(swatches[3].m_color == Color(1, 0, 0, 1));
     REQUIRE(swatches[3].m_gradient == std::vector<GradientStop>({
       GradientStop(0, Color(1, 0, 0, 1)), GradientStop(1, Color(0, 0, 1, 1))}));
+    REQUIRE(swatches[3].m_placements ==
+      std::vector{AssetPlacement("g1", "n")});
+    REQUIRE(document.get_resources().m_asset_groups == std::vector{
+      AssetGroup("g1", "Brand", "an", "groupColors",
+        std::vector<std::string>(),
+        std::vector<std::string>({"12c4c8f8-9852-4ac8-95a8-45b41e9a919a"}))});
   }
 
   TEST_CASE("character_styles") {

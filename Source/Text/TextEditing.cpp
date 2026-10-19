@@ -18,7 +18,7 @@ namespace {
 
   bool is_separator(char16_t character) {
     return character == u'\n' || character == u'\r' || character == u'\v' ||
-      character == u' ' || character == u' ';
+      character == u'\u2028' || character == u'\u2029';
   }
 
   bool is_mark(char16_t character) {
@@ -299,13 +299,10 @@ std::pair<std::size_t, std::size_t> Rellu::find_word(
     std::u16string_view content, std::size_t index) {
   index = std::min(index, content.size());
   auto position = index;
-  auto is_at_word = position < content.size() &&
-    get_kind(content[position]) == CharacterKind::WORD;
-  if(position > 0 && !is_at_word &&
+  if(position > 0 &&
       get_kind(content[position - 1]) != CharacterKind::SEPARATOR &&
       (position == content.size() ||
-        get_kind(content[position]) == CharacterKind::SEPARATOR ||
-        get_kind(content[position - 1]) == CharacterKind::WORD)) {
+        get_kind(content[position]) == CharacterKind::SEPARATOR)) {
     --position;
   }
   if(position >= content.size() ||
@@ -320,6 +317,12 @@ std::pair<std::size_t, std::size_t> Rellu::find_word(
   auto end = position + 1;
   while(end < content.size() && get_kind(content[end]) == kind) {
     ++end;
+  }
+  if(kind != CharacterKind::SPACE) {
+    while(end < content.size() &&
+        get_kind(content[end]) == CharacterKind::SPACE) {
+      ++end;
+    }
   }
   return std::pair(start, end);
 }

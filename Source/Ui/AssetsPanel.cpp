@@ -2,13 +2,13 @@
 #include <cmath>
 #include <exception>
 #include <memory>
+#include <tuple>
 #include <utility>
 #include <QApplication>
-#include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QDrag>
-#include <QFormLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -24,6 +24,7 @@
 #include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
+#include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/StyleCommands.hpp"
 #include "Rellu/Ui/AssetsPanel.hpp"
@@ -38,8 +39,38 @@ namespace {
   constexpr auto ROW_HEIGHT = 38;
   constexpr auto MAXIMUM_CHECKED_CHANGES = 4096;
   constexpr auto MAXIMUM_DEPTH = 256;
+  constexpr auto GROUP_INDENT = 16;
   const auto EM_DASH = QString(QChar(0x2014));
   const auto HIGHLIGHT = QString("background: #E0F0FA;");
+
+  std::string get_section_id(AssetSection section) {
+    if(section == AssetSection::COLORS) {
+      return COLOR_SECTION;
+    }
+    return CHARACTER_STYLE_SECTION;
+  }
+
+  class GroupRow : public QWidget {
+    public:
+      std::function<void ()> m_double_click;
+      std::function<QMenu* (QWidget*)> m_menu;
+
+    protected:
+      void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if(event->button() == Qt::LeftButton && m_double_click) {
+          m_double_click();
+        }
+      }
+
+      void contextMenuEvent(QContextMenuEvent* event) override {
+        if(!m_menu) {
+          return;
+        }
+        auto menu = m_menu(this);
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        menu->popup(event->globalPos());
+      }
+  };
 
   QColor to_qcolor(const Color& color) {
     return QColor::fromRgbF(static_cast<float>(color.m_red),
@@ -192,21 +223,6 @@ namespace {
       arg(to_byte(color.m_blue), 2, 16, QChar('0')).toUpper();
   }
 
-  std::optional<Color> parse_hex(QString text, double alpha) {
-    text = text.trimmed();
-    if(text.startsWith('#')) {
-      text.remove(0, 1);
-    }
-    auto is_valid = false;
-    auto rgb = text.toUInt(&is_valid, 16);
-    if(!is_valid || text.size() != 6) {
-      return std::nullopt;
-    }
-    return make_color(static_cast<int>((rgb >> 16) & 0xFF),
-      static_cast<int>((rgb >> 8) & 0xFF), static_cast<int>(rgb & 0xFF),
-      alpha);
-  }
-
   class ComponentRow : public QWidget {
     public:
       ComponentRow(AssetsPanel& panel, const ComponentId& component)
@@ -264,57 +280,136 @@ class AssetsPanel::StyleEditor : public QFrame {
     using CloseHandler = std::function<void ()>;
 
     StyleEditor(CharacterStyle style, const QStringList& families,
+        std::function<QStringList (const QString&)> styles,
         ChangeHandler change, CloseHandler close, QWidget* parent)
         : QFrame(parent, Qt::Popup),
           m_style(std::move(style)),
+          m_styles(std::move(styles)),
           m_change(std::move(change)),
           m_close(std::move(close)),
           m_family(new QComboBox()),
-          m_font_style(new QLineEdit()),
+          m_font_style(new QComboBox()),
           m_size(new QLineEdit()),
           m_letter_spacing(new QLineEdit()),
           m_line_height(new QLineEdit()),
           m_paragraph_spacing(new QLineEdit()),
-          m_color(new QLineEdit()),
-          m_underline(new QCheckBox("Underline")),
-          m_strikethrough(new QCheckBox("Strikethrough")) {
+          m_color(new QToolButton()),
+          m_picker(new ColorPicker(this)) {
       setObjectName("character_style_editor");
       setAttribute(Qt::WA_DeleteOnClose);
       setAttribute(Qt::WA_StyledBackground);
       setStyleSheet("QFrame#character_style_editor { background: #FFFFFF; "
         "border: 1px solid #D0D0D0; }");
       setFixedWidth(260);
-      auto layout = new QFormLayout(this);
+      auto layout = new QVBoxLayout(this);
       layout->setContentsMargins(16, 14, 16, 14);
       layout->setSpacing(10);
       m_family->setObjectName("underlined_choice");
       m_family->setEditable(true);
       m_family->addItems(families);
       m_family->setAccessibleName("Font");
-      layout->addRow("Font", m_family);
-      auto fields = std::vector<std::pair<QLineEdit*, const char*>>({
-        std::pair(m_font_style, "Font Style"), std::pair(m_size, "Font Size"),
-        std::pair(m_letter_spacing, "Character Spacing"),
-        std::pair(m_line_height, "Line Spacing"),
-        std::pair(m_paragraph_spacing, "Paragraph Spacing"),
-        std::pair(m_color, "Color")});
-      for(auto& field : fields) {
-        field.first->setObjectName("text_field");
-        field.first->setAccessibleName(field.second);
-        layout->addRow(field.second, field.first);
-        QObject::connect(field.first, &QLineEdit::editingFinished, this,
-          [this] {
-            commit();
-          });
+      layout->addWidget(m_family);
+      auto row = new QWidget();
+      auto row_layout = new QHBoxLayout(row);
+      row_layout->setContentsMargins(0, 0, 0, 0);
+      row_layout->setSpacing(14);
+      m_size->setObjectName("number_field");
+      m_size->setAccessibleName("Font Size");
+      m_size->setFixedWidth(48);
+      row_layout->addWidget(m_size);
+      m_font_style->setObjectName("underlined_choice");
+      m_font_style->setEditable(true);
+      m_font_style->setAccessibleName("Font Style");
+      row_layout->addWidget(m_font_style, 1);
+      layout->addWidget(row);
+      auto spacing = new QWidget();
+      auto spacing_layout = new QHBoxLayout(spacing);
+      spacing_layout->setContentsMargins(0, 0, 0, 0);
+      spacing_layout->setSpacing(10);
+      for(auto [field, glyph, name] : {
+          std::tuple(m_letter_spacing, Glyph::CHARACTER_SPACING,
+            "Character Spacing"),
+          std::tuple(m_line_height, Glyph::LINE_SPACING, "Line Spacing"),
+          std::tuple(m_paragraph_spacing, Glyph::PARAGRAPH_SPACING,
+            "Paragraph Spacing")}) {
+        auto icon = new QLabel();
+        icon->setPixmap(get_icon(glyph).pixmap(QSize(18, 18)));
+        spacing_layout->addWidget(icon);
+        field->setObjectName("number_field");
+        field->setAccessibleName(name);
+        spacing_layout->addWidget(field, 1);
       }
-      m_line_height->setPlaceholderText("Auto");
-      layout->addRow(m_underline);
-      layout->addRow(m_strikethrough);
-      for(auto box : {m_underline, m_strikethrough}) {
-        QObject::connect(box, &QCheckBox::clicked, this, [this] {
+      layout->addWidget(spacing);
+      for(auto field : {m_size, m_letter_spacing, m_line_height,
+          m_paragraph_spacing}) {
+        QObject::connect(field, &QLineEdit::editingFinished, this, [this] {
           commit();
         });
       }
+      m_line_height->setPlaceholderText("Auto");
+      auto toggles = new QWidget();
+      auto toggles_layout = new QHBoxLayout(toggles);
+      toggles_layout->setContentsMargins(0, 0, 0, 0);
+      toggles_layout->setSpacing(2);
+      for(auto [glyph, name, transform] : {
+          std::tuple(Glyph::UPPERCASE, "Uppercase", TextTransform::UPPERCASE),
+          std::tuple(Glyph::LOWERCASE, "Lowercase", TextTransform::LOWERCASE),
+          std::tuple(
+            Glyph::TITLE_CASE, "Title Case", TextTransform::TITLE_CASE)}) {
+        auto button = make_toggle(glyph, name);
+        toggles_layout->addWidget(button);
+        m_transforms.emplace_back(transform, button);
+        QObject::connect(button, &QToolButton::clicked, this,
+          [this, transform] {
+            auto& current = m_style.m_style.m_transform;
+            set_transform(current == transform ? TextTransform::NONE :
+              transform);
+          });
+      }
+      toggles_layout->addSpacing(8);
+      for(auto [glyph, name, script] : {
+          std::tuple(
+            Glyph::SUPERSCRIPT, "Superscript", TextScript::SUPERSCRIPT),
+          std::tuple(Glyph::SUBSCRIPT, "Subscript", TextScript::SUBSCRIPT)}) {
+        auto button = make_toggle(glyph, name);
+        toggles_layout->addWidget(button);
+        m_scripts.emplace_back(script, button);
+        QObject::connect(button, &QToolButton::clicked, this, [this, script] {
+          auto& current = m_style.m_style.m_script;
+          set_script(current == script ? TextScript::NORMAL : script);
+        });
+      }
+      toggles_layout->addSpacing(8);
+      m_underline = make_toggle(Glyph::UNDERLINE, "Underline");
+      m_strikethrough = make_toggle(Glyph::STRIKETHROUGH, "Strikethrough");
+      for(auto button : {m_underline, m_strikethrough}) {
+        toggles_layout->addWidget(button);
+        QObject::connect(button, &QToolButton::clicked, this, [this] {
+          commit();
+        });
+      }
+      toggles_layout->addStretch(1);
+      layout->addWidget(toggles);
+      m_color->setObjectName("swatch");
+      m_color->setAccessibleName("Color");
+      m_color->setFocusPolicy(Qt::NoFocus);
+      m_color->setAutoRaise(true);
+      m_color->setIconSize(QSize(30, 18));
+      m_color->setFixedSize(34, 22);
+      layout->addWidget(m_color);
+      m_picker->set_gradient_enabled(false);
+      m_picker->set_change_handler([this] (const Fill& fill) {
+        if(auto solid = std::get_if<SolidFill>(&fill)) {
+          auto style = m_style;
+          style.m_style.m_color = solid->m_color;
+          apply(std::move(style));
+        }
+      });
+      QObject::connect(m_color, &QToolButton::clicked, this, [this] {
+        m_picker->set_fill(SolidFill(m_style.m_style.m_color));
+        m_picker->popup(QRect(m_color->mapToGlobal(QPoint(0, 0)),
+          m_color->size()));
+      });
       QObject::connect(m_family, &QComboBox::activated, this, [this] {
         commit();
       });
@@ -323,7 +418,19 @@ class AssetsPanel::StyleEditor : public QFrame {
           commit();
         });
       }
+      QObject::connect(m_font_style, &QComboBox::activated, this, [this] {
+        commit();
+      });
+      if(auto line = m_font_style->lineEdit()) {
+        QObject::connect(line, &QLineEdit::editingFinished, this, [this] {
+          commit();
+        });
+      }
       load();
+    }
+
+    ColorPicker& get_color_picker() {
+      return *m_picker;
     }
 
   protected:
@@ -344,30 +451,95 @@ class AssetsPanel::StyleEditor : public QFrame {
 
   private:
     CharacterStyle m_style;
+    std::function<QStringList (const QString&)> m_styles;
     ChangeHandler m_change;
     CloseHandler m_close;
     QComboBox* m_family;
-    QLineEdit* m_font_style;
+    QComboBox* m_font_style;
     QLineEdit* m_size;
     QLineEdit* m_letter_spacing;
     QLineEdit* m_line_height;
     QLineEdit* m_paragraph_spacing;
-    QLineEdit* m_color;
-    QCheckBox* m_underline;
-    QCheckBox* m_strikethrough;
+    std::vector<std::pair<TextTransform, QToolButton*>> m_transforms;
+    std::vector<std::pair<TextScript, QToolButton*>> m_scripts;
+    QToolButton* m_underline;
+    QToolButton* m_strikethrough;
+    QToolButton* m_color;
+    ColorPicker* m_picker;
+
+    QToolButton* make_toggle(Glyph glyph, const QString& name) {
+      auto button = new QToolButton();
+      button->setObjectName("icon_toggle");
+      button->setAutoRaise(true);
+      button->setFocusPolicy(Qt::NoFocus);
+      button->setCheckable(true);
+      button->setIcon(get_icon(glyph));
+      button->setIconSize(QSize(18, 18));
+      button->setFixedSize(26, 26);
+      button->setToolTip(name);
+      button->setAccessibleName(name);
+      return button;
+    }
 
     void load() {
       auto& text = m_style.m_style;
-      m_family->setEditText(QString::fromStdString(text.m_font.m_family));
-      m_font_style->setText(QString::fromStdString(text.m_font.m_style));
+      auto family = QString::fromStdString(text.m_font.m_family);
+      m_family->setEditText(family);
+      m_font_style->clear();
+      if(m_styles) {
+        m_font_style->addItems(m_styles(family));
+      }
+      m_font_style->setEditText(QString::fromStdString(text.m_font.m_style));
       m_size->setText(format_number(text.m_font.m_size));
       m_letter_spacing->setText(format_number(text.m_letter_spacing));
       m_line_height->setText(m_style.m_line_height ?
         format_number(*m_style.m_line_height) : QString());
       m_paragraph_spacing->setText(format_number(m_style.m_paragraph_spacing));
-      m_color->setText(to_hex(text.m_color));
+      for(auto& [transform, button] : m_transforms) {
+        button->setChecked(text.m_transform == transform);
+      }
+      for(auto& [script, button] : m_scripts) {
+        button->setChecked(text.m_script == script);
+      }
       m_underline->setChecked(text.m_is_underlined);
       m_strikethrough->setChecked(text.m_is_struck_through);
+      m_color->setIcon(QIcon(make_color_icon(text.m_color)));
+    }
+
+    QPixmap make_color_icon(const Color& color) const {
+      auto ratio = devicePixelRatioF();
+      auto pixmap = QPixmap(static_cast<int>(30 * ratio),
+        static_cast<int>(18 * ratio));
+      pixmap.setDevicePixelRatio(ratio);
+      pixmap.fill(Qt::transparent);
+      auto painter = QPainter(&pixmap);
+      auto bounds = QRectF(0.5, 0.5, 29, 17);
+      painter.fillRect(bounds, to_qcolor(color));
+      painter.setPen(QPen(Colors::BORDER, 1));
+      painter.drawRect(bounds);
+      return pixmap;
+    }
+
+    void set_transform(TextTransform transform) {
+      auto style = m_style;
+      style.m_style.m_transform = transform;
+      apply(std::move(style));
+    }
+
+    void set_script(TextScript script) {
+      auto style = m_style;
+      style.m_style.m_script = script;
+      apply(std::move(style));
+    }
+
+    void apply(CharacterStyle style) {
+      if(!(style == m_style)) {
+        m_style = std::move(style);
+        if(m_change) {
+          m_change(m_style);
+        }
+      }
+      load();
     }
 
     void commit() {
@@ -378,8 +550,8 @@ class AssetsPanel::StyleEditor : public QFrame {
         text.m_font.m_family = family;
         text.m_font.m_postscript_name.clear();
       }
-      auto font_style = m_font_style->text().trimmed().toStdString();
-      if(font_style != text.m_font.m_style) {
+      auto font_style = m_font_style->currentText().trimmed().toStdString();
+      if(!font_style.empty() && font_style != text.m_font.m_style) {
         text.m_font.m_style = font_style;
         text.m_font.m_postscript_name.clear();
       }
@@ -399,18 +571,9 @@ class AssetsPanel::StyleEditor : public QFrame {
           spacing && *spacing >= 0) {
         style.m_paragraph_spacing = *spacing;
       }
-      if(auto color = parse_hex(m_color->text(), text.m_color.m_alpha)) {
-        text.m_color = *color;
-      }
       text.m_is_underlined = m_underline->isChecked();
       text.m_is_struck_through = m_strikethrough->isChecked();
-      if(style != m_style) {
-        m_style = style;
-        if(m_change) {
-          m_change(m_style);
-        }
-      }
-      load();
+      apply(std::move(style));
     }
 };
 
@@ -419,6 +582,7 @@ AssetsPanel::AssetsPanel(QWidget* parent)
       m_document(nullptr),
       m_editor(nullptr),
       m_entries(4),
+      m_group_names(4),
       m_picker(new ColorPicker(this)),
       m_content(new QWidget()),
       m_content_layout(new QVBoxLayout(m_content)),
@@ -705,7 +869,8 @@ void AssetsPanel::attach(Document* document) {
     m_subscription = m_document->subscribe([this] (const auto& changes) {
       invalidate_thumbnails(changes);
       if(!changes.m_components.empty() || !changes.m_swatches.empty() ||
-          !changes.m_character_styles.empty()) {
+          !changes.m_character_styles.empty() ||
+          changes.m_is_asset_group_changed) {
         rebuild();
       }
     });
@@ -716,10 +881,14 @@ void AssetsPanel::rebuild() {
   for(auto& entries : m_entries) {
     entries.clear();
   }
+  for(auto& names : m_group_names) {
+    names.clear();
+  }
   m_components.clear();
   m_swatches.clear();
   m_character_styles.clear();
   m_asset_rows.clear();
+  m_group_rows.clear();
   m_thumbnail_labels.clear();
   m_component_rows.clear();
   while(auto item = m_content_layout->takeAt(0)) {
@@ -730,16 +899,9 @@ void AssetsPanel::rebuild() {
   }
   if(m_document) {
     auto& resources = m_document->get_resources();
-    for(auto& swatch : resources.m_swatches) {
-      m_entries[static_cast<int>(AssetSection::COLORS)].push_back(
-        get_swatch_label(swatch));
-      m_swatches.push_back(swatch.m_id);
-    }
-    for(auto& style : resources.m_character_styles) {
-      m_entries[static_cast<int>(AssetSection::CHARACTER_STYLES)].push_back(
-        get_character_style_label(style));
-      m_character_styles.push_back(style.m_id);
-    }
+    std::erase_if(m_selected, [&] (const auto& id) {
+      return find_section(resources, id).empty();
+    });
     for(auto& component : resources.m_components) {
       m_entries[static_cast<int>(AssetSection::COMPONENTS)].push_back(
         QString::fromStdString(component.second.m_name));
@@ -750,6 +912,7 @@ void AssetsPanel::rebuild() {
   add_section(AssetSection::CHARACTER_STYLES, "Character Styles");
   add_section(AssetSection::COMPONENTS, "Components");
   add_section(AssetSection::VIDEOS, "Videos");
+  update_selection();
   m_is_empty_shown = std::all_of(m_entries.begin(), m_entries.end(),
     [] (const auto& entries) {
       return entries.empty();
@@ -825,14 +988,9 @@ void AssetsPanel::add_section(AssetSection section, const QString& title) {
   rows_layout->setSpacing(0);
   if(m_document) {
     auto& resources = m_document->get_resources();
-    if(section == AssetSection::COLORS) {
-      for(auto& swatch : resources.m_swatches) {
-        rows_layout->addWidget(make_swatch_row(swatch));
-      }
-    } else if(section == AssetSection::CHARACTER_STYLES) {
-      for(auto& style : resources.m_character_styles) {
-        rows_layout->addWidget(make_character_style_row(style));
-      }
+    if(section == AssetSection::COLORS ||
+        section == AssetSection::CHARACTER_STYLES) {
+      add_entries(section, get_section_id(section), *rows_layout, 0);
     } else if(section == AssetSection::COMPONENTS) {
       for(auto& component : resources.m_components) {
         rows_layout->addWidget(make_component_row(component.second));
@@ -1067,7 +1225,7 @@ void AssetsPanel::edit_character_style(const CharacterStyleId& style) {
   }
   m_editor->get_history().seal();
   auto families = m_font_families ? m_font_families() : QStringList();
-  auto editor = new StyleEditor(*entry, families,
+  auto editor = new StyleEditor(*entry, families, m_font_styles,
     [this] (const CharacterStyle& style) {
       replace_character_style(style);
     }, [this] {
@@ -1093,24 +1251,41 @@ void AssetsPanel::edit_character_style(const CharacterStyleId& style) {
 
 QMenu* AssetsPanel::make_swatch_menu(const SwatchId& swatch, QWidget* parent) {
   auto menu = new QMenu(parent);
-  auto has_selection =
-    m_editor && !m_editor->get_selection().get_nodes().empty();
-  auto fill = menu->addAction("Apply as Fill");
-  fill->setEnabled(has_selection);
-  QObject::connect(fill, &QAction::triggered, this, [this, swatch] {
-    apply_swatch(swatch, false);
+  auto color = QString();
+  if(m_document) {
+    for(auto& entry : m_document->get_resources().m_swatches) {
+      if(entry.m_id == swatch) {
+        color = to_hex(entry.m_gradient.empty() ? entry.m_color :
+          entry.m_gradient.front().m_color);
+      }
+    }
+  }
+  auto copy = menu->addAction(QString("Copy %1").arg(color));
+  QObject::connect(copy, &QAction::triggered, this, [color] {
+    if(auto clipboard = QGuiApplication::clipboard()) {
+      clipboard->setText(color);
+    }
   });
-  auto border = menu->addAction("Apply as Border");
-  border->setEnabled(has_selection);
-  QObject::connect(border, &QAction::triggered, this, [this, swatch] {
-    apply_swatch(swatch, true);
-  });
-  menu->addSeparator();
   auto edit = menu->addAction("Edit");
   edit->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(edit, &QAction::triggered, this, [this, swatch] {
     edit_swatch(swatch);
   });
+  menu->addSeparator();
+  auto highlight = menu->addAction("Highlight on canvas");
+  highlight->setEnabled(static_cast<bool>(m_editor));
+  QObject::connect(highlight, &QAction::triggered, this, [this, swatch] {
+    highlight_instances(swatch);
+  });
+  menu->addSeparator();
+  auto group = menu->addAction("New group from element");
+  group->setEnabled(static_cast<bool>(m_editor));
+  QObject::connect(group, &QAction::triggered, this, [this, swatch] {
+    group_assets({swatch});
+  });
+  menu->addSeparator();
+  add_move_menu(*menu, "Move to...", {swatch});
+  menu->addSeparator();
   auto rename = menu->addAction("Rename");
   rename->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(rename, &QAction::triggered, this, [this, swatch] {
@@ -1129,18 +1304,29 @@ QMenu* AssetsPanel::make_swatch_menu(const SwatchId& swatch, QWidget* parent) {
 QMenu* AssetsPanel::make_character_style_menu(
     const CharacterStyleId& style, QWidget* parent) {
   auto menu = new QMenu(parent);
-  auto apply = menu->addAction("Apply");
-  apply->setEnabled(
-    m_editor && !m_editor->get_selection().get_nodes().empty());
-  QObject::connect(apply, &QAction::triggered, this, [this, style] {
-    apply_character_style(style);
-  });
+  auto remove_font = menu->addAction("Remove font");
+  remove_font->setEnabled(false);
   menu->addSeparator();
   auto edit = menu->addAction("Edit");
   edit->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(edit, &QAction::triggered, this, [this, style] {
     edit_character_style(style);
   });
+  menu->addSeparator();
+  auto highlight = menu->addAction("Highlight on canvas");
+  highlight->setEnabled(static_cast<bool>(m_editor));
+  QObject::connect(highlight, &QAction::triggered, this, [this, style] {
+    highlight_instances(style);
+  });
+  menu->addSeparator();
+  auto group = menu->addAction("New group from element");
+  group->setEnabled(static_cast<bool>(m_editor));
+  QObject::connect(group, &QAction::triggered, this, [this, style] {
+    group_assets({style});
+  });
+  menu->addSeparator();
+  add_move_menu(*menu, "Move to...", {style});
+  menu->addSeparator();
   auto rename = menu->addAction("Rename");
   rename->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(rename, &QAction::triggered, this, [this, style] {
@@ -1171,14 +1357,15 @@ QWidget* AssetsPanel::make_swatch_row(const ColorSwatch& swatch) {
   row->setToolTip(to_hex(swatch.m_color));
   auto id = swatch.m_id;
   row->m_click = [this, id] (Qt::KeyboardModifiers modifiers) {
-    highlight(id);
-    apply_swatch(id, static_cast<bool>(modifiers & Qt::ShiftModifier));
+    click_asset(id, modifiers);
   };
   row->m_double_click = [this, id] {
-    edit_swatch(id);
+    start_rename(id, [this, id] (const QString& name) {
+      rename_swatch(id, name);
+    });
   };
   row->m_menu = [this, id] (QWidget* parent) {
-    return make_swatch_menu(id, parent);
+    return make_asset_menu(id, parent);
   };
   m_asset_rows.emplace(id, row);
   return row;
@@ -1196,15 +1383,16 @@ QWidget* AssetsPanel::make_character_style_row(const CharacterStyle& style) {
     row->setToolTip(QString::fromStdString(style.m_name));
   }
   auto id = style.m_id;
-  row->m_click = [this, id] (Qt::KeyboardModifiers) {
-    highlight(id);
-    apply_character_style(id);
+  row->m_click = [this, id] (Qt::KeyboardModifiers modifiers) {
+    click_asset(id, modifiers);
   };
   row->m_double_click = [this, id] {
-    edit_character_style(id);
+    start_rename(id, [this, id] (const QString& name) {
+      rename_character_style(id, name);
+    });
   };
   row->m_menu = [this, id] (QWidget* parent) {
-    return make_character_style_menu(id, parent);
+    return make_asset_menu(id, parent);
   };
   m_asset_rows.emplace(id, row);
   return row;
@@ -1238,11 +1426,8 @@ void AssetsPanel::start_rename(
 }
 
 void AssetsPanel::highlight(const NodeId& id) {
-  for(auto& row : m_asset_rows) {
-    if(row.second) {
-      row.second->setStyleSheet(row.first == id ? HIGHLIGHT : "");
-    }
-  }
+  m_selected = {id};
+  update_selection();
   for(auto& row : m_component_rows) {
     if(row.second) {
       row.second->setStyleSheet(row.first == id ? HIGHLIGHT : "");
@@ -1254,6 +1439,423 @@ void AssetsPanel::highlight(const NodeId& id) {
   }
   if(auto scroll = findChild<QScrollArea*>("assets_scroll")) {
     scroll->ensureWidgetVisible(row->second);
+  }
+}
+
+void AssetsPanel::set_font_styles(
+    std::function<QStringList (const QString& family)> styles) {
+  m_font_styles = std::move(styles);
+}
+
+void AssetsPanel::set_highlight_handler(
+    std::function<void (const std::vector<NodeId>& nodes)> handler) {
+  m_highlight_handler = std::move(handler);
+}
+
+void AssetsPanel::set_message_handler(
+    std::function<void (const QString& message)> handler) {
+  m_message_handler = std::move(handler);
+}
+
+const std::vector<NodeId>& AssetsPanel::get_selected_assets() const {
+  return m_selected;
+}
+
+void AssetsPanel::set_selected_assets(std::vector<NodeId> assets) {
+  m_selected = std::move(assets);
+  update_selection();
+}
+
+bool AssetsPanel::highlight_instances(const NodeId& asset) {
+  if(!m_editor) {
+    return false;
+  }
+  auto& document = m_editor->get_document();
+  auto& resources = document.get_resources();
+  auto instances = std::vector<NodeId>();
+  auto message = QString();
+  for(auto& swatch : resources.m_swatches) {
+    if(swatch.m_id == asset) {
+      instances = find_swatch_instances(document, swatch);
+      message = "0 objects use this color";
+    }
+  }
+  for(auto& style : resources.m_character_styles) {
+    if(style.m_id == asset) {
+      instances = find_character_style_instances(document, style);
+      message = "0 objects use this character style";
+    }
+  }
+  if(instances.empty()) {
+    if(m_highlight_handler) {
+      m_highlight_handler({});
+    }
+    if(m_message_handler && !message.isEmpty()) {
+      m_message_handler(message);
+    }
+    return false;
+  }
+  m_editor->get_selection().clear();
+  if(m_highlight_handler) {
+    m_highlight_handler(instances);
+  }
+  return true;
+}
+
+std::string AssetsPanel::group_assets(const std::vector<NodeId>& assets) {
+  if(!m_editor || assets.empty()) {
+    return std::string();
+  }
+  auto ordered = std::vector<NodeId>();
+  for(auto& id : m_swatches) {
+    if(std::find(assets.begin(), assets.end(), id) != assets.end()) {
+      ordered.push_back(id);
+    }
+  }
+  for(auto& id : m_character_styles) {
+    if(std::find(assets.begin(), assets.end(), id) != assets.end()) {
+      ordered.push_back(id);
+    }
+  }
+  if(ordered.size() != assets.size()) {
+    ordered = assets;
+  }
+  auto command = std::make_unique<GroupAssetsCommand>(ordered);
+  auto group = command->get_group();
+  if(!run(std::move(command))) {
+    return std::string();
+  }
+  start_group_rename(group);
+  return group;
+}
+
+bool AssetsPanel::move_assets(
+    const std::vector<NodeId>& assets, const std::string& group) {
+  return run(std::make_unique<MoveAssetsCommand>(assets, group));
+}
+
+bool AssetsPanel::rename_group(const std::string& group, const QString& name) {
+  if(name.trimmed().isEmpty()) {
+    return false;
+  }
+  return run(std::make_unique<RenameAssetGroupCommand>(
+    group, name.trimmed().toStdString()));
+}
+
+bool AssetsPanel::delete_assets(const std::vector<NodeId>& assets) {
+  if(!m_document || assets.empty()) {
+    return false;
+  }
+  auto& resources = m_document->get_resources();
+  auto commands = std::vector<std::unique_ptr<Command>>();
+  auto colors = 0;
+  auto styles = 0;
+  for(auto& asset : assets) {
+    auto section = find_section(resources, asset);
+    if(section == COLOR_SECTION) {
+      commands.push_back(std::make_unique<RemoveSwatchCommand>(asset));
+      ++colors;
+    } else if(section == CHARACTER_STYLE_SECTION) {
+      commands.push_back(
+        std::make_unique<RemoveCharacterStyleCommand>(asset));
+      ++styles;
+    }
+  }
+  if(commands.empty()) {
+    return false;
+  } else if(commands.size() == 1) {
+    return run(std::move(commands.front()));
+  }
+  auto label = std::string("Delete Mixed Assets");
+  if(styles == 0) {
+    label = "Delete Colors";
+  } else if(colors == 0) {
+    label = "Delete Character Styles";
+  }
+  return run(std::make_unique<CompositeCommand>(label, std::move(commands)));
+}
+
+std::vector<QString> AssetsPanel::get_group_names(AssetSection section) const {
+  return m_group_names[static_cast<int>(section)];
+}
+
+QMenu* AssetsPanel::make_group_menu(
+    const std::string& group, QWidget* parent) {
+  auto menu = new QMenu(parent);
+  auto subgroup = menu->addAction("Create subgroup");
+  subgroup->setEnabled(static_cast<bool>(m_editor));
+  QObject::connect(subgroup, &QAction::triggered, this, [this, group] {
+    auto command = std::make_unique<AddAssetGroupCommand>(group);
+    auto id = command->get_group();
+    if(run(std::move(command))) {
+      start_group_rename(id);
+    }
+  });
+  menu->addSeparator();
+  auto rename = menu->addAction("Rename group");
+  rename->setEnabled(static_cast<bool>(m_editor));
+  QObject::connect(rename, &QAction::triggered, this, [this, group] {
+    start_group_rename(group);
+  });
+  auto ungroup = menu->addAction("Ungroup");
+  ungroup->setEnabled(static_cast<bool>(m_editor));
+  QObject::connect(ungroup, &QAction::triggered, this, [this, group] {
+    run(std::make_unique<RemoveAssetGroupCommand>(group, false));
+  });
+  auto remove = menu->addAction("Delete");
+  remove->setEnabled(static_cast<bool>(m_editor));
+  QObject::connect(remove, &QAction::triggered, this, [this, group] {
+    run(std::make_unique<RemoveAssetGroupCommand>(group, true));
+  });
+  return menu;
+}
+
+QMenu* AssetsPanel::make_selection_menu(QWidget* parent) {
+  auto menu = new QMenu(parent);
+  auto selected = m_selected;
+  auto is_one_section = !selected.empty() && m_document &&
+    std::all_of(selected.begin(), selected.end(), [&] (const auto& id) {
+      return find_section(m_document->get_resources(), id) ==
+        find_section(m_document->get_resources(), selected.front());
+    });
+  auto group = menu->addAction("New group from selection");
+  group->setEnabled(m_editor && is_one_section);
+  QObject::connect(group, &QAction::triggered, this, [this, selected] {
+    group_assets(selected);
+  });
+  menu->addSeparator();
+  if(is_one_section) {
+    add_move_menu(*menu, "Move selected items to", selected);
+  } else {
+    menu->addAction("Move selected items to")->setEnabled(false);
+  }
+  menu->addSeparator();
+  auto remove = menu->addAction("Delete");
+  remove->setEnabled(static_cast<bool>(m_editor));
+  QObject::connect(remove, &QAction::triggered, this, [this, selected] {
+    delete_assets(selected);
+  });
+  return menu;
+}
+
+void AssetsPanel::add_entries(AssetSection section, const std::string& group,
+    QVBoxLayout& layout, int depth) {
+  auto& resources = m_document->get_resources();
+  auto index = static_cast<int>(section);
+  for(auto& entry : list_assets(resources, group)) {
+    if(!entry.m_group.empty()) {
+      auto found = std::find_if(resources.m_asset_groups.begin(),
+        resources.m_asset_groups.end(), [&] (const auto& candidate) {
+          return candidate.m_id == entry.m_group;
+        });
+      m_group_names[index].push_back(QString::fromStdString(found->m_name));
+      auto members = new QWidget();
+      auto members_layout = new QVBoxLayout(members);
+      members_layout->setContentsMargins(0, 0, 0, 0);
+      members_layout->setSpacing(0);
+      layout.addWidget(make_group_row(*found, *members, depth));
+      add_entries(section, entry.m_group, *members_layout, depth + 1);
+      layout.addWidget(members);
+      continue;
+    }
+    auto row = static_cast<QWidget*>(nullptr);
+    if(section == AssetSection::COLORS) {
+      for(auto& swatch : resources.m_swatches) {
+        if(swatch.m_id == entry.m_asset) {
+          m_entries[index].push_back(get_swatch_label(swatch));
+          m_swatches.push_back(swatch.m_id);
+          row = make_swatch_row(swatch);
+        }
+      }
+    } else {
+      for(auto& style : resources.m_character_styles) {
+        if(style.m_id == entry.m_asset) {
+          m_entries[index].push_back(get_character_style_label(style));
+          m_character_styles.push_back(style.m_id);
+          row = make_character_style_row(style);
+        }
+      }
+    }
+    if(row) {
+      row->layout()->setContentsMargins(16 + GROUP_INDENT * depth, 0, 16, 0);
+      layout.addWidget(row);
+    }
+  }
+}
+
+QWidget* AssetsPanel::make_group_row(
+    const AssetGroup& group, QWidget& members, int depth) {
+  auto row = new GroupRow();
+  row->setObjectName("asset_group_row");
+  row->setFixedHeight(ROW_HEIGHT);
+  auto layout = new QHBoxLayout(row);
+  layout->setContentsMargins(10 + GROUP_INDENT * depth, 0, 16, 0);
+  layout->setSpacing(4);
+  auto toggle = new QToolButton();
+  toggle->setObjectName("section_toggle");
+  toggle->setAutoRaise(true);
+  toggle->setCheckable(true);
+  toggle->setChecked(true);
+  toggle->setFocusPolicy(Qt::NoFocus);
+  toggle->setIcon(get_icon(Glyph::CHEVRON_DOWN));
+  toggle->setIconSize(QSize(14, 14));
+  toggle->setAccessibleName(QString::fromStdString(group.m_name));
+  layout->addWidget(toggle);
+  auto label = new QLabel(QString::fromStdString(group.m_name));
+  label->setObjectName("asset_label");
+  layout->addWidget(label, 1);
+  QObject::connect(toggle, &QToolButton::toggled, &members,
+    [toggle, members = &members] (bool is_open) {
+      members->setVisible(is_open);
+      toggle->setIcon(
+        get_icon(is_open ? Glyph::CHEVRON_DOWN : Glyph::CHEVRON_RIGHT));
+    });
+  auto id = group.m_id;
+  row->m_double_click = [this, id] {
+    start_group_rename(id);
+  };
+  row->m_menu = [this, id] (QWidget* parent) {
+    return make_group_menu(id, parent);
+  };
+  m_group_rows.emplace(id, row);
+  return row;
+}
+
+void AssetsPanel::click_asset(
+    const NodeId& id, Qt::KeyboardModifiers modifiers) {
+  if(modifiers & Qt::ControlModifier) {
+    if(auto i = std::find(m_selected.begin(), m_selected.end(), id);
+        i != m_selected.end()) {
+      m_selected.erase(i);
+    } else {
+      m_selected.push_back(id);
+    }
+    update_selection();
+    return;
+  } else if(modifiers & Qt::ShiftModifier && !m_selected.empty()) {
+    auto& order = m_document && find_section(m_document->get_resources(),
+      id) == COLOR_SECTION ? m_swatches : m_character_styles;
+    auto anchor = std::find(order.begin(), order.end(), m_selected.front());
+    auto target = std::find(order.begin(), order.end(), id);
+    if(anchor != order.end() && target != order.end()) {
+      auto first = std::min(anchor, target);
+      auto last = std::max(anchor, target);
+      auto range = std::vector<NodeId>(first, last + 1);
+      if(target < anchor) {
+        std::reverse(range.begin(), range.end());
+      }
+      m_selected = std::move(range);
+      update_selection();
+      return;
+    }
+  }
+  m_selected = {id};
+  update_selection();
+  if(m_document && find_section(m_document->get_resources(), id) ==
+      COLOR_SECTION) {
+    apply_swatch(id, static_cast<bool>(modifiers & Qt::AltModifier));
+  } else {
+    apply_character_style(id);
+  }
+}
+
+QMenu* AssetsPanel::make_asset_menu(const NodeId& id, QWidget* parent) {
+  if(m_selected.size() > 1 &&
+      std::find(m_selected.begin(), m_selected.end(), id) !=
+        m_selected.end()) {
+    return make_selection_menu(parent);
+  }
+  m_selected = {id};
+  update_selection();
+  if(m_document && find_section(m_document->get_resources(), id) ==
+      COLOR_SECTION) {
+    return make_swatch_menu(id, parent);
+  }
+  return make_character_style_menu(id, parent);
+}
+
+void AssetsPanel::add_move_menu(QMenu& menu, const QString& title,
+    const std::vector<NodeId>& assets) {
+  auto submenu = menu.addMenu(title);
+  if(!m_editor || !m_document || assets.empty()) {
+    submenu->setEnabled(false);
+    return;
+  }
+  auto& resources = m_document->get_resources();
+  auto section = find_section(resources, assets.front());
+  auto destinations = std::vector<std::pair<std::string, QString>>();
+  destinations.emplace_back(section, section == COLOR_SECTION ?
+    QString("Colors") : QString("Character Styles"));
+  auto groups = std::vector<std::pair<std::string, QString>>();
+  for(auto& group : resources.m_asset_groups) {
+    auto root = group.m_parent;
+    for(auto depth = 0; depth != 256; ++depth) {
+      auto parent = std::find_if(resources.m_asset_groups.begin(),
+        resources.m_asset_groups.end(), [&] (const auto& candidate) {
+          return candidate.m_id == root;
+        });
+      if(parent == resources.m_asset_groups.end()) {
+        break;
+      }
+      root = parent->m_parent;
+    }
+    if(root == section) {
+      groups.emplace_back(group.m_id, QString::fromStdString(group.m_name));
+    }
+  }
+  std::stable_sort(groups.begin(), groups.end(),
+    [] (const auto& left, const auto& right) {
+      return left.second.localeAwareCompare(right.second) < 0;
+    });
+  destinations.insert(destinations.end(), groups.begin(), groups.end());
+  for(auto& [group, name] : destinations) {
+    auto is_in = std::all_of(assets.begin(), assets.end(),
+      [&] (const auto& asset) {
+        return find_asset_group(resources, asset) == group;
+      });
+    auto action = submenu->addAction(name);
+    action->setCheckable(true);
+    action->setChecked(is_in);
+    action->setEnabled(!is_in);
+    QObject::connect(action, &QAction::triggered, this,
+      [this, assets, group] {
+        move_assets(assets, group);
+      });
+  }
+}
+
+void AssetsPanel::start_group_rename(const std::string& group) {
+  auto row = m_group_rows.find(group);
+  if(row == m_group_rows.end() || !row->second) {
+    return;
+  }
+  auto label = row->second->findChild<QLabel*>("asset_label");
+  if(!label) {
+    return;
+  }
+  auto field = new QLineEdit(label->text(), row->second);
+  field->setObjectName("asset_rename");
+  field->setGeometry(label->geometry());
+  field->selectAll();
+  field->show();
+  field->setFocus();
+  QObject::connect(field, &QLineEdit::editingFinished, this,
+    [this, group, field = QPointer<QLineEdit>(field)] {
+      if(!field) {
+        return;
+      }
+      auto text = field->text();
+      field->deleteLater();
+      rename_group(group, text);
+    });
+}
+
+void AssetsPanel::update_selection() {
+  for(auto& row : m_asset_rows) {
+    if(row.second) {
+      row.second->setStyleSheet(std::find(m_selected.begin(),
+        m_selected.end(), row.first) != m_selected.end() ? HIGHLIGHT : "");
+    }
   }
 }
 

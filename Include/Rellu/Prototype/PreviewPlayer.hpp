@@ -241,7 +241,8 @@ namespace Rellu {
 
       /**
        * Sets the function finding the hyperlinks of text, which a tap
-       * opens through the link handler when no tap interaction applies.
+       * opens through the link handler instead of running tap
+       * interactions.
        * @param finder The function.
        */
       void set_text_link_finder(TextLinkFinder finder);

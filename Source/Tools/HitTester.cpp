@@ -278,6 +278,16 @@ NodeId HitTester::hit(
     tolerance, is_locked_hit, 0);
 }
 
+NodeId HitTester::hit_within(const NodeId& id, Point point,
+    double tolerance, bool is_locked_hit) const {
+  auto node = m_document->find(id);
+  if(!node) {
+    return NodeId();
+  }
+  return hit(id, point, get_world_transform(*m_document, node->m_parent),
+    tolerance, is_locked_hit, 0);
+}
+
 std::vector<NodeId> HitTester::query(
     const NodeId& container, const Rect& region, bool is_enclosed) const {
   auto result = std::vector<NodeId>();
@@ -297,7 +307,7 @@ std::vector<NodeId> HitTester::query(
   }
   for(auto& child : *children) {
     auto node = m_document->find(child);
-    if(!node || node->m_header.m_is_locked) {
+    if(!node) {
       continue;
     }
     auto& extent = measure(child, 0);

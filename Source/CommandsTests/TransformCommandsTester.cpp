@@ -1,4 +1,6 @@
 #include <chrono>
+#include <cmath>
+#include <numbers>
 #include <string>
 #include <doctest/doctest.h>
 #include "Rellu/Commands/TransformCommands.hpp"
@@ -312,9 +314,11 @@ TEST_SUITE("TransformCommands") {
     require_undoable(history, std::make_unique<TransformCommand>(
       std::vector{rectangle_id, path, group, text}, make_scale(-1, 1),
       "Flip"));
-    for(auto& id : {rectangle_id, path, group, line, text}) {
+    for(auto& id : {rectangle_id, path, group, line}) {
       REQUIRE(get_world_transform(document, id).get_determinant() > 0);
     }
+    REQUIRE(get_world_transform(document, text) ==
+      Matrix(-1, 0, 0, 1, -200, 0));
     REQUIRE(*get_world_bounds(document, rectangle_id) ==
       Rect(-50, 10, 40, 20));
     REQUIRE(get_rectangle(document, rectangle_id).m_radii ==
@@ -339,5 +343,164 @@ TEST_SUITE("TransformCommands") {
     require_near(*get_world_bounds(document, text),
       Rect(-text_bounds.get_right(), text_bounds.m_y, text_bounds.m_width,
         text_bounds.m_height));
+  }
+
+  TEST_CASE("mirror_text") {
+    auto document = Document();
+    auto text = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto payload = make_text(u"Label");
+      payload.m_frame = AutoHeightFrame(100);
+      text = transaction.append(
+        NodeId(), make_header("Label", make_translation(10, 0)), payload);
+      transaction.commit();
+    }
+    auto bounds = *get_world_bounds(document, text);
+    auto history = History(document);
+    require_undoable(history, make_resize_command({text}, bounds,
+      Rect(bounds.m_x, bounds.m_y, -20, bounds.m_height)));
+    REQUIRE(std::get<AutoHeightFrame>(
+      document.get(text).get_text()->m_frame).m_width == doctest::Approx(20));
+    auto world = get_world_transform(document, text);
+    REQUIRE(world.get_determinant() < 0);
+    REQUIRE(std::atan2(world.m_b, world.m_a) ==
+      doctest::Approx(std::numbers::pi));
+    require_near(*get_world_bounds(document, text),
+      Rect(bounds.m_x - 20, bounds.m_y, 20, bounds.m_height));
+  }
+
+  TEST_CASE("mirror_instance") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto role = Group();
+    role.m_component_instance =
+      ComponentInstance(ComponentId(), StateId(), Size(80, 10));
+    role.m_component_instance->m_is_main = true;
+    auto instance = transaction.append(
+      NodeId(), make_header("Main", make_translation(100, 100)), role);
+    auto left = transaction.append(instance, make_header("Left"),
+      make_rectangle_shape(20, 10));
+    auto right = transaction.append(instance,
+      make_header("Right", make_translation(60, 0)),
+      make_rectangle_shape(20, 10));
+    transform_node(document, transaction, instance,
+      make_translation(280, 0) * make_scale(-1, 1));
+    transaction.commit();
+    REQUIRE(get_world_transform(document, instance) ==
+      make_translation(100, 100));
+    REQUIRE(*get_world_bounds(document, left) == Rect(100, 100, 20, 10));
+    REQUIRE(*get_world_bounds(document, right) == Rect(160, 100, 20, 10));
+  }
+
+  TEST_CASE("mirror_mask") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto role = Group();
+    role.m_mask = Mask();
+    role.m_mask->m_shapes.push_back(MaskShape(make_translation(10, 0),
+      RectangleShape(Rect(0, 0, 30, 20), CornerRadii(5, 0, 0, 0))));
+    auto mask = transaction.append(
+      NodeId(), make_header("Mask", make_translation(100, 100)), role);
+    auto content = transaction.append(mask, make_header("Content"),
+      make_rectangle_shape(60, 20));
+    transform_node(document, transaction, mask,
+      make_translation(260, 0) * make_scale(-1, 1));
+    transaction.commit();
+    REQUIRE(get_world_transform(document, mask).get_determinant() > 0);
+    auto& shape = document.get(mask).get_group()->m_mask->m_shapes.front();
+    REQUIRE(shape.m_transform.get_determinant() > 0);
+    REQUIRE(get_world_transform(document, mask).map(shape.m_transform.map(
+      std::get<RectangleShape>(shape.m_geometry).m_bounds)) ==
+        Rect(120, 100, 30, 20));
+    REQUIRE(std::get<RectangleShape>(shape.m_geometry).m_radii ==
+      CornerRadii(0, 5, 0, 0));
+    REQUIRE(*get_world_bounds(document, content) == Rect(100, 100, 60, 20));
+  }
+
+  TEST_CASE("resize_artboard_contents") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 400, 300);
+    auto board =
+      transaction.append(NodeId(), make_header("Artboard"), artboard);
+    auto inner = transaction.append(board,
+      make_header("Inner", make_translation(10, 10)),
+      make_rectangle_shape(40, 40));
+    auto outer = transaction.append(board,
+      make_header("Outer", make_translation(350, 10)),
+      make_rectangle_shape(40, 40));
+    auto loose = transaction.append(NodeId(),
+      make_header("Loose", make_translation(500, 10)),
+      make_rectangle_shape(40, 40));
+    auto other = Artboard();
+    other.m_frame = Rect(0, 1000, 100, 100);
+    auto distant = transaction.append(NodeId(), make_header("Other"), other);
+    transaction.commit();
+    document.clear_history();
+    auto history = History(document);
+    history.execute(
+      make_bounds_command(document, board, Rect(0, 0, 200, 300)));
+    REQUIRE(document.get_canvas() ==
+      std::vector{board, loose, distant, outer});
+    REQUIRE(document.get(board).m_children == std::vector{inner});
+    REQUIRE(*get_world_bounds(document, outer) == Rect(350, 10, 40, 40));
+    history.execute(
+      make_bounds_command(document, board, Rect(0, 0, 510, 300)));
+    REQUIRE(document.get_canvas() == std::vector{board, distant});
+    REQUIRE(document.get(board).m_children ==
+      std::vector{inner, loose, outer});
+    REQUIRE(*get_world_bounds(document, loose) == Rect(500, 10, 40, 40));
+    history.undo();
+    history.undo();
+    REQUIRE(document.get_canvas() == std::vector{board, loose, distant});
+    REQUIRE(document.get(board).m_children == std::vector{inner, outer});
+  }
+
+  TEST_CASE("release_to_artboard") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 400, 300);
+    auto board =
+      transaction.append(NodeId(), make_header("Artboard"), artboard);
+    auto shape = transaction.append(board,
+      make_header("Shape", make_translation(350, 10)),
+      make_rectangle_shape(40, 40));
+    auto other = Artboard();
+    other.m_frame = Rect(380, 0, 100, 100);
+    auto neighbour = transaction.append(NodeId(), make_header("Other"), other);
+    transaction.commit();
+    document.clear_history();
+    auto history = History(document);
+    history.execute(
+      make_bounds_command(document, board, Rect(0, 0, 200, 300)));
+    REQUIRE(document.get(neighbour).m_children == std::vector{shape});
+    REQUIRE(*get_world_bounds(document, shape) == Rect(350, 10, 40, 40));
+  }
+
+  TEST_CASE("dragged_artboard") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 400, 300);
+    auto board =
+      transaction.append(NodeId(), make_header("Artboard"), artboard);
+    auto loose = transaction.append(NodeId(),
+      make_header("Loose", make_translation(420, 10)),
+      make_rectangle_shape(40, 40));
+    transaction.commit();
+    document.clear_history();
+    auto history = History(document);
+    history.execute(std::make_unique<TransformCommand>(std::vector{board},
+      make_scale(1.25, 1), "Resize", TransformMode::DRAG));
+    REQUIRE(document.get(board).get_artboard()->m_frame ==
+      Rect(0, 0, 500, 300));
+    REQUIRE(document.get(loose).m_parent.is_nil());
+    REQUIRE(history.merge(std::make_unique<TransformCommand>(
+      std::vector{board}, Matrix(), "Resize", TransformMode::SETTLE)));
+    REQUIRE(document.get(loose).m_parent == board);
+    REQUIRE(history.get_undo_count() == 1);
   }
 }

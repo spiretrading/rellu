@@ -182,6 +182,8 @@ void Document::swap(Revision& revision) {
   swap_entries(m_resources.m_images, revision.m_images);
   swap_value(m_resources.m_swatches, revision.m_swatches);
   swap_value(m_resources.m_character_styles, revision.m_character_styles);
+  swap_value(m_resources.m_asset_groups, revision.m_asset_groups);
+  swap_value(m_resources.m_grid_defaults, revision.m_grid_defaults);
   swap_value(m_prototype.m_interactions, revision.m_interactions);
   swap_value(m_prototype.m_home_artboard, revision.m_home_artboard);
   swap_value(m_prototype.m_flows, revision.m_flows);

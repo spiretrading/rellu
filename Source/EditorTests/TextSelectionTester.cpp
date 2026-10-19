@@ -33,4 +33,36 @@ TEST_SUITE("TextSelection") {
     selection.clear();
     REQUIRE(!selection.get_pending_style());
   }
+
+  TEST_CASE("pending_hyperlink") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto selection = TextSelection(document);
+    auto count = 0;
+    auto subscription = selection.subscribe([&] { ++count; });
+    selection.set_pending_hyperlink("https://example.com");
+    REQUIRE(!selection.get_pending_hyperlink());
+    selection.set(scene.m_text, 2, 2);
+    selection.set_pending_hyperlink("https://example.com");
+    REQUIRE(selection.get_pending_hyperlink() ==
+      std::optional<std::string>("https://example.com"));
+    REQUIRE(count == 2);
+    selection.set(scene.m_text, 3, 3);
+    REQUIRE(!selection.get_pending_hyperlink());
+  }
+
+  TEST_CASE("last_style") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto selection = TextSelection(document);
+    REQUIRE(selection.get_last_style() == get_default_text_style());
+    REQUIRE(selection.get_last_paragraph_style() == ParagraphStyle());
+    auto style = document.get(scene.m_text).get_text()->m_base_style;
+    auto paragraph = ParagraphStyle();
+    paragraph.m_paragraph_spacing = 20;
+    selection.set_last_style(style, paragraph);
+    selection.clear();
+    REQUIRE(selection.get_last_style() == style);
+    REQUIRE(selection.get_last_paragraph_style() == paragraph);
+  }
 }

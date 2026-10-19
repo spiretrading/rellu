@@ -55,7 +55,8 @@ namespace Rellu {
   /**
    * Returns the effect Adobe XD adds when an effect is first applied: a
    * shadow of #000000 at 16% opacity, 3 down with a radius of 3 (shown as
-   * B 6), or a background blur of 10 at 10% fill opacity.
+   * B 6), or a background blur of 30 with a brightness of 15 at 0% fill
+   * opacity. Changing the type of a blur keeps its values.
    * @param kind The kind of effect.
    */
   Effect make_default_effect(EffectKind kind);

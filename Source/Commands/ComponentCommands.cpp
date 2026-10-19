@@ -4,6 +4,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -19,7 +20,18 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto STATE_DURATION = 0.3;
+  constexpr auto STATE_DURATION = static_cast<double>(0.3f);
+  constexpr auto GROUP_PREFIX = std::string_view("Group ");
+  constexpr auto COMPONENT_PREFIX = std::string_view("Component ");
+  constexpr auto NUMBER_SEPARATOR = std::string_view(" \xE2\x80\x93 ");
+
+  bool is_numbered(std::string_view name, std::string_view prefix) {
+    if(!name.starts_with(prefix) || name.size() == prefix.size()) {
+      return false;
+    }
+    return std::all_of(name.begin() + prefix.size(), name.end(),
+      [] (auto c) { return c >= '0' && c <= '9'; });
+  }
 
   bool is_tree_root(const Document& document, const NodeId& id) {
     return document.get(id).m_parent.is_nil() && !document.is_on_canvas(id);
@@ -508,13 +520,19 @@ void MakeComponentCommand::apply(
   if(nodes.size() == 1 && is_plain_group(document.get(nodes.front()))) {
     m_main = renew(document, transaction, nodes.front());
     name = document.get(m_main).m_header.m_name;
+    if(is_numbered(name, GROUP_PREFIX)) {
+      name = make_node_name(document, COMPONENT_PREFIX);
+      auto header = document.get(m_main).m_header;
+      header.m_name = name + std::string(NUMBER_SEPARATOR) + "1";
+      transaction.replace_header(std::move(header));
+    }
   } else {
-    name = make_node_name(document, "Component ");
+    name = make_node_name(document, COMPONENT_PREFIX);
     auto group = GroupCommand(std::move(nodes), name);
     group.apply(document, transaction);
     m_main = group.get_group();
     auto header = document.get(m_main).m_header;
-    header.m_name = name + " \xE2\x80\x93 1";
+    header.m_name = name + std::string(NUMBER_SEPARATOR) + "1";
     transaction.replace_header(std::move(header));
   }
   auto mapping = std::unordered_map<NodeId, NodeId>();

@@ -283,6 +283,8 @@ TEST_SUITE("SelectTool") {
     REQUIRE(context.get_hover() == board.m_group);
     hover(tools, Point(102, 90));
     REQUIRE(context.get_hover() == board.m_artboard);
+    hover(tools, Point(420, 320));
+    REQUIRE(context.get_hover().is_nil());
     tools.leave();
     REQUIRE(context.get_hover().is_nil());
   }
@@ -300,6 +302,8 @@ TEST_SUITE("SelectTool") {
     REQUIRE(selection.get_nodes() ==
       std::vector{board.m_group, board.m_rectangle});
     drag(tools, Point(380, 280), Point(460, 360));
+    REQUIRE(selection.get_nodes() == std::vector{board.m_locked});
+    drag(tools, Point(380, 420), Point(460, 480));
     REQUIRE(selection.is_empty());
     drag(tools, Point(50, 50), Point(400, 400));
     REQUIRE(selection.is_empty());
@@ -392,6 +396,66 @@ TEST_SUITE("SelectTool") {
     tools.release(make_event(
       Point(600, 210), Qt::LeftButton, Qt::NoButton, Qt::ShiftModifier));
     REQUIRE(history.get_undo_count() == 1);
+  }
+
+  TEST_CASE("clipped_click") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto clipped = NodeId();
+    {
+      auto transaction = Transaction(document);
+      clipped = add_rectangle(
+        transaction, board.m_artboard, Rect(550, 350, 200, 40));
+      transaction.commit();
+      document.clear_history();
+    }
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto& selection = editor.get_selection();
+    click(tools, Point(720, 470));
+    REQUIRE(selection.is_empty());
+    click(tools, Point(690, 470));
+    REQUIRE(selection.get_nodes() == std::vector{clipped});
+    click(tools, Point(720, 470));
+    REQUIRE(selection.get_nodes() == std::vector{clipped});
+    selection.select(board.m_rectangle);
+    click(tools, Point(720, 470));
+    REQUIRE(selection.get_nodes() == std::vector{clipped});
+  }
+
+  TEST_CASE("artboard_resize") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto loose = NodeId();
+    {
+      auto transaction = Transaction(document);
+      loose = add_rectangle(transaction, NodeId(), Rect(720, 150, 40, 40));
+      transaction.commit();
+      document.clear_history();
+    }
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto snap = SnapService();
+    tools.get_context().set_snap_service(snap);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    editor.get_selection().select(board.m_artboard);
+    tools.press(make_event(
+      Point(700, 300), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
+    drag_to(tools, Point(700, 300), Point(740, 300));
+    REQUIRE(document.get(board.m_artboard).get_artboard()->m_frame ==
+      Rect(100, 100, 640, 400));
+    REQUIRE(document.get(loose).m_parent.is_nil());
+    tools.release(make_event(
+      Point(740, 300), Qt::LeftButton, Qt::NoButton, Qt::NoModifier));
+    REQUIRE(document.get(loose).m_parent == board.m_artboard);
+    REQUIRE(document.get(board.m_artboard).m_children.back() == loose);
+    REQUIRE(get_bounds(document, loose) == Rect(720, 150, 40, 40));
+    REQUIRE(editor.get_history().get_undo_count() == 1);
+    REQUIRE(editor.undo());
+    REQUIRE(document.get(loose).m_parent.is_nil());
+    REQUIRE(document.get(board.m_artboard).get_artboard()->m_frame ==
+      Rect(100, 100, 600, 400));
   }
 
   TEST_CASE("rotate") {
@@ -523,6 +587,26 @@ TEST_SUITE("SelectTool") {
     auto copy = nodes.front();
     REQUIRE(copy != board.m_rectangle);
     REQUIRE(get_bounds(document, copy) == Rect(420, 160, 100, 50));
+    REQUIRE(get_bounds(document, board.m_rectangle) ==
+      Rect(400, 150, 100, 50));
+    REQUIRE(editor.get_history().get_undo_count() == 1);
+    REQUIRE(editor.undo());
+    REQUIRE(!document.find(copy));
+    tools.press(make_event(
+      Point(450, 175), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
+    drag_to(tools, Point(450, 175), Point(460, 175));
+    REQUIRE(get_bounds(document, board.m_rectangle) ==
+      Rect(410, 150, 100, 50));
+    tools.key_press(KeyEvent(Qt::Key_Alt, Qt::AltModifier));
+    REQUIRE(get_bounds(document, board.m_rectangle) ==
+      Rect(400, 150, 100, 50));
+    drag_to(tools, Point(460, 175), Point(480, 185), Qt::AltModifier);
+    tools.release(make_event(
+      Point(480, 185), Qt::LeftButton, Qt::NoButton, Qt::AltModifier));
+    REQUIRE(nodes.size() == 1);
+    copy = nodes.front();
+    REQUIRE(copy != board.m_rectangle);
+    REQUIRE(get_bounds(document, copy) == Rect(430, 160, 100, 50));
     REQUIRE(get_bounds(document, board.m_rectangle) ==
       Rect(400, 150, 100, 50));
     REQUIRE(editor.get_history().get_undo_count() == 1);
@@ -718,5 +802,44 @@ TEST_SUITE("SelectTool") {
     REQUIRE(editor.get_history().get_undo_count() == 1);
     editor.undo();
     REQUIRE(get_bounds(document, first).m_y == 100);
+  }
+
+  TEST_CASE("stack_nudge") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto group = Group();
+    group.m_stack = Stack(Orientation::HORIZONTAL);
+    auto stack = transaction.append(
+      NodeId(), make_header("Stack", make_translation(100, 100)), group);
+    auto last = add_rectangle(transaction, stack, Rect(50, 0, 40, 30));
+    auto first = add_rectangle(transaction, stack, Rect(0, 0, 40, 30));
+    auto payload = *document.get(stack).get_group();
+    payload.m_stack->m_spacing.emplace(first, 10);
+    transaction.replace_payload(stack, payload);
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    editor.get_selection().select(first);
+    for(auto key : {Qt::Key_Left, Qt::Key_Right}) {
+      for(auto modifiers : {Qt::NoModifier, Qt::ShiftModifier}) {
+        REQUIRE(tools.key_press(KeyEvent(key, modifiers)));
+        tools.key_release(KeyEvent(key, modifiers));
+      }
+    }
+    REQUIRE(document.get(stack).m_children == std::vector{last, first});
+    REQUIRE(get_bounds(document, first) == Rect(100, 100, 40, 30));
+    REQUIRE(editor.get_history().get_undo_count() == 0);
+    type(tools, Qt::Key_Down);
+    REQUIRE(get_bounds(document, first) == Rect(100, 101, 40, 30));
+    type(tools, Qt::Key_Up, Qt::ShiftModifier);
+    REQUIRE(get_bounds(document, first) == Rect(100, 91, 40, 30));
+    REQUIRE(get_bounds(document, last) == Rect(150, 100, 40, 30));
+    REQUIRE(editor.get_history().get_undo_count() == 2);
+    editor.get_selection().select(std::vector{first, last});
+    type(tools, Qt::Key_Right);
+    REQUIRE(get_bounds(document, first).m_x == 100);
+    REQUIRE(get_bounds(document, last).m_x == 150);
   }
 }

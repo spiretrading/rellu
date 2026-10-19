@@ -582,6 +582,8 @@ TEST_SUITE("PreviewPlayer") {
         scene.m_home, make_stage_header("Help", 10, 250), text);
       transaction.commit();
     }
+    add_interaction(document, label, TapTrigger(),
+      ArtboardTransition(scene.m_second, make_linear(Transition::NONE)));
     auto player = make_player(document, scene.m_home);
     auto opened = std::vector<std::string>();
     player->set_link_handler([&] (const std::string& url) {
@@ -595,6 +597,7 @@ TEST_SUITE("PreviewPlayer") {
     });
     tap(*player, Point(20, 255));
     REQUIRE(opened == std::vector<std::string>({"https://help"}));
+    REQUIRE(player->get_artboard() == scene.m_home);
     REQUIRE(positions.size() == 1);
     REQUIRE(positions.front() == Point(10, 5));
     tap(*player, Point(300, 280));

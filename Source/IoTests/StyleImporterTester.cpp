@@ -92,6 +92,21 @@ TEST_SUITE("StyleImporter") {
       RadialGradient(Point(0.25, 0.5), 1.5, Point(0.1, 0.2))));
   }
 
+  TEST_CASE("angular_gradient") {
+    auto document = Document();
+    auto report = import_nodes(make_shape(R"({"fill": {"type": "gradient",
+      "gradient": {"meta": {"ux": {"gradientResources": {"type": "angular",
+      "stops": [{"offset": 0, "color": {"mode": "RGB", "value": {"r": 52,
+      "g": 120, "b": 246}}}, {"offset": 1, "color": {"mode": "RGB",
+      "value": {"r": 26, "g": 60, "b": 123}}}]}, "x": 0.5, "y": 0.5,
+      "rotation": 45}}, "units": "objectBoundingBox"}}})"), document);
+    REQUIRE(report.m_unconsumed.empty());
+    auto fill = std::get<GradientFill>(get_style(document).m_fill);
+    REQUIRE(fill.m_geometry ==
+      GradientGeometry(AngularGradient(Point(0.5, 0.5), 45)));
+    REQUIRE(fill.m_stops.size() == 2);
+  }
+
   TEST_CASE("pattern_fill") {
     auto package = XdTestPackage();
     package.m_entries.emplace_back(

@@ -99,6 +99,25 @@ TEST_SUITE("ComponentActions") {
       m_states.size() == 1);
     REQUIRE(get_instance_role(document.get(main))->m_state.is_nil());
     REQUIRE(!fixture.is_enabled("component.delete_state"));
+    REQUIRE(fixture.m_actions.trigger("component.add_state"));
+    REQUIRE(document.get_resources().m_components.at(ids.m_component).
+      m_states.back().m_name == "State 3");
+    REQUIRE(fixture.m_actions.trigger("component.add_state"));
+    REQUIRE(document.get_resources().m_components.at(ids.m_component).
+      m_states.back().m_name == "State 4");
+  }
+
+  TEST_CASE("new_state_name") {
+    auto fixture = Fixture();
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    fixture.m_component_actions->set_editor(&editor);
+    editor.get_selection().select(ids.m_instance);
+    fixture.m_actions.trigger("object.edit_main_component");
+    REQUIRE(fixture.m_actions.trigger("component.add_state"));
+    REQUIRE(document.get_resources().m_components.at(ids.m_component).
+      m_states.back().m_name == "State 2");
   }
 
   TEST_CASE("linked") {

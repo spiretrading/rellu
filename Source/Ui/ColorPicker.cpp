@@ -33,8 +33,8 @@ namespace {
   constexpr auto CHECKER = 4;
   const auto WHITE = QColor(0xFF, 0xFF, 0xFF);
   const auto MODELS = QStringList({"Hex", "RGB", "HSB"});
-  const auto TYPES =
-    QStringList({"Solid Color", "Linear Gradient", "Radial Gradient"});
+  const auto TYPES = QStringList({"Solid Color", "Linear Gradient",
+    "Radial Gradient", "Angular Gradient"});
 
   QColor to_qcolor(const Color& color) {
     return QColor::fromRgbF(static_cast<float>(color.m_red),
@@ -499,6 +499,7 @@ ColorPicker::ColorPicker(QWidget* parent)
       m_is_gradient_enabled(true),
       m_is_picking(false),
       m_is_updating(false),
+      m_is_canvas_dragging(false),
       m_model(ColorModel::HEX),
       m_type(new ChevronBox()),
       m_bar(new GradientBar(*this)),
@@ -610,6 +611,8 @@ Color ColorPicker::get_color() const {
     if(m_stop >= 0 && m_stop < static_cast<int>(gradient->m_stops.size())) {
       return gradient->m_stops[m_stop].m_color;
     }
+  } else if(std::holds_alternative<ImageFill>(m_fill)) {
+    return Color(1, 1, 1, 1);
   }
   return to_color(QColor::fromHsvF(static_cast<float>(m_hue / 360),
     static_cast<float>(m_saturation), static_cast<float>(m_value),
@@ -631,22 +634,28 @@ void ColorPicker::apply_type(int index) {
       return;
     }
     m_fill = SolidFill(color);
-  } else if(index == 1 || index == 2) {
+  } else if(index >= 1 && index <= 3) {
     auto gradient = GradientFill();
+    auto is_new = false;
     if(auto current = std::get_if<GradientFill>(&m_fill)) {
       gradient = *current;
     } else {
-      gradient.m_stops.push_back(GradientStop(0, color));
-      gradient.m_stops.push_back(GradientStop(1, Color(1, 1, 1, 1)));
+      gradient.m_stops = make_default_stops(color);
+      is_new = true;
     }
-    if(index == 1 &&
-        !std::holds_alternative<LinearGradient>(gradient.m_geometry)) {
+    if(index == 1 && (is_new ||
+        !std::holds_alternative<LinearGradient>(gradient.m_geometry))) {
       gradient.m_geometry = LinearGradient(Point(0.5, 0), Point(0.5, 1));
       gradient.m_units = GradientUnits::OBJECT_BOUNDING_BOX;
       gradient.m_transform = Matrix();
-    } else if(index == 2 &&
-        !std::holds_alternative<RadialGradient>(gradient.m_geometry)) {
+    } else if(index == 2 && (is_new ||
+        !std::holds_alternative<RadialGradient>(gradient.m_geometry))) {
       gradient.m_geometry = RadialGradient();
+      gradient.m_units = GradientUnits::OBJECT_BOUNDING_BOX;
+      gradient.m_transform = Matrix();
+    } else if(index == 3 && (is_new ||
+        !std::holds_alternative<AngularGradient>(gradient.m_geometry))) {
+      gradient.m_geometry = AngularGradient();
       gradient.m_units = GradientUnits::OBJECT_BOUNDING_BOX;
       gradient.m_transform = Matrix();
     } else if(std::holds_alternative<GradientFill>(m_fill)) {
@@ -728,6 +737,44 @@ void ColorPicker::popup(const QRect& anchor) {
   move(position);
   show();
   raise();
+}
+
+void ColorPicker::apply_fill(const Fill& fill) {
+  set_fill(fill);
+  report();
+}
+
+void ColorPicker::set_canvas_handler(CanvasHandler handler) {
+  m_canvas_handler = std::move(handler);
+}
+
+void ColorPicker::mousePressEvent(QMouseEvent* event) {
+  if(!rect().contains(event->position().toPoint()) && m_canvas_handler &&
+      m_canvas_handler(CanvasEvent::PRESS, event->globalPosition())) {
+    m_is_canvas_dragging = true;
+    event->accept();
+    return;
+  }
+  QFrame::mousePressEvent(event);
+}
+
+void ColorPicker::mouseMoveEvent(QMouseEvent* event) {
+  if(m_is_canvas_dragging) {
+    m_canvas_handler(CanvasEvent::MOVE, event->globalPosition());
+    event->accept();
+    return;
+  }
+  QFrame::mouseMoveEvent(event);
+}
+
+void ColorPicker::mouseReleaseEvent(QMouseEvent* event) {
+  if(m_is_canvas_dragging) {
+    m_is_canvas_dragging = false;
+    m_canvas_handler(CanvasEvent::RELEASE, event->globalPosition());
+    event->accept();
+    return;
+  }
+  QFrame::mouseReleaseEvent(event);
 }
 
 void ColorPicker::hideEvent(QHideEvent* event) {
@@ -823,15 +870,7 @@ void ColorPicker::update_type() {
   m_type->setVisible(m_is_gradient_enabled);
   auto index = 0;
   if(auto gradient = std::get_if<GradientFill>(&m_fill)) {
-    index = std::holds_alternative<RadialGradient>(gradient->m_geometry) ? 2 :
-      1;
-  }
-  if(m_type->count() > static_cast<int>(TYPES.size())) {
-    m_type->removeItem(static_cast<int>(TYPES.size()));
-  }
-  if(std::holds_alternative<ImageFill>(m_fill)) {
-    m_type->addItem("Image Fill");
-    index = static_cast<int>(TYPES.size());
+    index = static_cast<int>(gradient->m_geometry.index()) + 1;
   }
   m_type->setCurrentIndex(index);
   m_bar->setVisible(std::holds_alternative<GradientFill>(m_fill));
@@ -1011,6 +1050,14 @@ void ColorPicker::pick_from_screen() {
       self->apply_color(picked);
     }
   }, restore);
+}
+
+std::vector<GradientStop> Rellu::make_default_stops(const Color& color) {
+  auto halve = [] (double component) {
+    return std::floor(component * 255 / 2 + 0.5) / 255;
+  };
+  return {GradientStop(0, color), GradientStop(1, Color(halve(color.m_red),
+    halve(color.m_green), halve(color.m_blue), color.m_alpha))};
 }
 
 void Rellu::pick_screen_color(std::function<void (const Color& color)> handler,

@@ -164,7 +164,9 @@ namespace Rellu {
    * @param is_horizontal Whether the nodes are mirrored left to right rather
    *        than top to bottom.
    * @param measurer The function measuring text.
-   * @return The command, or <code>nullptr</code> if no node can be mirrored.
+   * @return The command, or <code>nullptr</code> if no node can be mirrored
+   *         or every node is a component instance, a repeat grid or a
+   *         scroll group.
    */
   std::unique_ptr<Command> make_flip_command(const Document& document,
     const std::vector<NodeId>& nodes, bool is_horizontal,

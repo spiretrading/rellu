@@ -67,6 +67,20 @@ TEST_SUITE("HitTester") {
     REQUIRE(*tester.get_extent(rectangle) == Rect(0, 0, 20, 20));
   }
 
+  TEST_CASE("clipped_child") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = add_artboard(transaction, Rect(0, 0, 200, 200));
+    auto rectangle =
+      add_rectangle(transaction, artboard, Rect(180, 50, 60, 20));
+    transaction.commit();
+    auto tester = HitTester(document);
+    REQUIRE(tester.hit(Point(190, 60), 0, true) == rectangle);
+    REQUIRE(tester.hit(Point(220, 60), 0, true).is_nil());
+    REQUIRE(tester.hit_within(rectangle, Point(220, 60), 0) == rectangle);
+    REQUIRE(tester.hit_within(rectangle, Point(260, 60), 0).is_nil());
+  }
+
   TEST_CASE("strokes") {
     auto document = Document();
     auto transaction = Transaction(document);
@@ -220,15 +234,19 @@ TEST_SUITE("HitTester") {
       make_translation(200, 200) * make_rotation(std::numbers::pi / 4)),
       make_rectangle_shape(100, 10));
     auto hidden = add_rectangle(transaction, artboard, Rect(10, 10, 20, 20));
+    auto locked = add_rectangle(transaction, artboard, Rect(40, 40, 10, 10));
     transaction.commit();
     edit_header(document, hidden, [] (auto& header) {
       header.m_is_visible = false;
     });
+    edit_header(document, locked, [] (auto& header) {
+      header.m_is_locked = true;
+    });
     auto tester = HitTester(document);
     REQUIRE(tester.query(artboard, Rect(0, 0, 60, 60)) ==
-      std::vector{first, second});
+      std::vector{first, second, locked});
     REQUIRE(tester.query(artboard, Rect(0, 0, 60, 60), true) ==
-      std::vector{first});
+      std::vector{first, locked});
     REQUIRE(tester.query(artboard, Rect(260, 200, 20, 20)).empty());
     REQUIRE(tester.query(artboard, Rect(230, 230, 20, 20)) ==
       std::vector{turned});

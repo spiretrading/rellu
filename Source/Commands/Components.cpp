@@ -1568,6 +1568,22 @@ namespace {
         }
       }
 
+      bool is_in_copied_artboard(
+          const Node& node, const std::unordered_set<NodeId>& inserted) const {
+        auto parent = node.m_parent;
+        for(auto depth = 0; !parent.is_nil() && depth != 512; ++depth) {
+          auto current = m_document->find(parent);
+          if(!current) {
+            return false;
+          }
+          if(current->get_artboard()) {
+            return inserted.contains(parent);
+          }
+          parent = current->m_parent;
+        }
+        return false;
+      }
+
       void renumber_copies(const ChangeSet& changes) {
         auto inserted = std::unordered_set<NodeId>(
           changes.m_inserted.begin(), changes.m_inserted.end());
@@ -1576,7 +1592,8 @@ namespace {
           auto role = node ? get_instance_role(*node) : nullptr;
           auto component = role ? find_component(role->m_component) : nullptr;
           if(!component || role->m_is_main || !get_instance_number(
-              node->m_header.m_name, component->m_name)) {
+              node->m_header.m_name, component->m_name) ||
+              is_in_copied_artboard(*node, inserted)) {
             continue;
           }
           auto is_taken = false;

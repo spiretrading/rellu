@@ -109,7 +109,7 @@ TEST_SUITE("Typeface") {
     auto library = FontLibrary(get_system_font_directories());
     auto emoji = library.resolve(
       Font("Segoe UI Emoji", "Regular", "SegoeUIEmoji", 16)).m_typeface;
-    auto text = std::u16string(u"✅");
+    auto text = std::u16string(u"\u2705");
     auto glyph = emoji->shape(text, 0, 1).front().m_index;
     auto& layers = emoji->get_color_layers(glyph);
     REQUIRE(layers.size() > 1);

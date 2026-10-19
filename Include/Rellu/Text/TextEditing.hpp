@@ -129,10 +129,12 @@ namespace Rellu {
   std::size_t get_previous_word(std::u16string_view content, std::size_t index);
 
   /**
-   * Returns the range of the word, run of spaces or punctuation mark at an
-   * index, as a double click selects.
+   * Returns the range of the word or punctuation mark holding a character
+   * with the spaces following it, or of the run of spaces holding it, as a
+   * double click on the character selects.
    * @param content The text's content.
-   * @param index The index.
+   * @param index The index of the character, the character before it being
+   *        taken at the end of a line.
    * @return The start and end of the range.
    */
   std::pair<std::size_t, std::size_t> find_word(

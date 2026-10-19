@@ -716,6 +716,30 @@ TEST_SUITE("PathRenderer") {
     }
   }
 
+  TEST_CASE("angular_gradient") {
+    auto renderer = TestRenderer();
+    auto stops = std::vector<GradientStop>({
+      GradientStop(0, make_color(255, 255, 255)),
+      GradientStop(1, make_color(0, 0, 0))});
+    auto gradient = AngularGradient(Point(32, 32), 30);
+    renderer.m_list.push_back(FillCommand(
+      share(make_rectangle(Rect(0, 0, 64, 64))),
+      Matrix(), GradientPaint(gradient, stops, Matrix())));
+    auto image = render(renderer, QSize(64, 64));
+    for(auto y = 0; y < 64; y += 3) {
+      for(auto x = 0; x < 64; x += 3) {
+        auto point = Point(x + 0.5, y + 0.5);
+        auto offset = get_angular_offset(gradient, point);
+        if(std::abs(point.m_x - 32) < 3 && std::abs(point.m_y - 32) < 3 ||
+            offset < 0.03 || offset > 0.97) {
+          continue;
+        }
+        require_pixel(
+          image, x, y, premultiply(evaluate_gradient(stops, offset)), 3);
+      }
+    }
+  }
+
   TEST_CASE("image_fill") {
     auto colors = std::array<QColor, 8>({QColor(255, 0, 0), QColor(0, 255, 0),
       QColor(0, 0, 255), QColor(255, 255, 0), QColor(0, 255, 255),

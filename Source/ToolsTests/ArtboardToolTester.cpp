@@ -1,4 +1,5 @@
 #include <doctest/doctest.h>
+#include "Rellu/Commands/ArtboardPresets.hpp"
 #include "Rellu/Tools/ArtboardTool.hpp"
 #include "Rellu/Tools/ToolManager.hpp"
 #include "../CommandsTests/Fixture.hpp"
@@ -54,7 +55,7 @@ TEST_SUITE("ArtboardTool") {
     auto& node = document.get(nodes.front());
     REQUIRE(node.m_parent.is_nil());
     REQUIRE(document.get_canvas() == std::vector{existing, node.get_id()});
-    REQUIRE(node.m_header.m_name == "Artboard \xE2\x80\x93 5");
+    REQUIRE(node.m_header.m_name == "Artboard \xE2\x80\x93 1");
     REQUIRE(node.m_header.m_transform == Matrix());
     auto& artboard = *node.get_artboard();
     REQUIRE(artboard.m_frame == Rect(500, 100, 300, 300));
@@ -64,8 +65,9 @@ TEST_SUITE("ArtboardTool") {
     REQUIRE(editor.get_history().get_undo_label() == "Artboard");
     REQUIRE(tools.get_tool_name() == "artboard");
     drag(tools, Point(600, 600), Point(700, 650), Qt::ShiftModifier);
-    REQUIRE(document.get(editor.get_selection().get_primary()).
-      get_artboard()->m_frame == Rect(600, 600, 100, 100));
+    auto& square = document.get(editor.get_selection().get_primary());
+    REQUIRE(square.get_artboard()->m_frame == Rect(600, 600, 100, 100));
+    REQUIRE(square.m_header.m_name == "Artboard \xE2\x80\x93 2");
   }
 
   TEST_CASE("click") {
@@ -75,15 +77,29 @@ TEST_SUITE("ArtboardTool") {
     auto tools = ToolManager(editor);
     tools.set_view(Matrix(), 1, Size(1000, 800));
     tools.set_tool("artboard");
-    click(tools, Point(200, 200));
+    set_last_used_preset(ArtboardPreset("iPhone 14 Pro", Size(393, 852)));
+    click(tools, Point(105, 90));
     REQUIRE(editor.get_selection().get_nodes() == std::vector{existing});
-    click(tools, Point(800, 700));
-    REQUIRE(editor.get_selection().is_empty());
-    REQUIRE(document.get_canvas() == std::vector{existing});
     REQUIRE(!editor.get_history().can_undo());
+    click(tools, Point(200, 200));
+    auto& created = document.get(editor.get_selection().get_primary());
+    REQUIRE(created.m_header.m_name == "iPhone 14 Pro \xE2\x80\x93 1");
+    REQUIRE(created.get_artboard()->m_frame == Rect(-363, 100, 393, 852));
+    REQUIRE(created.get_artboard()->m_viewport_height == 852);
+    REQUIRE(editor.get_history().get_undo_label() == "Create Artboard");
+    REQUIRE(document.get_canvas() ==
+      std::vector{existing, created.get_id()});
+    set_last_used_preset(ArtboardPreset("Web 1920", Size(1920, 1080)));
+    click(tools, Point(800, 700));
+    auto& beside = document.get(editor.get_selection().get_primary());
+    REQUIRE(beside.m_header.m_name == "Web 1920 \xE2\x80\x93 1");
+    REQUIRE(beside.get_artboard()->m_frame == Rect(470, 100, 1920, 1080));
+    click(tools, Point(500, 2000));
+    REQUIRE(document.get(editor.get_selection().get_primary()).
+      get_artboard()->m_frame == Rect(470, 1270, 1920, 1080));
   }
 
-  TEST_CASE("enclosed_objects") {
+  TEST_CASE("captured_objects") {
     auto document = Document();
     auto existing = build_artboard(document);
     auto transaction = Transaction(document);
@@ -91,11 +107,19 @@ TEST_SUITE("ArtboardTool") {
       make_header("Inside", make_translation(520, 120)),
       make_rectangle_shape(40, 40));
     auto partial = transaction.append(NodeId(),
-      make_header("Partial", make_translation(780, 120)),
+      make_header("Partial", make_translation(790, 120)),
       make_rectangle_shape(40, 40));
     auto outside = transaction.append(NodeId(),
       make_header("Outside", make_translation(900, 120)),
       make_rectangle_shape(40, 40));
+    auto hidden_header = make_header("Hidden", make_translation(600, 200));
+    hidden_header.m_is_visible = false;
+    auto hidden =
+      transaction.append(NodeId(), hidden_header, make_rectangle_shape(20, 20));
+    auto locked_header = make_header("Locked", make_translation(600, 380));
+    locked_header.m_is_locked = true;
+    auto locked =
+      transaction.append(NodeId(), locked_header, make_rectangle_shape(20, 40));
     transaction.commit();
     document.clear_history();
     auto editor = Editor(document);
@@ -106,14 +130,15 @@ TEST_SUITE("ArtboardTool") {
     auto& nodes = editor.get_selection().get_nodes();
     REQUIRE(nodes.size() == 1);
     auto drawn = nodes.front();
-    REQUIRE(document.get_canvas() ==
-      std::vector{existing, partial, outside, drawn});
-    REQUIRE(document.get(drawn).m_children == std::vector{inside});
+    REQUIRE(document.get_canvas() == std::vector{existing, outside, drawn});
+    REQUIRE(document.get(drawn).m_children ==
+      std::vector{inside, partial, hidden, locked});
     REQUIRE(*get_world_bounds(document, inside) == Rect(520, 120, 40, 40));
+    REQUIRE(*get_world_bounds(document, partial) == Rect(790, 120, 40, 40));
     REQUIRE(editor.get_history().get_undo_count() == 1);
     REQUIRE(editor.undo());
     REQUIRE(document.get_canvas() ==
-      std::vector{existing, inside, partial, outside});
+      std::vector{existing, inside, partial, outside, hidden, locked});
     REQUIRE(*get_world_bounds(document, inside) == Rect(520, 120, 40, 40));
   }
 }

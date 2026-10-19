@@ -52,9 +52,11 @@ namespace Rellu {
    * edges and centers of what is moved, resized or drawn snap to those of
    * the other children of its container and of its artboard, to the
    * artboard's guides and visible layout or square grid, and to the spacing
-   * between its neighbours. Cyan lines show what lined up and pink
-   * distances, labelled with plain text, show equal spacing and the
-   * measurements taken while Alt is held. Holding Ctrl suspends snapping.
+   * between its neighbours. Cyan lines show what lined up and the edges a
+   * measured selection shares, and magenta distances without end caps,
+   * labelled with a plain number centred above them, or left of them when
+   * vertical, show equal spacing and the measurements taken while Alt is
+   * held. Holding Ctrl suspends snapping.
    */
   class SmartGuides : public SnapService {
     public:
@@ -77,8 +79,14 @@ namespace Rellu {
       /** The width in logical units of a line. */
       static constexpr auto LINE_WIDTH = 1.0;
 
-      /** The length in logical units of the caps ending a distance. */
-      static constexpr auto CAP_LENGTH = 6.0;
+      /**
+       * The distance in logical units from a distance to the baseline of
+       * the label above it, or to the end of the label left of it.
+       */
+      static constexpr auto LABEL_OFFSET = 6.0;
+
+      /** The height in logical units of a label's text above its baseline. */
+      static constexpr auto FONT_ASCENT = 6.0;
 
       /** The size in logical units of the font of a label. */
       static constexpr auto FONT_SIZE = 10.0;
@@ -110,6 +118,12 @@ namespace Rellu {
 
       /** Returns the lines extending the edges measured to. */
       const std::vector<GuideLine>& get_measured_lines() const;
+
+      /**
+       * Returns the lines along the edges the measured selection shares
+       * with what it is measured to.
+       */
+      const std::vector<GuideLine>& get_measured_edges() const;
 
       /** Returns the distances measured. */
       const std::vector<GuideDistance>& get_measured_distances() const;
@@ -161,6 +175,7 @@ namespace Rellu {
       std::vector<GuideLine> m_lines;
       std::vector<GuideDistance> m_distances;
       std::vector<GuideLine> m_measured_lines;
+      std::vector<GuideLine> m_measured_edges;
       std::vector<GuideDistance> m_measured_distances;
       mutable double m_label_scale;
       mutable std::unordered_map<std::string, std::shared_ptr<const QImage>>

@@ -12,6 +12,12 @@ namespace Rellu {
   /** The grid properties a SetGridCommand sets, absent ones kept. */
   struct GridEdit {
 
+    /**
+     * Whether the grid is first reset to the default for its artboard's
+     * width, keeping whether and which grid is shown, as Use Default does.
+     */
+    std::optional<bool> m_is_default;
+
     /** Whether the grid is displayed. */
     std::optional<bool> m_is_visible;
 
@@ -56,15 +62,37 @@ namespace Rellu {
 
   /**
    * Returns the grid Adobe XD gives an artboard that has none: a hidden
-   * layout grid of 4 columns with a gutter of 10 within left and right
-   * margins of 37, colored #00FFFF at 25%, and square cells of 8 ruled in
-   * #C7C7C7 at 50%.
+   * layout grid colored #00FFFF at 25% whose columns, gutter and margins
+   * depend on the artboard's width (1 column within margins of 28 up to
+   * 312, 4 with a gutter of 10 and margins of 36 up to 599, 8 with a gutter
+   * of 16 and margins of 80 up to 834, 12 with a gutter of 16 and margins
+   * of 120 up to 1024, otherwise margins of 140), the margins then adjusted
+   * so that the columns are about whole widths, and square cells of 8
+   * ruled in #C7C7C7 at 50%. Grids made the default replace the square
+   * grid, and their layout grids by width replace the layout grid.
    * @param artboard The artboard.
+   * @param defaults The grids made the default.
    */
-  LayoutGrid make_default_grid(const Artboard& artboard);
+  LayoutGrid make_default_grid(
+    const Artboard& artboard, const GridDefaults& defaults = GridDefaults());
+
+  /** Returns Adobe XD's own layout grids by artboard width. */
+  std::vector<GridOverride> get_built_in_overrides();
 
   /**
-   * Returns the width of each column of a layout grid on an artboard.
+   * Returns the grids made the default by Make Default: the grid itself,
+   * and the layout grids by width with the grid's layout given to artboards
+   * up to the artboard's width.
+   * @param grid The artboard's grid.
+   * @param width The artboard's width.
+   * @param defaults The grids made the default until now.
+   */
+  GridDefaults make_grid_defaults(const LayoutGrid& grid, double width,
+    const GridDefaults& defaults);
+
+  /**
+   * Returns the width of each column of a layout grid on an artboard,
+   * rounded down to a whole width as Adobe XD shows it.
    * @param grid The grid.
    * @param width The artboard's width.
    */
@@ -97,6 +125,26 @@ namespace Rellu {
     private:
       std::vector<NodeId> m_artboards;
       GridEdit m_edit;
+  };
+
+  /**
+   * Makes the grid of an artboard the grid given to artboards, labelled
+   * Make Default.
+   */
+  class MakeGridDefaultCommand : public Command {
+    public:
+
+      /**
+       * Constructs a MakeGridDefaultCommand.
+       * @param artboard The artboard.
+       */
+      explicit MakeGridDefaultCommand(const NodeId& artboard) noexcept;
+
+      std::string get_label() const override;
+      void apply(const Document& document, Transaction& transaction) override;
+
+    private:
+      NodeId m_artboard;
   };
 
   /**

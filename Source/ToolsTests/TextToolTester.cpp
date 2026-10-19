@@ -169,7 +169,8 @@ TEST_SUITE("TextTool") {
     REQUIRE(get_content(document, id) == u"Hi there");
     REQUIRE(document.get(id).m_header.m_name == "Hi there");
     REQUIRE(editor.get_history().get_undo_count() == 1);
-    REQUIRE(editor.get_history().get_undo_label() == "Add Text");
+    REQUIRE(editor.get_history().get_undo_label() ==
+      "Create Auto Width Text");
     auto& typed = get_text(document, id);
     REQUIRE(typed.m_layout);
     auto relaid = typed;
@@ -177,9 +178,15 @@ TEST_SUITE("TextTool") {
     REQUIRE(**typed.m_layout == store_layout(relaid, get_library()));
     REQUIRE(measure_text(typed, get_library()).m_width > 50);
     REQUIRE(press_key(tools, Qt::Key_Escape));
-    REQUIRE(tools.get_tool_name() == "select");
+    REQUIRE(tools.get_tool_name() == "text");
     REQUIRE(!get_selection(editor).is_editing());
     REQUIRE(editor.get_selection().get_nodes() == std::vector{id});
+    REQUIRE(press_key(tools, Qt::Key_Return));
+    REQUIRE(get_selection(editor).get_node() == id);
+    REQUIRE(get_selection(editor).get_range() == TextRange(0, 8));
+    tool.commit(tools.get_context());
+    REQUIRE(press_key(tools, Qt::Key_Escape));
+    REQUIRE(tools.get_tool_name() == "select");
     REQUIRE(editor.undo());
     REQUIRE(!document.find(id));
   }
@@ -196,8 +203,9 @@ TEST_SUITE("TextTool") {
     auto id = get_selection(editor).get_node();
     auto& node = document.get(id);
     REQUIRE(node.m_header.m_transform == make_translation(100, 100));
-    REQUIRE(std::get<AreaFrame>(node.get_text()->m_frame).m_size ==
-      Size(60, 100));
+    REQUIRE(std::get<AutoHeightFrame>(node.get_text()->m_frame).m_width ==
+      60);
+    REQUIRE(editor.get_history().get_undo_label() == "Draw Text");
     type(tools, u"aaaa bbbb cccc dddd");
     REQUIRE(measure_lines(get_text(document, id), get_library()).size() > 1);
   }
@@ -216,7 +224,7 @@ TEST_SUITE("TextTool") {
     REQUIRE(!document.find(id));
     REQUIRE(editor.get_history().get_undo_count() == 0);
     REQUIRE(document.get(board.m_artboard).m_children.size() == 1);
-    REQUIRE(tools.get_tool_name() == "select");
+    REQUIRE(tools.get_tool_name() == "text");
   }
 
   TEST_CASE("click_outside") {
@@ -229,10 +237,46 @@ TEST_SUITE("TextTool") {
     click(tools, Point(300, 300));
     auto id = get_selection(editor).get_node();
     type(tools, u"x");
+    auto count = document.get(board.m_artboard).m_children.size();
+    click(tools, Point(650, 450));
+    REQUIRE(!tool.is_editing(tools.get_context()));
+    REQUIRE(tools.get_tool_name() == "text");
+    REQUIRE(editor.get_selection().get_nodes() == std::vector{id});
+    REQUIRE(get_content(document, id) == u"x");
+    REQUIRE(document.get(board.m_artboard).m_children.size() == count);
+    click(tools, get_caret_point(document, board.m_text, 2));
+    REQUIRE(get_selection(editor).get_node() == board.m_text);
+    REQUIRE(get_selection(editor).get_caret() == 2);
+    click(tools, get_caret_point(document, id, 1));
+    REQUIRE(!tool.is_editing(tools.get_context()));
+    REQUIRE(editor.get_selection().get_nodes() == std::vector{board.m_text});
+    click(tools, get_caret_point(document, board.m_text, 2));
+    REQUIRE(tool.is_editing(tools.get_context()));
+    click(tools, Point(650, 450));
+    REQUIRE(editor.get_selection().get_nodes() == std::vector{board.m_text});
+    click(tools, Point(650, 450));
+    REQUIRE(tool.is_editing(tools.get_context()));
+    REQUIRE(document.get(board.m_artboard).m_children.size() == count + 1);
+  }
+
+  TEST_CASE("handed_over_text") {
+    auto document = Document();
+    auto board = build_board(document, u"Hello world");
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto& tool = get_text_tool(tools);
+    auto point = get_caret_point(document, board.m_text, 3);
+    double_click(tools, point);
+    REQUIRE(tool.is_editing(tools.get_context()));
+    REQUIRE(press_key(tools, Qt::Key_Escape));
+    REQUIRE(tools.get_tool_name() == "select");
+    REQUIRE(editor.get_selection().get_nodes() == std::vector{board.m_text});
+    double_click(tools, point);
+    REQUIRE(tool.is_editing(tools.get_context()));
     click(tools, Point(650, 450));
     REQUIRE(!tool.is_editing(tools.get_context()));
     REQUIRE(tools.get_tool_name() == "select");
-    REQUIRE(get_content(document, id) == u"x");
+    REQUIRE(document.get(board.m_artboard).m_children.size() == 1);
   }
 
   TEST_CASE("selection_change") {
@@ -374,9 +418,50 @@ TEST_SUITE("TextTool") {
     press_key(tools, Qt::Key_Return);
     press_key(tools, Qt::Key_Return, Qt::ShiftModifier);
     press_key(tools, Qt::Key_Tab);
-    REQUIRE(get_content(document, board.m_text) == u"a\n\u2028\tb");
+    REQUIRE(get_content(document, board.m_text) == u"a\n\v\tb");
     REQUIRE(measure_lines(get_text(document, board.m_text),
       get_library()).size() == 3);
+  }
+
+  TEST_CASE("line_break") {
+    auto document = Document();
+    auto board = build_board(document, u"");
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto& tool = get_text_tool(tools);
+    tools.set_tool("text");
+    {
+      auto transaction = Transaction(document);
+      auto text = get_text(document, board.m_text);
+      text.m_paragraph_style.m_line_height = 20;
+      text.m_paragraph_style.m_paragraph_spacing = 20;
+      transaction.replace_payload(board.m_text, text);
+      transaction.commit();
+    }
+    tool.edit(tools.get_context(), board.m_text, 0, 0);
+    type(tools, u"one two");
+    press_key(tools, Qt::Key_Return, Qt::ShiftModifier);
+    type(tools, u"three");
+    press_key(tools, Qt::Key_Return);
+    type(tools, u"four");
+    auto& text = get_text(document, board.m_text);
+    REQUIRE(*text.m_content == u"one two\vthree\nfour");
+    REQUIRE(document.get(board.m_text).m_header.m_name ==
+      "one two\vthree\nfour");
+    auto& paragraphs = (*text.m_layout)->m_paragraphs;
+    REQUIRE(paragraphs.size() == 3);
+    auto& first = paragraphs[0].m_lines.front().m_runs.front();
+    REQUIRE(first.m_from == 0);
+    REQUIRE(first.m_to == 7);
+    REQUIRE(first.m_position.m_y == 0);
+    auto& second = paragraphs[1].m_lines.front().m_runs.front();
+    REQUIRE(second.m_from == 8);
+    REQUIRE(second.m_to == 13);
+    REQUIRE(second.m_position.m_y == 40);
+    auto& third = paragraphs[2].m_lines.front().m_runs.front();
+    REQUIRE(third.m_from == 14);
+    REQUIRE(third.m_to == 18);
+    REQUIRE(third.m_position.m_y == 80);
   }
 
   TEST_CASE("typing_over_selection") {
@@ -481,7 +566,7 @@ TEST_SUITE("TextTool") {
     auto point = get_caret_point(document, board.m_text, 7);
     tools.double_click(make_event(point, Qt::LeftButton, Qt::LeftButton));
     tools.release(make_event(point, Qt::LeftButton, Qt::NoButton));
-    REQUIRE(selection.get_range() == TextRange(6, 9));
+    REQUIRE(selection.get_range() == TextRange(6, 10));
     click(tools, point);
     REQUIRE(selection.get_range() == TextRange(0, 15));
     click(tools, get_caret_point(document, board.m_text, 2));
@@ -570,9 +655,11 @@ TEST_SUITE("TextTool") {
     auto& tool = get_text_tool(tools);
     tools.set_tool("text");
     tool.edit(tools.get_context(), board.m_text, 5, 5);
+    auto caret = tool.get_caret_rect(tools.get_context());
     auto style = get_text(document, board.m_text).m_base_style;
     style.m_font.m_size = 40;
     editor.get_text_selection().set_pending_style(style);
+    REQUIRE(tool.get_caret_rect(tools.get_context()) == caret);
     type(tools, u"ab");
     auto& text = get_text(document, board.m_text);
     REQUIRE(*text.m_content == u"Helloab world");
@@ -583,6 +670,103 @@ TEST_SUITE("TextTool") {
     REQUIRE(text.m_runs[2].m_style.m_font.m_size == 20);
     REQUIRE(!editor.get_text_selection().get_pending_style());
     REQUIRE(editor.get_history().get_undo_count() == 1);
+  }
+
+  TEST_CASE("pending_hyperlink") {
+    auto document = Document();
+    auto board = build_board(document, u"Hello world");
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto& tool = get_text_tool(tools);
+    tools.set_tool("text");
+    tool.edit(tools.get_context(), board.m_text, 5, 5);
+    auto& selection = editor.get_text_selection();
+    selection.set_pending_hyperlink("https://example.com");
+    type(tools, u"ab");
+    auto& text = get_text(document, board.m_text);
+    REQUIRE(text.m_runs.size() == 3);
+    REQUIRE(text.m_runs[1].m_length == 2);
+    REQUIRE(text.m_runs[1].m_hyperlink == "https://example.com");
+    REQUIRE(text.m_runs[0].m_hyperlink.empty());
+    REQUIRE(!selection.get_pending_hyperlink());
+  }
+
+  TEST_CASE("last_style") {
+    auto document = Document();
+    auto board = build_board(document, u"Hello world");
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto& tool = get_text_tool(tools);
+    tools.set_tool("text");
+    auto style = get_text(document, board.m_text).m_base_style;
+    style.m_font = Font("Segoe UI", "Bold", "SegoeUI-Bold", 15);
+    style.m_color = make_color(255, 0, 0);
+    style.m_letter_spacing = 50;
+    style.m_is_underlined = true;
+    style.m_transform = TextTransform::UPPERCASE;
+    {
+      auto transaction = Transaction(document);
+      auto text = get_text(document, board.m_text);
+      text.m_base_style = style;
+      text.m_paragraph_style.m_paragraph_spacing = 20;
+      text.m_paragraph_style.m_alignment = TextAlignment::CENTER;
+      transaction.replace_payload(board.m_text, text);
+      transaction.commit();
+    }
+    tool.edit(tools.get_context(), board.m_text, 3, 3);
+    tool.commit(tools.get_context());
+    click(tools, Point(300, 200));
+    auto id = get_selection(editor).get_node();
+    auto& text = get_text(document, id);
+    auto expected = get_default_text_style();
+    expected.m_font = style.m_font;
+    expected.m_color = style.m_color;
+    expected.m_letter_spacing = style.m_letter_spacing;
+    REQUIRE(text.m_base_style == expected);
+    REQUIRE(text.m_style.m_fill == Fill(SolidFill(style.m_color)));
+    REQUIRE(text.m_paragraph_style.m_paragraph_spacing == 20);
+    REQUIRE(text.m_paragraph_style.m_alignment == TextAlignment::CENTER);
+  }
+
+  TEST_CASE("grouped_text") {
+    auto document = Document();
+    auto board = build_board(document, u"Hello world");
+    auto group = NodeId();
+    {
+      auto transaction = Transaction(document);
+      group = transaction.append(board.m_artboard, make_header("Group"),
+        Group());
+      transaction.move(board.m_text, group, 0);
+      transaction.commit();
+    }
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto& tool = get_text_tool(tools);
+    tools.set_tool("text");
+    auto point = get_caret_point(document, board.m_text, 2);
+    click(tools, point);
+    REQUIRE(!tool.is_editing(tools.get_context()));
+    REQUIRE(editor.get_selection().get_nodes() == std::vector{board.m_text});
+    REQUIRE(editor.get_context().get_container() == group);
+    click(tools, point);
+    REQUIRE(tool.is_editing(tools.get_context()));
+    REQUIRE(get_selection(editor).get_caret() == 2);
+  }
+
+  TEST_CASE("punctuation_double_click") {
+    auto document = Document();
+    auto board = build_board(document, u"Hello, big world");
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto& tool = get_text_tool(tools);
+    tools.set_tool("text");
+    tool.edit(tools.get_context(), board.m_text, 0, 0);
+    auto left = get_caret_point(document, board.m_text, 5);
+    auto right = get_caret_point(document, board.m_text, 6);
+    auto point = Point((left.m_x + right.m_x) / 2 + 0.5, left.m_y);
+    tools.double_click(make_event(point, Qt::LeftButton, Qt::LeftButton));
+    tools.release(make_event(point, Qt::LeftButton, Qt::NoButton));
+    REQUIRE(get_selection(editor).get_range() == TextRange(5, 7));
   }
 
   TEST_CASE("text_keys") {

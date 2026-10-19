@@ -9,9 +9,9 @@
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/CornerRadiusCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
+#include "Rellu/Commands/Layouts.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
-#include "Rellu/Commands/StackCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Geometry/Polyline.hpp"
 #include "Rellu/Model/ShapeGeometry.hpp"
@@ -88,6 +88,79 @@ namespace {
   bool is_artboard(const Document& document, const NodeId& id) {
     auto node = document.find(id);
     return node && node->get_artboard();
+  }
+
+  bool is_stacked(const Document& document, const NodeId& id, Point axis) {
+    auto node = document.find(id);
+    auto parent = node ? document.find(node->m_parent) : nullptr;
+    auto group = parent ? parent->get_group() : nullptr;
+    if(!group || !group->m_stack) {
+      return false;
+    }
+    auto is_horizontal =
+      group->m_stack->m_orientation == Orientation::HORIZONTAL;
+    if(is_horizontal != (axis.m_x != 0)) {
+      return false;
+    }
+    auto items = get_stack_items(document, parent->get_id());
+    return std::find(items.begin(), items.end(), id) != items.end();
+  }
+
+  NodeId find_clipped_hit(
+      const ToolContext& context, Point point, double tolerance) {
+    auto& document = context.get_document();
+    auto& editor = context.get_editor();
+    auto& hit_tester = context.get_hit_tester();
+    auto test = [&] (const NodeId& id) {
+      auto artboard = find_artboard(document, id);
+      if(artboard.is_nil() || artboard == id ||
+          document.get(artboard).get_artboard()->m_frame.contains(point)) {
+        return NodeId();
+      }
+      return hit_tester.hit_within(id, point, tolerance, true);
+    };
+    auto test_children = [&] (const NodeId& id) {
+      auto& children = document.get(id).m_children;
+      for(auto i = children.rbegin(); i != children.rend(); ++i) {
+        if(auto hit = test(*i); !hit.is_nil()) {
+          return hit;
+        }
+      }
+      return NodeId();
+    };
+    auto& container = editor.get_context().get_container();
+    if(document.find(container)) {
+      if(auto hit = test_children(container); !hit.is_nil()) {
+        return hit;
+      }
+    }
+    auto& nodes = editor.get_selection().get_nodes();
+    for(auto& id : nodes) {
+      if(auto hit = test(id); !hit.is_nil()) {
+        return hit;
+      }
+    }
+    for(auto& id : nodes) {
+      auto artboard = find_artboard(document, id);
+      if(!artboard.is_nil() && artboard != id) {
+        if(auto hit = test_children(artboard); !hit.is_nil()) {
+          return hit;
+        }
+      }
+    }
+    return NodeId();
+  }
+
+  NodeId find_hit(const ToolContext& context, Point point) {
+    auto tolerance = SelectTool::HIT_TOLERANCE / context.get_zoom();
+    auto& document = context.get_document();
+    auto hit = context.get_hit_tester().hit(point, tolerance, true);
+    auto clipped = find_clipped_hit(context, point, tolerance);
+    if(clipped.is_nil() || (!hit.is_nil() &&
+        find_artboard(document, hit) == find_artboard(document, clipped))) {
+      return hit;
+    }
+    return clipped;
   }
 
   bool is_locked(const Document& document, const NodeId& id) {
@@ -362,6 +435,7 @@ SelectTool::SelectTool()
     m_angle(0),
     m_raw_angle(0),
     m_is_applied(false),
+    m_is_copied(false),
     m_marquee(0, 0, 0, 0),
     m_nudge_key(0),
     m_corner(0),
@@ -448,8 +522,7 @@ void SelectTool::press(ToolContext& context, const PointerEvent& event) {
     select(title);
     return;
   }
-  auto hit = context.get_hit_tester().hit(
-    m_press_document, HIT_TOLERANCE / context.get_zoom(), true);
+  auto hit = find_hit(context, m_press_document);
   auto background = NodeId();
   if(!hit.is_nil() && is_artboard(document, hit)) {
     background = hit;
@@ -554,8 +627,7 @@ void SelectTool::double_click(
   }
   auto& editor = context.get_editor();
   auto& document = context.get_document();
-  auto hit = context.get_hit_tester().hit(context.to_document(
-    event.m_position), HIT_TOLERANCE / context.get_zoom(), true);
+  auto hit = find_hit(context, context.to_document(event.m_position));
   if(hit.is_nil() || is_artboard(document, hit)) {
     return;
   }
@@ -654,10 +726,10 @@ bool SelectTool::key_press(ToolContext& context, const KeyEvent& event) {
   if(nodes.empty()) {
     return false;
   }
-  if(auto reorder =
-      make_stack_nudge(context.get_document(), nodes, delta)) {
-    editor.get_history().seal();
-    editor.execute(std::move(reorder));
+  std::erase_if(nodes, [&] (const auto& id) {
+    return is_stacked(context.get_document(), id, delta);
+  });
+  if(nodes.empty()) {
     return true;
   }
   if(!event.m_is_repeat || m_nudge_key != event.m_key) {
@@ -998,24 +1070,45 @@ void SelectTool::begin_drag(ToolContext& context, const PointerEvent& event) {
   m_box = *box;
   m_delta = Point(0, 0);
   m_gesture = Gesture::MOVE;
-  auto& editor = context.get_editor();
-  editor.get_history().seal();
-  if(is_alt(event.m_modifiers) && std::none_of(m_nodes.begin(), m_nodes.end(),
-      [&] (const auto& id) {
-        return is_artboard(context.get_document(), id);
-      })) {
-    if(editor.execute(std::make_unique<DragCopyCommand>(m_nodes))) {
-      m_nodes = get_top_level(
-        context.get_document(), editor.get_selection().get_nodes());
-      m_is_applied = true;
-    }
+  m_is_copied = false;
+  context.get_editor().get_history().seal();
+  if(is_alt(event.m_modifiers)) {
+    copy(context);
   }
-  editor.get_history().hold_layout(m_nodes);
+  context.get_editor().get_history().hold_layout(m_nodes);
   context.get_snap_service().begin(
     get_container(context.get_document(), m_nodes), m_nodes);
 }
 
+void SelectTool::copy(ToolContext& context) {
+  m_is_copied = true;
+  auto& document = context.get_document();
+  if(std::any_of(m_nodes.begin(), m_nodes.end(), [&] (const auto& id) {
+      return is_artboard(document, id);
+    })) {
+    return;
+  }
+  auto& editor = context.get_editor();
+  if(m_is_applied) {
+    editor.undo();
+    m_is_applied = false;
+  }
+  m_delta = Point(0, 0);
+  if(editor.execute(std::make_unique<DragCopyCommand>(m_nodes))) {
+    m_nodes = get_top_level(document, editor.get_selection().get_nodes());
+    m_is_applied = true;
+  }
+}
+
 void SelectTool::update_move(ToolContext& context, const PointerEvent& event) {
+  if(!m_is_copied && is_alt(event.m_modifiers)) {
+    auto& history = context.get_editor().get_history();
+    history.release_layout();
+    copy(context);
+    history.hold_layout(m_nodes);
+    context.get_snap_service().begin(
+      get_container(context.get_document(), m_nodes), m_nodes);
+  }
   auto raw = context.to_document(event.m_position) - m_press_document;
   if(is_shift(event.m_modifiers)) {
     if(std::abs(raw.m_x) >= std::abs(raw.m_y)) {
@@ -1081,8 +1174,8 @@ void SelectTool::update_resize(
     return;
   }
   auto step = transform * make_rect_mapping(m_resized, rect) * *inverse;
-  context.get_editor().merge(
-    std::make_unique<TransformCommand>(m_nodes, step, "Resize"));
+  context.get_editor().merge(std::make_unique<TransformCommand>(
+    m_nodes, step, "Resize", TransformMode::DRAG));
   m_resized = rect;
   m_is_applied = true;
 }
@@ -1174,13 +1267,16 @@ void SelectTool::update_hover(
   }
   auto hover = context.get_titles().find(event.m_position);
   if(hover.is_nil()) {
-    auto hit = context.get_hit_tester().hit(context.to_document(
-      event.m_position), HIT_TOLERANCE / context.get_zoom(), true);
+    auto hit = find_hit(context, context.to_document(event.m_position));
     if(!hit.is_nil() && !is_artboard(context.get_document(), hit)) {
       hover = resolve_target(context, hit, event.m_modifiers, false);
     }
   }
-  edit.set_hover(hover);
+  if(is_locked(context.get_document(), hover)) {
+    edit.set_hover(NodeId());
+  } else {
+    edit.set_hover(hover);
+  }
   measure(context, get_box(context), hover, event.m_modifiers);
 }
 
@@ -1189,6 +1285,13 @@ void SelectTool::finish(ToolContext& context) {
     m_layout_handles.release(context);
   } else if(m_gesture == Gesture::MOVE || m_gesture == Gesture::RESIZE ||
       m_gesture == Gesture::ROTATE) {
+    if(m_gesture == Gesture::RESIZE && m_is_applied &&
+        std::any_of(m_nodes.begin(), m_nodes.end(), [&] (const auto& id) {
+          return is_artboard(context.get_document(), id);
+        })) {
+      context.get_editor().merge(std::make_unique<TransformCommand>(
+        m_nodes, Matrix(), "Resize", TransformMode::SETTLE));
+    }
     context.get_editor().get_history().release_layout();
     context.get_editor().get_history().seal();
     context.get_snap_service().end();

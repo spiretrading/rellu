@@ -1,6 +1,9 @@
 #include <algorithm>
 #include <cmath>
+#include <optional>
+#include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
+#include "Rellu/Commands/Layouts.hpp"
 #include "Rellu/Tools/DrawTool.hpp"
 #include "Rellu/Tools/SelectionBox.hpp"
 
@@ -20,11 +23,59 @@ namespace {
   Point round_point(Point point) {
     return Point(std::round(point.m_x), std::round(point.m_y));
   }
+
+  struct StackPlace {
+    bool m_is_vertical;
+    NodeId m_next;
+    double m_start;
+    double m_end;
+  };
+
+  std::optional<StackPlace> find_stack_place(const Document& document,
+      const NodeId& stack, const NodeId& id, Point point) {
+    auto node = document.find(stack);
+    auto group = node ? node->get_group() : nullptr;
+    if(!group || !group->m_stack) {
+      return std::nullopt;
+    }
+    auto inverse = invert(get_world_transform(document, stack));
+    if(!inverse) {
+      return std::nullopt;
+    }
+    auto place = StackPlace(
+      group->m_stack->m_orientation == Orientation::VERTICAL, NodeId(), 0, 0);
+    auto get_along = [&] (Point value) {
+      return place.m_is_vertical ? value.m_y : value.m_x;
+    };
+    auto start = get_along(inverse->map(point));
+    auto is_found = false;
+    for(auto& item : get_stack_items(document, stack)) {
+      if(item == id || !document.get(item).m_header.m_is_visible) {
+        continue;
+      }
+      auto rect = get_bounds(document, item, get_transform(document, item));
+      if(!rect) {
+        continue;
+      }
+      is_found = true;
+      place.m_end = get_along(rect->get_bottom_right());
+      if(place.m_end > start) {
+        place.m_next = item;
+        place.m_start = get_along(rect->get_top_left());
+        break;
+      }
+    }
+    if(!is_found) {
+      return std::nullopt;
+    }
+    return place;
+  }
 }
 
 DrawTool::DrawTool(std::string prefix)
   : m_is_pressed(false),
     m_is_applied(false),
+    m_is_held(false),
     m_prefix(std::move(prefix)),
     m_press(0, 0),
     m_start(0, 0) {}
@@ -140,6 +191,8 @@ void DrawTool::update(ToolContext& context, const PointerEvent& event) {
     m_header = NodeHeader();
     m_header->m_id = generate_node_id();
     m_header->m_name = make_node_name(context.get_document(), m_prefix);
+    m_is_held = hold_drawn_layout(
+      context, find_parent(context, m_start), m_header->m_id);
   }
   auto end = context.get_snap_service().snap_point(
     context.to_document(event.m_position), SnapAxes::BOTH, event.m_modifiers);
@@ -154,6 +207,26 @@ void DrawTool::update(ToolContext& context, const PointerEvent& event) {
 }
 
 void DrawTool::finish(ToolContext& context) {
+  if(m_is_held) {
+    auto& editor = context.get_editor();
+    auto& document = context.get_document();
+    if(auto node = m_is_applied ? document.find(m_header->m_id) : nullptr) {
+      auto id = node->get_id();
+      auto parent = node->m_parent;
+      if(auto bounds = get_bounds(document, id, get_transform(document, id))) {
+        auto offset = get_stack_offset(document, parent, id, *bounds, m_start);
+        if(offset != Point(0, 0)) {
+          auto header = node->m_header;
+          header.m_transform =
+            make_translation(offset.m_x, offset.m_y) * header.m_transform;
+          editor.merge(std::make_unique<InsertNodeCommand>(
+            std::string(), parent, std::move(header), node->m_payload));
+        }
+      }
+    }
+    editor.get_history().release_layout();
+    m_is_held = false;
+  }
   if(m_is_applied) {
     context.get_editor().get_history().seal();
   }
@@ -184,6 +257,52 @@ Rect Rellu::make_drawn_box(
     std::abs(delta.m_y));
 }
 
+bool Rellu::hold_drawn_layout(
+    ToolContext& context, const NodeId& parent, const NodeId& id) {
+  auto node = context.get_document().find(parent);
+  auto group = node ? node->get_group() : nullptr;
+  if(!group || !group->m_stack) {
+    return false;
+  }
+  context.get_editor().get_history().hold_layout(std::vector{id});
+  return true;
+}
+
+Point Rellu::get_stack_offset(const Document& document, const NodeId& stack,
+    const NodeId& id, const Rect& bounds, Point point) {
+  auto place = find_stack_place(document, stack, id, point);
+  if(!place) {
+    return Point(0, 0);
+  }
+  auto key = place->m_end + 1;
+  if(!place->m_next.is_nil()) {
+    key = place->m_start;
+  }
+  if(place->m_is_vertical) {
+    return Point(0, key - bounds.get_center().m_y);
+  }
+  return Point(key - bounds.get_center().m_x, 0);
+}
+
+std::optional<std::size_t> Rellu::get_stack_index(const Document& document,
+    const NodeId& stack, const NodeId& id, Point point) {
+  auto place = find_stack_place(document, stack, id, point);
+  if(!place) {
+    return std::nullopt;
+  }
+  auto children = document.get(stack).m_children;
+  std::erase(children, id);
+  if(place->m_next.is_nil()) {
+    auto& role = *document.get(stack).get_group()->m_stack;
+    if(role.m_has_background && !children.empty()) {
+      return 1;
+    }
+    return 0;
+  }
+  return static_cast<std::size_t>(std::find(children.begin(), children.end(),
+    place->m_next) - children.begin()) + 1;
+}
+
 NodeId Rellu::find_drawing_parent(const Document& document, Point point) {
   auto& canvas = document.get_canvas();
   for(auto i = canvas.rbegin(); i != canvas.rend(); ++i) {
@@ -205,8 +324,7 @@ NodeId Rellu::find_drawing_parent(const ToolContext& context, Point point) {
   auto current = container;
   while(auto node = document.find(current)) {
     if(auto group = node->get_group()) {
-      if(group->m_repeat_grid || group->m_stack ||
-          group->m_component_instance) {
+      if(group->m_repeat_grid && current == container) {
         return find_drawing_parent(document, point);
       }
     } else if(!node->get_artboard()) {

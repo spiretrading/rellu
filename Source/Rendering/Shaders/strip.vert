@@ -57,7 +57,7 @@ void main() {
     v_divisor = dot(fetch(base + 4.0).xyz, point) + 1.0;
     v_paint = vec4(dot(first.xyz, point), dot(second.xyz, point), first.w,
       second.w);
-    if(first.w > 2.5) {
+    if(first.w > 2.5 && first.w < 4.5) {
       vec4 third = fetch(base + 2.0);
       vec4 fourth = fetch(base + 3.0);
       v_extra = vec4(third.x * position.x + third.y,

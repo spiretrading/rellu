@@ -1,5 +1,6 @@
 #include <vector>
 #include <doctest/doctest.h>
+#include <QComboBox>
 #include <QLineEdit>
 #include <QToolButton>
 #include "Rellu/Ui/ColorPicker.hpp"
@@ -62,8 +63,10 @@ TEST_SUITE("ColorPicker") {
     auto linear = std::get<GradientFill>(fill);
     REQUIRE(std::holds_alternative<LinearGradient>(linear.m_geometry));
     REQUIRE(linear.m_stops.size() == 2);
+    REQUIRE(std::get<LinearGradient>(linear.m_geometry) ==
+      LinearGradient(Point(0.5, 0), Point(0.5, 1)));
     REQUIRE(linear.m_stops[0].m_color == make_color(255, 0, 0));
-    REQUIRE(linear.m_stops[1].m_color == make_color(255, 255, 255));
+    REQUIRE(linear.m_stops[1].m_color == make_color(128, 0, 0));
     picker.set_stop(1);
     picker.apply_color(make_color(0, 0, 255));
     REQUIRE(std::get<GradientFill>(fill).m_stops[1].m_color ==
@@ -72,10 +75,47 @@ TEST_SUITE("ColorPicker") {
     auto radial = std::get<GradientFill>(fill);
     REQUIRE(std::holds_alternative<RadialGradient>(radial.m_geometry));
     REQUIRE(radial.m_stops[1].m_color == make_color(0, 0, 255));
+    picker.apply_type(3);
+    auto angular = std::get<GradientFill>(fill);
+    REQUIRE(angular.m_geometry == GradientGeometry(AngularGradient()));
+    REQUIRE(angular.m_stops == radial.m_stops);
     picker.apply_type(0);
     REQUIRE(fill == Fill(SolidFill(make_color(255, 0, 0))));
     picker.set_gradient_enabled(false);
     REQUIRE(!picker.is_gradient_enabled());
+  }
+
+  TEST_CASE("default_stops") {
+    auto stops = make_default_stops(make_color(255, 255, 255));
+    REQUIRE(stops.size() == 2);
+    REQUIRE(stops[0] == GradientStop(0, make_color(255, 255, 255)));
+    REQUIRE(stops[1] == GradientStop(1, make_color(0x80, 0x80, 0x80)));
+    REQUIRE(make_default_stops(make_color(51, 100, 7, 0.5))[1].m_color ==
+      make_color(26, 50, 4, 0.5));
+  }
+
+  TEST_CASE("image_fill") {
+    auto picker = ColorPicker();
+    auto fill = Fill();
+    picker.set_change_handler([&] (const auto& changed) {
+      fill = changed;
+    });
+    auto image = ImageFill();
+    image.m_image = generate_node_id();
+    picker.set_fill(image);
+    REQUIRE(picker.get_color() == make_color(255, 255, 255));
+    REQUIRE(get_field(picker, "Hex").text() == "#FFFFFF");
+    auto type = static_cast<QComboBox*>(nullptr);
+    for(auto box : picker.findChildren<QComboBox*>()) {
+      if(box->accessibleName() == "Fill Type") {
+        type = box;
+      }
+    }
+    REQUIRE(type);
+    REQUIRE(type->count() == 4);
+    REQUIRE(type->currentText() == "Solid Color");
+    enter(picker, "Hex", "#00FF00");
+    REQUIRE(fill == Fill(SolidFill(make_color(0, 255, 0))));
   }
 
   TEST_CASE("swatches") {

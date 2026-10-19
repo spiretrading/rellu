@@ -1,6 +1,8 @@
+#include <algorithm>
 #include <memory>
 #include <vector>
 #include <doctest/doctest.h>
+#include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Ui/AssetsPanel.hpp"
 #include "TestDocument.hpp"
 
@@ -48,10 +50,10 @@ TEST_SUITE("AssetsPanel") {
       transaction.commit();
     }
     REQUIRE(panel.get_entries(AssetSection::COLORS) ==
-      std::vector<QString>({"#F5F5F5", "Accent"}));
+      std::vector<QString>({"Accent", "#F5F5F5"}));
     REQUIRE(panel.get_entries(AssetSection::CHARACTER_STYLES) ==
-      std::vector<QString>({QString("Roboto %1 12pt").arg(EM_DASH),
-        QString("Roboto Bold %1 14pt").arg(EM_DASH)}));
+      std::vector<QString>({QString("Roboto Bold %1 14pt").arg(EM_DASH),
+        QString("Roboto %1 12pt").arg(EM_DASH)}));
     panel.set_document(nullptr);
     REQUIRE(panel.get_entries(AssetSection::COMPONENTS).empty());
     REQUIRE(panel.is_empty_shown());
@@ -162,12 +164,91 @@ TEST_SUITE("AssetsPanel") {
         texts.push_back(action->text());
       }
     }
-    REQUIRE(texts == QStringList({"Apply as Fill", "Apply as Border", "Edit",
+    REQUIRE(texts == QStringList({"Copy #00FF00", "Edit",
+      "Highlight on canvas", "New group from element", "Move to...",
       "Rename", "Delete"}));
     REQUIRE(panel.delete_swatch(swatch));
     REQUIRE(panel.get_swatches().empty());
     REQUIRE(document.get(ids.m_ellipse).get_shape()->m_style.m_fill ==
       Fill(SolidFill(make_color(0, 255, 0))));
+  }
+
+  TEST_CASE("asset_groups") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto panel = AssetsPanel();
+    panel.set_editor(&editor);
+    editor.get_selection().select(ids.m_background);
+    REQUIRE(panel.add_colors());
+    REQUIRE(editor.execute(std::make_unique<AddSwatchCommand>(
+      ColorSwatch(NodeId(), "", make_color(0, 255, 0)))));
+    auto swatches = panel.get_swatches();
+    REQUIRE(swatches.size() == 2);
+    auto group = panel.group_assets({swatches.back()});
+    REQUIRE(!group.empty());
+    REQUIRE(editor.get_history().get_undo_label() == "Create Asset Group");
+    REQUIRE(panel.get_group_names(AssetSection::COLORS) ==
+      std::vector<QString>({"New group"}));
+    REQUIRE(panel.rename_group(group, "Brand"));
+    REQUIRE(panel.get_group_names(AssetSection::COLORS) ==
+      std::vector<QString>({"Brand"}));
+    auto group_menu =
+      std::unique_ptr<QMenu>(panel.make_group_menu(group, nullptr));
+    auto group_texts = QStringList();
+    for(auto action : group_menu->actions()) {
+      if(!action->isSeparator()) {
+        group_texts.push_back(action->text());
+      }
+    }
+    REQUIRE(group_texts ==
+      QStringList({"Create subgroup", "Rename group", "Ungroup", "Delete"}));
+    REQUIRE(panel.move_assets({swatches.front()}, group));
+    REQUIRE(find_asset_group(document.get_resources(), swatches.front()) ==
+      group);
+    panel.set_selected_assets(swatches);
+    auto menu = std::unique_ptr<QMenu>(panel.make_selection_menu(nullptr));
+    auto texts = QStringList();
+    for(auto action : menu->actions()) {
+      if(!action->isSeparator()) {
+        texts.push_back(action->text());
+      }
+    }
+    REQUIRE(texts == QStringList({"New group from selection",
+      "Move selected items to", "Delete"}));
+    REQUIRE(panel.delete_assets(swatches));
+    REQUIRE(editor.get_history().get_undo_label() == "Delete Colors");
+    REQUIRE(panel.get_swatches().empty());
+  }
+
+  TEST_CASE("highlight_on_canvas") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto panel = AssetsPanel();
+    auto highlighted = std::vector<NodeId>();
+    auto messages = QStringList();
+    panel.set_highlight_handler([&] (const auto& nodes) {
+      highlighted = nodes;
+    });
+    panel.set_message_handler([&] (const auto& message) {
+      messages.push_back(message);
+    });
+    panel.set_editor(&editor);
+    editor.get_selection().select(ids.m_background);
+    REQUIRE(panel.add_colors());
+    auto swatch = panel.get_swatches().front();
+    REQUIRE(panel.highlight_instances(swatch));
+    REQUIRE(std::find(highlighted.begin(), highlighted.end(),
+      ids.m_background) != highlighted.end());
+    REQUIRE(editor.get_selection().is_empty());
+    auto unused = Transaction(document);
+    auto id = unused.add_swatch(
+      ColorSwatch(NodeId(), "", make_color(1, 2, 3)));
+    unused.commit();
+    REQUIRE(!panel.highlight_instances(id));
+    REQUIRE(highlighted.empty());
+    REQUIRE(messages == QStringList({"0 objects use this color"}));
   }
 
   TEST_CASE("color_editing") {
@@ -215,7 +296,8 @@ TEST_SUITE("AssetsPanel") {
       "Body");
     auto menu = std::unique_ptr<QMenu>(
       panel.make_character_style_menu(style, nullptr));
-    REQUIRE(menu->actions().front()->text() == "Apply");
+    REQUIRE(menu->actions().front()->text() == "Remove font");
+    REQUIRE(!menu->actions().front()->isEnabled());
     REQUIRE(panel.delete_character_style(style));
     REQUIRE(panel.get_character_styles().empty());
   }

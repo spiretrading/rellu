@@ -180,11 +180,27 @@ not observable without mouse or text input)*.
 
 ## Context menus
 
-Right-clicking the canvas, an object or an artboard could not be surveyed:
-XD ignores injected mouse input, and neither Shift+F10 nor the Applications
-key opens a context menu (`run4/context-object.png`,
-`run5/context-object-apps.png`). *(Inferred: XD's context menus repeat the
-Edit and Object menu commands that apply to the selection.)*
+Observed hands-on on 2026-10-19 and read from XD 61's own menu logic
+(`ui/ContextMenuController.js` in the application's resources). A right
+click first selects what is under the pointer as a left click does. The menu
+is one flat list in a fixed order, separators shown as |: Cut (canvas only),
+Copy, Copy SVG Code, Paste, Paste Appearance, Duplicate (Layers only),
+Delete, Rename (Layers only), Edit in Photoshop, Replace Image... | Reset 3D
+Transforms | Lock, Hide, Group, Mask with Shape, Ungroup, Outline Stroke |
+Make Component, Edit Main Component, Back to Previous Instance, Reset to Main
+State, Reveal Component in Assets, Fit Bounds To Content (Ungroup Component
+here instead of above) | Add Color to Assets, Add Character Style to Assets,
+Add Video, Reveal Color in Assets, Reveal Character Style in Assets, Reveal
+Video | Mark for Export | Bring to Front, Bring Forward, Send Backward, Send
+to Back (canvas only) | Export Batch..., Export Selected... (Layers only) |
+Align to Pixel Grid (canvas only). Only enabled items are listed, except
+Paste and the two export items, which are listed disabled; when nothing is
+enabled the common items are listed disabled. Repeated separators collapse.
+A boolean group shows Cut, Copy, Copy SVG Code, Paste, Paste Appearance,
+Delete | Lock, Hide, Group, Ungroup, Outline Stroke | Make Component | Add
+Color to Assets | Mark for Export | Bring to Front, Bring Forward, Send
+Backward, Send to Back | Align to Pixel Grid. The empty pasteboard shows
+Paste only; the empty area of an artboard shows no menu.
 
 ## Canvas
 
@@ -209,7 +225,10 @@ Edit and Object menu commands that apply to the selection.)*
 ## Layers panel
 
 `run2/layers-tree.txt`, `run4/sel-rectangle.png`. A search box ("All Items"
-with a filter dropdown) heads the panel. With no selection it lists
+with a filter dropdown: All Items, Images, Shapes, Text, Video) heads the
+panel. Images are nodes filled with a bitmap; Shapes are rectangles (other
+than artboards and images, which are aspect-locked rectangles filled with a
+bitmap), ellipses, paths, lines and polygons. With no selection it lists
 ARTBOARDS (artboard icon and name). With a selection inside an artboard it
 shows a back chevron and the artboard name in capitals, then the artboard's
 children topmost first, one 32 dip row each with a kind icon (rectangle,
@@ -228,6 +247,19 @@ as "Roboto - 12pt", drawn with an em dash),
 **Components** (thumbnail and name), **Videos**. An empty document shows an
 illustration with "Add your styles and components, or use elements from
 existing libraries." and a "View libraries" link.
+
+Assets are listed by the order keys XD stores in each element's
+`assetGroupData` (`{"groupColors": "h"}`), new assets taking a key before
+the first so that the latest is listed first; groups live in
+`documentLibrary.groupData.groups` (name, id, order, parentId, childrenIds,
+elementIds). A click applies a color as the fill (with Alt as the border)
+or a character style; Ctrl and Shift select; a double-click renames. The
+context menu of a color is Copy #RRGGBB, Edit | Highlight on canvas | New
+group from element | Move to... | Rename, Delete; of a character style
+Remove font | Edit | Highlight on canvas | New group from element | Move
+to... | Rename, Delete; of several assets New group from selection | Move
+selected items to | Delete. Highlight on canvas outlines each visible
+instance with a 2 px #0090E9 inside stroke and clears the selection.
 
 ## Property inspector
 
@@ -270,13 +302,29 @@ with an underline; units are implicit pixels except opacity (%) and rotation
 
 Per kind differences:
 
-- **Artboard** (`run4/sel-artboard.png`): no component or align controls;
-  TRANSFORM has W, H, X, Y and Portrait / Landscape toggles; LAYOUT has
-  Responsive Resize and SCROLLING (None by default); APPEARANCE has only Fill;
+- **Artboard** (`run4/sel-artboard.png`, corrected hands-on on 2026-10-19):
+  the align row and the Repeat Grid and boolean buttons are shown disabled,
+  then COMPONENT with its `+`; TRANSFORM has W, H, X, Y and Portrait /
+  Landscape toggles; LAYOUT has Responsive Resize and SCROLLING (None by
+  default); APPEARANCE has only Fill;
   then **GRID**: show checkbox and a type dropdown (Layout, Square). Turning on
   the layout grid shows Columns (with colour swatch) 4, Gutter Width 10, Column
   Width 94, linked or per-side margins (37), and Use Default / Make Default
   (`run6/grid-on.png`, values are XD's defaults for a 480 wide artboard).
+  The default depends on the width (`lib/GridStyle.js`): up to 312 one
+  column within margins of 28, up to 599 four columns with a gutter of 10
+  within 36, up to 834 eight with 16 within 80, up to 1024 twelve with 16
+  within 120, otherwise twelve with 16 within 140; the margins then grow or
+  shrink so the columns are about whole widths (a fraction of at most one
+  half rounds down), split evenly, the odd pixel lost when the margins are
+  equal and there are several columns. The Column Width shown is rounded
+  down. Make Default stores the grid in the document's resources as
+  `gridDefaults`: `defaultGrid` (the grid, colors as `{"value": ARGB}`) and
+  `layoutOverrides` (the four layouts above plus one for the artboard's
+  exact width); new grids and Use Default take the square grid from
+  `defaultGrid` and the layout of the narrowest override at least as wide
+  as the artboard, otherwise twelve columns within 140. Make Default is not
+  an undoable change.
 - **Text** (`run4/sel-text-area.png`): a **TEXT** section after LAYOUT with
   font family dropdown, font size, font style dropdown, character spacing,
   line spacing and paragraph spacing fields; alignment Left / Center / Right;
@@ -290,9 +338,20 @@ Per kind differences:
   shapes.
 - **Image fill** (`run4/sel-image.png`): the shape keeps its own controls;
   the fill swatch shows the image.
+- **Angular gradient** (XD 61, `probe_w7.xd`): stored as a `gradient` fill
+  whose `meta.ux` holds `gradientResources` of type `angular` and the
+  centre `x`, `y` and `rotation` (degrees) in object bounding box units,
+  with no x1/y1. The colours sweep clockwise from offset 0 at the rotation,
+  measured clockwise from the positive x axis. On the canvas the editor
+  shows the stops on a circle of radius one half around the centre handle
+  and a rotation handle beyond it, above the centre at first.
 
 Popups: the colour picker (`run5/fill-picker.png`) opens to the left of the
-inspector with a fill type dropdown (Solid Color), a saturation/brightness
+inspector with a fill type dropdown (Solid Color, Linear Gradient, Radial
+Gradient, Angular Gradient; a solid colour becomes a gradient from the
+colour to the colour at half its red, green and blue values, top to
+bottom for a linear one; changing between gradient types keeps the stops),
+a saturation/brightness
 square, vertical hue and alpha sliders, a Hex dropdown with the value field,
 an opacity field, an eyedropper and `+` to add the colour to assets. The
 Blend Mode dropdown (`run5/blend-list.png`) lists Normal, then groups

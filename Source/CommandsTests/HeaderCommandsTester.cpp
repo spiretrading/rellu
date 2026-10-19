@@ -99,6 +99,20 @@ TEST_SUITE("HeaderCommands") {
     add_header_commands(registry, estimate_text_bounds);
     REQUIRE(!registry.make("object.transform.flip_horizontally", document,
       std::vector{scene.m_artboard}));
+    REQUIRE(!registry.make("object.transform.flip_vertically", document,
+      std::vector{scene.m_instance}));
+    {
+      auto transaction = Transaction(document);
+      auto role = Group();
+      role.m_repeat_grid =
+        RepeatGrid(Size(40, 40), 20, 10, 1, 1, Size(40, 40));
+      auto grid = transaction.append(scene.m_artboard, make_header("Grid"),
+        role);
+      transaction.append(grid, make_header("Cell"), Group());
+      transaction.commit();
+      REQUIRE(!registry.make("object.transform.flip_horizontally", document,
+        std::vector{grid}));
+    }
     auto nodes = std::vector{scene.m_rectangle, scene.m_group};
     auto rectangle = *get_world_bounds(document, scene.m_rectangle);
     auto bounds = *get_world_bounds(document, nodes);
@@ -120,6 +134,24 @@ TEST_SUITE("HeaderCommands") {
       Rect(2 * bounds.m_x + bounds.m_width - rectangle.m_x - rectangle.m_width,
         2 * bounds.m_y + bounds.m_height - rectangle.m_y - rectangle.m_height,
         rectangle.m_width, rectangle.m_height));
+  }
+
+  TEST_CASE("flip_mixed") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto registry = CommandRegistry();
+    add_header_commands(registry, estimate_text_bounds);
+    auto nodes = std::vector{scene.m_rectangle, scene.m_instance};
+    auto instance = get_world_transform(document, scene.m_instance);
+    auto bounds = *get_world_bounds(document, nodes);
+    auto history = History(document);
+    require_undoable(history,
+      registry.make("object.transform.flip_horizontally", document, nodes));
+    auto flipped = get_world_transform(document, scene.m_instance);
+    REQUIRE(flipped.get_determinant() > 0);
+    REQUIRE(flipped.m_tx ==
+      doctest::Approx(2 * bounds.get_center().m_x - instance.m_tx - 80));
+    REQUIRE(!document.get(scene.m_reference).get_reference()->m_transform);
   }
 
   TEST_CASE("pixel_grid") {

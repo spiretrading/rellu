@@ -87,6 +87,14 @@ namespace {
       auto fy = gradient.get_number("fy"_L1, *cy);
       fill.m_geometry =
         RadialGradient(Point(*cx, *cy), *r, Point(fx, fy));
+    } else if(type == "angular"_L1) {
+      auto x = ux->get_number("x"_L1);
+      auto y = ux->get_number("y"_L1);
+      auto rotation = ux->get_number("rotation"_L1);
+      if(!x || !y || !rotation) {
+        return std::nullopt;
+      }
+      fill.m_geometry = AngularGradient(Point(*x, *y), *rotation);
     } else {
       return std::nullopt;
     }

@@ -9,6 +9,7 @@
 #include <QAbstractButton>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QConicalGradient>
 #include <QFocusEvent>
 #include <QFrame>
 #include <QGridLayout>
@@ -30,6 +31,7 @@
 #include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
 #include "Colors.hpp"
+#include "HyperlinkStatus.hpp"
 #include "Icons.hpp"
 
 using namespace Rellu;
@@ -51,6 +53,27 @@ namespace {
     return QColor::fromRgbF(static_cast<float>(color.m_red),
       static_cast<float>(color.m_green), static_cast<float>(color.m_blue),
       static_cast<float>(color.m_alpha));
+  }
+
+  void list_swatches(const Resources& resources, const std::string& group,
+      std::vector<ColorSwatch>& swatches) {
+    for(auto& entry : list_assets(resources, group)) {
+      if(!entry.m_group.empty()) {
+        list_swatches(resources, entry.m_group, swatches);
+        continue;
+      }
+      for(auto& swatch : resources.m_swatches) {
+        if(swatch.m_id == entry.m_asset) {
+          swatches.push_back(swatch);
+        }
+      }
+    }
+  }
+
+  std::vector<ColorSwatch> get_listed_swatches(const Resources& resources) {
+    auto swatches = std::vector<ColorSwatch>();
+    list_swatches(resources, COLOR_SECTION, swatches);
+    return swatches;
   }
 
   NodeId get_source(const Document& document, const NodeId& id) {
@@ -360,6 +383,24 @@ namespace {
     return button;
   }
 
+  QToolButton* make_command_button(const Binding& binding,
+      const QString& text, const std::string& path) {
+    auto button = make_text_button(binding, text, nullptr);
+    auto probe = PropertyDescriptor();
+    probe.m_path = path;
+    auto editor = binding.m_editor(probe);
+    button->setAccessibleName(text);
+    button->setEnabled(binding.m_is_enabled && editor);
+    if(editor) {
+      QObject::connect(button, &QToolButton::clicked, button,
+        [=, commit = binding.m_commit, finish = binding.m_finish] {
+          commit(path, true);
+          finish(path);
+        });
+    }
+    return button;
+  }
+
   struct SectionFrame {
     QWidget* m_widget;
     QVBoxLayout* m_layout;
@@ -488,7 +529,7 @@ namespace {
   }
 
   QWidget* make_text_field(const Binding& binding, const std::string& path,
-      const QString& placeholder) {
+      const QString& placeholder, bool is_entered = false) {
     auto property = binding.m_find(path);
     if(!property) {
       return nullptr;
@@ -500,7 +541,16 @@ namespace {
     line->setPlaceholderText(placeholder);
     line->setEnabled(binding.m_is_enabled);
     line->setReadOnly(!editor);
-    if(editor) {
+    if(editor && is_entered) {
+      QObject::connect(line, &QLineEdit::editingFinished, line,
+        [=, commit = binding.m_commit, finish = binding.m_finish] {
+          if(line->isModified()) {
+            line->setModified(false);
+            commit(path, line->text());
+          }
+          finish(path);
+        });
+    } else if(editor) {
       QObject::connect(line, &QLineEdit::textEdited, line,
         [=, commit = binding.m_commit] (const QString& text) {
           commit(path, text);
@@ -744,6 +794,14 @@ namespace {
       if(std::holds_alternative<RadialGradient>(gradient->m_geometry)) {
         auto paint = QRadialGradient(bounds.center(), bounds.width() / 2);
         set_stops(paint);
+        painter.setBrush(paint);
+      } else if(auto angular =
+          std::get_if<AngularGradient>(&gradient->m_geometry)) {
+        auto paint = QConicalGradient(bounds.center(), -angular->m_rotation);
+        for(auto& stop : gradient->m_stops) {
+          paint.setColorAt(1 - std::clamp(stop.m_offset, 0.0, 1.0),
+            to_qcolor(stop.m_color));
+        }
         painter.setBrush(paint);
       } else {
         auto paint = QLinearGradient(bounds.topLeft(), bounds.topRight());
@@ -1329,8 +1387,9 @@ namespace {
     auto link = make_row(layout, 8);
     layout->addWidget(make_icon_label(Glyph::HYPERLINK));
     if(auto field =
-        make_text_field(binding, "text.hyperlink", "Insert URL here")) {
+        make_text_field(binding, "text.hyperlink", "Insert URL here", true)) {
       layout->addWidget(field, 1);
+      link = add_hyperlink_status(link, *static_cast<QLineEdit*>(field));
     }
     frame.m_layout->addWidget(link);
   }
@@ -1487,8 +1546,15 @@ namespace {
           std::pair("grid.column_width", "Column Width")}) {
         auto field_row = make_row(layout, 12);
         layout->addWidget(make_label(label), 1);
-        layout->addWidget(make_number(
-          binding, path, QString(), std::nullopt, 40));
+        auto field = make_number(binding, path, QString(), std::nullopt, 40);
+        if(field && std::string_view(path) == "grid.column_width") {
+          for(auto line : field->findChildren<QLineEdit*>()) {
+            auto font = line->font();
+            font.setItalic(true);
+            line->setFont(font);
+          }
+        }
+        layout->addWidget(field);
         frame.m_layout->addWidget(field_row);
       }
       auto margins = make_row(layout, 12);
@@ -1507,8 +1573,10 @@ namespace {
       }
       frame.m_layout->addWidget(margins);
       auto defaults = make_row(layout, 0);
-      layout->addWidget(make_text_button(binding, "Use Default", nullptr), 1);
-      layout->addWidget(make_text_button(binding, "Make Default", nullptr), 1);
+      layout->addWidget(make_command_button(
+        binding, "Use Default", "grid.use_default"), 1);
+      layout->addWidget(make_command_button(
+        binding, "Make Default", "grid.make_default"), 1);
       frame.m_layout->addWidget(defaults);
     } else {
       auto square = make_row(layout, 12);
@@ -1676,7 +1744,9 @@ PropertyInspector::PropertyInspector(QWidget* parent)
       m_scroll(new QScrollArea()),
       m_content(nullptr),
       m_layout(nullptr),
-      m_picker(new ColorPicker(this)) {
+      m_picker(new ColorPicker(this)),
+      m_footer(nullptr),
+      m_is_footer_exclusive(false) {
   setObjectName("inspector");
   m_picker->set_close_handler([this] {
     auto path = std::exchange(m_picked_path, std::string());
@@ -1765,6 +1835,19 @@ void PropertyInspector::set_actions(ActionRegistry* actions) {
 
 void PropertyInspector::set_workspace(Workspace workspace) {
   m_workspace = workspace;
+  rebuild();
+}
+
+void PropertyInspector::set_footer(QWidget* footer, bool is_exclusive) {
+  if(footer == m_footer && is_exclusive == m_is_footer_exclusive) {
+    return;
+  }
+  if(m_footer) {
+    m_footer->hide();
+    m_footer->setParent(this);
+  }
+  m_footer = footer;
+  m_is_footer_exclusive = is_exclusive;
   rebuild();
 }
 
@@ -1896,6 +1979,10 @@ void PropertyInspector::rebuild() {
   auto scroll = m_scroll->verticalScrollBar()->value();
   m_fields.clear();
   m_sections.clear();
+  if(m_footer) {
+    m_footer->hide();
+    m_footer->setParent(this);
+  }
   auto old = m_scroll->takeWidget();
   if(old) {
     old->deleteLater();
@@ -1938,6 +2025,9 @@ void PropertyInspector::rebuild() {
   } else {
     auto is_empty = m_properties.empty();
     auto sections = is_empty ? make_empty_sections() : m_properties;
+    if(m_footer && m_is_footer_exclusive) {
+      sections.clear();
+    }
     auto binding = Binding();
     binding.m_find = [sections = std::make_shared<
         std::vector<PropertyDescriptor>>(sections)] (std::string_view path) {
@@ -2027,6 +2117,10 @@ void PropertyInspector::rebuild() {
     if(is_empty) {
       m_properties.clear();
     }
+    if(m_footer) {
+      m_layout->addWidget(m_footer);
+      m_footer->show();
+    }
   }
   m_layout->addStretch(1);
   m_scroll->setWidget(m_content);
@@ -2047,6 +2141,10 @@ void PropertyInspector::update_fields() {
 
 ColorPicker& PropertyInspector::get_color_picker() {
   return *m_picker;
+}
+
+const std::string& PropertyInspector::get_picked_path() const {
+  return m_picked_path;
 }
 
 bool PropertyInspector::open_color_picker(std::string_view path) {
@@ -2134,7 +2232,8 @@ void PropertyInspector::open_picker(
   }
   m_picker->set_gradient_enabled(is_fill);
   m_picker->set_fill(fill);
-  m_picker->set_swatches(m_editor->get_document().get_resources().m_swatches);
+  m_picker->set_swatches(
+    get_listed_swatches(m_editor->get_document().get_resources()));
   m_picked_path = path;
   auto window = this->window();
   auto left = mapToGlobal(QPoint(0, 0)).x();
@@ -2171,7 +2270,8 @@ void PropertyInspector::add_swatch(const Fill& fill) {
   try {
     m_editor->execute(std::make_unique<AddSwatchCommand>(std::move(swatch)));
   } catch(const std::exception&) {}
-  m_picker->set_swatches(m_editor->get_document().get_resources().m_swatches);
+  m_picker->set_swatches(
+    get_listed_swatches(m_editor->get_document().get_resources()));
 }
 
 bool PropertyInspector::find_lock() const {

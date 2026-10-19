@@ -138,19 +138,12 @@ void Editor::select_all() {
     return;
   }
   auto nodes = std::vector<NodeId>();
-  auto add = [&] (const NodeId& id) {
-    if(!m_document->get(id).m_header.m_is_locked) {
-      nodes.push_back(id);
-    }
-  };
   for(auto& id : m_document->get_canvas()) {
     auto& node = m_document->get(id);
-    if(!node.get_artboard()) {
-      add(id);
-    } else if(!node.m_header.m_is_locked) {
-      for(auto& child : node.m_children) {
-        add(child);
-      }
+    if(node.get_artboard()) {
+      nodes.insert(nodes.end(), node.m_children.begin(), node.m_children.end());
+    } else {
+      nodes.push_back(id);
     }
   }
   m_selection.select(nodes);

@@ -148,6 +148,66 @@ namespace {
       text.m_layout = Shared(layouter(text));
     }
   }
+
+  Text restyle(const Text& text, TextRange range,
+      const TextStyleEditor& editor, bool& is_relaid) {
+    auto size = text.m_content->size();
+    range = clamp(range, size);
+    auto result = text;
+    auto is_whole = range.m_start == 0 && range.m_end == size;
+    if(!is_whole && range.m_start == range.m_end) {
+      return result;
+    }
+    auto is_affected = false;
+    auto runs = std::vector<TextRun>();
+    auto start = std::size_t(0);
+    for(auto& run : get_runs(text)) {
+      auto end = start + run.m_length;
+      auto add = [&] (std::size_t from, std::size_t to, bool is_edited) {
+        if(from >= to) {
+          return;
+        }
+        auto& piece = runs.emplace_back(run);
+        piece.m_length = to - from;
+        if(is_edited) {
+          auto edit = editor(piece.m_style);
+          auto previous = piece.m_style;
+          apply(piece.m_style, edit);
+          is_affected |=
+            is_layout_affected(edit) && !(previous == piece.m_style);
+          if(edit.m_hyperlink) {
+            piece.m_hyperlink = *edit.m_hyperlink;
+          }
+        }
+      };
+      add(start, std::min(end, range.m_start), false);
+      add(std::max(start, range.m_start), std::min(end, range.m_end), true);
+      add(std::max(start, range.m_end), end, false);
+      start = end;
+    }
+    if(is_whole) {
+      auto edit = editor(result.m_base_style);
+      auto previous = result.m_base_style;
+      apply(result.m_base_style, edit);
+      is_affected |=
+        is_layout_affected(edit) && !(previous == result.m_base_style);
+      if(edit.m_color) {
+        result.m_style.m_fill = SolidFill(*edit.m_color);
+      }
+    }
+    if(size == 0 && result.m_runs.empty()) {
+      return result;
+    }
+    result.m_runs = normalize(std::move(runs));
+    if(text.m_runs.empty() && result.m_runs.size() == 1 &&
+        result.m_runs.front().m_style == result.m_base_style &&
+        result.m_runs.front().m_character_style.is_nil() &&
+        result.m_runs.front().m_hyperlink.empty()) {
+      result.m_runs.clear();
+    }
+    is_relaid = is_affected;
+    return result;
+  }
 }
 
 TextStyle Rellu::get_default_text_style() {
@@ -284,52 +344,16 @@ Text Rellu::replace_text(
 
 Text Rellu::edit_text_style(
     const Text& text, TextRange range, const TextStyleEdit& edit) {
-  auto size = text.m_content->size();
-  range = clamp(range, size);
-  auto result = text;
-  auto is_whole = range.m_start == 0 && range.m_end == size;
-  if(!is_whole && range.m_start == range.m_end) {
-    return result;
-  }
-  auto runs = std::vector<TextRun>();
-  auto start = std::size_t(0);
-  for(auto& run : get_runs(text)) {
-    auto end = start + run.m_length;
-    auto add = [&] (std::size_t from, std::size_t to, bool is_edited) {
-      if(from >= to) {
-        return;
-      }
-      auto& piece = runs.emplace_back(run);
-      piece.m_length = to - from;
-      if(is_edited) {
-        apply(piece.m_style, edit);
-        if(edit.m_hyperlink) {
-          piece.m_hyperlink = *edit.m_hyperlink;
-        }
-      }
-    };
-    add(start, std::min(end, range.m_start), false);
-    add(std::max(start, range.m_start), std::min(end, range.m_end), true);
-    add(std::max(start, range.m_end), end, false);
-    start = end;
-  }
-  if(is_whole) {
-    apply(result.m_base_style, edit);
-    if(edit.m_color) {
-      result.m_style.m_fill = SolidFill(*edit.m_color);
-    }
-  }
-  if(size == 0 && result.m_runs.empty()) {
-    return result;
-  }
-  result.m_runs = normalize(std::move(runs));
-  if(text.m_runs.empty() && result.m_runs.size() == 1 &&
-      result.m_runs.front().m_style == result.m_base_style &&
-      result.m_runs.front().m_character_style.is_nil() &&
-      result.m_runs.front().m_hyperlink.empty()) {
-    result.m_runs.clear();
-  }
-  if(is_layout_affected(edit)) {
+  return edit_text_style(text, range, [&] (const TextStyle&) {
+    return edit;
+  });
+}
+
+Text Rellu::edit_text_style(
+    const Text& text, TextRange range, const TextStyleEditor& editor) {
+  auto is_relaid = false;
+  auto result = restyle(text, range, editor, is_relaid);
+  if(is_relaid) {
     result.m_layout = std::nullopt;
   }
   return result;
@@ -380,7 +404,10 @@ const NodeId& EditTextCommand::get_node() const {
 
 std::string EditTextCommand::get_label() const {
   if(m_insertion) {
-    return "Add Text";
+    if(m_text && !std::holds_alternative<PositionedFrame>(m_text->m_frame)) {
+      return "Draw Text";
+    }
+    return "Create Auto Width Text";
   } else if(!m_text) {
     return "Delete";
   }
@@ -439,31 +466,38 @@ std::optional<std::vector<NodeId>> EditTextCommand::get_selection() const {
 }
 
 SetTextStyleCommand::SetTextStyleCommand(std::vector<NodeId> nodes,
-  TextStyleEdit edit, TextLayouter layouter) noexcept
+  TextStyleEdit edit, TextLayouter layouter, std::string label) noexcept
   : m_nodes(std::move(nodes)),
     m_edit(std::move(edit)),
-    m_layouter(std::move(layouter)) {}
+    m_layouter(std::move(layouter)),
+    m_label(std::move(label)) {}
 
 SetTextStyleCommand::SetTextStyleCommand(const NodeId& id, TextRange range,
-  TextStyleEdit edit, TextLayouter layouter) noexcept
+  TextStyleEdit edit, TextLayouter layouter, std::string label) noexcept
   : m_nodes({id}),
     m_range(range),
     m_edit(std::move(edit)),
-    m_layouter(std::move(layouter)) {}
+    m_layouter(std::move(layouter)),
+    m_label(std::move(label)) {}
 
 std::string SetTextStyleCommand::get_label() const {
+  if(!m_label.empty()) {
+    return m_label;
+  } else if(m_edit.m_hyperlink) {
+    return "Text Hyperlink";
+  }
   auto labels = std::vector<std::string>();
   if(m_edit.m_family || m_edit.m_style || m_edit.m_postscript_name) {
-    labels.push_back("Change Font");
+    labels.push_back("Font Family");
   }
   if(m_edit.m_size) {
-    labels.push_back("Change Font Size");
+    labels.push_back("Font Size");
   }
   if(m_edit.m_letter_spacing) {
-    labels.push_back("Change Character Spacing");
+    labels.push_back("Character Spacing");
   }
   if(m_edit.m_color) {
-    labels.push_back("Change Text Color");
+    labels.push_back("Fill");
   }
   if(m_edit.m_is_underlined) {
     labels.push_back("Underline");
@@ -472,13 +506,10 @@ std::string SetTextStyleCommand::get_label() const {
     labels.push_back("Strikethrough");
   }
   if(m_edit.m_transform) {
-    labels.push_back("Change Case");
+    labels.push_back("Text Transform");
   }
   if(m_edit.m_script) {
-    labels.push_back("Change Script");
-  }
-  if(m_edit.m_hyperlink) {
-    labels.push_back("Change Hyperlink");
+    labels.push_back("Script");
   }
   if(labels.size() == 1) {
     return labels.front();
@@ -510,6 +541,41 @@ bool SetTextStyleCommand::merge(const Command& command) {
   return true;
 }
 
+RestyleTextCommand::RestyleTextCommand(std::vector<NodeId> nodes,
+  std::string label, TextStyleEditor editor, TextLayouter layouter) noexcept
+  : m_nodes(std::move(nodes)),
+    m_label(std::move(label)),
+    m_editor(std::move(editor)),
+    m_layouter(std::move(layouter)) {}
+
+RestyleTextCommand::RestyleTextCommand(const NodeId& id, TextRange range,
+  std::string label, TextStyleEditor editor, TextLayouter layouter) noexcept
+  : m_nodes({id}),
+    m_range(range),
+    m_label(std::move(label)),
+    m_editor(std::move(editor)),
+    m_layouter(std::move(layouter)) {}
+
+std::string RestyleTextCommand::get_label() const {
+  return m_label;
+}
+
+void RestyleTextCommand::apply(
+    const Document& document, Transaction& transaction) {
+  for(auto& id : get_texts(document, m_nodes)) {
+    auto& text = *document.get(id).get_text();
+    auto range = m_range.value_or(TextRange(0, text.m_content->size()));
+    auto is_relaid = false;
+    auto payload = restyle(text, range, m_editor, is_relaid);
+    if(is_relaid) {
+      relay(payload, m_layouter);
+    }
+    if(!(payload == text)) {
+      transaction.replace_payload(id, std::move(payload));
+    }
+  }
+}
+
 SetParagraphStyleCommand::SetParagraphStyleCommand(std::vector<NodeId> nodes,
   ParagraphStyleEdit edit, TextLayouter layouter) noexcept
   : m_nodes(std::move(nodes)),
@@ -529,11 +595,11 @@ std::string SetParagraphStyleCommand::get_label() const {
   }
   if(count == 1) {
     if(m_edit.m_alignment) {
-      return "Change Alignment";
+      return "Text Align";
     } else if(m_edit.m_line_height) {
-      return "Change Line Spacing";
+      return "Line Spacing";
     }
-    return "Change Paragraph Spacing";
+    return "Paragraph Spacing";
   }
   return "Change Paragraph Style";
 }
@@ -575,7 +641,12 @@ SetTextFrameCommand::SetTextFrameCommand(std::vector<NodeId> nodes,
     m_measurer(std::move(measurer)) {}
 
 std::string SetTextFrameCommand::get_label() const {
-  return "Change Text Frame";
+  if(m_kind == TextFrameKind::AUTO_WIDTH) {
+    return "Convert To Auto Width";
+  } else if(m_kind == TextFrameKind::AUTO_HEIGHT) {
+    return "Convert To Auto Height";
+  }
+  return "Convert To Fixed Size";
 }
 
 void SetTextFrameCommand::apply(

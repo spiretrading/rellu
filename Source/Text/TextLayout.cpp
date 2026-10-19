@@ -64,6 +64,17 @@ namespace {
       character == u'\u2028' || character == u'\u2029';
   }
 
+  std::size_t skip_line_separator(
+      const std::u16string& content, std::size_t index) {
+    if(index >= content.size()) {
+      return content.size();
+    } else if(content[index] == u'\r' && index + 1 != content.size() &&
+        content[index + 1] == u'\n') {
+      return index + 2;
+    }
+    return index + 1;
+  }
+
   bool is_invisible(char32_t character) {
     auto category = QChar::category(character);
     return QChar::isSpace(character) || category == QChar::Other_Format ||
@@ -427,22 +438,18 @@ namespace {
       std::u16string_view(content).substr(start, end - start));
     auto finder = QTextBoundaryFinder(QTextBoundaryFinder::Line, paragraph);
     auto line_start = start;
-    auto line_width = 0.0;
     auto word_start = start;
     while(finder.toNextBoundary() != -1) {
       auto word_end = start + static_cast<std::size_t>(finder.position());
       if(word_end <= word_start) {
         continue;
       }
-      auto visible = measure(content, word_start,
-        trim_end(content, word_start, word_end), spans, library);
-      auto total = measure(content, word_start, word_end, spans, library);
-      if(word_start != line_start && line_width + visible > *width + 1e-6) {
+      if(word_start != line_start && measure(content, line_start,
+          trim_end(content, line_start, word_end), spans, library) >
+            *width + 1e-6) {
         lines.emplace_back(line_start, word_start);
         line_start = word_start;
-        line_width = 0;
       }
-      line_width += total;
       word_start = word_end;
     }
     lines.emplace_back(line_start, end);
@@ -605,7 +612,10 @@ namespace {
   std::vector<Line> get_lines(const Text& text,
       const std::vector<Span>& spans, const FontLibrary& library) {
     if(text.m_layout) {
-      return read_lines(**text.m_layout, text.m_content->size());
+      auto lines = read_lines(**text.m_layout, text.m_content->size());
+      if(!lines.empty() || text.m_content->empty()) {
+        return lines;
+      }
     }
     return break_lines(text, spans, library);
   }
@@ -725,6 +735,15 @@ StoredLayout Rellu::store_layout(const Text& text, const FontLibrary& library) {
       }
       is_paragraph_start = line.m_is_paragraph_end;
     });
+  if(auto& paragraphs = layout.m_paragraphs; !paragraphs.empty() &&
+      paragraphs.back().m_lines.size() == 1 &&
+      paragraphs.back().m_lines.front().m_runs.size() == 1) {
+    auto& run = paragraphs.back().m_lines.front().m_runs.front();
+    if(run.m_from == content.size() && run.m_to == content.size()) {
+      run.m_from = 0;
+      run.m_to = 0;
+    }
+  }
   return layout;
 }
 
@@ -738,11 +757,19 @@ std::vector<LineGeometry> Rellu::measure_lines(
       auto start = std::size_t(0);
       if(!lines.empty()) {
         start = lines.back().m_end;
+        if(lines.back().m_is_paragraph_end) {
+          start = skip_line_separator(content, start);
+        }
       }
       auto end = start;
       if(!line.m_segments.empty()) {
-        start = std::min(line.m_segments.front().m_start, content.size());
-        end = std::clamp(line.m_segments.back().m_end, start, content.size());
+        auto from = std::min(line.m_segments.front().m_start, content.size());
+        auto to =
+          std::clamp(line.m_segments.back().m_end, from, content.size());
+        if(from != to || lines.empty() || from >= start) {
+          start = from;
+          end = to;
+        }
       }
       while(end > start && is_line_separator(content[end - 1])) {
         --end;

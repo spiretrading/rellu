@@ -7,6 +7,7 @@
 #include <QMimeData>
 #include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
+#include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Ui/EditActions.hpp"
 
 using namespace Rellu;
@@ -36,6 +37,7 @@ EditActions::EditActions(
     : m_actions(&actions),
       m_commands(&commands),
       m_editor(nullptr),
+      m_workspace(Workspace::DESIGN),
       m_measurer(estimate_text_bounds) {
   set_action("edit.undo", [this] {
     run([&] { m_editor->undo(); });
@@ -46,6 +48,7 @@ EditActions::EditActions(
   set_action("edit.cut", [this] { cut(); });
   set_action("edit.copy", [this] { copy(); });
   set_action("edit.paste", [this] { paste(); });
+  set_action("edit.paste_appearance", [this] { paste_appearance(); });
   set_action("edit.select_all", [this] {
     run([&] { m_editor->select_all(); });
   });
@@ -53,12 +56,17 @@ EditActions::EditActions(
     run([&] { m_editor->get_selection().clear(); });
   });
   for(auto& name : m_actions->get_names()) {
-    if(m_commands->contains(name)) {
+    if(!m_commands->contains(name)) {
+      continue;
+    }
+    if(name == "edit.duplicate") {
+      set_action(name, [this] { duplicate(); });
+    } else {
       set_action(name, [this, name] {
         run([&] { m_editor->execute(*m_commands, name); });
       });
-      m_command_actions.push_back(name);
     }
+    m_command_actions.push_back(name);
   }
   auto& remove = m_actions->get("edit.delete");
   auto shortcuts = remove.shortcuts();
@@ -104,6 +112,14 @@ void EditActions::set_view_provider(ViewProvider provider) {
   m_view_provider = std::move(provider);
 }
 
+void EditActions::set_reveal_handler(RevealHandler handler) {
+  m_reveal_handler = std::move(handler);
+}
+
+void EditActions::set_workspace(Workspace workspace) {
+  m_workspace = workspace;
+}
+
 void EditActions::set_text_measurer(TextMeasurer measurer) {
   m_measurer = std::move(measurer);
 }
@@ -137,6 +153,7 @@ void EditActions::update() {
   m_actions->set_enabled("edit.paste",
     !m_clipboard.is_empty() || (get_system_data() &&
       Clipboard::is_loadable(*get_system_data())));
+  m_actions->set_enabled("edit.paste_appearance", !nodes.empty());
   m_actions->set_enabled("edit.select_all", true);
   m_actions->set_enabled(
     "edit.deselect_all", !m_editor->get_selection().is_empty());
@@ -212,14 +229,84 @@ void EditActions::paste() {
       m_clipboard.load(*data, m_measurer);
     }
     auto target = PasteTarget();
-    target.m_artboard = find_artboard(
-      m_editor->get_document(), m_editor->get_selection().get_primary());
+    target.m_selection = m_editor->get_selection().get_nodes();
     target.m_focus = m_editor->get_context().get_artboard();
-    if(m_view_provider) {
-      target.m_view = m_view_provider();
+    target.m_container = m_editor->get_context().get_container();
+    target.m_view = get_view();
+    target.m_is_prototyping = m_workspace == Workspace::PROTOTYPE;
+    if(auto command = m_clipboard.make_paste_command(target);
+        command && m_editor->execute(std::move(command))) {
+      reveal_artboards();
     }
-    if(auto command = m_clipboard.make_paste_command(target)) {
+  });
+}
+
+void EditActions::paste_appearance() {
+  run([&] {
+    if(auto data = get_system_data()) {
+      m_clipboard.load(*data, m_measurer);
+    }
+    if(auto command = m_clipboard.make_paste_appearance_command(
+        m_editor->get_selection().get_nodes())) {
       m_editor->execute(std::move(command));
     }
   });
+}
+
+void EditActions::duplicate() {
+  run([&] {
+    auto& document = m_editor->get_document();
+    auto& nodes = m_editor->get_selection().get_nodes();
+    if(!m_commands->make("edit.duplicate", document, nodes)) {
+      return;
+    }
+    auto mode = DuplicateMode::DESIGN;
+    if(m_workspace == Workspace::PROTOTYPE) {
+      mode = DuplicateMode::PROTOTYPE;
+    }
+    auto roots = get_top_level(document, nodes);
+    auto command = std::unique_ptr<Command>();
+    if(auto view = get_view()) {
+      command = std::make_unique<DuplicateCommand>(roots, *view, mode);
+    } else {
+      command = std::make_unique<DuplicateCommand>(roots, Point(0, 0), mode);
+    }
+    if(m_editor->execute(std::move(command))) {
+      reveal_artboards();
+    }
+  });
+}
+
+std::optional<Rect> EditActions::get_view() const {
+  if(!m_view_provider) {
+    return std::nullopt;
+  }
+  return m_view_provider();
+}
+
+void EditActions::reveal_artboards() {
+  auto& document = m_editor->get_document();
+  auto first = std::optional<Rect>();
+  for(auto& id : m_editor->get_selection().get_nodes()) {
+    auto node = document.find(id);
+    auto artboard = node ? node->get_artboard() : nullptr;
+    if(!artboard) {
+      return;
+    }
+    auto& frame = artboard->m_frame;
+    if(!first || frame.m_y < first->m_y ||
+        (frame.m_y == first->m_y && frame.m_x < first->m_x)) {
+      first = frame;
+    }
+  }
+  if(!first) {
+    return;
+  }
+  auto& context = m_editor->get_context();
+  while(!context.get_container().is_nil()) {
+    context.exit();
+  }
+  if(m_reveal_handler) {
+    m_reveal_handler(*first);
+  }
 }

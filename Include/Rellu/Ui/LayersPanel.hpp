@@ -24,17 +24,20 @@ namespace Rellu {
     /** Every layer. */
     ALL,
 
-    /** Component instances and main components. */
-    COMPONENTS,
+    /** Layers filled with an image. */
+    IMAGES,
 
-    /** Groups. */
-    GROUPS,
-
-    /** Shapes. */
+    /**
+     * Rectangles, ellipses, polygons, lines and paths, other than images:
+     * rectangles filled with an image at a locked aspect ratio.
+     */
     SHAPES,
 
     /** Text. */
-    TEXT
+    TEXT,
+
+    /** Videos. */
+    VIDEO
   };
 
   /**

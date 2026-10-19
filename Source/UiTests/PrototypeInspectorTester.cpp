@@ -2,6 +2,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
 #include <QStandardItemModel>
 #include <QToolButton>
@@ -60,8 +61,13 @@ TEST_SUITE("PrototypeInspector") {
     auto& trigger = get<QComboBox>(inspector, "trigger");
     REQUIRE(trigger.currentText() == "Tap");
     REQUIRE(!trigger.isEnabled());
+    REQUIRE(get<QComboBox>(inspector, "type").currentText() == "Transition");
+    REQUIRE(get<QComboBox>(inspector, "destination").currentText() ==
+      "(Choose a destination)");
+    REQUIRE(get<QComboBox>(inspector, "animation").currentText() == "None");
     REQUIRE(get<QComboBox>(inspector, "easing").currentText() == "Ease In");
     REQUIRE(get<QComboBox>(inspector, "duration").currentText() == "0.2 s");
+    REQUIRE(!get<QComboBox>(inspector, "duration").isEnabled());
     editor.get_selection().select(scene.m_button);
     QApplication::processEvents();
     REQUIRE(inspector.get_node() == scene.m_button);
@@ -83,30 +89,52 @@ TEST_SUITE("PrototypeInspector") {
     QApplication::processEvents();
     auto& interaction = get_first(document, scene.m_button);
     REQUIRE(inspector.get_current() == interaction.m_id);
-    REQUIRE(interaction.m_action == Action(
-      ArtboardTransition(NodeId(), make_empty_animation())));
+    REQUIRE(interaction.m_action == Action(ArtboardTransition(NodeId(),
+      Animation(Transition::NONE, Easing::EASE_OUT, 0.30000001192092896))));
     REQUIRE(editor.get_history().get_undo_count() == 1);
     REQUIRE(get<QComboBox>(inspector, "trigger").isEnabled());
-    REQUIRE(get<QComboBox>(inspector, "destination").currentText() ==
-      "None");
+    auto& destination = get<QComboBox>(inspector, "destination");
+    REQUIRE(destination.currentIndex() == -1);
+    REQUIRE(destination.placeholderText() == "(Choose an artboard)");
+    REQUIRE(destination.findText("Home") < 0);
+    REQUIRE(destination.findText("None") < 0);
+    REQUIRE(destination.count() == 3);
     REQUIRE(get<QComboBox>(inspector, "animation").currentText() == "None");
     REQUIRE(!get<QComboBox>(inspector, "animation").isEnabled());
-    REQUIRE(get<QComboBox>(inspector, "easing").currentText() == "Ease In");
-    REQUIRE(get<QComboBox>(inspector, "duration").currentText() == "0.2 s");
+    REQUIRE(get<QComboBox>(inspector, "easing").currentText() == "Ease Out");
+    REQUIRE(get<QComboBox>(inspector, "duration").currentText() == "0.3 s");
     choose(get<QComboBox>(inspector, "destination"), "Menu");
     REQUIRE(get_first(document, scene.m_button).m_action == Action(
-      ArtboardTransition(scene.m_menu, make_default_animation())));
-    REQUIRE(get<QComboBox>(inspector, "animation").currentText() ==
-      "Dissolve");
+      ArtboardTransition(scene.m_menu, make_empty_animation())));
+    REQUIRE(get<QComboBox>(inspector, "animation").currentText() == "None");
     REQUIRE(get<QComboBox>(inspector, "animation").isEnabled());
     REQUIRE(get<QComboBox>(inspector, "easing").currentText() == "Ease Out");
     REQUIRE(get<QComboBox>(inspector, "duration").currentText() == "0.3 s");
+    enter(get<QComboBox>(inspector, "duration"), "0.3 s");
+    REQUIRE(editor.get_history().get_undo_count() == 2);
     editor.get_selection().select(scene.m_home);
     QApplication::processEvents();
     get<QToolButton>(inspector, "add").click();
     QApplication::processEvents();
-    REQUIRE(std::holds_alternative<TimeTrigger>(
-      get_first(document, scene.m_home).m_trigger));
+    REQUIRE(get_first(document, scene.m_home).m_trigger ==
+      Trigger(TapTrigger()));
+    editor.get_selection().select(scene.m_button);
+    QApplication::processEvents();
+    choose(get<QComboBox>(inspector, "type"), "Overlay");
+    editor.get_selection().select(scene.m_box);
+    QApplication::processEvents();
+    get<QToolButton>(inspector, "add").click();
+    QApplication::processEvents();
+    REQUIRE(get_first(document, scene.m_box).m_action ==
+      Action(Overlay(NodeId(), Point(0, 0), make_empty_animation())));
+    REQUIRE(get<QComboBox>(inspector, "type").currentText() == "Overlay");
+    editor.get_selection().select(scene.m_button);
+    QApplication::processEvents();
+    get<QToolButton>(inspector, "add").click();
+    QApplication::processEvents();
+    auto interactions = get_interactions(document, scene.m_button);
+    REQUIRE(interactions.size() == 2);
+    REQUIRE(interactions[1]->m_trigger == Trigger(KeyTrigger()));
   }
 
   TEST_CASE("triggers") {
@@ -131,12 +159,53 @@ TEST_SUITE("PrototypeInspector") {
     QApplication::processEvents();
     REQUIRE(list() == QStringList({"Tap", "Drag", "Keys & Gamepad", "Voice"}));
     REQUIRE(!is_item_enabled(get<QComboBox>(inspector, "trigger"), "Voice"));
+    get<QToolButton>(inspector, "add").click();
+    QApplication::processEvents();
+    auto second = get_interactions(document, scene.m_button)[1];
+    REQUIRE(second->m_trigger == Trigger(DragTrigger()));
+    REQUIRE(std::get<ArtboardTransition>(second->m_action).m_animation.
+      m_transition == Transition::AUTO_ANIMATE);
+    REQUIRE(list() == QStringList({"Drag", "Keys & Gamepad", "Voice"}));
     editor.get_selection().select(scene.m_home);
     QApplication::processEvents();
-    REQUIRE(list() == QStringList({"Time", "Keys & Gamepad", "Voice"}));
+    REQUIRE(list() ==
+      QStringList({"Tap", "Drag", "Time", "Keys & Gamepad", "Voice"}));
     enter(get<QComboBox>(inspector, "delay"), "2");
     REQUIRE(get_first(document, scene.m_home).m_trigger ==
       Trigger(TimeTrigger(2)));
+    editor.get_selection().select(scene.m_instance);
+    QApplication::processEvents();
+    get<QToolButton>(inspector, "add").click();
+    QApplication::processEvents();
+    REQUIRE(list() ==
+      QStringList({"Tap", "Drag", "Hover", "Keys & Gamepad", "Voice"}));
+  }
+
+  TEST_CASE("component_without_states") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    {
+      auto transaction = Transaction(document);
+      auto group = *document.get(scene.m_instance).get_group();
+      group.m_component_instance->m_states.clear();
+      transaction.replace_payload(scene.m_instance, group);
+      transaction.commit();
+      document.clear_history();
+    }
+    auto editor = Editor(document);
+    auto inspector = PrototypeInspector();
+    inspector.set_editor(&editor);
+    editor.get_selection().select(scene.m_instance);
+    QApplication::processEvents();
+    get<QToolButton>(inspector, "add").click();
+    QApplication::processEvents();
+    auto& box = get<QComboBox>(inspector, "trigger");
+    REQUIRE(box.findText("Hover") < 0);
+    REQUIRE(box.count() == 4);
+    REQUIRE(get<QComboBox>(inspector, "destination").placeholderText() ==
+      "(Choose an artboard)");
+    REQUIRE(inspector.find_field("secondary_action"));
+    REQUIRE(!inspector.find_field("secondary_action")->isEnabled());
   }
 
   TEST_CASE("edit") {
@@ -159,7 +228,7 @@ TEST_SUITE("PrototypeInspector") {
     enter(get<QComboBox>(inspector, "duration"), "0.6 s");
     REQUIRE(std::get<ArtboardTransition>(get_first(document,
       scene.m_button).m_action).m_animation ==
-      Animation(Transition::SLIDE_LEFT, Easing::EASE_IN, 0.6));
+      Animation(Transition::SLIDE_LEFT, Easing::EASE_IN, 0.6000000238418579));
     REQUIRE(history.get_undo_count() == 4);
     get<QCheckBox>(inspector, "preserve_scroll").click();
     QApplication::processEvents();
@@ -214,16 +283,112 @@ TEST_SUITE("PrototypeInspector") {
     editor.get_selection().select(scene.m_instance);
     QApplication::processEvents();
     REQUIRE(get<QComboBox>(inspector, "trigger").currentText() == "Hover");
-    auto& state = get<QComboBox>(inspector, "state");
-    REQUIRE(state.count() == 2);
-    REQUIRE(state.currentText() == "Hover");
-    choose(state, "Default State");
-    REQUIRE(std::get<StateTransition>(get_first(document,
-      scene.m_instance).m_action).m_state == scene.m_component);
-    auto& animation = get<QComboBox>(inspector, "animation");
-    REQUIRE(animation.count() == 3);
-    choose(animation, "Auto-Animate");
+    REQUIRE(get<QComboBox>(inspector, "type").currentText() == "Transition");
+    REQUIRE(!inspector.find_field("state"));
+    auto& destination = get<QComboBox>(inspector, "destination");
+    REQUIRE(destination.placeholderText() ==
+      "(Choose an artboard or a state)");
+    REQUIRE(destination.currentText() == "Hover");
+    REQUIRE(destination.currentIndex() == 0);
+    REQUIRE(destination.findText("Default State") < 0);
+    REQUIRE(destination.findText("Home") < 0);
+    REQUIRE(destination.findText("Second") == 2);
+    REQUIRE(destination.count() == 5);
+    REQUIRE(get<QComboBox>(inspector, "animation").count() == 2);
+    choose(get<QComboBox>(inspector, "destination"), "Second");
+    REQUIRE(get_first(document, scene.m_instance).m_action ==
+      Action(ArtboardTransition(scene.m_second, make_default_animation())));
+    choose(get<QComboBox>(inspector, "destination"), "Hover");
+    REQUIRE(get_first(document, scene.m_instance).m_action ==
+      Action(StateTransition(scene.m_hover, make_default_animation())));
+    choose(get<QComboBox>(inspector, "type"), "Auto-Animate");
+    REQUIRE(get_first(document, scene.m_instance).m_action ==
+      Action(StateTransition(scene.m_hover, Animation(
+        Transition::AUTO_ANIMATE, Easing::EASE_OUT, DEFAULT_DURATION))));
+    REQUIRE(!inspector.find_field("animation"));
+    REQUIRE(get<QComboBox>(inspector, "type").currentText() == "Auto-Animate");
     REQUIRE(get<QComboBox>(inspector, "easing").count() == 7);
+    REQUIRE(get<QComboBox>(inspector, "destination").currentText() ==
+      "Hover");
+  }
+
+  TEST_CASE("types") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    add_interaction(document, scene.m_button, TapTrigger(),
+      ArtboardTransition(scene.m_second, make_default_animation()));
+    auto editor = Editor(document);
+    auto inspector = PrototypeInspector();
+    inspector.set_editor(&editor);
+    editor.get_selection().select(scene.m_button);
+    QApplication::processEvents();
+    auto& type = get<QComboBox>(inspector, "type");
+    auto items = QStringList();
+    for(auto i = 0; i != type.count(); ++i) {
+      items.push_back(type.itemText(i));
+    }
+    REQUIRE(items == QStringList({"Transition", "Auto-Animate", "Hyperlink",
+      "Overlay", "Scroll To", "Previous Artboard", "Audio Playback",
+      "Speech Playback"}));
+  }
+
+  TEST_CASE("text_hyperlinks") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    auto label = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto text = Text();
+      text.m_content = Shared(std::u16string(u"alpha beta gamma"));
+      text.m_frame = AreaFrame(Size(200, 20));
+      auto run = TextRun();
+      run.m_length = 5;
+      run.m_hyperlink = "https://a.example.com";
+      text.m_runs.push_back(run);
+      run.m_length = 1;
+      run.m_hyperlink.clear();
+      text.m_runs.push_back(run);
+      run.m_length = 5;
+      run.m_hyperlink = "b.example.com";
+      text.m_runs.push_back(run);
+      run.m_length = 5;
+      run.m_style.m_is_underlined = true;
+      text.m_runs.push_back(run);
+      label = transaction.append(
+        scene.m_home, make_stage_header("Label", 10, 250), text);
+      transaction.commit();
+      document.clear_history();
+    }
+    auto editor = Editor(document);
+    auto inspector = PrototypeInspector();
+    inspector.set_editor(&editor);
+    editor.get_selection().select(scene.m_button);
+    QApplication::processEvents();
+    REQUIRE(!inspector.find_field("link_text_0"));
+    editor.get_selection().select(label);
+    QApplication::processEvents();
+    REQUIRE(get<QLabel>(inspector, "link_text_0").text() == "\"alpha\"");
+    REQUIRE(get<QLabel>(inspector, "link_text_1").text() ==
+      "\"beta gamma\"");
+    REQUIRE(!inspector.find_field("link_text_2"));
+    REQUIRE(get<QLineEdit>(inspector, "link_url_0").text() ==
+      "https://a.example.com");
+    REQUIRE(!get<QLabel>(inspector, "link_status_0").pixmap().isNull());
+    auto& status = get<QLabel>(inspector, "link_status_1");
+    auto& message = *status.parentWidget()->parentWidget()->findChild<QLabel*>(
+      "hyperlink_message");
+    REQUIRE(!message.isHidden());
+    auto& url = get<QLineEdit>(inspector, "link_url_1");
+    url.setText("mailto:b@example.com");
+    REQUIRE(message.isHidden());
+    url.editingFinished();
+    QApplication::processEvents();
+    auto& runs = document.get(label).get_text()->m_runs;
+    REQUIRE(runs.size() == 4);
+    REQUIRE(runs[0].m_hyperlink == "https://a.example.com");
+    REQUIRE(runs[2].m_hyperlink == "mailto:b@example.com");
+    REQUIRE(runs[3].m_hyperlink == "mailto:b@example.com");
+    REQUIRE(editor.get_history().get_undo_count() == 1);
   }
 
   TEST_CASE("multiple") {

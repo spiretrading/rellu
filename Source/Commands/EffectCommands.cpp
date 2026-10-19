@@ -8,9 +8,10 @@ using namespace Rellu;
 namespace {
   constexpr auto DEFAULT_SHADOW_OFFSET = 3.0;
   constexpr auto DEFAULT_SHADOW_RADIUS = 3.0;
-  constexpr auto DEFAULT_SHADOW_ALPHA = 0.16;
-  constexpr auto DEFAULT_BLUR = 10.0;
-  constexpr auto DEFAULT_FILL_OPACITY = 0.1;
+  constexpr auto DEFAULT_SHADOW_ALPHA = 41 / 255.0;
+  constexpr auto DEFAULT_BLUR_AMOUNT = 30.0;
+  constexpr auto DEFAULT_BRIGHTNESS = 15.0;
+  constexpr auto DEFAULT_FILL_OPACITY = 0.0;
 
   bool is_kind(const Effect& effect, EffectKind kind) {
     if(kind == EffectKind::INNER_SHADOW) {
@@ -86,7 +87,8 @@ Effect Rellu::make_default_effect(EffectKind kind) {
     return DropShadow(offset, DEFAULT_SHADOW_RADIUS, color, true);
   }
   auto blur = Blur();
-  blur.m_amount = DEFAULT_BLUR;
+  blur.m_amount = DEFAULT_BLUR_AMOUNT;
+  blur.m_brightness = DEFAULT_BRIGHTNESS;
   blur.m_fill_opacity = DEFAULT_FILL_OPACITY;
   blur.m_is_background = true;
   return blur;

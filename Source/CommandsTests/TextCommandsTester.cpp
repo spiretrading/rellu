@@ -134,8 +134,77 @@ TEST_SUITE("TextCommands") {
     edit.m_hyperlink = "";
     auto cleared = edit_text_style(edited, TextRange(0, 11), edit);
     REQUIRE(get_lengths(cleared) == std::vector<std::size_t>{11});
+    edit.m_is_underlined = true;
     auto command = SetTextStyleCommand(std::vector<NodeId>(), edit);
-    REQUIRE(command.get_label() == "Change Hyperlink");
+    REQUIRE(command.get_label() == "Text Hyperlink");
+    auto font = TextStyleEdit();
+    font.m_family = "Arial";
+    REQUIRE(SetTextStyleCommand(std::vector<NodeId>(), font).get_label() ==
+      "Font Family");
+    REQUIRE(SetTextStyleCommand(std::vector<NodeId>(), font, TextLayouter(),
+      "Font Style").get_label() == "Font Style");
+  }
+
+  TEST_CASE("run_styles") {
+    auto text = make_runs(u"aaabbb", {TextRun(3, make_style(30)),
+      TextRun(3, make_style(14))});
+    text.m_layout = Shared(make_marker_layout());
+    auto step = [] (const TextStyle& style) {
+      auto edit = TextStyleEdit();
+      edit.m_size = style.m_font.m_size + 1;
+      return edit;
+    };
+    auto whole = edit_text_style(text, TextRange(0, 6), step);
+    REQUIRE(get_lengths(whole) == std::vector<std::size_t>{3, 3});
+    REQUIRE(whole.m_runs[0].m_style.m_font.m_size == 31);
+    REQUIRE(whole.m_runs[1].m_style.m_font.m_size == 15);
+    REQUIRE(whole.m_base_style.m_font.m_size == 31);
+    REQUIRE(!whole.m_layout);
+    auto part = edit_text_style(text, TextRange(2, 4), step);
+    REQUIRE(get_lengths(part) == std::vector<std::size_t>{2, 1, 1, 2});
+    REQUIRE(part.m_runs[1].m_style.m_font.m_size == 31);
+    REQUIRE(part.m_runs[2].m_style.m_font.m_size == 15);
+    REQUIRE(part.m_base_style.m_font.m_size == 30);
+    auto unchanged = edit_text_style(text, TextRange(0, 6),
+      [] (const TextStyle&) {
+        return TextStyleEdit();
+      });
+    REQUIRE(unchanged == text);
+  }
+
+  TEST_CASE("restyle_command") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto history = History(document);
+    auto layouts = 0;
+    auto layouter = [&] (const Text&) {
+      ++layouts;
+      return make_marker_layout();
+    };
+    auto step = [] (const TextStyle& style) {
+      auto edit = TextStyleEdit();
+      edit.m_size = style.m_font.m_size + 1;
+      return edit;
+    };
+    auto size = document.get(scene.m_text).get_text()->m_runs.front().
+      m_style.m_font.m_size;
+    require_undoable(history, std::make_unique<RestyleTextCommand>(
+      scene.m_text, TextRange(1, 3), "Increase Font Size", step, layouter));
+    REQUIRE(history.get_undo_label() == "Increase Font Size");
+    REQUIRE(layouts == 1);
+    auto& runs = document.get(scene.m_text).get_text()->m_runs;
+    REQUIRE(runs[1].m_style.m_font.m_size == size + 1);
+    require_undoable(history, std::make_unique<RestyleTextCommand>(
+      std::vector{scene.m_text, scene.m_rectangle}, "Increase Font Size", step,
+      layouter));
+    auto& stepped = document.get(scene.m_text).get_text()->m_runs;
+    REQUIRE(stepped[0].m_style.m_font.m_size == size + 1);
+    REQUIRE(stepped[1].m_style.m_font.m_size == size + 2);
+    REQUIRE(!history.execute(std::make_unique<RestyleTextCommand>(
+      std::vector{scene.m_text}, "Bold",
+      [] (const TextStyle&) {
+        return TextStyleEdit();
+      }, layouter)));
   }
 
   TEST_CASE("style_edit") {
@@ -218,7 +287,7 @@ TEST_SUITE("TextCommands") {
     auto empty = make_text(u"");
     REQUIRE(history.execute(std::make_unique<EditTextCommand>(
       TextInsertion(scene.m_artboard, header), empty)));
-    REQUIRE(history.get_undo_label() == "Add Text");
+    REQUIRE(history.get_undo_label() == "Draw Text");
     REQUIRE(document.get(id).m_parent == scene.m_artboard);
     auto typed = empty;
     for(auto character : std::u16string(u"abc")) {
@@ -265,7 +334,7 @@ TEST_SUITE("TextCommands") {
     edit.m_size = 24;
     require_undoable(history, std::make_unique<SetTextStyleCommand>(
       std::vector{scene.m_text, scene.m_rectangle}, edit, layouter));
-    REQUIRE(history.get_undo_label() == "Change Font Size");
+    REQUIRE(history.get_undo_label() == "Font Size");
     auto& text = *document.get(scene.m_text).get_text();
     REQUIRE(text.m_runs.front().m_style.m_font.m_size == 24);
     REQUIRE(text.m_layout);
@@ -276,7 +345,7 @@ TEST_SUITE("TextCommands") {
     color.m_color = make_color(0, 0, 255);
     require_undoable(history, std::make_unique<SetTextStyleCommand>(
       scene.m_text, TextRange(1, 3), color, layouter));
-    REQUIRE(history.get_undo_label() == "Change Text Color");
+    REQUIRE(history.get_undo_label() == "Fill");
     REQUIRE(layouts == count);
     REQUIRE(get_lengths(*document.get(scene.m_text).get_text()) ==
       std::vector<std::size_t>{1, 2, 2});
@@ -305,7 +374,7 @@ TEST_SUITE("TextCommands") {
     edit.m_paragraph_spacing = 8;
     require_undoable(history, std::make_unique<SetParagraphStyleCommand>(
       std::vector{scene.m_text}, edit));
-    REQUIRE(history.get_undo_label() == "Change Paragraph Spacing");
+    REQUIRE(history.get_undo_label() == "Paragraph Spacing");
     REQUIRE(document.get(scene.m_text).get_text()->m_paragraph_style.
       m_paragraph_spacing == 8);
   }
@@ -323,7 +392,7 @@ TEST_SUITE("TextCommands") {
     auto before = document.get(scene.m_text).m_header.m_transform;
     require_undoable(history, std::make_unique<SetTextFrameCommand>(
       std::vector{scene.m_text}, TextFrameKind::AUTO_WIDTH, measurer));
-    REQUIRE(history.get_undo_label() == "Change Text Frame");
+    REQUIRE(history.get_undo_label() == "Convert To Auto Width");
     auto& node = document.get(scene.m_text);
     REQUIRE(std::holds_alternative<PositionedFrame>(
       node.get_text()->m_frame));
@@ -331,6 +400,7 @@ TEST_SUITE("TextCommands") {
       before * make_translation(0, 12));
     require_undoable(history, std::make_unique<SetTextFrameCommand>(
       std::vector{scene.m_text}, TextFrameKind::FIXED_SIZE, measurer));
+    REQUIRE(history.get_undo_label() == "Convert To Fixed Size");
     auto& area = document.get(scene.m_text);
     REQUIRE(std::get<AreaFrame>(area.get_text()->m_frame).m_size ==
       Size(60, 16));
