@@ -4,8 +4,10 @@
 #include <filesystem>
 #include <memory>
 #include <utility>
+#include <QAbstractButton>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QContextMenuEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -20,7 +22,10 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include "Rellu/Commands/AlignCommands.hpp"
+#include "Rellu/Commands/ArtboardCommands.hpp"
+#include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Commands/ComponentCommands.hpp"
+#include "Rellu/Commands/HeaderCommands.hpp"
 #include "Rellu/Commands/PathCommands.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
@@ -28,12 +33,14 @@
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Ui/ComponentPropertyEditors.hpp"
+#include "Rellu/Ui/ContextMenus.hpp"
 #include "Rellu/Ui/LayoutProperties.hpp"
 #include "Rellu/Ui/PropertyEditors.hpp"
 #include "Rellu/Ui/TextMeasurement.hpp"
 #include "Rellu/Ui/TextPropertyEditors.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "MainWindow.hpp"
+#include "NativeFrame.hpp"
 
 using namespace Rellu;
 
@@ -43,6 +50,7 @@ namespace {
   constexpr auto REVEAL_MARGIN = 24.0;
   constexpr auto LEFT_PANEL_WIDTH = 407;
   constexpr auto MENU_ROW_HEIGHT = 32;
+  constexpr auto CAPTION_BUTTON_WIDTH = 46;
   const auto FILE_FILTER = QString("Adobe XD Files (*.xd);;All Files (*)");
   const auto PASTEBOARD = QColor(0xE4, 0xE4, 0xE4);
   const auto DEFAULT_PANEL = QString("layers");
@@ -59,6 +67,67 @@ namespace {
     }
     return "view.plugins";
   }
+
+  enum class CaptionKind : unsigned char {
+    MINIMIZE,
+    MAXIMIZE,
+    CLOSE
+  };
+
+  class CaptionButton : public QAbstractButton {
+    public:
+      CaptionButton(CaptionKind kind, const QString& tip)
+          : m_kind(kind) {
+        setObjectName("caption_button");
+        setFocusPolicy(Qt::NoFocus);
+        setFixedSize(CAPTION_BUTTON_WIDTH, MENU_ROW_HEIGHT);
+        setToolTip(tip);
+        setAccessibleName(tip);
+        setAttribute(Qt::WA_Hover);
+      }
+
+    protected:
+      void paintEvent(QPaintEvent*) override {
+        auto painter = QPainter(this);
+        auto is_hovered = underMouse();
+        auto ink = QColor(0x3F, 0x3F, 0x3F);
+        if(m_kind == CaptionKind::CLOSE && (is_hovered || isDown())) {
+          painter.fillRect(rect(), isDown() ? QColor(0xF1, 0x70, 0x7A) :
+            QColor(0xE8, 0x11, 0x23));
+          ink = Qt::white;
+        } else if(isDown()) {
+          painter.fillRect(rect(), QColor(0xC6, 0xC6, 0xC6));
+        } else if(is_hovered) {
+          painter.fillRect(rect(), QColor(0xD6, 0xD6, 0xD6));
+        }
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(ink, 1));
+        painter.setBrush(Qt::NoBrush);
+        auto center = QPointF(width() / 2.0, height() / 2.0);
+        if(m_kind == CaptionKind::MINIMIZE) {
+          painter.drawLine(QPointF(center.x() - 5, center.y() + 0.5),
+            QPointF(center.x() + 5, center.y() + 0.5));
+        } else if(m_kind == CaptionKind::MAXIMIZE) {
+          if(window()->isMaximized()) {
+            painter.drawRect(QRectF(center.x() - 5, center.y() - 3, 8, 8));
+            painter.drawPolyline(QList<QPointF>({
+              QPointF(center.x() - 3, center.y() - 5),
+              QPointF(center.x() + 5, center.y() - 5),
+              QPointF(center.x() + 5, center.y() + 3)}));
+          } else {
+            painter.drawRect(QRectF(center.x() - 5, center.y() - 5, 10, 10));
+          }
+        } else {
+          painter.drawLine(QPointF(center.x() - 5, center.y() - 5),
+            QPointF(center.x() + 5, center.y() + 5));
+          painter.drawLine(QPointF(center.x() + 5, center.y() - 5),
+            QPointF(center.x() - 5, center.y() + 5));
+        }
+      }
+
+    private:
+      CaptionKind m_kind;
+  };
 
   QPixmap make_mark(double ratio) {
     auto size = 20;
@@ -84,6 +153,9 @@ namespace {
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
       m_view(new DocumentView()),
+      m_menu_row(nullptr),
+      m_menu_bar(nullptr),
+      m_maximize(nullptr),
       m_actions(*this),
       m_app_bar(new AppBar()),
       m_toolbar(new Toolbar(make_xd_tools(), make_xd_panels())),
@@ -97,17 +169,20 @@ MainWindow::MainWindow(QWidget* parent)
       m_inspector_frame(new QWidget()),
       m_recent_files(MAXIMUM_RECENT_FILES),
       m_measurer(make_text_measurer(get_default_font_library())) {
-  add_standard_commands(m_commands);
+  add_standard_commands(m_commands, m_measurer);
   add_align_commands(m_commands, m_measurer);
   add_path_commands(m_commands);
-  add_repeat_grid_commands(m_commands);
-  add_component_commands(m_commands);
+  add_repeat_grid_commands(m_commands, m_measurer);
+  add_component_commands(m_commands, m_measurer);
+  add_header_commands(m_commands, m_measurer);
+  add_artboard_commands(m_commands);
+  add_asset_commands(m_commands);
   m_view->get_renderer().set_background(PASTEBOARD);
   m_view->installEventFilter(this);
   m_inspector->set_measurer(m_measurer);
   auto editors = make_standard_property_editors(m_measurer);
   add_text_property_editors(editors, get_default_font_library(), m_measurer,
-    [this] () -> const TextSelection* {
+    [this] () -> TextSelection* {
       if(!m_session) {
         return nullptr;
       }
@@ -117,6 +192,7 @@ MainWindow::MainWindow(QWidget* parent)
   add_component_property_editors(editors);
   m_inspector->set_property_editors(std::move(editors));
   m_inspector->set_actions(&m_actions);
+  m_layers->set_actions(&m_actions);
   m_layers->set_activation_handler([this] (const auto& id) {
     reveal(id);
   });
@@ -136,6 +212,9 @@ MainWindow::MainWindow(QWidget* parent)
   add_xd_menus(m_actions);
   add_actions();
   add_component_actions();
+  m_text_actions =
+    std::make_unique<TextActions>(m_actions, get_default_font_library());
+  add_asset_actions();
   m_actions.build(*bar);
   restore_settings();
   update_title();
@@ -177,6 +256,26 @@ bool MainWindow::open(const QString& path) {
   m_recent_files.add(path);
   update_recent_files();
   save_settings();
+  return true;
+}
+
+bool MainWindow::revert() {
+  if(!m_session || m_session->get_path().isEmpty()) {
+    return false;
+  }
+  auto path = m_session->get_path();
+  QApplication::setOverrideCursor(Qt::WaitCursor);
+  auto document = std::make_unique<Document>();
+  try {
+    import_xd(std::filesystem::path(path.toStdU16String()), *document);
+  } catch(const std::exception& error) {
+    QApplication::restoreOverrideCursor();
+    QMessageBox::critical(this, "Rellu",
+      QString("Unable to open %1:\n%2").arg(path, error.what()));
+    return false;
+  }
+  install(std::move(document), path);
+  QApplication::restoreOverrideCursor();
   return true;
 }
 
@@ -222,11 +321,129 @@ void MainWindow::closeEvent(QCloseEvent* event) {
   QMainWindow::closeEvent(event);
 }
 
+void MainWindow::changeEvent(QEvent* event) {
+  QMainWindow::changeEvent(event);
+  if(event->type() == QEvent::WindowStateChange && m_maximize) {
+    auto tip = isMaximized() ? QString("Restore Down") : QString("Maximize");
+    m_maximize->setToolTip(tip);
+    m_maximize->setAccessibleName(tip);
+    m_maximize->update();
+  }
+}
+
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
-  if(m_view && watched == m_view && event->type() == QEvent::Paint) {
-    update_zoom();
+  if(m_view && watched == m_view) {
+    if(event->type() == QEvent::Paint) {
+      update_zoom();
+    } else if(event->type() == QEvent::ContextMenu && m_session) {
+      auto position = static_cast<QContextMenuEvent*>(event)->globalPos();
+      auto menu = make_context_menu(m_actions, ContextMenuKind::CANVAS, this);
+      menu->setAttribute(Qt::WA_DeleteOnClose);
+      if(menu->isEmpty()) {
+        menu->deleteLater();
+      } else {
+        menu->popup(position);
+      }
+      return true;
+    }
   }
   return QMainWindow::eventFilter(watched, event);
+}
+
+bool MainWindow::nativeEvent(
+    const QByteArray& type, void* message, qintptr* result) {
+  if(m_maximize && handle_frame_event(*this, message, result,
+      [this] (QPoint position) {
+        return is_caption(position);
+      })) {
+    return true;
+  }
+  return QMainWindow::nativeEvent(type, message, result);
+}
+
+bool MainWindow::is_caption(QPoint position) const {
+  if(!m_menu_row || !m_menu_row->geometry().contains(position)) {
+    return false;
+  }
+  auto local = m_menu_row->mapFrom(this, position);
+  auto child = m_menu_row->childAt(local);
+  if(!child) {
+    return true;
+  } else if(child == m_menu_bar) {
+    return !m_menu_bar->actionAt(m_menu_bar->mapFrom(m_menu_row, local));
+  }
+  return static_cast<bool>(qobject_cast<QLabel*>(child));
+}
+
+void MainWindow::add_asset_actions() {
+  m_assets->set_font_families([] {
+    auto families = QStringList();
+    for(auto& face : get_default_font_library().get_faces()) {
+      auto family =
+        QString::fromStdString(face.m_names.m_typographic_family);
+      if(!family.isEmpty() && !families.contains(family)) {
+        families.push_back(family);
+      }
+    }
+    families.sort(Qt::CaseInsensitive);
+    return families;
+  });
+  m_actions.set_handler("object.reveal_color", [this] {
+    if(!m_session) {
+      return;
+    }
+    auto& document = m_session->get_document();
+    auto node = document.find(
+      m_session->get_editor().get_selection().get_primary());
+    auto style = node ? (node->get_shape() ? &node->get_shape()->m_style :
+      node->get_text() ? &node->get_text()->m_style : nullptr) : nullptr;
+    if(!style) {
+      return;
+    }
+    if(auto swatch = find_swatch(document.get_resources(), style->m_fill)) {
+      show_panel("assets");
+      m_assets->reveal_swatch(swatch->m_id);
+    }
+  });
+  m_actions.set_handler("object.reveal_character_style", [this] {
+    if(!m_session) {
+      return;
+    }
+    auto& document = m_session->get_document();
+    auto node = document.find(
+      m_session->get_editor().get_selection().get_primary());
+    auto text = node ? node->get_text() : nullptr;
+    if(!text) {
+      return;
+    }
+    if(auto style = find_character_style(document.get_resources(), *text)) {
+      show_panel("assets");
+      m_assets->reveal_character_style(style->m_id);
+    }
+  });
+}
+
+void MainWindow::update_asset_actions() {
+  auto is_color = false;
+  auto is_style = false;
+  if(m_session) {
+    auto& document = m_session->get_document();
+    if(auto node = document.find(
+        m_session->get_editor().get_selection().get_primary())) {
+      auto& resources = document.get_resources();
+      if(auto shape = node->get_shape()) {
+        is_color =
+          static_cast<bool>(find_swatch(resources, shape->m_style.m_fill));
+      } else if(auto text = node->get_text()) {
+        is_color =
+          static_cast<bool>(find_swatch(resources, text->m_style.m_fill));
+        is_style =
+          static_cast<bool>(find_character_style(resources, *text));
+      }
+    }
+  }
+  m_actions.set_enabled("object.reveal_color", is_color);
+  m_actions.set_enabled("object.reveal_character_style", is_style);
 }
 
 QMenuBar* MainWindow::make_layout() {
@@ -243,7 +460,35 @@ QMenuBar* MainWindow::make_layout() {
   menu_layout->addWidget(mark);
   auto bar = new QMenuBar();
   bar->setNativeMenuBar(false);
-  menu_layout->addWidget(bar, 1);
+  menu_layout->addWidget(bar);
+  menu_layout->addStretch(1);
+  m_menu_row = menu_row;
+  m_menu_bar = bar;
+  if(is_custom_frame_supported()) {
+    menu_layout->setSpacing(0);
+    menu_layout->insertSpacing(1, 14);
+    auto minimize = new CaptionButton(CaptionKind::MINIMIZE, "Minimize");
+    connect(minimize, &QAbstractButton::clicked, this, [this] {
+      showMinimized();
+    });
+    auto maximize = new CaptionButton(CaptionKind::MAXIMIZE, "Maximize");
+    connect(maximize, &QAbstractButton::clicked, this, [this] {
+      if(isMaximized()) {
+        showNormal();
+      } else {
+        showMaximized();
+      }
+    });
+    auto close = new CaptionButton(CaptionKind::CLOSE, "Close");
+    connect(close, &QAbstractButton::clicked, this, [this] {
+      this->close();
+    });
+    menu_layout->addWidget(minimize);
+    menu_layout->addWidget(maximize);
+    menu_layout->addWidget(close);
+    m_maximize = maximize;
+    enable_custom_frame(*this);
+  }
   setMenuWidget(menu_row);
   auto central = new QWidget();
   central->setObjectName("central");
@@ -271,6 +516,11 @@ QMenuBar* MainWindow::make_layout() {
   inspector_layout->addWidget(m_inspector);
   inspector_layout->addWidget(m_prototype_inspector);
   m_prototype_inspector->hide();
+  m_prototype_inspector->set_fixed_position_factory(
+    [] (const NodeId& node, bool is_fixed) {
+      return std::make_unique<SetFixedPositionCommand>(
+        std::vector<NodeId>({node}), is_fixed);
+    });
   body_layout->addWidget(m_inspector_frame);
   layout->addWidget(body, 1);
   setCentralWidget(central);
@@ -285,7 +535,16 @@ void MainWindow::add_actions() {
   m_actions.set_handler("file.save", [this] { save(); });
   m_actions.set_handler("file.save_as", [this] { save_as(); });
   m_actions.set_handler("file.save_as_local", [this] { save_as(); });
+  m_actions.set_handler("file.revert", [this] { revert(); });
   m_edit_actions = std::make_unique<EditActions>(m_actions, m_commands);
+  m_edit_actions->set_text_measurer(m_measurer);
+  m_edit_actions->set_view_provider([this] () -> std::optional<Rect> {
+    auto inverse = invert(m_view->get_renderer().get_view());
+    if(!inverse || m_view->width() <= 0 || m_view->height() <= 0) {
+      return std::nullopt;
+    }
+    return inverse->map(Rect(0, 0, m_view->width(), m_view->height()));
+  });
   m_edit_actions->set_error_handler([this] (const auto& message) {
     QMessageBox::warning(this, "Rellu", message);
   });
@@ -333,6 +592,9 @@ void MainWindow::add_actions() {
     activateWindow();
   });
   m_actions.set_handler("window.preview", [this] { toggle_preview(); });
+  m_actions.set_handler("edit.preferences.language.english", [this] {
+    m_actions.get("edit.preferences.language.english").setChecked(true);
+  });
   for(auto button : m_app_bar->findChildren<QToolButton*>()) {
     if(button->accessibleName() == "Desktop Preview") {
       button->setEnabled(true);
@@ -589,14 +851,17 @@ void MainWindow::install(
   m_prototype_inspector->set_editor(&editor);
   m_edit_actions->set_editor(&editor);
   m_component_actions->set_editor(&editor);
+  m_text_actions->set_editor(&editor);
   m_component_drop->set_editor(&editor);
   m_history_subscription = editor.get_history().subscribe([this] {
     update_title();
+    update_asset_actions();
   });
   m_selection_subscription = editor.get_selection().subscribe([this] {
     update_selection_actions();
   });
   if(auto tools = m_view->get_tools()) {
+    tools->get_context().set_text_measurer(m_measurer);
     m_tool_subscription = tools->subscribe_tool([this] {
       update_tool();
     });
@@ -615,6 +880,9 @@ void MainWindow::detach() {
   m_edit_actions->set_editor(nullptr);
   if(m_component_actions) {
     m_component_actions->set_editor(nullptr);
+  }
+  if(m_text_actions) {
+    m_text_actions->set_editor(nullptr);
   }
   if(m_component_drop) {
     m_component_drop->set_editor(nullptr);
@@ -647,6 +915,8 @@ void MainWindow::update_title() {
   m_actions.set_enabled("file.save", has_session &&
     (m_session->is_dirty() || m_session->get_path().isEmpty()));
   m_actions.set_enabled("file.save_as", has_session);
+  m_actions.set_enabled("file.revert", has_session &&
+    m_session->is_dirty() && !m_session->get_path().isEmpty());
   m_actions.set_enabled("file.save_as_local", has_session);
   m_actions.set_enabled("window.document", has_session);
 }
@@ -656,6 +926,7 @@ void MainWindow::update_selection_actions() {
     !m_session->get_editor().get_selection().is_empty();
   m_actions.set_enabled("view.zoom_selection", has_selection);
   m_actions.set_enabled("edit.rename", has_selection);
+  update_asset_actions();
 }
 
 void MainWindow::reveal(const NodeId& id) {

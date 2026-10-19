@@ -135,6 +135,15 @@ namespace Rellu {
       void invalidate(const NodeId& id);
 
       /**
+       * Reports a change to a node's transform alone. Where the change moves
+       * the node by a translation that its kept draw lists can be moved by
+       * exactly, build_lists reuses them moved; otherwise the change is
+       * treated as invalidate treats it.
+       * @param id The id of the node whose transform changed.
+       */
+      void invalidate_transform(const NodeId& id);
+
+      /**
        * Discards what is cached of a node, as when it is removed.
        * @param id The node's id.
        */
@@ -196,8 +205,13 @@ namespace Rellu {
       };
       struct Subtree {
         Placement m_parent;
+        Placement m_placement;
         int m_depth;
         bool m_is_stale;
+        bool m_is_moved;
+        bool m_is_surveyed;
+        bool m_is_rigid;
+        std::vector<std::vector<NodeId>> m_clips;
         double m_tolerance;
         SceneDependencies m_dependencies;
         std::vector<Segment> m_segments;
@@ -239,6 +253,9 @@ namespace Rellu {
       void add_segments(const Node& source, const std::vector<NodeId>& children,
         bool is_own, std::size_t begin, std::size_t end, std::size_t limit,
         const Placement& placement, int depth, std::vector<Segment>& segments);
+      bool replace(const NodeId& id, Subtree& tree, const Placement& parent);
+      void survey(const Node& node, Subtree& tree) const;
+      void report(const NodeId& id, bool is_moved);
       void forget(const NodeId& id);
       void mark_ancestors(const Node& node);
       void invalidate_dependents(const NodeId& key);

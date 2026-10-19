@@ -407,6 +407,43 @@ namespace {
     }
   }
 
+  NodeId renew(const Document& document, Transaction& transaction,
+      const NodeId& id) {
+    auto node = document.get(id);
+    auto index = get_index(document, id);
+    auto header = node.m_header;
+    header.m_id = generate_node_id();
+    auto interactions = std::vector<Interaction>();
+    for(auto& interaction : document.get_prototype().m_interactions) {
+      if(interaction.m_owner == id) {
+        interactions.push_back(interaction);
+      }
+    }
+    auto renewed = transaction.insert(
+      node.m_parent, index, std::move(header), node.m_payload);
+    for(auto i = std::size_t(0); i != node.m_children.size(); ++i) {
+      transaction.move(node.m_children[i], renewed, i);
+    }
+    transaction.remove(id);
+    for(auto& interaction : interactions) {
+      interaction.m_owner = renewed;
+      transaction.add_interaction(std::move(interaction));
+    }
+    if(auto parent = node.m_parent.is_nil() ? nullptr :
+        document.find(node.m_parent)) {
+      if(auto group = parent->get_group(); group && group->m_stack &&
+          group->m_stack->m_spacing.contains(id)) {
+        auto payload = *group;
+        auto& spacing = payload.m_stack->m_spacing;
+        auto margin = spacing.at(id);
+        spacing.erase(id);
+        spacing.emplace(renewed, margin);
+        transaction.replace_payload(node.m_parent, std::move(payload));
+      }
+    }
+    return renewed;
+  }
+
   void check_editable(const Document& document, const ComponentId& id) {
     get_component(document, id);
     if(is_linked(document, id)) {
@@ -433,8 +470,10 @@ namespace {
   }
 }
 
-MakeComponentCommand::MakeComponentCommand(std::vector<NodeId> nodes) noexcept
-  : m_nodes(std::move(nodes)) {}
+MakeComponentCommand::MakeComponentCommand(
+  std::vector<NodeId> nodes, TextMeasurer measurer) noexcept
+  : m_nodes(std::move(nodes)),
+    m_measurer(std::move(measurer)) {}
 
 const ComponentId& MakeComponentCommand::get_component() const {
   return m_component;
@@ -465,30 +504,40 @@ void MakeComponentCommand::apply(
         "A component can not be made inside a component instance.");
     }
   }
+  auto name = std::string();
   if(nodes.size() == 1 && is_plain_group(document.get(nodes.front()))) {
-    m_main = nodes.front();
+    m_main = renew(document, transaction, nodes.front());
+    name = document.get(m_main).m_header.m_name;
   } else {
-    auto group =
-      GroupCommand(std::move(nodes), make_node_name(document, "Component "));
+    name = make_node_name(document, "Component ");
+    auto group = GroupCommand(std::move(nodes), name);
     group.apply(document, transaction);
     m_main = group.get_group();
+    auto header = document.get(m_main).m_header;
+    header.m_name = name + " \xE2\x80\x93 1";
+    transaction.replace_header(std::move(header));
   }
   auto mapping = std::unordered_map<NodeId, NodeId>();
   auto master = clone_tree(document, transaction, m_main, mapping);
   auto master_header = document.get(master).m_header;
+  master_header.m_name = name;
   master_header.m_transform = Matrix();
   master_header.m_transform_3d = std::nullopt;
   master_header.m_opaque = OpaqueData();
   transaction.replace_header(std::move(master_header));
+  auto size = Size(0, 0);
+  if(auto bounds = get_local_bounds(
+      document, m_main, BoundsType::GEOMETRY, m_measurer)) {
+    size = Size(bounds->m_width, bounds->m_height);
+  }
   auto component = Component();
-  component.m_name = document.get(m_main).m_header.m_name;
+  component.m_name = name;
   component.m_master = master;
+  component.m_size = size;
   m_component = transaction.add_component(std::move(component));
   auto role = ComponentInstance();
   role.m_component = m_component;
-  if(auto bounds = get_local_bounds(document, m_main)) {
-    role.m_size = Size(bounds->m_width, bounds->m_height);
-  }
+  role.m_size = size;
   for(auto& entry : mapping) {
     if(entry.first != m_main) {
       role.m_sync_map.emplace(entry.first, entry.second);
@@ -588,10 +637,11 @@ void SetInstanceStateCommand::apply(
   }
 }
 
-SwapComponentCommand::SwapComponentCommand(
-  std::vector<NodeId> nodes, const ComponentId& component) noexcept
+SwapComponentCommand::SwapComponentCommand(std::vector<NodeId> nodes,
+  const ComponentId& component, TextMeasurer measurer) noexcept
   : m_nodes(std::move(nodes)),
-    m_component(component) {}
+    m_component(component),
+    m_measurer(std::move(measurer)) {}
 
 std::string SwapComponentCommand::get_label() const {
   return "Swap Component";
@@ -613,8 +663,8 @@ void SwapComponentCommand::apply(
     auto transform = node.m_header.m_transform;
     auto index = get_index(document, id);
     transaction.remove(id);
-    m_selection.push_back(insert_instance(
-      document, transaction, m_component, parent, index, transform));
+    m_selection.push_back(insert_instance(document, transaction,
+      m_component, parent, index, transform, m_measurer));
   }
 }
 
@@ -623,10 +673,11 @@ std::optional<std::vector<NodeId>> SwapComponentCommand::get_selection() const {
 }
 
 InsertInstanceCommand::InsertInstanceCommand(const ComponentId& component,
-  const NodeId& parent, const Matrix& transform) noexcept
+  const NodeId& parent, const Matrix& transform, TextMeasurer measurer) noexcept
   : m_component(component),
     m_parent(parent),
-    m_transform(transform) {}
+    m_transform(transform),
+    m_measurer(std::move(measurer)) {}
 
 const NodeId& InsertInstanceCommand::get_instance() const {
   return m_instance;
@@ -639,8 +690,8 @@ std::string InsertInstanceCommand::get_label() const {
 void InsertInstanceCommand::apply(
     const Document& document, Transaction& transaction) {
   auto count = document.get_children(m_parent).size();
-  m_instance = insert_instance(
-    document, transaction, m_component, m_parent, count, m_transform);
+  m_instance = insert_instance(document, transaction, m_component, m_parent,
+    count, m_transform, m_measurer);
 }
 
 std::optional<std::vector<NodeId>>
@@ -649,9 +700,11 @@ std::optional<std::vector<NodeId>>
 }
 
 RestoreMainComponentCommand::RestoreMainComponentCommand(
-  const ComponentId& component, const Matrix& transform) noexcept
+  const ComponentId& component, const Matrix& transform,
+  TextMeasurer measurer) noexcept
   : m_component(component),
-    m_transform(transform) {}
+    m_transform(transform),
+    m_measurer(std::move(measurer)) {}
 
 const NodeId& RestoreMainComponentCommand::get_main() const {
   return m_main;
@@ -668,7 +721,7 @@ void RestoreMainComponentCommand::apply(
     throw std::invalid_argument("The component has a main component.");
   }
   m_main = insert_instance(document, transaction, m_component, NodeId(),
-    document.get_canvas().size(), m_transform);
+    document.get_canvas().size(), m_transform, m_measurer);
   auto group = *document.get(m_main).get_group();
   group.m_component_instance->m_is_main = true;
   transaction.replace_payload(m_main, std::move(group));
@@ -873,8 +926,9 @@ std::unique_ptr<Command> Rellu::make_ungroup_component(
   return std::make_unique<UngroupComponentCommand>(std::move(instances));
 }
 
-void Rellu::add_component_commands(CommandRegistry& registry) {
-  registry.add("object.make_component", [] (const auto& document,
+void Rellu::add_component_commands(
+    CommandRegistry& registry, TextMeasurer measurer) {
+  registry.add("object.make_component", [=] (const auto& document,
       const auto& targets) -> std::unique_ptr<Command> {
     auto nodes = get_top_level(document, targets);
     if(nodes.empty() || std::any_of(nodes.begin(), nodes.end(),
@@ -884,7 +938,7 @@ void Rellu::add_component_commands(CommandRegistry& registry) {
         })) {
       return nullptr;
     }
-    return std::make_unique<MakeComponentCommand>(std::move(nodes));
+    return std::make_unique<MakeComponentCommand>(std::move(nodes), measurer);
   });
   registry.add("object.ungroup_component", make_ungroup_component);
   registry.add("object.reset_main_state", [] (const auto& document,

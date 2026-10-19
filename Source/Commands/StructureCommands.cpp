@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <variant>
 #include "Rellu/Commands/Bounds.hpp"
+#include "Rellu/Commands/CreationCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
@@ -271,13 +272,14 @@ void ReparentCommand::apply(
   reparent(document, transaction, nodes, m_parent, m_index);
 }
 
-GroupCommand::GroupCommand(std::vector<NodeId> nodes)
-  : GroupCommand(std::move(nodes), "Group") {}
+GroupCommand::GroupCommand(std::vector<NodeId> nodes, TextMeasurer measurer)
+  : GroupCommand(std::move(nodes), std::string(), std::move(measurer)) {}
 
-GroupCommand::GroupCommand(
-  std::vector<NodeId> nodes, std::string name) noexcept
+GroupCommand::GroupCommand(std::vector<NodeId> nodes, std::string name,
+  TextMeasurer measurer) noexcept
   : m_nodes(std::move(nodes)),
-    m_name(std::move(name)) {}
+    m_name(std::move(name)),
+    m_measurer(std::move(measurer)) {}
 
 const NodeId& GroupCommand::get_group() const {
   return m_group;
@@ -309,8 +311,9 @@ void GroupCommand::apply(const Document& document, Transaction& transaction) {
   }
   auto origin = std::optional<Point>();
   for(auto& id : nodes) {
-    if(auto bounds = get_bounds(
-        document, id, *inverse * get_world_transform(document, id))) {
+    if(auto bounds = get_bounds(document, id,
+        *inverse * get_world_transform(document, id), BoundsType::GEOMETRY,
+        m_measurer)) {
       if(origin) {
         origin = Point(std::min(origin->m_x, bounds->m_x),
           std::min(origin->m_y, bounds->m_y));
@@ -321,6 +324,9 @@ void GroupCommand::apply(const Document& document, Transaction& transaction) {
   }
   auto header = NodeHeader();
   header.m_name = m_name;
+  if(header.m_name.empty()) {
+    header.m_name = make_node_name(document, "Group ");
+  }
   if(origin) {
     header.m_transform = make_translation(origin->m_x, origin->m_y);
   }

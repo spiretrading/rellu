@@ -527,6 +527,45 @@ TEST_SUITE("SceneBuilder") {
     REQUIRE(changed == 1);
   }
 
+  TEST_CASE("invalidate_transform") {
+    auto document = Document();
+    auto transaction = std::optional<Transaction>(std::in_place, document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 400, 400);
+    auto board = transaction->append(NodeId(), make_header(), artboard);
+    auto group = transaction->append(
+      board, make_header(make_translation(5, 5)), Group());
+    auto scroll = Group();
+    scroll.m_scroll_group =
+      ScrollGroup(ScrollDirection::VERTICAL, Size(100, 50), Point(0, 0));
+    auto scrolled = transaction->append(
+      group, make_header(make_translation(0, 20)), scroll);
+    for(auto i = 0; i != 600; ++i) {
+      transaction->append(i % 2 == 0 ? group : scrolled,
+        make_header(make_translation(i % 30 * 10, i / 30 * 10)),
+        make_shape(Rect(0, 0, 8, 8), make_color(i % 256, 0, 0)));
+    }
+    transaction->commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto dependencies = SceneDependencies();
+    builder.build_lists(board, dependencies);
+    auto move = [&] (const Matrix& transform) {
+      auto header = document.get(group).m_header;
+      header.m_transform = transform;
+      transaction.emplace(document);
+      transaction->replace_header(header);
+      transaction->commit();
+      builder.invalidate_transform(group);
+      auto lists = builder.build_lists(board, dependencies);
+      REQUIRE(is_same(lists, builder.build(board)));
+    };
+    move(make_translation(8, 9));
+    move(make_translation(8, -30));
+    move(make_translation(-250, -30));
+    move(make_translation(-250, -30) * make_scale(2, 2));
+    move(make_translation(7.5, 9.25));
+  }
+
   TEST_CASE("edit") {
     auto document = Document();
     auto transaction = std::optional<Transaction>(std::in_place, document);

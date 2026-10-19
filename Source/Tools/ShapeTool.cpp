@@ -66,7 +66,7 @@ std::unique_ptr<Command> ShapeTool::make_command(ToolContext& context,
     NodeHeader header, Point start, Point end,
     Qt::KeyboardModifiers modifiers) {
   auto& document = context.get_document();
-  auto parent = find_drawing_parent(document, start);
+  auto parent = find_parent(context, start);
   auto inverse = invert(get_world_transform(document, parent));
   if(!inverse) {
     return nullptr;

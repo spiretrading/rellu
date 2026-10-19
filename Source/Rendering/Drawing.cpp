@@ -236,6 +236,8 @@ namespace {
       void query(const Rect& region, double scale,
         const std::vector<Item>& items,
         std::vector<std::uint32_t>& result) const;
+      bool contains(const Rect& region, double scale,
+        const std::vector<Item>& items) const;
 
     private:
       struct Node {
@@ -334,6 +336,32 @@ namespace {
         }
       }
     }
+  }
+
+  bool Index::contains(const Rect& region, double scale,
+      const std::vector<Item>& items) const {
+    if(m_nodes.empty()) {
+      return false;
+    }
+    auto stack = std::vector<std::uint32_t>(
+      {static_cast<std::uint32_t>(m_nodes.size() - 1)});
+    while(!stack.empty()) {
+      auto& node = m_nodes[stack.back()];
+      stack.pop_back();
+      if(!is_touching(node.m_bounds, node.m_margin, scale, region)) {
+        continue;
+      }
+      for(auto i = node.m_first; i != node.m_first + node.m_count; ++i) {
+        auto child = m_children[i];
+        if(!node.m_is_leaf) {
+          stack.push_back(child);
+        } else if(is_touching(
+            items[child].m_bounds, items[child].m_margin, scale, region)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   int to_coordinate(double value) {
@@ -593,4 +621,15 @@ Rect Drawing::query(
     }
   }
   return area;
+}
+
+bool Drawing::is_empty(const Rect& region, double scale) const {
+  if(region.is_empty() || !(scale > 0)) {
+    return true;
+  }
+  return std::none_of(m_entries.begin(), m_entries.end(),
+    [&] (const auto& entry) {
+      return is_touching(entry->m_bounds, entry->m_margin, scale, region) &&
+        entry->m_index.contains(region, scale, entry->m_items);
+    });
 }

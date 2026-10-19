@@ -45,6 +45,8 @@ namespace {
     NodeId m_stack;
     NodeId m_padding;
     NodeId m_grid;
+    NodeId m_cell;
+    NodeId m_cell_text;
     NodeId m_scroll;
     NodeId m_mask;
     NodeId m_instance;
@@ -133,6 +135,8 @@ namespace {
     rectangle_header.m_transform = make_translation(10, 20);
     rectangle_header.m_opacity = 0.5;
     rectangle_header.m_blend_mode = BlendMode::MULTIPLY;
+    rectangle_header.m_is_fixed_position = true;
+    rectangle_header.m_aspect_lock = Size(20, 10);
     built.m_rectangle =
       transaction.append(built.m_artboard, rectangle_header, rectangle);
     auto ellipse = Shape();
@@ -179,6 +183,7 @@ namespace {
       make_rectangle_shape(10, 10));
     auto text = make_text_payload(u"Hello");
     text.m_runs.front().m_character_style = built.m_character_style;
+    text.m_runs.front().m_hyperlink = "https://example.com";
     built.m_text =
       transaction.append(built.m_artboard, make_header("Text"), text);
     auto stack = Group();
@@ -202,6 +207,11 @@ namespace {
     grid.m_repeat_grid = RepeatGrid(Size(50, 50), 10, 10, 2, 3, Size(110, 170));
     built.m_grid =
       transaction.append(built.m_artboard, make_header("Grid"), grid);
+    built.m_cell = transaction.append(built.m_grid, make_header(""), Group());
+    auto series = make_text_payload(u"One");
+    series.m_repeat_data = {u"One", u"Two"};
+    built.m_cell_text =
+      transaction.append(built.m_cell, make_header("Series"), series);
     auto scroll = Group();
     scroll.m_scroll_group =
       ScrollGroup(ScrollDirection::VERTICAL, Size(100, 200), Point(0, 10));
@@ -227,6 +237,7 @@ namespace {
     component.m_name = "Button";
     component.m_master = built.m_master;
     component.m_default_state = generate_node_id();
+    component.m_size = Size(80, 30);
     component.m_states.push_back(
       ComponentState(state, "Hover", built.m_state_tree));
     built.m_component = transaction.add_component(component);
@@ -248,6 +259,11 @@ namespace {
         Animation(Transition::DISSOLVE, Easing::EASE_OUT, 0.3))));
     interactions.push_back(Interaction(NodeId(), built.m_instance,
       HoverTrigger(), StateTransition(state)));
+    interactions.push_back(Interaction(NodeId(), built.m_ellipse,
+      TapTrigger(), ArtboardTransition(NodeId(),
+        Animation(Transition::NONE, Easing::EASE_IN, 0.2))));
+    interactions.push_back(Interaction(NodeId(), built.m_line,
+      TapTrigger(), Hyperlink("https://www.example.com")));
     std::sort(interactions.begin(), interactions.end(),
       [] (const auto& left, const auto& right) {
         return to_string(left.m_owner) < to_string(right.m_owner);
@@ -467,11 +483,58 @@ TEST_SUITE("XdWriter") {
     REQUIRE(ux.value("symbolId"_L1).toString().toStdString() ==
       to_string(built.m_component));
     REQUIRE(ux.value("width"_L1).toDouble() == 80);
+    REQUIRE(ux.value("componentType"_L1) == "componentNoBounds"_L1);
+    REQUIRE(master.value("width"_L1).toDouble() == 80);
+    REQUIRE(master.value("height"_L1).toDouble() == 30);
+    REQUIRE(master.value("componentType"_L1) == "componentNoBounds"_L1);
     auto reference = find_written(package, built.m_reference);
     REQUIRE(reference.value("type"_L1) == "syncRef"_L1);
     REQUIRE(!reference.contains("meta"_L1));
     REQUIRE(reference.value("syncSourceGuid"_L1).toString().toStdString() ==
       to_string(document.get(built.m_reference).get_reference()->m_source));
+  }
+
+  TEST_CASE("repeat_grid_cells") {
+    auto document = Document();
+    auto built = build(document);
+    auto package = XdPackage(write_xd(document));
+    REQUIRE(get_ux(find_written(package, built.m_cell)).value(
+      "disableNaming"_L1).toBool());
+    REQUIRE(!get_ux(find_written(package, built.m_cell_text)).contains(
+      "disableNaming"_L1));
+    auto series = get_ux(find_written(package, built.m_cell_text)).value(
+      "repeatOverrides"_L1).toArray();
+    REQUIRE(series.size() == 2);
+    REQUIRE(series[1].toObject() == QJsonObject({{"overrideType", "text"},
+      {"data", "Two"}, {"type", "RepeatOverride"}}));
+  }
+
+  TEST_CASE("interaction_without_destination") {
+    auto document = Document();
+    auto built = build(document);
+    auto interactions = XdPackage(write_xd(document)).read_interactions();
+    auto list = interactions.value("interactions"_L1).toObject().value(
+      QString::fromStdString(to_string(built.m_ellipse))).toArray();
+    REQUIRE(list.size() == 1);
+    auto properties =
+      list.first().toObject().value("properties"_L1).toObject();
+    REQUIRE(!properties.contains("destination"_L1));
+    REQUIRE(properties.value("transition"_L1) == "none"_L1);
+    REQUIRE(properties.value("easing"_L1) == "ease-in"_L1);
+  }
+
+  TEST_CASE("hyperlink") {
+    auto document = Document();
+    auto built = build(document);
+    auto interactions = XdPackage(write_xd(document)).read_interactions();
+    auto list = interactions.value("interactions"_L1).toObject().value(
+      QString::fromStdString(to_string(built.m_line))).toArray();
+    REQUIRE(list.size() == 1);
+    auto entry = list.first().toObject();
+    REQUIRE(entry.value("action"_L1) == "hyperlink"_L1);
+    REQUIRE(entry.value("triggerEvent"_L1) == "tap"_L1);
+    REQUIRE(entry.value("properties"_L1).toObject() ==
+      QJsonObject({{"hyperlinkUrl", "https://www.example.com"}}));
   }
 
   TEST_CASE("main_component") {
@@ -519,6 +582,8 @@ TEST_SUITE("XdWriter") {
     REQUIRE(ranges.size() == 1);
     REQUIRE(ranges.first().toObject().value("linkId"_L1).toString().
       toStdString() == to_string(built.m_character_style));
+    REQUIRE(ranges.first().toObject().value("hyperlinkUrl"_L1) ==
+      "https://example.com"_L1);
   }
 
   TEST_CASE("text_layout") {
@@ -573,7 +638,7 @@ TEST_SUITE("XdWriter") {
     auto interactions = package.read_interactions();
     REQUIRE(interactions.value("homeArtboard"_L1).toString().toStdString() ==
       to_string(built.m_artboard));
-    REQUIRE(interactions.value("interactions"_L1).toObject().size() == 2);
+    REQUIRE(interactions.value("interactions"_L1).toObject().size() == 4);
     REQUIRE(package.read("resources/" + to_uid(built.m_image)).size() == 12);
   }
 
@@ -672,5 +737,42 @@ TEST_SUITE("XdWriter") {
     import_xd(path, imported);
     REQUIRE(join(filter(find_differences(document, imported))) == "");
     REQUIRE(!std::filesystem::exists(path.string() + ".saving"));
+  }
+
+  TEST_CASE("default_names") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto rectangle = transaction.append(NodeId(),
+      make_header("Rectangle 3"), make_rectangle_shape(5, 5));
+    auto custom = transaction.append(
+      NodeId(), make_header("Logo"), make_rectangle_shape(5, 5));
+    auto ellipse = Shape();
+    ellipse.m_geometry = EllipseShape(Point(5, 5), 5, 3);
+    auto ellipse_id =
+      transaction.append(NodeId(), make_header("Ellipse 12"), ellipse);
+    auto group = transaction.append(NodeId(), make_header("Group 2"), Group());
+    transaction.append(
+      group, make_header("Path 1"), make_rectangle_shape(5, 5));
+    auto text = transaction.append(
+      NodeId(), make_header("Hello"), make_text_payload(u"Hello"));
+    auto renamed = transaction.append(
+      NodeId(), make_header("Title"), make_text_payload(u"Hello"));
+    auto grid = Group();
+    grid.m_repeat_grid = RepeatGrid(Size(50, 50), 10, 10, 2, 3, Size(110, 170));
+    auto grid_id =
+      transaction.append(NodeId(), make_header("Repeat Grid 1"), grid);
+    transaction.commit();
+    auto package = XdPackage(write_xd(document));
+    auto get_key = [&] (const NodeId& id) {
+      return get_ux(find_written(package, id)).value("nameL10N"_L1).
+        toString().toStdString();
+    };
+    REQUIRE(get_key(rectangle) == "SHAPE_RECTANGLE");
+    REQUIRE(get_key(custom).empty());
+    REQUIRE(get_key(ellipse_id) == "SHAPE_ELLIPSE");
+    REQUIRE(get_key(group) == "SHAPE_GROUP");
+    REQUIRE(get_key(text) == "SHAPE_GROUP");
+    REQUIRE(get_key(renamed).empty());
+    REQUIRE(get_key(grid_id) == "SHAPE_REPEAT_GRID");
   }
 }

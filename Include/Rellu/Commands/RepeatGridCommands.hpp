@@ -35,8 +35,10 @@ namespace Rellu {
       /**
        * Constructs a RepeatGridCommand.
        * @param nodes The nodes to repeat, none of them an artboard.
+       * @param measurer The function measuring text, which sizes the cell.
        */
-      explicit RepeatGridCommand(std::vector<NodeId> nodes) noexcept;
+      explicit RepeatGridCommand(std::vector<NodeId> nodes,
+        TextMeasurer measurer = estimate_text_bounds) noexcept;
 
       /** Returns the grid made by the last application, or nil. */
       const NodeId& get_grid() const;
@@ -47,6 +49,7 @@ namespace Rellu {
 
     private:
       std::vector<NodeId> m_nodes;
+      TextMeasurer m_measurer;
       NodeId m_grid;
   };
 
@@ -143,8 +146,10 @@ namespace Rellu {
    * Adds object.repeat_grid, making a repeat grid of the targets unless they
    * are all repeat grids already.
    * @param registry The registry to add to.
+   * @param measurer The function measuring text, which sizes cells.
    */
-  void add_repeat_grid_commands(CommandRegistry& registry);
+  void add_repeat_grid_commands(CommandRegistry& registry,
+    TextMeasurer measurer = estimate_text_bounds);
 }
 
 #endif

@@ -180,10 +180,13 @@ TEST_SUITE("TextImporter") {
   TEST_CASE("hyperlink") {
     auto document = Document();
     auto report = ImportReport();
-    import_text(document, R"([{"length": 1, "fontFamily": "Roboto",
-      "hyperlinkUrl": "https://example.com"}])",
-      R"({"rawText": "x"})", &report);
-    REQUIRE(report.m_unconsumed.at(
-      "<text>.meta.ux.rangedStyles[].hyperlinkUrl:str") == 1);
+    auto& text = import_text(document, R"([{"length": 1,
+      "fontFamily": "Roboto", "hyperlinkUrl": "https://example.com"},
+      {"length": 1, "hyperlinkUrl": ""}])", R"({"rawText": "xy"})", &report);
+    REQUIRE(!report.m_unconsumed.contains(
+      "<text>.meta.ux.rangedStyles[].hyperlinkUrl:str"));
+    REQUIRE(text.m_runs.size() == 2);
+    REQUIRE(text.m_runs.front().m_hyperlink == "https://example.com");
+    REQUIRE(text.m_runs.back().m_hyperlink.empty());
   }
 }

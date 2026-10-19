@@ -709,6 +709,60 @@ TEST_SUITE("Scene") {
     }
   }
 
+  TEST_CASE("translation") {
+    auto document = Document();
+    auto sample = make_sample(document);
+    auto scene = Scene(document, TOLERANCE);
+    scene.update();
+    auto check = [&] {
+      scene.update();
+      REQUIRE(scene.is_current());
+      REQUIRE(is_rebuilt_equal(document, scene));
+    };
+    displace(document, sample.m_grid, Point(3, 2));
+    check();
+    displace(document, sample.m_grid, Point(-1, 4));
+    check();
+    displace(document, sample.m_masked, Point(5, -3));
+    check();
+    displace(document, sample.m_scroll, Point(0, -540));
+    check();
+    displace(document, sample.m_scroll, Point(0, 540));
+    check();
+    displace(document, sample.m_rotated, Point(2, 2));
+    check();
+    displace(document, sample.m_instances, Point(4, 1));
+    check();
+    displace(document, sample.m_overridden, Point(1, 1));
+    check();
+    displace(document, sample.m_faded, Point(1, 0.5));
+    check();
+    displace(document, sample.m_isolated, Point(0.25, 3));
+    check();
+    displace(document, sample.m_content, Point(7, 0));
+    check();
+    recolor(document, get_child(document, sample.m_grid, 30),
+      make_color(1, 2, 3));
+    check();
+    displace(document, sample.m_grid, Point(1, 1));
+    recolor(document, get_child(document, sample.m_grid, 31),
+      make_color(4, 5, 6));
+    check();
+    displace(document, get_child(document, sample.m_grid, 32), Point(1, 1));
+    displace(document, sample.m_grid, Point(1, 1));
+    check();
+    recolor(document, get_child(document, sample.m_icon, 0),
+      make_color(9, 9, 9));
+    displace(document, sample.m_instances, Point(1, 1));
+    check();
+    while(document.undo()) {
+      check();
+    }
+    while(document.redo()) {
+      check();
+    }
+  }
+
   TEST_CASE("retained_images") {
     auto document = Document();
     auto sample = make_sample(document);

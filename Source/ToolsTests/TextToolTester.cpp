@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <doctest/doctest.h>
@@ -163,8 +164,7 @@ TEST_SUITE("TextTool") {
     REQUIRE(text.m_base_style == get_default_text_style());
     REQUIRE(text.m_style.m_fill ==
       Fill(SolidFill(get_default_text_style().m_color)));
-    auto ascent = measure_lines(text, get_library()).front().m_ascent;
-    REQUIRE(node.m_header.m_transform == make_translation(200, 200 + ascent));
+    REQUIRE(node.m_header.m_transform == make_translation(200, 200));
     type(tools, u"Hi there");
     REQUIRE(get_content(document, id) == u"Hi there");
     REQUIRE(document.get(id).m_header.m_name == "Hi there");
@@ -263,8 +263,11 @@ TEST_SUITE("TextTool") {
     REQUIRE(tools.get_tool_name() == "text");
     REQUIRE(tool.is_editing(tools.get_context()));
     REQUIRE(get_selection(editor).get_node() == board.m_text);
-    REQUIRE(get_selection(editor).get_caret() == 3);
+    REQUIRE(get_selection(editor).get_anchor() == 0);
+    REQUIRE(get_selection(editor).get_caret() == 11);
     REQUIRE(editor.get_selection().get_nodes() == std::vector{board.m_text});
+    click(tools, point);
+    REQUIRE(get_selection(editor).get_range() == TextRange(3, 3));
   }
 
   TEST_CASE("click_on_text") {
@@ -371,7 +374,7 @@ TEST_SUITE("TextTool") {
     press_key(tools, Qt::Key_Return);
     press_key(tools, Qt::Key_Return, Qt::ShiftModifier);
     press_key(tools, Qt::Key_Tab);
-    REQUIRE(get_content(document, board.m_text) == u"a\n\v\tb");
+    REQUIRE(get_content(document, board.m_text) == u"a\n\u2028\tb");
     REQUIRE(measure_lines(get_text(document, board.m_text),
       get_library()).size() == 3);
   }
@@ -516,14 +519,70 @@ TEST_SUITE("TextTool") {
     press_key(tools, Qt::Key_Right, Qt::ShiftModifier);
     REQUIRE(tool.is_caret_visible());
     REQUIRE(find_caret() == 0);
-    auto overlay = tools.draw();
-    REQUIRE(std::any_of(overlay.m_shapes.begin(), overlay.m_shapes.end(),
-      [] (const auto& shape) {
-        return shape.m_fill.m_alpha > 0 && shape.m_fill.m_alpha < 1;
-      }));
     auto caret = tool.get_caret_rect(tools.get_context());
     REQUIRE(caret);
     REQUIRE(caret->m_height > 0);
+  }
+
+  TEST_CASE("highlight") {
+    auto document = Document();
+    auto board = build_board(document, u"Hello world");
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto& tool = get_text_tool(tools);
+    tools.set_tool("text");
+    tool.edit(tools.get_context(), board.m_text, 3, 3);
+    auto images = tools.draw().m_images.size();
+    tool.edit(tools.get_context(), board.m_text, 0, 5);
+    auto overlay = tools.draw();
+    REQUIRE(overlay.m_images.size() == images + 1);
+    auto& highlight = overlay.m_images.back();
+    auto lines = measure_lines(get_text(document, board.m_text), get_library());
+    auto rect = get_selection_rects(lines, 0, 5).front();
+    auto origin = get_world_transform(document, board.m_text).map(
+      rect.get_top_left());
+    REQUIRE(highlight.m_position ==
+      Point(std::floor(origin.m_x), std::floor(origin.m_y)));
+    auto& image = *highlight.m_image;
+    REQUIRE(image.width() == static_cast<int>(
+      std::ceil(origin.m_x + rect.m_width) - std::floor(origin.m_x)));
+    auto blue = 0;
+    auto white = 0;
+    for(auto y = 0; y != image.height(); ++y) {
+      for(auto x = 0; x != image.width(); ++x) {
+        auto pixel = image.pixelColor(x, y);
+        if(pixel == QColor(0x33, 0x99, 0xFF)) {
+          ++blue;
+        } else if(pixel.red() > 0xC0 && pixel.alpha() == 0xFF) {
+          ++white;
+        }
+      }
+    }
+    REQUIRE(blue > white);
+    REQUIRE(white > 0);
+  }
+
+  TEST_CASE("pending_style") {
+    auto document = Document();
+    auto board = build_board(document, u"Hello world");
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto& tool = get_text_tool(tools);
+    tools.set_tool("text");
+    tool.edit(tools.get_context(), board.m_text, 5, 5);
+    auto style = get_text(document, board.m_text).m_base_style;
+    style.m_font.m_size = 40;
+    editor.get_text_selection().set_pending_style(style);
+    type(tools, u"ab");
+    auto& text = get_text(document, board.m_text);
+    REQUIRE(*text.m_content == u"Helloab world");
+    REQUIRE(text.m_runs.size() == 3);
+    REQUIRE(text.m_runs[0].m_length == 5);
+    REQUIRE(text.m_runs[1].m_length == 2);
+    REQUIRE(text.m_runs[1].m_style.m_font.m_size == 40);
+    REQUIRE(text.m_runs[2].m_style.m_font.m_size == 20);
+    REQUIRE(!editor.get_text_selection().get_pending_style());
+    REQUIRE(editor.get_history().get_undo_count() == 1);
   }
 
   TEST_CASE("text_keys") {

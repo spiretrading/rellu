@@ -143,8 +143,8 @@ namespace {
         }
       }
     }
-    if(json.value("hyperlinkUrl"_L1).toString().isEmpty()) {
-      range.consume("hyperlinkUrl"_L1);
+    if(auto hyperlink = range.get_string("hyperlinkUrl"_L1)) {
+      run.m_hyperlink = to_std_string(*hyperlink);
     }
     return run;
   }

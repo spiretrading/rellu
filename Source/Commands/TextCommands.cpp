@@ -42,7 +42,8 @@ namespace {
         continue;
       }
       if(!result.empty() && result.back().m_style == run.m_style &&
-          result.back().m_character_style == run.m_character_style) {
+          result.back().m_character_style == run.m_character_style &&
+          result.back().m_hyperlink == run.m_hyperlink) {
         result.back().m_length += run.m_length;
       } else {
         result.push_back(std::move(run));
@@ -125,6 +126,7 @@ namespace {
     take(target.m_is_struck_through, source.m_is_struck_through);
     take(target.m_transform, source.m_transform);
     take(target.m_script, source.m_script);
+    take(target.m_hyperlink, source.m_hyperlink);
   }
 
   std::vector<NodeId> get_texts(
@@ -177,6 +179,26 @@ std::string Rellu::make_text_name(std::u16string_view content) {
     append_utf8(name, code);
   }
   return name;
+}
+
+TextStyle Rellu::edit_style(TextStyle style, const TextStyleEdit& edit) {
+  apply(style, edit);
+  return style;
+}
+
+TextStyleEdit Rellu::make_style_edit(const TextStyle& style) {
+  auto edit = TextStyleEdit();
+  edit.m_family = style.m_font.m_family;
+  edit.m_style = style.m_font.m_style;
+  edit.m_postscript_name = style.m_font.m_postscript_name;
+  edit.m_size = style.m_font.m_size;
+  edit.m_letter_spacing = style.m_letter_spacing;
+  edit.m_color = style.m_color;
+  edit.m_is_underlined = style.m_is_underlined;
+  edit.m_is_struck_through = style.m_is_struck_through;
+  edit.m_transform = style.m_transform;
+  edit.m_script = style.m_script;
+  return edit;
 }
 
 std::vector<TextRun> Rellu::get_runs(const Text& text) {
@@ -281,6 +303,9 @@ Text Rellu::edit_text_style(
       piece.m_length = to - from;
       if(is_edited) {
         apply(piece.m_style, edit);
+        if(edit.m_hyperlink) {
+          piece.m_hyperlink = *edit.m_hyperlink;
+        }
       }
     };
     add(start, std::min(end, range.m_start), false);
@@ -300,7 +325,8 @@ Text Rellu::edit_text_style(
   result.m_runs = normalize(std::move(runs));
   if(text.m_runs.empty() && result.m_runs.size() == 1 &&
       result.m_runs.front().m_style == result.m_base_style &&
-      result.m_runs.front().m_character_style.is_nil()) {
+      result.m_runs.front().m_character_style.is_nil() &&
+      result.m_runs.front().m_hyperlink.empty()) {
     result.m_runs.clear();
   }
   if(is_layout_affected(edit)) {
@@ -450,6 +476,9 @@ std::string SetTextStyleCommand::get_label() const {
   }
   if(m_edit.m_script) {
     labels.push_back("Change Script");
+  }
+  if(m_edit.m_hyperlink) {
+    labels.push_back("Change Hyperlink");
   }
   if(labels.size() == 1) {
     return labels.front();

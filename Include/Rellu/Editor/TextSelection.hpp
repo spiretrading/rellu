@@ -2,6 +2,7 @@
 #define RELLU_EDITOR_TEXT_SELECTION_HPP
 #include <cstddef>
 #include <functional>
+#include <optional>
 #include "Rellu/Commands/Signal.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Model/Document.hpp"
@@ -12,9 +13,10 @@ namespace Rellu {
 
   /**
    * The text node of a document being edited in place, if any, with its
-   * caret and the anchor of the range selected from it, as UTF-16 indices.
-   * Editing ends when the node is removed, and the indices are kept within
-   * its content as it changes.
+   * caret and the anchor of the range selected from it, as UTF-16 indices,
+   * and the style set for the text typed at the caret. Editing ends when
+   * the node is removed, and the indices are kept within its content as it
+   * changes.
    */
   class TextSelection {
     public:
@@ -41,6 +43,20 @@ namespace Rellu {
       TextRange get_range() const;
 
       /**
+       * Returns the style set for the text typed at the caret, or none to
+       * type in the style of the text before it.
+       */
+      const std::optional<TextStyle>& get_pending_style() const;
+
+      /**
+       * Sets the style of the text typed at the caret until the node, anchor
+       * or caret changes.
+       * @param style The style, or none to type in the style of the text
+       *        before the caret.
+       */
+      void set_pending_style(std::optional<TextStyle> style);
+
+      /**
        * Edits a text node, selecting the range between two indices, clamped
        * to its content.
        * @param node The text node, or nil to end editing.
@@ -53,7 +69,8 @@ namespace Rellu {
       void clear();
 
       /**
-       * Subscribes an observer to every change of the node, anchor or caret.
+       * Subscribes an observer to every change of the node, anchor, caret or
+       * pending style.
        * @param observer The function called after each change.
        * @return The handle ending the subscription when released.
        */
@@ -64,6 +81,7 @@ namespace Rellu {
       NodeId m_node;
       std::size_t m_anchor;
       std::size_t m_caret;
+      std::optional<TextStyle> m_pending_style;
       Signal m_signal;
       Subscription m_subscription;
 

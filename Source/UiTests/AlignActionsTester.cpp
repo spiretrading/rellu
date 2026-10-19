@@ -79,7 +79,7 @@ TEST_SUITE("AlignActions") {
     REQUIRE(fixture.is_enabled(ALIGN_NAMES));
     REQUIRE(fixture.is_disabled(DISTRIBUTE_NAMES));
     selection.select(ids.m_background);
-    REQUIRE(fixture.is_enabled(ALIGN_NAMES));
+    REQUIRE(fixture.is_disabled(ALIGN_NAMES));
     selection.select(ids.m_loose);
     REQUIRE(fixture.is_disabled(ALIGN_NAMES));
     selection.select(ids.m_artboard);

@@ -33,6 +33,35 @@ namespace {
     return nodes;
   }
 
+  void continue_series(const Document& document, Transaction& transaction,
+      const NodeId& cell, std::size_t index) {
+    auto pending = std::vector<NodeId>({cell});
+    while(!pending.empty()) {
+      auto id = pending.back();
+      pending.pop_back();
+      auto& node = document.get(id);
+      pending.insert(
+        pending.end(), node.m_children.begin(), node.m_children.end());
+      auto text = node.get_text();
+      if(!text || text->m_repeat_data.empty()) {
+        continue;
+      }
+      auto& value = text->m_repeat_data[index % text->m_repeat_data.size()];
+      if(*text->m_content == value) {
+        continue;
+      }
+      auto copy = *text;
+      copy.m_content = Shared<std::u16string>(value);
+      if(!copy.m_runs.empty()) {
+        auto run = copy.m_runs.front();
+        run.m_length = value.size();
+        copy.m_runs = std::vector{run};
+      }
+      copy.m_layout = std::nullopt;
+      transaction.replace_payload(id, Box<Text>(std::move(copy)));
+    }
+  }
+
   const RepeatGrid& get_grid(const Document& document, const NodeId& id) {
     auto node = document.find(id);
     if(!node || !node->get_group() || !node->get_group()->m_repeat_grid) {
@@ -47,8 +76,10 @@ bool Rellu::is_repeat_grid(const Document& document, const NodeId& id) {
   return node && node->get_group() && node->get_group()->m_repeat_grid;
 }
 
-RepeatGridCommand::RepeatGridCommand(std::vector<NodeId> nodes) noexcept
-  : m_nodes(std::move(nodes)) {}
+RepeatGridCommand::RepeatGridCommand(
+  std::vector<NodeId> nodes, TextMeasurer measurer) noexcept
+  : m_nodes(std::move(nodes)),
+    m_measurer(std::move(measurer)) {}
 
 const NodeId& RepeatGridCommand::get_grid() const {
   return m_grid;
@@ -79,8 +110,9 @@ void RepeatGridCommand::apply(
   }
   auto bounds = std::optional<Rect>();
   for(auto& id : nodes) {
-    if(auto rect = get_bounds(
-        document, id, *inverse * get_world_transform(document, id))) {
+    if(auto rect = get_bounds(document, id,
+        *inverse * get_world_transform(document, id), BoundsType::GEOMETRY,
+        m_measurer)) {
       bounds = bounds ? unite(*bounds, *rect) : *rect;
     }
   }
@@ -176,6 +208,8 @@ void ResizeRepeatGridCommand::apply(
       }
       auto copy = copy_into(document, transaction, source, m_grid);
       if(!copy.is_nil()) {
+        continue_series(document, transaction, copy,
+          static_cast<std::size_t>(row * columns + column));
         order.push_back(copy);
       }
     }
@@ -268,8 +302,9 @@ std::unique_ptr<Command> Rellu::make_ungroup_grid_command(
   return std::make_unique<UngroupGridCommand>(std::move(nodes));
 }
 
-void Rellu::add_repeat_grid_commands(CommandRegistry& registry) {
-  registry.add("object.repeat_grid", [] (const auto& document,
+void Rellu::add_repeat_grid_commands(
+    CommandRegistry& registry, TextMeasurer measurer) {
+  registry.add("object.repeat_grid", [=] (const auto& document,
       const auto& targets) -> std::unique_ptr<Command> {
     auto nodes = get_repeatable(document, targets);
     if(nodes.empty() || std::any_of(nodes.begin(), nodes.end(),
@@ -278,6 +313,6 @@ void Rellu::add_repeat_grid_commands(CommandRegistry& registry) {
           [&] (const auto& id) { return is_repeat_grid(document, id); })) {
       return nullptr;
     }
-    return std::make_unique<RepeatGridCommand>(std::move(nodes));
+    return std::make_unique<RepeatGridCommand>(std::move(nodes), measurer);
   });
 }

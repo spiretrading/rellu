@@ -66,9 +66,10 @@ namespace Rellu {
       /**
        * Finds the node that clicking on a node selects: its ancestor within
        * the container entered, or at the top level its ancestor directly
-       * within an artboard or on the canvas.
+       * within an artboard or on the canvas. A locked node is selected like
+       * any other, as Adobe XD selects it by a click.
        * @param hit The deepest node under the pointer.
-       * @return The node to select, or nil if it is unknown or locked.
+       * @return The node to select, or nil if it is unknown.
        */
       NodeId resolve(const NodeId& hit) const;
 

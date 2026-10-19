@@ -14,6 +14,9 @@ namespace {
 CanvasRenderer::CanvasRenderer()
   : m_background(CANVAS_BACKGROUND),
     m_rhi(nullptr),
+    m_descriptor(nullptr),
+    m_sample_count(1),
+    m_is_initialized(false),
     m_is_prepared(false),
     m_is_complete(true),
     m_scale(0) {}
@@ -86,7 +89,9 @@ void CanvasRenderer::set_overlay(CanvasOverlay overlay) {
 void CanvasRenderer::initialize(
     QRhi& rhi, QRhiRenderPassDescriptor& descriptor, int sample_count) {
   m_rhi = &rhi;
-  m_paths.initialize(rhi, descriptor, sample_count);
+  m_descriptor = &descriptor;
+  m_sample_count = sample_count;
+  m_is_initialized = false;
   m_tiles.initialize(rhi, descriptor, sample_count);
   m_overlays.initialize(rhi);
   m_is_prepared = false;
@@ -96,6 +101,8 @@ void CanvasRenderer::release() {
   m_overlays.release();
   m_tiles.release();
   m_paths.release();
+  m_is_initialized = false;
+  m_descriptor = nullptr;
   m_rhi = nullptr;
   m_is_prepared = false;
 }
@@ -125,12 +132,12 @@ void CanvasRenderer::render(
       m_commands = to_sequence(*m_list);
     }
     batch = m_rhi->nextResourceUpdateBatch();
-    m_paths.prepare(*batch, m_commands, view, size);
+    get_paths().prepare(*batch, m_commands, view, size);
     m_is_prepared = true;
     m_size = size;
     m_scale = scale;
   }
-  m_paths.render(buffer, target, m_background, batch);
+  get_paths().render(buffer, target, m_background, batch);
   m_overlays.render(buffer, target, scale, m_overlay);
 }
 
@@ -154,7 +161,7 @@ void CanvasRenderer::render(QRhiCommandBuffer& buffer, QRhiTexture& texture,
   auto extent = (to_pixels(DrawRegion(area, 1), view) &
     QRect(QPoint(0, 0), size)) | region;
   auto batch = m_rhi->nextResourceUpdateBatch();
-  m_paths.prepare(*batch, m_commands, view, size, extent);
+  get_paths().prepare(*batch, m_commands, view, size, extent);
   m_paths.render(buffer, m_background, batch);
   m_is_prepared = false;
   m_is_complete = true;
@@ -172,4 +179,12 @@ void CanvasRenderer::render(QRhiCommandBuffer& buffer, QRhiTexture& texture,
   auto copies = m_rhi->nextResourceUpdateBatch();
   copies->copyTexture(&texture, &source, description);
   buffer.resourceUpdate(copies);
+}
+
+PathRenderer& CanvasRenderer::get_paths() {
+  if(!m_is_initialized) {
+    m_paths.initialize(*m_rhi, *m_descriptor, m_sample_count);
+    m_is_initialized = true;
+  }
+  return m_paths;
 }

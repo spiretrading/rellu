@@ -456,11 +456,17 @@ void PrototypeTool::connect(ToolContext& context, const NodeId& destination) {
       continue;
     }
     auto changed = *interaction;
+    auto adopt = [&] (NodeId& target, Animation& animation) {
+      if(target.is_nil() && animation == make_empty_animation()) {
+        animation = make_default_animation();
+      }
+      target = destination;
+    };
     if(auto transition =
         std::get_if<ArtboardTransition>(&changed.m_action)) {
-      transition->m_destination = destination;
+      adopt(transition->m_destination, transition->m_animation);
     } else if(auto overlay = std::get_if<Overlay>(&changed.m_action)) {
-      overlay->m_destination = destination;
+      adopt(overlay->m_destination, overlay->m_animation);
     } else {
       continue;
     }

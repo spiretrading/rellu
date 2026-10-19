@@ -2,6 +2,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <utility>
+#include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Prototype/Easing.hpp"
 #include "Rellu/Prototype/PreviewPlayer.hpp"
@@ -351,10 +352,20 @@ bool PreviewPlayer::advance(double seconds) {
 bool PreviewPlayer::press(Point position) {
   m_press = position;
   m_is_dragging = false;
+  m_drag_point.reset();
+  m_drag_group = NodeId();
   return update_hover(position);
 }
 
 bool PreviewPlayer::move(Point position) {
+  if(m_press && m_is_dragging && m_drag_point) {
+    auto delta = Point(
+      m_drag_point->m_x - position.m_x, m_drag_point->m_y - position.m_y);
+    m_drag_point = position;
+    auto is_scrolled = m_stage->find(m_drag_group) &&
+      scroll_group(m_drag_group, delta);
+    return update_hover(position) || is_scrolled;
+  }
   if(m_press && !m_is_dragging) {
     auto distance = std::hypot(
       position.m_x - m_press->m_x, position.m_y - m_press->m_y);
@@ -363,6 +374,12 @@ bool PreviewPlayer::move(Point position) {
       auto matches = find_all(*m_press, DRAG);
       if(!matches.empty()) {
         return perform(*matches.front().second, matches.front().first);
+      }
+      auto groups = find_scroll_groups(*m_press);
+      if(!groups.empty()) {
+        m_drag_group = groups.front();
+        m_drag_point = *m_press;
+        return move(position);
       }
     }
   }
@@ -376,12 +393,20 @@ bool PreviewPlayer::release(Point position) {
   auto is_tap = !m_is_dragging;
   m_press.reset();
   m_is_dragging = false;
+  m_drag_point.reset();
+  m_drag_group = NodeId();
   if(!is_tap) {
     return false;
   }
   auto matches = find_all(position, TAP);
   if(!matches.empty()) {
     return perform(*matches.front().second, matches.front().first);
+  }
+  if(m_link_handler) {
+    if(auto url = find_text_link(position); !url.empty()) {
+      m_link_handler(url);
+      return true;
+    }
   }
   if(!m_overlays.empty()) {
     auto& top = m_overlays.back();
@@ -399,6 +424,8 @@ bool PreviewPlayer::release(Point position) {
 bool PreviewPlayer::leave() {
   m_press.reset();
   m_is_dragging = false;
+  m_drag_point.reset();
+  m_drag_group = NodeId();
   auto is_changed = false;
   while(!m_hovers.empty()) {
     auto hover = m_hovers.back();
@@ -422,6 +449,36 @@ bool PreviewPlayer::scroll(double delta) {
   }
   m_screen->m_scroll = scroll;
   return true;
+}
+
+bool PreviewPlayer::scroll(Point position, Point delta) {
+  for(auto& group : find_scroll_groups(position)) {
+    auto shift = delta;
+    if(m_stage->get(group).get_group()->m_scroll_group->m_direction ==
+        ScrollDirection::HORIZONTAL && shift.m_x == 0) {
+      shift = Point(shift.m_y, 0);
+    }
+    if(scroll_group(group, shift)) {
+      return true;
+    }
+  }
+  return scroll(delta.m_y);
+}
+
+Point PreviewPlayer::get_scroll(const NodeId& group) const {
+  if(auto entry = m_scrolls.find(group); entry != m_scrolls.end()) {
+    return entry->second;
+  }
+  return Point(0, 0);
+}
+
+void PreviewPlayer::set_link_handler(
+    std::function<void (const std::string& url)> handler) {
+  m_link_handler = std::move(handler);
+}
+
+void PreviewPlayer::set_text_link_finder(TextLinkFinder finder) {
+  m_text_link_finder = std::move(finder);
 }
 
 bool PreviewPlayer::press_key(const KeyChord& chord) {
@@ -800,6 +857,17 @@ bool PreviewPlayer::perform(
     return switch_state(instance, state->m_state, state->m_animation);
   } else if(std::holds_alternative<PreviousArtboard>(interaction.m_action)) {
     return go_back();
+  } else if(auto link = std::get_if<Hyperlink>(&interaction.m_action)) {
+    if(link->m_url.empty()) {
+      report("Hyperlink without an address");
+      return false;
+    }
+    if(!m_link_handler) {
+      report("Hyperlink not opened: " + link->m_url);
+      return false;
+    }
+    m_link_handler(link->m_url);
+    return true;
   }
   report("Video playback is not played");
   return false;
@@ -1203,6 +1271,109 @@ bool PreviewPlayer::update_hover(Point position) {
     }
   }
   return is_changed;
+}
+
+std::vector<NodeId> PreviewPlayer::find_scroll_groups(Point position) const {
+  auto groups = std::vector<NodeId>();
+  for(auto& target : get_targets(position)) {
+    auto nodes = std::vector<NodeId>();
+    collect(target.first, nodes);
+    for(auto& id : nodes) {
+      auto group = m_stage->get(id).get_group();
+      if(!group || !group->m_scroll_group) {
+        continue;
+      }
+      auto inverse = invert(get_world_transform(*m_stage, id));
+      if(!inverse) {
+        continue;
+      }
+      auto& scroll = *group->m_scroll_group;
+      auto local = inverse->map(target.second);
+      auto is_inside_x = scroll.m_direction == ScrollDirection::VERTICAL ||
+        local.m_x >= scroll.m_offset.m_x &&
+          local.m_x < scroll.m_offset.m_x + scroll.m_viewport.m_width;
+      auto is_inside_y = scroll.m_direction == ScrollDirection::HORIZONTAL ||
+        local.m_y >= scroll.m_offset.m_y &&
+          local.m_y < scroll.m_offset.m_y + scroll.m_viewport.m_height;
+      if(is_inside_x && is_inside_y) {
+        groups.push_back(id);
+      }
+    }
+  }
+  std::ranges::reverse(groups);
+  return groups;
+}
+
+std::string PreviewPlayer::find_text_link(Point position) const {
+  auto url = std::string();
+  if(!m_text_link_finder) {
+    return url;
+  }
+  for(auto& target : get_targets(position)) {
+    auto nodes = std::vector<NodeId>();
+    collect(target.first, nodes);
+    for(auto& id : nodes) {
+      auto& node = m_stage->get(id);
+      if(!node.get_text()) {
+        continue;
+      }
+      auto bounds = get_world_bounds(
+        *m_stage, id, BoundsType::GEOMETRY, m_measurer);
+      auto inverse = invert(get_world_transform(*m_stage, id));
+      if(!bounds || !bounds->contains(target.second) || !inverse) {
+        continue;
+      }
+      if(auto found = m_text_link_finder(node, inverse->map(target.second));
+          !found.empty()) {
+        url = std::move(found);
+      }
+    }
+  }
+  return url;
+}
+
+bool PreviewPlayer::scroll_group(const NodeId& group, Point delta) {
+  auto& node = m_stage->get(group);
+  auto& scroll = *node.get_group()->m_scroll_group;
+  if(scroll.m_direction == ScrollDirection::HORIZONTAL) {
+    delta.m_y = 0;
+  } else if(scroll.m_direction == ScrollDirection::VERTICAL) {
+    delta.m_x = 0;
+  }
+  auto content = std::optional<Rect>();
+  for(auto& child : node.m_children) {
+    if(auto bounds = get_bounds(*m_stage, child,
+        get_transform(*m_stage, child), BoundsType::GEOMETRY, m_measurer)) {
+      content = content ? unite(*content, *bounds) : *bounds;
+    }
+  }
+  if(!content) {
+    return false;
+  }
+  auto limit = [] (double value, double start, double end, double first,
+      double last) {
+    return std::clamp(value, std::min(0.0, start - first),
+      std::max(0.0, end - last));
+  };
+  delta.m_x = limit(delta.m_x, content->get_left(), content->get_right(),
+    scroll.m_offset.m_x, scroll.m_offset.m_x + scroll.m_viewport.m_width);
+  delta.m_y = limit(delta.m_y, content->get_top(), content->get_bottom(),
+    scroll.m_offset.m_y, scroll.m_offset.m_y + scroll.m_viewport.m_height);
+  if(delta.m_x == 0 && delta.m_y == 0) {
+    return false;
+  }
+  auto children = node.m_children;
+  auto transaction = Transaction(*m_stage);
+  for(auto& child : children) {
+    set_transform(*m_stage, transaction, child,
+      make_translation(-delta.m_x, -delta.m_y) *
+        get_transform(*m_stage, child));
+  }
+  transaction.commit();
+  m_stage->clear_history();
+  auto& offset = m_scrolls[group];
+  offset = Point(offset.m_x + delta.m_x, offset.m_y + delta.m_y);
+  return true;
 }
 
 std::vector<PreviewLayer> PreviewPlayer::get_screen_layers(

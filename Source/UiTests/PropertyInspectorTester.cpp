@@ -8,6 +8,7 @@
 #include <QToolButton>
 #include <QWidget>
 #include "Rellu/Commands/Components.hpp"
+#include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Ui/ComponentActions.hpp"
@@ -174,8 +175,7 @@ TEST_SUITE("PropertyInspector") {
     make_editable(inspector, editor);
     editor.get_selection().select(ids.m_background);
     REQUIRE(inspector.find_field("appearance.opacity"));
-    REQUIRE(!inspector.find_field("export.marked"));
-    REQUIRE(inspector.find_display("export.marked"));
+    REQUIRE(inspector.find_field("export.marked"));
     auto text = make_text(u"Point");
     text.m_frame = PositionedFrame();
     auto transaction = Transaction(document);
@@ -281,8 +281,8 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(document.get(ids.m_background).m_header.m_blend_mode ==
       BlendMode::MULTIPLY);
     REQUIRE(history.get_undo_label() == "Change Blend Mode");
-    REQUIRE(inspector.find_field("fill.color"));
-    auto fill = qobject_cast<QCheckBox*>(inspector.find_field("fill.enabled"));
+    REQUIRE(inspector.find_field("fill.paint"));
+    auto fill =qobject_cast<QCheckBox*>(inspector.find_field("fill.enabled"));
     REQUIRE(fill);
     REQUIRE(fill->isChecked());
     fill->click();
@@ -426,5 +426,211 @@ TEST_SUITE("PropertyInspector") {
     Q_EMIT combo->activated(0);
     REQUIRE(get_instance_role(document.get(main))->m_state.is_nil());
     REQUIRE(!find_property(inspector.get_properties(), "component.state_name"));
+  }
+
+  TEST_CASE("effect_edits") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(ids.m_background);
+    REQUIRE(!inspector.find_field("effects.drop_shadow.x"));
+    auto shadow =
+      qobject_cast<QCheckBox*>(inspector.find_field("effects.drop_shadow"));
+    REQUIRE(shadow);
+    shadow->click();
+    QCoreApplication::processEvents();
+    auto effects = [&] () -> const std::vector<Effect>& {
+      return document.get(ids.m_background).get_shape()->m_style.m_effects;
+    };
+    REQUIRE(effects().size() == 1);
+    REQUIRE(get_line(inspector, "effects.drop_shadow.blur").text() == "6");
+    enter(inspector, "effects.drop_shadow.blur", "20");
+    REQUIRE(std::get<DropShadow>(effects().front()).m_blur == 10);
+    enter(inspector, "effects.drop_shadow.x", "4");
+    REQUIRE(std::get<DropShadow>(effects().front()).m_offset == Point(4, 3));
+    REQUIRE(editor.get_history().get_undo_label() == "Change Effect");
+    auto blur = qobject_cast<QCheckBox*>(inspector.find_field("effects.blur"));
+    REQUIRE(blur);
+    blur->click();
+    QCoreApplication::processEvents();
+    REQUIRE(effects().size() == 2);
+    REQUIRE(get_line(inspector, "effects.blur.opacity").text() == "10%");
+    auto type =
+      qobject_cast<QComboBox*>(inspector.find_field("effects.blur.type"));
+    REQUIRE(type);
+    Q_EMIT type->activated(1);
+    QCoreApplication::processEvents();
+    REQUIRE(!std::get<Blur>(effects().back()).m_is_background);
+    REQUIRE(inspector.find_field("effects.blur.amount"));
+    REQUIRE(!inspector.find_field("effects.blur.brightness"));
+  }
+
+  TEST_CASE("transform_toggles") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(ids.m_background);
+    auto lock =
+      qobject_cast<QToolButton*>(inspector.find_field("transform.lock_aspect"));
+    REQUIRE(lock);
+    REQUIRE(!lock->isChecked());
+    lock->click();
+    REQUIRE(document.get(ids.m_background).m_header.m_aspect_lock ==
+      Size(100, 50));
+    REQUIRE(lock->isChecked());
+    enter(inspector, "transform.width", "200");
+    REQUIRE(get_text(inspector, "transform.height") == "100");
+    auto fixed = qobject_cast<QCheckBox*>(
+      inspector.find_field("transform.fixed_position"));
+    REQUIRE(fixed);
+    fixed->click();
+    REQUIRE(document.get(ids.m_background).m_header.m_is_fixed_position);
+    auto mark =
+      qobject_cast<QCheckBox*>(inspector.find_field("export.marked"));
+    REQUIRE(mark);
+    mark->click();
+    REQUIRE(document.get(ids.m_background).m_header.m_is_marked_for_export);
+    REQUIRE(editor.get_history().get_undo_label() == "Mark for Export");
+  }
+
+  TEST_CASE("constraints") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(ids.m_background);
+    REQUIRE(!find_property(
+      inspector.get_properties(), "layout.responsive.mode"));
+    auto responsive = qobject_cast<QAbstractButton*>(
+      inspector.find_field("layout.responsive"));
+    REQUIRE(responsive);
+    responsive->click();
+    QCoreApplication::processEvents();
+    REQUIRE(document.get(ids.m_background).m_header.m_constraints.m_is_enabled);
+    REQUIRE(get_text(inspector, "layout.responsive.mode") == "Auto");
+    REQUIRE(!inspector.find_field("layout.responsive.width"));
+    auto section = inspector.find_section("layout");
+    auto manual = static_cast<QToolButton*>(nullptr);
+    for(auto button : section->findChildren<QToolButton*>()) {
+      if(button->text() == "Manual") {
+        manual = button;
+      }
+    }
+    REQUIRE(manual);
+    manual->click();
+    QCoreApplication::processEvents();
+    REQUIRE(document.get(ids.m_background).m_header.m_constraints.m_is_custom);
+    auto width = qobject_cast<QCheckBox*>(
+      inspector.find_field("layout.responsive.width"));
+    REQUIRE(width);
+    width->click();
+    REQUIRE(document.get(ids.m_background).m_header.m_constraints.m_width);
+  }
+
+  TEST_CASE("locked_selection") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(ids.m_background);
+    REQUIRE(!inspector.is_locked());
+    REQUIRE(get_line(inspector, "appearance.opacity").isEnabled());
+    REQUIRE(editor.execute(std::make_unique<SetLockCommand>(
+      std::vector{ids.m_background}, true)));
+    QCoreApplication::processEvents();
+    REQUIRE(inspector.is_locked());
+    REQUIRE(!inspector.find_section("transform")->isEnabled());
+    REQUIRE(!get_line(inspector, "appearance.opacity").isEnabled());
+    REQUIRE(!inspector.open_color_picker("fill.paint"));
+  }
+
+  TEST_CASE("color_picker") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(ids.m_background);
+    auto& history = editor.get_history();
+    REQUIRE(inspector.open_color_picker("fill.paint"));
+    auto& picker = inspector.get_color_picker();
+    REQUIRE(picker.is_gradient_enabled());
+    REQUIRE(picker.get_color() == make_color(255, 0, 0));
+    picker.apply_color(make_color(0, 128, 0));
+    picker.apply_type(1);
+    QCoreApplication::processEvents();
+    auto& fill = document.get(ids.m_background).get_shape()->m_style.m_fill;
+    auto gradient = std::get_if<GradientFill>(&fill);
+    REQUIRE(gradient);
+    REQUIRE(gradient->m_stops.front().m_color == make_color(0, 128, 0));
+    picker.hide();
+    REQUIRE(history.get_undo_count() == 1);
+    REQUIRE(history.get_undo_label() == "Change Fill");
+    REQUIRE(inspector.open_color_picker("stroke.color"));
+    REQUIRE(!picker.is_gradient_enabled());
+    picker.apply_color(make_color(0, 0, 255));
+    picker.hide();
+    REQUIRE(document.get(ids.m_background).get_shape()->m_style.m_stroke->
+      m_color == make_color(0, 0, 255));
+    REQUIRE(history.get_undo_count() == 2);
+    REQUIRE(editor.undo());
+    REQUIRE(editor.undo());
+    REQUIRE(document.get(ids.m_background).get_shape()->m_style.m_fill ==
+      Fill(SolidFill(make_color(255, 0, 0))));
+  }
+
+  TEST_CASE("grid_edits") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(ids.m_artboard);
+    REQUIRE(inspector.find_field("transform.lock_aspect"));
+    auto visible =
+      qobject_cast<QCheckBox*>(inspector.find_field("grid.visible"));
+    REQUIRE(visible);
+    visible->click();
+    QCoreApplication::processEvents();
+    auto& grid = document.get(ids.m_artboard).get_artboard()->m_layout_grid;
+    REQUIRE(grid);
+    REQUIRE(grid->m_is_visible);
+    REQUIRE(get_line(inspector, "grid.columns").text() == "4");
+    REQUIRE(get_line(inspector, "grid.margin_linked").text() == "37");
+    enter(inspector, "grid.columns", "6");
+    REQUIRE(document.get(ids.m_artboard).get_artboard()->m_layout_grid->
+      m_column_count == 6);
+    enter(inspector, "grid.margin_linked", "20");
+    REQUIRE(document.get(ids.m_artboard).get_artboard()->m_layout_grid->
+      m_margins.m_right == 20);
+    auto scrolling =
+      qobject_cast<QComboBox*>(inspector.find_field("layout.scrolling"));
+    REQUIRE(scrolling);
+    Q_EMIT scrolling->activated(1);
+    QCoreApplication::processEvents();
+    REQUIRE(document.get(ids.m_artboard).get_artboard()->m_viewport_height ==
+      812);
+  }
+
+  TEST_CASE("group_style") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(ids.m_card);
+    REQUIRE(inspector.open_color_picker("fill.paint"));
+    inspector.get_color_picker().apply_color(make_color(0, 0, 0));
+    inspector.get_color_picker().hide();
+    REQUIRE(document.get(ids.m_background).get_shape()->m_style.m_fill ==
+      Fill(SolidFill(make_color(0, 0, 0))));
+    REQUIRE(document.get(ids.m_label).get_text()->m_style.m_fill ==
+      Fill(SolidFill(make_color(0, 0, 0))));
   }
 }

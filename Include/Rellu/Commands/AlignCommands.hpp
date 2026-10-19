@@ -55,12 +55,13 @@ namespace Rellu {
   /**
    * Returns the bounds in document space that nodes align to, as Adobe XD
    * does: the union of their bounding boxes when there are several, a
-   * single node's parent group or artboard otherwise.
+   * single node's artboard otherwise.
    * @param document The document holding the nodes.
    * @param nodes The nodes aligned, as listed by get_alignable.
    * @param measurer The function measuring text.
    * @return The bounds, or <code>std::nullopt</code> if there is nothing to
-   *         align to, as for a single artboard or a node on the pasteboard.
+   *         align to, as for a single artboard, a single node on the
+   *         pasteboard or a single node within a group.
    */
   std::optional<Rect> get_alignment_bounds(const Document& document,
     const std::vector<NodeId>& nodes,

@@ -1,6 +1,7 @@
 #ifndef RELLU_UI_ASSETS_PANEL_HPP
 #define RELLU_UI_ASSETS_PANEL_HPP
 #include <functional>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -12,13 +13,16 @@
 #include <QPixmap>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
+#include "Rellu/Commands/Command.hpp"
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/Resources.hpp"
 #include "Rellu/Model/Subscription.hpp"
+#include "Rellu/Ui/ColorPicker.hpp"
 
 namespace Rellu {
 
@@ -55,8 +59,10 @@ namespace Rellu {
   /**
    * The Document Assets panel, listing a document's colors, character styles
    * and components, kept up to date as the document changes. With an editor,
-   * its components can be dragged onto the canvas, renamed, swapped for the
-   * selected instances and their main components edited.
+   * colors and character styles are added from the selection, applied to it
+   * by a click, edited, renamed and deleted, and components can be dragged
+   * onto the canvas, renamed, swapped for the selected instances and their
+   * main components edited.
    */
   class AssetsPanel : public QWidget {
     public:
@@ -157,11 +163,154 @@ namespace Rellu {
        */
       bool is_empty_shown() const;
 
+      /** Returns the color swatches listed, in order. */
+      std::vector<SwatchId> get_swatches() const;
+
+      /** Returns the character styles listed, in order. */
+      std::vector<CharacterStyleId> get_character_styles() const;
+
+      /**
+       * Sets the function listing the font families offered when editing a
+       * character style.
+       * @param families The function returning the family names.
+       */
+      void set_font_families(std::function<QStringList ()> families);
+
+      /** Returns the color picker editing color swatches. */
+      ColorPicker& get_color_picker();
+
+      /**
+       * Adds the distinct fill and border colors of the selection to the
+       * assets, as Object &gt; Add Color to Assets does.
+       * @return <code>true</code> iff a color was added.
+       */
+      bool add_colors();
+
+      /**
+       * Adds the distinct character styles of the selected text to the
+       * assets, as Object &gt; Add Character Style to Assets does.
+       * @return <code>true</code> iff a style was added.
+       */
+      bool add_character_styles();
+
+      /**
+       * Applies a color swatch to the selection, as clicking it does.
+       * @param swatch The swatch's id.
+       * @param is_border Whether the color is applied to the border rather
+       *        than the fill.
+       * @return <code>true</code> iff the selection changed.
+       */
+      bool apply_swatch(const SwatchId& swatch, bool is_border);
+
+      /**
+       * Applies a character style to the selected text, as clicking it does.
+       * @param style The style's id.
+       * @return <code>true</code> iff the selection changed.
+       */
+      bool apply_character_style(const CharacterStyleId& style);
+
+      /**
+       * Replaces a color swatch, recoloring the fills linked to it, the
+       * replacements made while its picker is open merging into one step.
+       * @param swatch The new swatch.
+       * @return <code>true</code> iff the swatch changed.
+       */
+      bool replace_swatch(const ColorSwatch& swatch);
+
+      /**
+       * Replaces a character style, restyling the text linked to it, the
+       * replacements made while its editor is open merging into one step.
+       * @param style The new style.
+       * @return <code>true</code> iff the style changed.
+       */
+      bool replace_character_style(const CharacterStyle& style);
+
+      /**
+       * Renames a color swatch.
+       * @param swatch The swatch's id.
+       * @param name The new name.
+       * @return <code>true</code> iff the swatch was renamed.
+       */
+      bool rename_swatch(const SwatchId& swatch, const QString& name);
+
+      /**
+       * Renames a character style.
+       * @param style The style's id.
+       * @param name The new name.
+       * @return <code>true</code> iff the style was renamed.
+       */
+      bool rename_character_style(
+        const CharacterStyleId& style, const QString& name);
+
+      /**
+       * Deletes a color swatch, the fills linked to it keeping their color.
+       * @param swatch The swatch's id.
+       * @return <code>true</code> iff the swatch was deleted.
+       */
+      bool delete_swatch(const SwatchId& swatch);
+
+      /**
+       * Deletes a character style, the text linked to it keeping its style.
+       * @param style The style's id.
+       * @return <code>true</code> iff the style was deleted.
+       */
+      bool delete_character_style(const CharacterStyleId& style);
+
+      /**
+       * Opens the color picker editing a color swatch.
+       * @param swatch The swatch's id.
+       */
+      void edit_swatch(const SwatchId& swatch);
+
+      /**
+       * Opens the editor of a character style.
+       * @param style The style's id.
+       */
+      void edit_character_style(const CharacterStyleId& style);
+
+      /**
+       * Makes the menu of a color swatch: Apply as Fill, Apply as Border,
+       * Edit, Rename and Delete.
+       * @param swatch The swatch's id.
+       * @param parent The menu's parent.
+       * @return The menu.
+       */
+      QMenu* make_swatch_menu(const SwatchId& swatch, QWidget* parent);
+
+      /**
+       * Makes the menu of a character style: Apply, Edit, Rename and Delete.
+       * @param style The style's id.
+       * @param parent The menu's parent.
+       * @return The menu.
+       */
+      QMenu* make_character_style_menu(
+        const CharacterStyleId& style, QWidget* parent);
+
+      /**
+       * Scrolls a color swatch into view and highlights it.
+       * @param swatch The swatch's id.
+       */
+      void reveal_swatch(const SwatchId& swatch);
+
+      /**
+       * Scrolls a character style into view and highlights it.
+       * @param style The style's id.
+       */
+      void reveal_character_style(const CharacterStyleId& style);
+
     private:
+      class StyleEditor;
       Document* m_document;
       Editor* m_editor;
       Subscription m_subscription;
       std::vector<std::vector<QString>> m_entries;
+      std::vector<SwatchId> m_swatches;
+      std::vector<CharacterStyleId> m_character_styles;
+      std::unordered_map<NodeId, QPointer<QWidget>> m_asset_rows;
+      std::function<QStringList ()> m_font_families;
+      ColorPicker* m_picker;
+      SwatchId m_edited_swatch;
+      QPointer<StyleEditor> m_style_editor;
       std::vector<ComponentId> m_components;
       QWidget* m_content;
       QVBoxLayout* m_content_layout;
@@ -178,6 +327,11 @@ namespace Rellu {
       void rebuild();
       void add_section(AssetSection section, const QString& title);
       QWidget* make_component_row(const Component& component);
+      QWidget* make_swatch_row(const ColorSwatch& swatch);
+      QWidget* make_character_style_row(const CharacterStyle& style);
+      void start_rename(const NodeId& id, std::function<void (QString)> done);
+      void highlight(const NodeId& id);
+      bool run(std::unique_ptr<Command> command, bool is_merged = false);
       void invalidate_thumbnails(const ChangeSet& changes);
   };
 

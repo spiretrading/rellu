@@ -101,12 +101,17 @@ namespace Rellu {
    * @param point The point in the box's space the handle is dragged to.
    * @param is_proportional Whether the aspect ratio is kept.
    * @param is_centered Whether the rect is resized about its center.
+   * @param is_flippable Whether dragging past the opposite side flips the
+   *        rect rather than stopping at the smallest size.
    * @param minimum The smallest width and height resized to, unless the
    *        <i>rect</i> is already smaller along that axis.
-   * @return The resized rect.
+   * @return The resized rect, whose width or height is negative where it is
+   *         flipped, so that make_rect_mapping from the <i>rect</i> to it
+   *         is the mapping resizing it.
    */
   Rect resize(const Rect& rect, Handle handle, Point point,
-    bool is_proportional, bool is_centered, double minimum);
+    bool is_proportional, bool is_centered, bool is_flippable,
+    double minimum);
 }
 
 #endif

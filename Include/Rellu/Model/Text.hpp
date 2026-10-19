@@ -101,6 +101,9 @@ namespace Rellu {
     /** The character style the span is linked to, or nil if unlinked. */
     CharacterStyleId m_character_style;
 
+    /** The URL the span links to, or empty if it links nowhere. */
+    std::string m_hyperlink;
+
     bool operator ==(const TextRun&) const = default;
   };
 
@@ -232,6 +235,12 @@ namespace Rellu {
 
     /** The layout stored by Adobe XD, if any. */
     std::optional<Shared<StoredLayout>> m_layout;
+
+    /**
+     * The series of contents the cells of a repeat grid holding the text
+     * show in turn, or empty if there is none.
+     */
+    std::vector<std::u16string> m_repeat_data;
 
     bool operator ==(const Text&) const = default;
   };

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <set>
@@ -29,33 +30,33 @@ namespace {
     return choice->m_index;
   }
 
-  std::optional<TextRange> find_range(const TextSelectionSource& source,
-      const std::vector<NodeId>& nodes) {
-    if(!source || nodes.size() != 1) {
-      return std::nullopt;
-    }
-    auto selection = source();
-    if(!selection || !selection->is_editing() ||
+  bool is_edited(const Document& document, const std::vector<NodeId>& nodes,
+      const TextSelection* selection) {
+    if(!selection || nodes.size() != 1 || !selection->is_editing() ||
         selection->get_node() != nodes.front()) {
-      return std::nullopt;
+      return false;
     }
-    auto range = selection->get_range();
-    if(range.m_start == range.m_end) {
-      return std::nullopt;
-    }
-    return range;
+    auto node = document.find(nodes.front());
+    return node && node->get_text();
   }
 
-  std::optional<TextStyle> find_style(const Document& document,
-      const std::vector<NodeId>& nodes, const std::optional<TextRange>& range) {
-    for(auto& id : nodes) {
-      if(auto node = document.find(id); node && node->get_text()) {
-        auto& text = *node->get_text();
-        return get_style(
-          text, range.value_or(TextRange(0, text.m_content->size())));
-      }
+  TextSelection* find_selection(const TextSelectionSource& source) {
+    if(!source) {
+      return nullptr;
     }
-    return std::nullopt;
+    return source();
+  }
+
+  TextRange get_range(const Text& text, const TextSelection& selection) {
+    auto size = text.m_content->size();
+    auto range = selection.get_range();
+    return TextRange(
+      std::min(range.m_start, size), std::min(range.m_end, size));
+  }
+
+  bool is_caret(const Text& text, const TextSelection& selection) {
+    auto range = get_range(text, selection);
+    return range.m_start == range.m_end && !text.m_content->empty();
   }
 
   bool is_found(FontMatch match) {
@@ -83,20 +84,13 @@ namespace {
       TextLayouter layouter, auto make_edit) {
     return [=] (const Document& document, const std::vector<NodeId>& nodes,
         const PropertyValue& value) -> std::unique_ptr<Command> {
-      if(nodes.empty()) {
-        return nullptr;
-      }
-      auto range = find_range(source, nodes);
-      auto edit = make_edit(document, nodes, range, value);
+      auto selection = find_selection(source);
+      auto edit = make_edit(document, nodes, selection, value);
       if(!edit) {
         return nullptr;
       }
-      if(range) {
-        return std::make_unique<SetTextStyleCommand>(
-          nodes.front(), *range, std::move(*edit), layouter);
-      }
-      return std::make_unique<SetTextStyleCommand>(
-        nodes, std::move(*edit), layouter);
+      return make_text_style_command(
+        document, nodes, selection, std::move(*edit), layouter);
     };
   }
 
@@ -104,7 +98,7 @@ namespace {
       TextLayouter layouter, auto make_edit) {
     return make_style_setter(std::move(source), std::move(layouter),
       [=] (const Document&, const std::vector<NodeId>&,
-          const std::optional<TextRange>&, const PropertyValue& value) {
+          const TextSelection*, const PropertyValue& value) {
         return make_edit(value);
       });
   }
@@ -124,6 +118,25 @@ namespace {
     };
   }
 
+  TextMeasurer make_frame_measurer(
+      const FontLibrary& library, TextMeasurer measurer) {
+    return [library = &library, measurer = std::move(measurer)] (
+        const Text& text) {
+      auto bounds = measurer(text);
+      if(!std::holds_alternative<PositionedFrame>(text.m_frame)) {
+        return bounds;
+      }
+      auto left = std::numeric_limits<double>::infinity();
+      auto right = -std::numeric_limits<double>::infinity();
+      for(auto& line : measure_lines(text, *library)) {
+        left = std::min(left, line.m_carets.front());
+        right = std::max(right, line.m_carets.back());
+      }
+      bounds.m_width = std::max(bounds.m_width, std::ceil(right - left));
+      return bounds;
+    };
+  }
+
   PropertyEditor make_editor(PropertySetter setter,
       std::optional<double> minimum = std::nullopt) {
     auto editor = PropertyEditor();
@@ -139,11 +152,10 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
   auto layouter = make_text_layouter(library);
   editors.add("text.family", make_editor(make_style_setter(selection,
     layouter, [library = &library] (const Document& document,
-        const std::vector<NodeId>& nodes,
-        const std::optional<TextRange>& range,
+        const std::vector<NodeId>& nodes, const TextSelection* selection,
         const PropertyValue& value) -> std::optional<TextStyleEdit> {
       auto family = std::get_if<QString>(&value);
-      auto style = find_style(document, nodes, range);
+      auto style = find_text_style(document, nodes, selection);
       if(!family || family->trimmed().isEmpty() || !style) {
         return std::nullopt;
       }
@@ -153,11 +165,10 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
     })));
   editors.add("text.style", make_editor(make_style_setter(selection,
     layouter, [library = &library] (const Document& document,
-        const std::vector<NodeId>& nodes,
-        const std::optional<TextRange>& range,
+        const std::vector<NodeId>& nodes, const TextSelection* selection,
         const PropertyValue& value) -> std::optional<TextStyleEdit> {
       auto name = std::get_if<QString>(&value);
-      auto style = find_style(document, nodes, range);
+      auto style = find_text_style(document, nodes, selection);
       if(!name || name->trimmed().isEmpty() || !style) {
         return std::nullopt;
       }
@@ -239,6 +250,17 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
       edit.m_script = static_cast<TextScript>(*index);
       return edit;
     })));
+  editors.add("text.hyperlink", make_editor(make_simple_style_setter(
+    selection, layouter,
+    [] (const PropertyValue& value) -> std::optional<TextStyleEdit> {
+      auto url = std::get_if<QString>(&value);
+      if(!url) {
+        return std::nullopt;
+      }
+      auto edit = TextStyleEdit();
+      edit.m_hyperlink = url->trimmed().toStdString();
+      return edit;
+    })));
   editors.add("text.alignment", make_editor(make_paragraph_setter(layouter,
     [] (const PropertyValue& value) -> std::optional<ParagraphStyleEdit> {
       auto index = get_index(value, 3);
@@ -275,7 +297,8 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
       return edit;
     }), 0.0));
   editors.add("text.frame", make_editor(
-    [measurer = std::move(measurer)] (const Document& document,
+    [measurer = make_frame_measurer(library, std::move(measurer))] (
+        const Document& document,
         const std::vector<NodeId>& nodes,
         const PropertyValue& value) -> std::unique_ptr<Command> {
       auto index = get_index(value, 3);
@@ -290,6 +313,52 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
       }
       return std::make_unique<SetTextFrameCommand>(nodes, kind, measurer);
     }));
+}
+
+std::optional<TextStyle> Rellu::find_text_style(const Document& document,
+    const std::vector<NodeId>& nodes, const TextSelection* selection) {
+  if(!is_edited(document, nodes, selection)) {
+    selection = nullptr;
+  }
+  for(auto& id : nodes) {
+    if(auto node = document.find(id); node && node->get_text()) {
+      auto& text = *node->get_text();
+      if(!selection) {
+        return get_style(text, TextRange(0, text.m_content->size()));
+      }
+      if(auto& pending = selection->get_pending_style();
+          pending && is_caret(text, *selection)) {
+        return *pending;
+      }
+      return get_style(text, get_range(text, *selection));
+    }
+  }
+  return std::nullopt;
+}
+
+std::unique_ptr<Command> Rellu::make_text_style_command(
+    const Document& document, const std::vector<NodeId>& nodes,
+    TextSelection* selection, TextStyleEdit edit, TextLayouter layouter) {
+  if(nodes.empty()) {
+    return nullptr;
+  }
+  if(is_edited(document, nodes, selection)) {
+    auto& text = *document.get(nodes.front()).get_text();
+    if(is_caret(text, *selection)) {
+      if(!edit.m_hyperlink) {
+        selection->set_pending_style(edit_style(
+          *find_text_style(document, nodes, selection), edit));
+      }
+      return nullptr;
+    }
+    auto range = get_range(text, *selection);
+    if(range.m_start != range.m_end) {
+      return std::make_unique<SetTextStyleCommand>(
+        nodes.front(), range, std::move(edit), std::move(layouter));
+    }
+  }
+  return std::make_unique<SetTextStyleCommand>(
+    nodes, std::move(edit), std::move(layouter));
 }
 
 TextLayouter Rellu::make_text_layouter(const FontLibrary& library) {

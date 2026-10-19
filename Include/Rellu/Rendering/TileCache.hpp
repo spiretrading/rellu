@@ -129,7 +129,7 @@ namespace Rellu {
 
     private:
       struct Tile {
-        std::unique_ptr<QRhiTexture> m_texture;
+        int m_slot = -1;
         std::uint64_t m_frame;
         bool m_is_stale;
       };
@@ -138,6 +138,7 @@ namespace Rellu {
         QPoint m_anchor;
         QSize m_size;
         std::unordered_map<std::uint64_t, Tile> m_tiles;
+        double m_density;
       };
       int m_tile_size;
       std::size_t m_batch_size;
@@ -152,8 +153,11 @@ namespace Rellu {
       QRhiRenderPassDescriptor* m_descriptor;
       int m_sample_count;
       std::vector<std::unique_ptr<PathRenderer>> m_renderers;
-      std::vector<std::unique_ptr<QRhiTexture>> m_textures;
+      std::vector<std::unique_ptr<QRhiTexture>> m_pages;
+      std::vector<int> m_slots;
       std::unique_ptr<QRhiTexture> m_blank;
+      std::unique_ptr<QRhiTexture> m_fill;
+      bool m_is_fill_current;
       std::unique_ptr<QRhiBuffer> m_corners;
       std::unique_ptr<QRhiBuffer> m_uniforms;
       std::unique_ptr<QRhiBuffer> m_layout_uniforms;
@@ -170,14 +174,19 @@ namespace Rellu {
       TileCache(const TileCache&) = delete;
       TileCache& operator =(const TileCache&) = delete;
       void discard(Epoch& epoch);
+      void recycle(int& slot);
       void start(double scale, QPoint translation, QSize size);
+      Rect get_region(const QRect& tiles) const;
+      QRect trim(const Drawing& drawing, const QRect& tiles);
       QRect query(
         const Drawing& drawing, const QRect& tiles, DrawSequence& commands);
       Matrix get_view() const;
       void render_tiles(QRhiCommandBuffer& buffer, const QRect& tiles,
         const DrawSequence& commands, const QRect& extent,
         PathRenderer& renderer, const QColor& background);
-      std::unique_ptr<QRhiTexture> make_texture();
+      int allocate();
+      QRhiTexture& get_page(int slot) const;
+      QPoint get_origin(int slot) const;
       void reserve_uniforms(std::size_t count);
       QRhiShaderResourceBindings& get_bindings(
         QRhiTexture& texture, bool is_linear);

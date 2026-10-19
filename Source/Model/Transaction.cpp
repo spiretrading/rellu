@@ -128,7 +128,9 @@ namespace {
     if(previous.m_is_isolated != current.m_is_isolated) {
       mask |= ChangeMask::ISOLATION;
     }
-    if(previous.m_constraints != current.m_constraints) {
+    if(previous.m_constraints != current.m_constraints ||
+        previous.m_aspect_lock != current.m_aspect_lock ||
+        previous.m_is_fixed_position != current.m_is_fixed_position) {
       mask |= ChangeMask::CONSTRAINTS;
     }
     if(previous.m_is_marked_for_export != current.m_is_marked_for_export) {

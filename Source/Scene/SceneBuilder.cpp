@@ -290,6 +290,107 @@ namespace {
     });
   }
 
+  bool is_clipping(const Mask& mask) {
+    if(mask.m_shapes.size() != 1) {
+      return false;
+    }
+    auto rectangle =
+      std::get_if<RectangleShape>(&mask.m_shapes.front().m_geometry);
+    if(!rectangle) {
+      return false;
+    }
+    auto& radii = rectangle->m_radii;
+    return radii.m_top_left <= 0 && radii.m_top_right <= 0 &&
+      radii.m_bottom_right <= 0 && radii.m_bottom_left <= 0;
+  }
+
+  bool translate(double& value, double offset) {
+    auto moved = value + offset;
+    if(moved - offset != value || moved - value != offset) {
+      return false;
+    }
+    value = moved;
+    return true;
+  }
+
+  bool translate(Matrix& matrix, Point offset) {
+    return translate(matrix.m_tx, offset.m_x) &&
+      translate(matrix.m_ty, offset.m_y);
+  }
+
+  using ClipMapping =
+    std::vector<std::pair<std::optional<Rect>, std::optional<Rect>>>;
+
+  bool map(ClipMapping& mapping, const std::optional<Rect>& from,
+      const std::optional<Rect>& to) {
+    for(auto& clip : mapping) {
+      if(clip.first == from) {
+        return clip.second == to;
+      }
+    }
+    mapping.emplace_back(from, to);
+    return true;
+  }
+
+  bool translate(std::optional<Rect>& clip, const ClipMapping& mapping) {
+    for(auto& entry : mapping) {
+      if(entry.first == clip) {
+        clip = entry.second;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void clip_to_mask(const Node& source, auto& placement) {
+    auto group = source.get_group();
+    if(!group || !group->m_mask || placement.m_projection ||
+        !is_clipping(*group->m_mask)) {
+      return;
+    }
+    auto& shape = group->m_mask->m_shapes.front();
+    auto matrix = placement.m_transform * shape.m_transform;
+    if(is_axis_aligned(matrix)) {
+      clip_to(placement.m_clip,
+        matrix.map(std::get<RectangleShape>(shape.m_geometry).m_bounds));
+    }
+  }
+
+  bool is_projected(const Paint& paint) {
+    if(auto gradient = std::get_if<GradientPaint>(&paint)) {
+      return static_cast<bool>(gradient->m_projection);
+    } else if(auto image = std::get_if<ImagePaint>(&paint)) {
+      return static_cast<bool>(image->m_projection);
+    }
+    return false;
+  }
+
+  std::shared_ptr<const DrawList> translate(
+      const DrawList& list, const ClipMapping& clips, Point offset) {
+    auto moved = list;
+    for(auto& command : moved) {
+      if(auto fill = std::get_if<FillCommand>(&command)) {
+        if(is_projected(fill->m_paint) ||
+            !translate(fill->m_transform, offset) ||
+            !translate(fill->m_clip, clips)) {
+          return nullptr;
+        }
+      } else if(auto layer = std::get_if<BeginLayerCommand>(&command)) {
+        if((layer->m_mask &&
+            !translate(layer->m_mask->m_transform, offset)) ||
+            !translate(layer->m_clip, clips)) {
+          return nullptr;
+        }
+      } else if(auto blur = std::get_if<BackdropBlurCommand>(&command)) {
+        if(!translate(blur->m_transform, offset) ||
+            !translate(blur->m_clip, clips)) {
+          return nullptr;
+        }
+      }
+    }
+    return std::make_shared<const DrawList>(std::move(moved));
+  }
+
   bool is_exposed(const Node& source, const auto& placement, bool is_masked,
       const std::vector<std::shared_ptr<const DrawList>>& lists) {
     if(auto group = source.get_group()) {
@@ -398,6 +499,14 @@ std::vector<std::shared_ptr<const DrawList>> SceneBuilder::build_lists(
 }
 
 void SceneBuilder::invalidate(const NodeId& id) {
+  report(id, false);
+}
+
+void SceneBuilder::invalidate_transform(const NodeId& id) {
+  report(id, true);
+}
+
+void SceneBuilder::report(const NodeId& id, bool is_moved) {
   if(m_subtrees.empty()) {
     return;
   }
@@ -406,7 +515,12 @@ void SceneBuilder::invalidate(const NodeId& id) {
   if(!node) {
     return;
   }
-  forget(id);
+  if(auto subtree = m_subtrees.find(id);
+      is_moved && subtree != m_subtrees.end()) {
+    subtree->second.m_is_moved = true;
+  } else {
+    forget(id);
+  }
   mark_ancestors(*node);
   auto root = node;
   for(auto depth = 0; depth != MAXIMUM_DEPTH && !root->m_parent.is_nil();
@@ -575,7 +689,8 @@ void SceneBuilder::retain(const NodeId& id, const Placement& parent,
     int depth, Segment& segment) {
   if(auto subtree = m_subtrees.find(id); subtree != m_subtrees.end()) {
     auto& tree = subtree->second;
-    if(tree.m_parent != parent || tree.m_depth != depth) {
+    if(tree.m_parent != parent || tree.m_depth != depth ||
+        (tree.m_is_moved && !replace(id, tree, parent))) {
       forget(id);
     } else if(!tree.m_is_stale &&
         is_reusable(tree.m_total, tree.m_tolerance, m_tolerance)) {
@@ -684,13 +799,182 @@ void SceneBuilder::retain(const NodeId& id, const Placement& parent,
   tree.m_total = std::move(total);
   tree.m_lists = std::move(lists);
   tree.m_size = size;
+  tree.m_placement = entry->m_placement;
   tree.m_is_stale = false;
+  tree.m_is_moved = false;
+  tree.m_is_surveyed = false;
+  tree.m_clips.clear();
   tree.m_tolerance = m_tolerance;
   segment.m_lists = tree.m_lists;
   segment.m_size = tree.m_size;
   segment.m_dependencies = tree.m_total;
   segment.m_tolerance = m_tolerance;
   m_dependencies = outer;
+}
+
+bool SceneBuilder::replace(
+    const NodeId& id, Subtree& tree, const Placement& parent) {
+  if(tree.m_is_stale || m_device_transform ||
+      !is_reusable(tree.m_total, tree.m_tolerance, m_tolerance)) {
+    return false;
+  }
+  auto node = m_document->find(id);
+  if(!node) {
+    return false;
+  }
+  auto outer = std::exchange(m_dependencies, nullptr);
+  auto entry = enter(*node, parent);
+  if(!entry) {
+    m_dependencies = outer;
+    return false;
+  }
+  auto& previous = tree.m_placement;
+  auto& current = entry->m_placement;
+  auto& from = previous.m_transform;
+  auto& to = current.m_transform;
+  auto offset = Point(to.m_tx - from.m_tx, to.m_ty - from.m_ty);
+  auto moved = from;
+  if(previous.m_projection || current.m_projection ||
+      previous.m_opacity != current.m_opacity || from.m_a != to.m_a ||
+      from.m_b != to.m_b || from.m_c != to.m_c || from.m_d != to.m_d ||
+      !translate(moved, offset) || moved != to) {
+    m_dependencies = outer;
+    return false;
+  }
+  if(!tree.m_is_surveyed) {
+    survey(*node, tree);
+  }
+  auto clips = ClipMapping();
+  auto is_mapped = [&] {
+    if(!tree.m_is_rigid || !map(clips, parent.m_clip, parent.m_clip) ||
+        !map(clips, previous.m_clip, current.m_clip)) {
+      return false;
+    }
+    auto left = previous;
+    auto right = current;
+    clip_to_mask(*entry->m_source, left);
+    clip_to_mask(*entry->m_source, right);
+    if(!map(clips, left.m_clip, right.m_clip)) {
+      return false;
+    }
+    for(auto& chain : tree.m_clips) {
+      auto before = left;
+      auto after = right;
+      for(auto& link : chain) {
+        auto child = m_document->find(link);
+        if(!child) {
+          return false;
+        }
+        auto first = enter(*child, before);
+        auto second = enter(*child, after);
+        if(!first || !second) {
+          if(first || second) {
+            return false;
+          }
+          break;
+        }
+        before = first->m_placement;
+        after = second->m_placement;
+        if(!map(clips, before.m_clip, after.m_clip)) {
+          return false;
+        }
+        clip_to_mask(*first->m_source, before);
+        clip_to_mask(*second->m_source, after);
+        if(!map(clips, before.m_clip, after.m_clip)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }();
+  m_dependencies = outer;
+  if(!is_mapped) {
+    return false;
+  }
+  auto translations = std::unordered_map<const DrawList*,
+    std::shared_ptr<const DrawList>>();
+  auto move = [&] (const std::vector<std::shared_ptr<const DrawList>>& lists) {
+    for(auto& list : lists) {
+      auto& translation = translations[list.get()];
+      if(!translation) {
+        translation = translate(*list, clips, offset);
+        if(!translation) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+  if(!move(tree.m_lists) || !std::all_of(tree.m_segments.begin(),
+      tree.m_segments.end(), [&] (const auto& segment) {
+        return move(segment.m_lists);
+      })) {
+    return false;
+  }
+  auto apply = [&] (std::vector<std::shared_ptr<const DrawList>>& lists) {
+    for(auto& list : lists) {
+      list = translations.at(list.get());
+    }
+  };
+  apply(tree.m_lists);
+  for(auto& segment : tree.m_segments) {
+    apply(segment.m_lists);
+  }
+  tree.m_placement = current;
+  tree.m_is_moved = false;
+  return true;
+}
+
+void SceneBuilder::survey(const Node& node, Subtree& tree) const {
+  tree.m_is_surveyed = true;
+  tree.m_is_rigid = false;
+  tree.m_clips.clear();
+  auto& nodes = m_document->get_nodes();
+  auto path = std::vector<NodeId>();
+  auto pending = std::vector<std::pair<const Node*, int>>();
+  pending.emplace_back(&node, 0);
+  while(!pending.empty()) {
+    auto [current, depth] = pending.back();
+    pending.pop_back();
+    if(depth > MAXIMUM_DEPTH) {
+      tree.m_clips.clear();
+      return;
+    }
+    if(depth != 0) {
+      path.resize(static_cast<std::size_t>(depth - 1));
+      path.push_back(current->get_id());
+    }
+    auto source = current;
+    auto children = &current->m_children;
+    if(current->get_reference()) {
+      auto resolution = resolve_reference(nodes, current->get_id());
+      if(!resolution) {
+        continue;
+      }
+      source = &nodes.get(resolution->m_source);
+      children = &nodes.get(resolution->m_child_source).m_children;
+    } else if(depth != 0 && current->m_header.m_transform_3d) {
+      tree.m_clips.clear();
+      return;
+    }
+    if(source->get_artboard()) {
+      tree.m_clips.clear();
+      return;
+    } else if(source->get_shape() || source->get_text()) {
+      continue;
+    }
+    auto group = source->get_group();
+    if(depth != 0 && group && (get_viewport(*group) ||
+        (group->m_mask && is_clipping(*group->m_mask)))) {
+      tree.m_clips.push_back(path);
+    }
+    for(auto& child : *children) {
+      if(auto descendant = nodes.find(child)) {
+        pending.emplace_back(descendant, depth + 1);
+      }
+    }
+  }
+  tree.m_is_rigid = true;
 }
 
 void SceneBuilder::add_segments(const Node& source,

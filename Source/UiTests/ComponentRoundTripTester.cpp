@@ -105,6 +105,7 @@ TEST_SUITE("ComponentRoundTrip") {
       std::make_unique<MakeComponentCommand>(std::vector{group}));
     auto component =
       static_cast<const MakeComponentCommand&>(*make).get_component();
+    group = static_cast<const MakeComponentCommand&>(*make).get_main();
     auto master = document.get_resources().m_components.at(component).m_master;
     auto master_background = document.get(master).m_children.front();
     auto master_label = document.get(master).m_children.back();
@@ -164,6 +165,7 @@ TEST_SUITE("ComponentRoundTrip") {
       std::make_unique<MakeComponentCommand>(std::vector{group}));
     auto component =
       static_cast<const MakeComponentCommand&>(*make).get_component();
+    group = static_cast<const MakeComponentCommand&>(*make).get_main();
     auto instance = static_cast<const InsertInstanceCommand&>(*editor.execute(
       std::make_unique<InsertInstanceCommand>(component, NodeId(),
         make_translation(100, 0)))).get_instance();

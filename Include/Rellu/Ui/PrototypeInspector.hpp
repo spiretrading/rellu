@@ -1,5 +1,7 @@
 #ifndef RELLU_UI_PROTOTYPE_INSPECTOR_HPP
 #define RELLU_UI_PROTOTYPE_INSPECTOR_HPP
+#include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -7,6 +9,7 @@
 #include <QScrollArea>
 #include <QVBoxLayout>
 #include <QWidget>
+#include "Rellu/Commands/Command.hpp"
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Model/Prototype.hpp"
@@ -21,15 +24,25 @@ namespace Rellu {
    * and the Trigger, Type, Destination, Animation, Easing and Duration of
    * the one being edited, with the fields particular to its trigger and
    * action (the delay of a time trigger, the keys of a key trigger, the
-   * position of an overlay, the state of a state change, Preserve Scroll
-   * Position); the FLOW section of an artboard; and the SCROLLING section.
-   * Voice triggers and the Scroll To, Audio Playback and Speech Playback
-   * actions are listed but unavailable. Each change is one undoable step.
+   * address of a hyperlink, the position of an overlay, the state of a
+   * state change, Preserve Scroll Position); the FLOW section of an
+   * artboard; and the SCROLLING section. The triggers and action types
+   * offered depend on the node as in Adobe XD: Time only for an artboard,
+   * Hover only within a component with states. Voice triggers and the
+   * Scroll To, Audio Playback and Speech Playback actions are listed but
+   * unavailable. Each change is one undoable step.
    * Without an interaction to edit, the fields show Adobe XD's placeholder
    * values, disabled.
    */
   class PrototypeInspector : public QWidget {
     public:
+
+      /**
+       * Makes the command setting whether a node keeps its place when its
+       * artboard scrolls, as Fix Position When Scrolling does.
+       */
+      using FixedPositionFactory = std::function<
+        std::unique_ptr<Command> (const NodeId& node, bool is_fixed)>;
 
       /** The labels of the triggers, in Adobe XD's order. */
       static const std::vector<std::string>& get_trigger_labels();
@@ -55,6 +68,13 @@ namespace Rellu {
        *        outlive this inspector or be replaced first.
        */
       void set_editor(Editor* editor);
+
+      /**
+       * Sets the function making the command of the Fix Position When
+       * Scrolling checkbox, which is disabled without one.
+       * @param factory The function.
+       */
+      void set_fixed_position_factory(FixedPositionFactory factory);
 
       /** Returns the node inspected, or nil if there is none. */
       const NodeId& get_node() const;
@@ -84,6 +104,7 @@ namespace Rellu {
 
     private:
       Editor* m_editor;
+      FixedPositionFactory m_fixed_position_factory;
       Subscription m_subscription;
       Subscription m_selection_subscription;
       NodeId m_node;

@@ -1,7 +1,10 @@
 #include <memory>
 #include <stdexcept>
 #include <doctest/doctest.h>
+#include "Rellu/Commands/ComponentCommands.hpp"
+#include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/CompositeCommand.hpp"
+#include "Rellu/Io/XdValues.hpp"
 #include "Rellu/Prototype/InteractionCommands.hpp"
 #include "../CommandsTests/Fixture.hpp"
 
@@ -171,5 +174,61 @@ TEST_SUITE("InteractionCommands") {
     REQUIRE(history.get_undo_count() == 1);
     REQUIRE(document.get_prototype().m_flows.size() == 1);
     REQUIRE(get_interactions(document, scene.m_ellipse).size() == 1);
+  }
+
+  TEST_CASE("empty_interaction") {
+    auto owner = generate_node_id();
+    auto interaction = make_empty_interaction(owner, false);
+    REQUIRE(interaction.m_owner == owner);
+    REQUIRE(std::holds_alternative<TapTrigger>(interaction.m_trigger));
+    REQUIRE(interaction.m_action == Action(ArtboardTransition(NodeId(),
+      Animation(Transition::NONE, Easing::EASE_IN, 0.2))));
+    REQUIRE(make_empty_interaction(owner, true).m_trigger ==
+      Trigger(TimeTrigger(DEFAULT_DELAY)));
+  }
+
+  TEST_CASE("inherited_id") {
+    auto source = generate_node_id();
+    auto owner = generate_node_id();
+    REQUIRE(derive_inherited_id(source, owner) == derive_node_id(
+      QString::fromStdString(to_string(source)),
+      QString::fromStdString(to_string(owner))));
+  }
+
+  TEST_CASE("main_component_interactions") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto second = add_artboard(document, "Second");
+    auto history = History(document);
+    auto command = history.execute(
+      std::make_unique<MakeComponentCommand>(std::vector{scene.m_group}));
+    auto& made = static_cast<const MakeComponentCommand&>(*command);
+    auto main = made.get_main();
+    auto master =
+      document.get_resources().m_components.at(made.get_component()).m_master;
+    history.execute(std::make_unique<AddInteractionCommand>(
+      make_default_interaction(main, second)));
+    auto sources = get_interactions(document, master);
+    REQUIRE(sources.size() == 1);
+    auto source = sources.front()->m_id;
+    auto copies = get_interactions(document, main);
+    REQUIRE(copies.size() == 1);
+    REQUIRE(copies.front()->m_id == derive_inherited_id(source, main));
+    auto changed = *copies.front();
+    auto instance = static_cast<const InsertInstanceCommand&>(
+      *history.execute(std::make_unique<InsertInstanceCommand>(
+        made.get_component(), scene.m_artboard, make_translation(0, 0)))).
+      get_instance();
+    REQUIRE(get_interactions(document, instance).size() == 1);
+    changed.m_trigger = DragTrigger();
+    history.execute(std::make_unique<SetInteractionCommand>(changed));
+    REQUIRE(get_interactions(document, master).front()->m_trigger ==
+      Trigger(DragTrigger()));
+    REQUIRE(get_interactions(document, instance).front()->m_trigger ==
+      Trigger(DragTrigger()));
+    history.execute(std::make_unique<RemoveInteractionCommand>(
+      derive_inherited_id(source, main)));
+    REQUIRE(get_interactions(document, master).empty());
+    REQUIRE(get_interactions(document, instance).empty());
   }
 }

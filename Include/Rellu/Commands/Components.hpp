@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Command.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Model/ChangeSet.hpp"
@@ -188,23 +189,59 @@ namespace Rellu {
    * @param parent The parent, or nil for the canvas.
    * @param index The position among the parent's children.
    * @param transform The instance's transform.
+   * @param measurer The function measuring text, which sizes the instance.
    * @return The instance's id.
    */
   NodeId insert_instance(const Document& document, Transaction& transaction,
     const ComponentId& component, const NodeId& parent, std::size_t index,
-    const Matrix& transform);
+    const Matrix& transform,
+    const TextMeasurer& measurer = estimate_text_bounds);
+
+  /**
+   * Returns the name Adobe XD gives a new instance of a component: the
+   * component's name followed by an en dash and the next number when the
+   * component's instances are numbered so, otherwise the component's name.
+   * @param document The document holding the component.
+   * @param component The component's id.
+   */
+  std::string make_instance_name(
+    const Document& document, const ComponentId& component);
+
+  /**
+   * Returns the id Adobe XD's files give a node's copy of an interaction it
+   * inherits, such as a component instance's copy of an interaction of its
+   * master's root.
+   * @param source The inherited interaction's id.
+   * @param owner The inheriting node's id.
+   */
+  InteractionId derive_inherited_id(
+    const InteractionId& source, const NodeId& owner);
 
   /**
    * Propagates the changes of the most recent revision through components
    * as Adobe XD does, as part of that revision: edits of a main component
    * reach the component and its instances' properties that are not
-   * overridden, and edits of other instances become overrides.
+   * overridden, edits of other instances become overrides, and every
+   * instance inherits the interactions of the root of the tree it mirrors,
+   * those of a main component's root belonging to the component.
    * @param document The document changed.
    * @param changes The changes the most recent revision made, to which the
    *        changes made here are appended.
    * @return <code>true</code> iff anything changed.
    */
   bool refresh_components(Document& document, ChangeSet& changes);
+
+  /**
+   * Updates the sizes Adobe XD records for the masters and component
+   * instances containing the nodes the most recent revision changed, as part
+   * of that revision.
+   * @param document The document changed.
+   * @param changes The changes the most recent revision made.
+   * @param measurer The function measuring text.
+   * @return <code>true</code> iff a size changed.
+   */
+  bool refresh_component_sizes(Document& document, const ChangeSet& changes,
+    const TextMeasurer& measurer);
 }
 
 #endif

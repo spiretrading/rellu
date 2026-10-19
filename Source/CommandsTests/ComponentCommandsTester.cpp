@@ -6,6 +6,7 @@
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
+#include "Rellu/Commands/StackCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Commands/StyleCommands.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
@@ -46,10 +47,12 @@ namespace {
     return *get_instance_role(document.get(id));
   }
 
-  ComponentId make_component(History& history, const NodeId& group) {
+  ComponentId make_component(History& history, NodeId& group) {
     auto command = history.execute(
       std::make_unique<MakeComponentCommand>(std::vector{group}));
-    return static_cast<const MakeComponentCommand*>(command)->get_component();
+    auto& made = static_cast<const MakeComponentCommand&>(*command);
+    group = made.get_main();
+    return made.get_component();
   }
 
   NodeId add_instance(History& history, const ComponentId& component,
@@ -116,9 +119,15 @@ TEST_SUITE("ComponentCommands") {
       std::make_unique<MakeComponentCommand>(std::vector{parts.m_group}));
     REQUIRE(history.get_undo_label() == "Make Component");
     auto& made = static_cast<const MakeComponentCommand&>(*command);
-    REQUIRE(made.get_main() == parts.m_group);
-    REQUIRE(made.get_selection() == std::vector{parts.m_group});
-    auto& role = get_role(document, parts.m_group);
+    REQUIRE(made.get_main() != parts.m_group);
+    REQUIRE(!document.find(parts.m_group));
+    REQUIRE(made.get_selection() == std::vector{made.get_main()});
+    auto& main = document.get(made.get_main());
+    REQUIRE(main.m_parent == parts.m_artboard);
+    REQUIRE(main.m_header.m_name == "Button");
+    REQUIRE(main.m_header.m_transform == make_translation(20, 20));
+    REQUIRE(main.m_children == std::vector{parts.m_rectangle, parts.m_label});
+    auto& role = get_role(document, made.get_main());
     REQUIRE(role.m_is_main);
     REQUIRE(role.m_component == made.get_component());
     REQUIRE(role.m_sync_map.size() == 2);
@@ -132,8 +141,10 @@ TEST_SUITE("ComponentCommands") {
     REQUIRE(master.m_children.front() == role.m_sync_map.at(parts.m_rectangle));
     REQUIRE(get_fill(document, master.m_children.front()) ==
       make_color(255, 0, 0));
+    REQUIRE(component.m_size == role.m_size);
+    REQUIRE(component.m_size.m_width > 0);
     REQUIRE(find_main_component(document, made.get_component()) ==
-      parts.m_group);
+      made.get_main());
   }
 
   TEST_CASE("make_component_from_nodes") {
@@ -144,7 +155,9 @@ TEST_SUITE("ComponentCommands") {
       std::vector{parts.m_rectangle, parts.m_label}));
     auto& made = static_cast<const MakeComponentCommand&>(*command);
     auto& main = document.get(made.get_main());
-    REQUIRE(main.m_header.m_name == "Component 1");
+    REQUIRE(main.m_header.m_name == "Component 1 \xE2\x80\x93 1");
+    REQUIRE(document.get_resources().m_components.at(made.get_component()).
+      m_name == "Component 1");
     REQUIRE(main.m_parent == parts.m_group);
     REQUIRE(main.m_children == std::vector{parts.m_rectangle, parts.m_label});
     REQUIRE(get_role(document, made.get_main()).m_is_main);
@@ -582,5 +595,152 @@ TEST_SUITE("ComponentCommands") {
       "object.make_component", document, std::vector<NodeId>()));
     REQUIRE(!commands.make(
       "object.ungroup_component", document, std::vector{parts.m_group}));
+  }
+
+  TEST_CASE("inherited_interactions") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto component = make_component(history, parts.m_group);
+    auto instance = add_instance(history, component, parts.m_artboard, 200, 20);
+    auto command = history.execute(std::make_unique<AddStateCommand>(
+      component, "Hover State", StateKind::HOVER));
+    auto state = static_cast<const AddStateCommand&>(*command).get_state();
+    auto& master =
+      document.get_resources().m_components.at(component).m_master;
+    auto source = InteractionId();
+    for(auto& interaction : document.get_prototype().m_interactions) {
+      if(interaction.m_owner == master) {
+        source = interaction.m_id;
+      }
+    }
+    REQUIRE(!source.is_nil());
+    auto find = [&] (const InteractionId& id) -> const Interaction* {
+      for(auto& interaction : document.get_prototype().m_interactions) {
+        if(interaction.m_id == id) {
+          return &interaction;
+        }
+      }
+      return nullptr;
+    };
+    auto copy = find(derive_inherited_id(source, instance));
+    REQUIRE(copy);
+    REQUIRE(copy->m_owner == instance);
+    REQUIRE(copy->m_trigger == Trigger(HoverTrigger()));
+    REQUIRE(std::get<StateTransition>(copy->m_action).m_state == state);
+    REQUIRE(!find(derive_inherited_id(source, parts.m_group)));
+    auto added = add_instance(history, component, parts.m_artboard, 200, 100);
+    REQUIRE(find(derive_inherited_id(source, added)));
+    history.execute(std::make_unique<SetInstanceStateCommand>(
+      std::vector{added}, state));
+    REQUIRE(!find(derive_inherited_id(source, added)));
+    history.execute(
+      std::make_unique<RemoveStateCommand>(component, state));
+    REQUIRE(!find(derive_inherited_id(source, instance)));
+    REQUIRE(history.undo());
+    REQUIRE(find(derive_inherited_id(source, instance)));
+  }
+
+  TEST_CASE("nested_override") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto inner = make_component(history, parts.m_group);
+    auto nested = add_instance(history, inner, parts.m_artboard, 200, 20);
+    auto outer_main = nested;
+    auto outer = make_component(history, outer_main);
+    auto instance = add_instance(history, outer, parts.m_artboard, 0, 150);
+    history.execute(std::make_unique<MakeEditableCommand>(
+      std::vector{instance}, "Edit"));
+    auto copy = document.get(instance).m_children.front();
+    history.execute(std::make_unique<MakeEditableCommand>(
+      std::vector{copy}, "Edit"));
+    REQUIRE(get_instance_role(document.get(copy)));
+    auto rectangle = document.get(copy).m_children.front();
+    edit(history, rectangle, make_fill(rectangle, make_color(0, 255, 0)));
+    REQUIRE(get_overridden(document, copy, rectangle) ==
+      std::vector<std::string>{"fill"});
+    REQUIRE(get_overridden(document, instance, rectangle) ==
+      std::vector<std::string>{"fill"});
+    history.execute(make_fill(parts.m_rectangle, make_color(0, 0, 255)));
+    REQUIRE(get_fill(document, rectangle) == make_color(0, 255, 0));
+    auto main_rectangle = document.get(nested).m_children.front();
+    edit(history, main_rectangle,
+      make_fill(main_rectangle, make_color(9, 9, 9)));
+    REQUIRE(get_fill(document, rectangle) == make_color(0, 255, 0));
+  }
+
+  TEST_CASE("layout_roles") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto component = make_component(history, parts.m_group);
+    auto instance = add_instance(history, component, parts.m_artboard, 200, 20);
+    history.execute(std::make_unique<SetStackCommand>(std::vector{
+      parts.m_group}, Orientation::VERTICAL, estimate_text_bounds));
+    auto& master =
+      document.get_resources().m_components.at(component).m_master;
+    REQUIRE(document.get(master).get_group()->m_stack);
+    auto& stack = document.get(instance).get_group()->m_stack;
+    REQUIRE(stack);
+    REQUIRE(stack->m_orientation == Orientation::VERTICAL);
+    history.execute(std::make_unique<SetStackSpacingCommand>(
+      std::vector{parts.m_group}, 12, estimate_text_bounds));
+    auto& spacing =
+      document.get(instance).get_group()->m_stack->m_spacing;
+    REQUIRE(spacing.size() == 1);
+    REQUIRE(spacing.begin()->second == 12);
+    REQUIRE(std::ranges::contains(
+      document.get(instance).m_children, spacing.begin()->first));
+  }
+
+  TEST_CASE("sizes") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto component = make_component(history, parts.m_group);
+    auto instance = add_instance(history, component, parts.m_artboard, 200, 20);
+    history.execute(std::make_unique<InsertNodeCommand>("Rectangle",
+      parts.m_group, make_header("Dot", make_translation(100, 100)),
+      make_rectangle_shape(50, 50)));
+    REQUIRE(document.get_resources().m_components.at(component).m_size ==
+      Size(150, 150));
+    REQUIRE(get_role(document, parts.m_group).m_size == Size(150, 150));
+    REQUIRE(get_role(document, instance).m_size == Size(150, 150));
+  }
+
+  TEST_CASE("instance_names") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto command = history.execute(std::make_unique<MakeComponentCommand>(
+      std::vector{parts.m_rectangle, parts.m_label}));
+    auto component =
+      static_cast<const MakeComponentCommand&>(*command).get_component();
+    auto first = add_instance(history, component, parts.m_artboard, 200, 20);
+    REQUIRE(document.get(first).m_header.m_name ==
+      "Component 1 \xE2\x80\x93 2");
+    auto duplicate =
+      history.execute(std::make_unique<DuplicateCommand>(std::vector{first}));
+    REQUIRE(document.get(duplicate->get_selection()->front()).m_header.
+      m_name == "Component 1 \xE2\x80\x93 3");
+  }
+
+  TEST_CASE("measurer") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto measurer = [] (const Text&) { return Rect(0, 0, 200, 50); };
+    history.set_text_measurer(measurer);
+    auto command = history.execute(std::make_unique<MakeComponentCommand>(
+      std::vector{parts.m_group}, measurer));
+    auto component =
+      static_cast<const MakeComponentCommand&>(*command).get_component();
+    REQUIRE(document.get_resources().m_components.at(component).m_size ==
+      Size(210, 55));
+    auto inserted = history.execute(std::make_unique<InsertInstanceCommand>(
+      component, parts.m_artboard, make_translation(0, 0), measurer));
+    REQUIRE(get_role(document, static_cast<const InsertInstanceCommand&>(
+      *inserted).get_instance()).m_size == Size(210, 55));
   }
 }

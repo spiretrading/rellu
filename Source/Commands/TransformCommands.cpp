@@ -1,11 +1,13 @@
 #include <cmath>
 #include <optional>
 #include <type_traits>
+#include <utility>
 #include <variant>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Geometry/Path.hpp"
+#include "Rellu/Geometry/Shapes.hpp"
 
 using namespace Rellu;
 
@@ -14,7 +16,7 @@ namespace {
 
   std::optional<Point> get_axis_scale(const Matrix& matrix) {
     auto magnitude = std::abs(matrix.m_a) + std::abs(matrix.m_d);
-    if(!(matrix.m_a > 0) || !(matrix.m_d > 0) ||
+    if(!(std::abs(matrix.m_a) > 0) || !(std::abs(matrix.m_d) > 0) ||
         std::abs(matrix.m_b) > TOLERANCE * magnitude ||
         std::abs(matrix.m_c) > TOLERANCE * magnitude) {
       return std::nullopt;
@@ -77,8 +79,136 @@ namespace {
   }
 
   void reshape(const Document& document, Transaction& transaction,
-    const NodeId& id, const Matrix& transform, const Matrix& local,
-    const Matrix& composed);
+    const NodeId& id, const Matrix& transform, Matrix local,
+    Matrix composed);
+
+  bool is_mirrorable(const Node& node) {
+    if(node.get_shape()) {
+      return true;
+    } else if(auto group = node.get_group()) {
+      return !group->m_repeat_grid && !group->m_scroll_group &&
+        !group->m_stack && !group->m_padding &&
+        !group->m_component_instance && !group->m_mask;
+    }
+    return false;
+  }
+
+  Matrix make_reflection(Point center, bool is_horizontal, bool is_vertical) {
+    return make_translation(center.m_x, center.m_y) *
+      make_scale(is_horizontal ? -1 : 1, is_vertical ? -1 : 1) *
+      make_translation(-center.m_x, -center.m_y);
+  }
+
+  CornerRadii mirror_radii(
+      CornerRadii radii, bool is_horizontal, bool is_vertical) {
+    if(is_horizontal) {
+      std::swap(radii.m_top_left, radii.m_top_right);
+      std::swap(radii.m_bottom_left, radii.m_bottom_right);
+    }
+    if(is_vertical) {
+      std::swap(radii.m_top_left, radii.m_bottom_left);
+      std::swap(radii.m_top_right, radii.m_bottom_right);
+    }
+    return radii;
+  }
+
+  ShapeGeometry mirror_geometry(const ShapeGeometry& geometry,
+      const Matrix& reflection, bool is_horizontal, bool is_vertical) {
+    return std::visit([&] (const auto& shape) -> ShapeGeometry {
+      using Type = std::decay_t<decltype(shape)>;
+      auto mirrored = shape;
+      if constexpr(std::is_same_v<Type, RectangleShape>) {
+        mirrored.m_bounds = reflection.map(shape.m_bounds);
+        mirrored.m_radii =
+          mirror_radii(shape.m_radii, is_horizontal, is_vertical);
+      } else if constexpr(std::is_same_v<Type, EllipseShape>) {
+        mirrored.m_center = reflection.map(shape.m_center);
+      } else if constexpr(std::is_same_v<Type, LineShape>) {
+        mirrored.m_start = reflection.map(shape.m_start);
+        mirrored.m_end = reflection.map(shape.m_end);
+      } else if constexpr(std::is_same_v<Type, PolygonShape>) {
+        if(shape.m_vertices.empty()) {
+          if(!is_vertical || shape.m_corner_count % 2 == 0) {
+            return mirrored;
+          }
+          mirrored.m_vertices = make_polygon_vertices(shape.m_corner_count,
+            Rect(0, 0, shape.m_size.m_width, shape.m_size.m_height));
+        }
+        for(auto& vertex : mirrored.m_vertices) {
+          vertex = reflection.map(vertex);
+        }
+      } else {
+        mirrored.m_path = Shared(transform(*shape.m_path, reflection));
+      }
+      return mirrored;
+    }, geometry);
+  }
+
+  void mirror_gradient(GradientFill& gradient, const Matrix& reflection) {
+    if(!gradient.m_transform.is_identity()) {
+      gradient.m_transform = reflection * gradient.m_transform;
+    } else if(auto linear = std::get_if<LinearGradient>(&gradient.m_geometry)) {
+      linear->m_start = reflection.map(linear->m_start);
+      linear->m_end = reflection.map(linear->m_end);
+    } else if(auto radial =
+        std::get_if<RadialGradient>(&gradient.m_geometry)) {
+      radial->m_center = reflection.map(radial->m_center);
+      radial->m_focus = reflection.map(radial->m_focus);
+    }
+  }
+
+  Fill mirror_fill(const Fill& fill, const Matrix& reflection,
+      bool is_horizontal, bool is_vertical) {
+    auto mirrored = fill;
+    if(auto image = std::get_if<ImageFill>(&mirrored)) {
+      image->m_is_flipped_horizontally ^= is_horizontal;
+      image->m_is_flipped_vertically ^= is_vertical;
+    } else if(auto gradient = std::get_if<GradientFill>(&mirrored)) {
+      if(gradient->m_units == GradientUnits::OBJECT_BOUNDING_BOX) {
+        mirror_gradient(*gradient,
+          make_reflection(Point(0.5, 0.5), is_horizontal, is_vertical));
+      } else {
+        mirror_gradient(*gradient, reflection);
+      }
+    }
+    return mirrored;
+  }
+
+  void mirror_children(const Document& document, Transaction& transaction,
+      const std::vector<NodeId>& children, const Matrix& reflection) {
+    for(auto& child : children) {
+      auto transform = get_transform(document, child);
+      auto composed = reflection * transform;
+      if(auto inverse = invert(transform)) {
+        reshape(document, transaction, child, transform,
+          *inverse * reflection * transform, composed);
+      } else {
+        set_transform(document, transaction, child, composed);
+      }
+    }
+  }
+
+  void mirror_content(const Document& document, Transaction& transaction,
+      const NodeId& id, Point center, bool is_horizontal, bool is_vertical) {
+    auto reflection = make_reflection(center, is_horizontal, is_vertical);
+    auto& node = document.get(id);
+    auto children = node.m_children;
+    if(auto shape = node.get_shape()) {
+      auto payload = *shape;
+      payload.m_geometry = mirror_geometry(
+        shape->m_geometry, reflection, is_horizontal, is_vertical);
+      payload.m_style.m_fill = mirror_fill(
+        shape->m_style.m_fill, reflection, is_horizontal, is_vertical);
+      auto is_compound =
+        std::holds_alternative<CompoundShape>(payload.m_geometry);
+      transaction.replace_payload(id, std::move(payload));
+      if(is_compound) {
+        mirror_children(document, transaction, children, reflection);
+      }
+    } else if(node.get_group()) {
+      mirror_children(document, transaction, children, reflection);
+    }
+  }
 
   void scale_children(const Document& document, Transaction& transaction,
       const std::vector<NodeId>& children, Point scale) {
@@ -134,10 +264,25 @@ namespace {
   }
 
   void reshape(const Document& document, Transaction& transaction,
-      const NodeId& id, const Matrix& transform, const Matrix& local,
-      const Matrix& composed) {
+      const NodeId& id, const Matrix& transform, Matrix local,
+      Matrix composed) {
     auto scale = get_axis_scale(local);
-    if(scale && is_scalable(document.get(id), *scale)) {
+    if(scale && (scale->m_x < 0 || scale->m_y < 0)) {
+      if(auto bounds = get_local_bounds(document, id)) {
+        if(is_mirrorable(document.get(id))) {
+          mirror_content(document, transaction, id, bounds->get_center(),
+            scale->m_x < 0, scale->m_y < 0);
+        }
+        auto mapped = local.map(*bounds);
+        scale = Point(std::abs(scale->m_x), std::abs(scale->m_y));
+        local = Matrix(scale->m_x, 0, 0, scale->m_y,
+          mapped.m_x - scale->m_x * bounds->m_x,
+          mapped.m_y - scale->m_y * bounds->m_y);
+        composed = transform * local;
+      }
+    }
+    if(scale && scale->m_x > 0 && scale->m_y > 0 &&
+        is_scalable(document.get(id), *scale)) {
       auto updated = transform * make_translation(local.m_tx, local.m_ty);
       if(updated != transform) {
         set_transform(document, transaction, id, updated);
@@ -158,7 +303,7 @@ namespace {
     }
     auto local = *inverse * mapping * parent;
     auto scale = get_axis_scale(local);
-    if(!scale) {
+    if(!scale || !(scale->m_x > 0) || !(scale->m_y > 0)) {
       return;
     }
     auto payload = *node.get_artboard();
@@ -323,8 +468,9 @@ std::unique_ptr<TransformCommand> Rellu::make_resize_command(
 }
 
 std::unique_ptr<TransformCommand> Rellu::make_bounds_command(
-    const Document& document, const NodeId& id, const Rect& bounds) {
-  auto local = get_local_bounds(document, id);
+    const Document& document, const NodeId& id, const Rect& bounds,
+    const TextMeasurer& measurer) {
+  auto local = get_local_bounds(document, id, BoundsType::GEOMETRY, measurer);
   if(!local) {
     return nullptr;
   }

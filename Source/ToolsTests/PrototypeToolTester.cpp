@@ -184,4 +184,19 @@ TEST_SUITE("PrototypeTool") {
     REQUIRE(get_tool(tools).find_destination(
       tools.get_context(), Point(700, 200)) == setup.m_boards.m_second);
   }
+
+  TEST_CASE("wire_to_empty_interaction") {
+    auto setup = Setup();
+    auto& tools = *setup.m_tools;
+    auto& document = setup.m_document;
+    auto& boards = setup.m_boards;
+    setup.m_editor->execute(std::make_unique<AddInteractionCommand>(
+      make_empty_interaction(boards.m_button, false)));
+    click(tools, Point(200, 175));
+    drag(tools, Point(251, 176), Point(700, 200));
+    auto interactions = get_interactions(document, boards.m_button);
+    REQUIRE(interactions.size() == 1);
+    REQUIRE(interactions.front()->m_action == Action(ArtboardTransition(
+      boards.m_second, make_default_animation())));
+  }
 }

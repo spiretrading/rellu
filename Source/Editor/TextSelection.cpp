@@ -33,6 +33,18 @@ TextRange TextSelection::get_range() const {
   return TextRange(std::min(m_anchor, m_caret), std::max(m_anchor, m_caret));
 }
 
+const std::optional<TextStyle>& TextSelection::get_pending_style() const {
+  return m_pending_style;
+}
+
+void TextSelection::set_pending_style(std::optional<TextStyle> style) {
+  if(m_node.is_nil() || style == m_pending_style) {
+    return;
+  }
+  m_pending_style = std::move(style);
+  m_signal();
+}
+
 void TextSelection::set(
     const NodeId& node, std::size_t anchor, std::size_t caret) {
   auto size = std::size_t(0);
@@ -47,6 +59,7 @@ void TextSelection::set(
   m_node = node;
   m_anchor = anchor;
   m_caret = caret;
+  m_pending_style = std::nullopt;
   m_signal();
 }
 

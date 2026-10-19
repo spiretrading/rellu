@@ -1,8 +1,4 @@
-#include <optional>
 #include <vector>
-#include "Rellu/Io/XdGenerator.hpp"
-#include "Rellu/Io/XdOpaque.hpp"
-#include "Rellu/Io/XdPatch.hpp"
 #include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Prototype/StageDocument.hpp"
 
@@ -30,35 +26,6 @@ namespace {
         pending.push_back(&document.get(*i));
       }
     }
-  }
-
-  bool is_marked(const XdValue& json) {
-    auto meta = json.find("meta");
-    if(!meta) {
-      return false;
-    }
-    auto ux = meta->find("ux");
-    if(!ux) {
-      return false;
-    }
-    auto fixed = ux->find("fixed");
-    return fixed && fixed->to_bool();
-  }
-
-  bool is_candidate(const Node& node) {
-    auto bytes = node.m_header.m_opaque.get_bytes();
-    if(bytes.find("fixed") == std::string_view::npos) {
-      return false;
-    }
-    return decode_node_data(bytes).m_patch.find("fixed") !=
-      std::string_view::npos;
-  }
-
-  bool is_marked(const XdGenerator& generator, const Node& node) {
-    auto json = generator.make_node(node);
-    apply_patch(decode_node_data(node.m_header.m_opaque.get_bytes()).m_patch,
-      json, false);
-    return is_marked(json);
   }
 }
 
@@ -108,15 +75,9 @@ std::unique_ptr<Document> Rellu::copy_document(const Document& document) {
 
 std::unordered_set<NodeId> Rellu::find_fixed_nodes(const Document& document) {
   auto fixed = std::unordered_set<NodeId>();
-  auto generator = std::optional<XdGenerator>();
   document.get_nodes().for_each([&] (const auto& node) {
-    if(is_candidate(node)) {
-      if(!generator) {
-        generator.emplace(document, XdTextLayout());
-      }
-      if(is_marked(*generator, node)) {
-        fixed.insert(node.get_id());
-      }
+    if(node.m_header.m_is_fixed_position) {
+      fixed.insert(node.get_id());
     }
   });
   return fixed;
@@ -124,9 +85,5 @@ std::unordered_set<NodeId> Rellu::find_fixed_nodes(const Document& document) {
 
 bool Rellu::is_fixed(const Document& document, const NodeId& id) {
   auto node = document.find(id);
-  if(!node || !is_candidate(*node)) {
-    return false;
-  }
-  auto generator = XdGenerator(document, XdTextLayout());
-  return is_marked(generator, *node);
+  return node && node->m_header.m_is_fixed_position;
 }

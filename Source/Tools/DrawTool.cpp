@@ -7,7 +7,7 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto SELECTION_COLOR = make_color(20, 115, 230);
+  constexpr auto SELECTION_COLOR = make_color(38, 128, 235);
   constexpr auto LINE_WIDTH = 1.0;
 
   double get_sign(double value) {
@@ -65,6 +65,8 @@ void DrawTool::release(ToolContext& context, const PointerEvent& event) {
   update(context, event);
   if(!m_is_applied) {
     click(context, m_start);
+  } else if(m_header) {
+    complete(context, m_header->m_id);
   }
   finish(context);
 }
@@ -124,8 +126,10 @@ void DrawTool::draw(const ToolContext& context, CanvasOverlay& overlay) const {
 
 void DrawTool::click(ToolContext& context, Point point) {}
 
+void DrawTool::complete(ToolContext& context, const NodeId& id) {}
+
 NodeId DrawTool::find_parent(const ToolContext& context, Point point) const {
-  return find_drawing_parent(context.get_document(), point);
+  return find_drawing_parent(context, point);
 }
 
 void DrawTool::update(ToolContext& context, const PointerEvent& event) {
@@ -193,4 +197,25 @@ NodeId Rellu::find_drawing_parent(const Document& document, Point point) {
     }
   }
   return NodeId();
+}
+
+NodeId Rellu::find_drawing_parent(const ToolContext& context, Point point) {
+  auto& document = context.get_document();
+  auto container = context.get_editor().get_context().get_container();
+  auto current = container;
+  while(auto node = document.find(current)) {
+    if(auto group = node->get_group()) {
+      if(group->m_repeat_grid || group->m_stack ||
+          group->m_component_instance) {
+        return find_drawing_parent(document, point);
+      }
+    } else if(!node->get_artboard()) {
+      return find_drawing_parent(document, point);
+    }
+    current = node->m_parent;
+  }
+  if(!container.is_nil() && document.find(container)) {
+    return container;
+  }
+  return find_drawing_parent(document, point);
 }

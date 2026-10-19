@@ -116,6 +116,13 @@ namespace {
     constraints.m_bottom = ux.get_bool("constraintBottom"_L1, false);
     constraints.m_width = ux.get_bool("constraintWidth"_L1, false);
     constraints.m_height = ux.get_bool("constraintHeight"_L1, false);
+    header.m_is_fixed_position = ux.get_bool("fixed"_L1, false);
+    if(auto lock = ux.get_json().value("aspectLock"_L1).toObject();
+        lock.value("width"_L1).isDouble() &&
+        lock.value("height"_L1).isDouble()) {
+      header.m_aspect_lock = Size(lock.value("width"_L1).toDouble(),
+        lock.value("height"_L1).toDouble());
+    }
     ux.ignore({"hasCustomName"_L1, "nameL10N"_L1,
       "hasNameFromExternalSource"_L1, "isCustomNameInherited"_L1,
       "disableNaming"_L1, "rotation"_L1, "aspectLock"_L1,

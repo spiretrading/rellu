@@ -105,4 +105,18 @@ TEST_SUITE("ZoomTool") {
     REQUIRE(tools.key_press(KeyEvent(Qt::Key_Escape, Qt::NoModifier)));
     REQUIRE(tools.get_tool_name() == "select");
   }
+
+  TEST_CASE("cursor") {
+    auto document = Document();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    tools.set_tool("zoom");
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ZOOM_IN);
+    tools.move(make_event(Point(10, 10), Qt::NoButton, Qt::NoButton,
+      Qt::AltModifier));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ZOOM_OUT);
+    tools.key_release(KeyEvent(Qt::Key_Alt, Qt::NoModifier));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ZOOM_IN);
+  }
 }

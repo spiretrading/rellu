@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/Layouts.hpp"
@@ -368,4 +370,83 @@ std::optional<Margins> Rellu::get_padding(
     return group->m_padding->m_padding;
   }
   return std::nullopt;
+}
+
+MoveStackItemsCommand::MoveStackItemsCommand(
+  std::vector<NodeId> nodes, bool is_forward) noexcept
+  : m_nodes(std::move(nodes)),
+    m_is_forward(is_forward) {}
+
+std::string MoveStackItemsCommand::get_label() const {
+  return "Reorder";
+}
+
+void MoveStackItemsCommand::apply(
+    const Document& document, Transaction& transaction) {
+  if(m_nodes.empty()) {
+    throw std::invalid_argument("There is nothing to reorder.");
+  }
+  auto stack = document.get(m_nodes.front()).m_parent;
+  auto group = stack.is_nil() ? nullptr : find_group(document, stack);
+  if(!group || !group->m_stack) {
+    throw std::invalid_argument("The nodes are not stack items.");
+  }
+  auto items = get_stack_items(document, stack);
+  auto selected = std::unordered_set<NodeId>(m_nodes.begin(), m_nodes.end());
+  for(auto& id : m_nodes) {
+    if(std::find(items.begin(), items.end(), id) == items.end()) {
+      throw std::invalid_argument("The nodes are not items of one stack.");
+    }
+  }
+  if(m_is_forward) {
+    for(auto i = items.size(); i-- > 1;) {
+      if(selected.contains(items[i - 1]) && !selected.contains(items[i])) {
+        std::swap(items[i - 1], items[i]);
+      }
+    }
+  } else {
+    for(auto i = std::size_t(1); i < items.size(); ++i) {
+      if(selected.contains(items[i]) && !selected.contains(items[i - 1])) {
+        std::swap(items[i - 1], items[i]);
+      }
+    }
+  }
+  auto& children = document.get(stack).m_children;
+  auto order = std::vector<NodeId>();
+  if(group->m_stack->m_has_background && !children.empty()) {
+    order.push_back(children.front());
+  }
+  order.insert(order.end(), items.rbegin(), items.rend());
+  reorder_children(document, transaction, stack, order);
+}
+
+std::unique_ptr<Command> Rellu::make_stack_nudge(const Document& document,
+    const std::vector<NodeId>& nodes, Point delta) {
+  if(nodes.empty()) {
+    return nullptr;
+  }
+  auto node = document.find(nodes.front());
+  if(!node || node->m_parent.is_nil()) {
+    return nullptr;
+  }
+  auto stack = node->m_parent;
+  auto group = find_group(document, stack);
+  if(!group || !group->m_stack) {
+    return nullptr;
+  }
+  auto items = get_stack_items(document, stack);
+  for(auto& id : nodes) {
+    if(std::find(items.begin(), items.end(), id) == items.end()) {
+      return nullptr;
+    }
+  }
+  auto along = delta.m_y;
+  auto across = delta.m_x;
+  if(group->m_stack->m_orientation == Orientation::HORIZONTAL) {
+    std::swap(along, across);
+  }
+  if(along == 0 || across != 0) {
+    return nullptr;
+  }
+  return std::make_unique<MoveStackItemsCommand>(nodes, along > 0);
 }

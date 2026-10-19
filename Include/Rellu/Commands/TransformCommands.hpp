@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Command.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
@@ -35,7 +36,10 @@ namespace Rellu {
   /**
    * Applies a mapping in document space to a node, resizing its geometry
    * rather than scaling its transform where the mapping scales along the
-   * node's own axes.
+   * node's own axes. A mapping that mirrors along those axes, as a resize
+   * past the opposite side does, mirrors the geometry and fills of shapes
+   * and of the contents of plain groups, and only moves other nodes, so
+   * that no transform is left mirrored, as Adobe XD does.
    * @param document The document holding the node.
    * @param transaction The open transaction on the <i>document</i>.
    * @param id The node's id.
@@ -144,11 +148,13 @@ namespace Rellu {
    * @param document The document holding the node.
    * @param id The node's id.
    * @param bounds The new bounds in the node's local space.
+   * @param measurer The function measuring text.
    * @return The command, or <code>nullptr</code> if the node draws nothing
    *         or its transform is singular.
    */
   std::unique_ptr<TransformCommand> make_bounds_command(
-    const Document& document, const NodeId& id, const Rect& bounds);
+    const Document& document, const NodeId& id, const Rect& bounds,
+    const TextMeasurer& measurer = estimate_text_bounds);
 
   /**
    * Makes a command labelled Rotate rotating nodes about a point.

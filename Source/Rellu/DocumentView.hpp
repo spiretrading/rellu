@@ -119,6 +119,8 @@ namespace Rellu {
       bool m_is_panning;
       QPointF m_position;
       std::optional<QCursor> m_rotate_cursor;
+      std::optional<QCursor> m_zoom_in_cursor;
+      std::optional<QCursor> m_zoom_out_cursor;
       QTimer m_preparation;
       QTimer m_caret_timer;
 

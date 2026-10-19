@@ -9,6 +9,7 @@
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Projection.hpp"
+#include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Model/OpaqueData.hpp"
 
@@ -131,6 +132,15 @@ namespace Rellu {
     /** Whether the node is marked for batch export. */
     bool m_is_marked_for_export = false;
 
+    /** Whether the node keeps its place while its artboard scrolls. */
+    bool m_is_fixed_position = false;
+
+    /**
+     * The size whose proportions the node keeps when resized, or none if
+     * its aspect ratio is not locked.
+     */
+    std::optional<Size> m_aspect_lock;
+
     /** The data a document format keeps for the node. */
     OpaqueData m_opaque;
 
@@ -170,7 +180,8 @@ namespace Rellu {
       m_is_isolated == header.m_is_isolated &&
       m_constraints == header.m_constraints &&
       m_is_marked_for_export == header.m_is_marked_for_export &&
-      m_opaque == header.m_opaque;
+      m_is_fixed_position == header.m_is_fixed_position &&
+      m_aspect_lock == header.m_aspect_lock && m_opaque == header.m_opaque;
   }
 }
 

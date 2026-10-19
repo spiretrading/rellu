@@ -56,7 +56,13 @@ namespace Rellu {
     CROSSHAIR,
 
     /** An I-beam placing a text caret. */
-    TEXT
+    TEXT,
+
+    /** A magnifier with a plus sign, zooming in. */
+    ZOOM_IN,
+
+    /** A magnifier with a minus sign, zooming out. */
+    ZOOM_OUT
   };
 
   /** The pointer a tool shows over the canvas. */

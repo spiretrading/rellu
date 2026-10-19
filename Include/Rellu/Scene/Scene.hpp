@@ -98,7 +98,7 @@ namespace Rellu {
       Scene(const Scene&) = delete;
       Scene& operator =(const Scene&) = delete;
       void on_change(const ChangeSet& changes);
-      void mark(const NodeId& id);
+      void mark(const NodeId& id, bool is_moved);
       void mark_dependents(const NodeId& key);
       void forget(const NodeId& id, Fragment& fragment);
       std::vector<DrawRegion> update(

@@ -17,16 +17,16 @@ namespace Rellu {
 
   /**
    * Finds the nodes that Adobe XD keeps in place when their artboard
-   * scrolls, which an Adobe XD file marks with Fix Position When Scrolling.
-   * @param document The document, as read from an Adobe XD file.
+   * scrolls, those marked with Fix Position When Scrolling.
+   * @param document The document.
    * @return The ids of the nodes marked.
    */
   std::unordered_set<NodeId> find_fixed_nodes(const Document& document);
 
   /**
-   * Returns <code>true</code> iff an Adobe XD file marks a node with Fix
-   * Position When Scrolling.
-   * @param document The document, as read from an Adobe XD file.
+   * Returns <code>true</code> iff a node is marked with Fix Position When
+   * Scrolling.
+   * @param document The document.
    * @param id The node's id.
    */
   bool is_fixed(const Document& document, const NodeId& id);

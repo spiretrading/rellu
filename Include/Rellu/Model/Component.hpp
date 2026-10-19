@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include "Rellu/Geometry/Equality.hpp"
+#include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/NodeId.hpp"
 
 namespace Rellu {
@@ -80,6 +81,9 @@ namespace Rellu {
 
     /** The state the master itself represents. */
     StateId m_default_state;
+
+    /** The size of the master's content. */
+    Size m_size = Size(0, 0);
 
     /** The source of a linked component, if it is linked. */
     std::optional<ComponentLink> m_link;

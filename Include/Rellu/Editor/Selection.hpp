@@ -89,7 +89,8 @@ namespace Rellu {
       void extend(const NodeId& id);
 
       /**
-       * Selects every visible, unlocked child of a container.
+       * Selects every unlocked child of a container, hidden ones included
+       * as Adobe XD does.
        * @param container The container, or nil for the canvas.
        */
       void select_all(const NodeId& container);

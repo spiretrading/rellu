@@ -154,11 +154,12 @@ TEST_SUITE("AlignCommands") {
     auto document = Document();
     auto layout = build_layout(document);
     auto history = History(document);
-    auto targets = std::vector{layout.m_inner};
-    run(history, registry, "object.align.right", targets);
+    for(auto name : registry.get_names()) {
+      REQUIRE(!registry.make(name, document, std::vector{layout.m_inner}));
+    }
+    run(history, registry, "object.align.right",
+      std::vector{layout.m_inner, layout.m_outer});
     REQUIRE(get_bounds(document, layout.m_inner) == Rect(350, 200, 20, 20));
-    run(history, registry, "object.align.bottom", targets);
-    REQUIRE(get_bounds(document, layout.m_inner) == Rect(350, 220, 20, 20));
     REQUIRE(get_bounds(document, layout.m_outer) == Rect(340, 230, 30, 10));
   }
 

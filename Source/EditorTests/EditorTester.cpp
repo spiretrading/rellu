@@ -136,13 +136,13 @@ TEST_SUITE("Editor") {
     auto scene = build_scene(document);
     auto editor = Editor(document);
     auto& selection = editor.get_selection();
+    auto everything = std::vector{scene.m_rectangle, scene.m_group,
+      scene.m_mask, scene.m_instance, scene.m_loose};
     editor.select_all();
-    REQUIRE(selection.get_nodes() ==
-      std::vector{scene.m_artboard, scene.m_loose});
+    REQUIRE(selection.get_nodes() == everything);
     editor.get_context().set_artboard(scene.m_artboard);
     editor.select_all();
-    REQUIRE(selection.get_nodes() == std::vector{scene.m_rectangle,
-      scene.m_group, scene.m_mask, scene.m_instance});
+    REQUIRE(selection.get_nodes() == everything);
     editor.get_context().enter(scene.m_group);
     editor.select_all();
     REQUIRE(selection.get_nodes() ==

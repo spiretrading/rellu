@@ -100,7 +100,7 @@ TEST_SUITE("StructureCommands") {
       std::vector{scene.m_group, group, scene.m_instance});
     REQUIRE(document.get_children(group) ==
       std::vector{scene.m_rectangle, scene.m_mask});
-    REQUIRE(document.get(group).m_header.m_name == "Group");
+    REQUIRE(document.get(group).m_header.m_name == "Group 1");
     REQUIRE(document.get(group).m_header.m_transform ==
       make_translation(10, 10));
     require_near(get_world_transform(document, scene.m_rectangle), rectangle);
@@ -184,6 +184,13 @@ TEST_SUITE("StructureCommands") {
     }
     auto group = history.execute(std::make_unique<GroupCommand>(nodes));
     REQUIRE(group);
+    REQUIRE(document.get(group->get_selection()->front()).m_header.m_name ==
+      "Group 1");
+    REQUIRE(history.execute(std::make_unique<GroupCommand>(
+      std::vector{scene.m_instance})));
+    REQUIRE(document.get(document.get_children(scene.m_artboard).back()).
+      m_header.m_name == "Group 2");
+    history.undo();
     REQUIRE(history.execute(std::make_unique<UngroupCommand>(
       *group->get_selection())));
     REQUIRE(document.get_children(scene.m_artboard) == std::vector{

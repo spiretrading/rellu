@@ -28,7 +28,7 @@ namespace {
   using Usages = std::map<std::string, Usage, std::less<>>;
 
   const auto SUPPORTED_ACTIONS = std::vector<std::string>({
-    "artboard-transition", "auto-animate", "overlay-transition",
+    "artboard-transition", "auto-animate", "hyperlink", "overlay-transition",
     "previous-artboard", "state-transition"});
 
   const auto SUPPORTED_TRIGGERS =

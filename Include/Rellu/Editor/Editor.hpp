@@ -85,7 +85,11 @@ namespace Rellu {
        */
       bool redo();
 
-      /** Selects every visible, unlocked node in the context's scope. */
+      /**
+       * Selects every unlocked node of the entered container, or, when none
+       * is entered, every unlocked child of every artboard and every
+       * unlocked node on the pasteboard, as Adobe XD's Select All does.
+       */
       void select_all();
 
     private:

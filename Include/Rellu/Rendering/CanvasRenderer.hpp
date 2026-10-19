@@ -132,10 +132,15 @@ namespace Rellu {
       Matrix m_view;
       QColor m_background;
       QRhi* m_rhi;
+      QRhiRenderPassDescriptor* m_descriptor;
+      int m_sample_count;
+      bool m_is_initialized;
       bool m_is_prepared;
       bool m_is_complete;
       QSize m_size;
       double m_scale;
+
+      PathRenderer& get_paths();
   };
 }
 

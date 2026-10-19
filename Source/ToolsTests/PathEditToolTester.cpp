@@ -292,4 +292,14 @@ TEST_SUITE("PathEditTool") {
     click(tools, Point(150, 150));
     REQUIRE(tools.get_tool_name() == "select");
   }
+
+  TEST_CASE("snapping") {
+    auto setup = Setup();
+    setup.edit(setup.m_rectangle);
+    drag(setup.m_tools, Point(150, 150), Point(198, 247));
+    auto contours = setup.get_contours(setup.m_rectangle);
+    auto transform = get_world_transform(setup.m_document, setup.m_rectangle);
+    REQUIRE(transform.map(contours.front().m_anchors[0].m_point) ==
+      Point(198, 250));
+  }
 }

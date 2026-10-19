@@ -310,9 +310,12 @@ void History::refresh() {
     append(changes, std::exchange(m_changes, ChangeSet()));
   }
   if(refresh_layouts(*m_document, changes, m_layout)) {
-    refresh_compounds(
-      *m_document, std::exchange(m_changes, ChangeSet()), m_filter);
+    auto laid_out = std::exchange(m_changes, ChangeSet());
+    refresh_compounds(*m_document, laid_out, m_filter);
+    append(changes, laid_out);
   }
+  m_changes = ChangeSet();
+  refresh_component_sizes(*m_document, changes, m_layout.m_measurer);
   m_changes = ChangeSet();
 }
 

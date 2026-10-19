@@ -5,8 +5,8 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto SELECTION_COLOR = make_color(20, 115, 230);
-  constexpr auto MARQUEE_FILL = make_color(20, 115, 230, 0.08);
+  constexpr auto SELECTION_COLOR = make_color(38, 128, 235);
+  constexpr auto MARQUEE_FILL = make_color(38, 128, 235, 0.08);
   constexpr auto HIT_TOLERANCE = 3.0;
 
   bool is_shift(Qt::KeyboardModifiers modifiers) {
@@ -51,6 +51,13 @@ namespace {
     auto top = std::min(first.m_y, second.m_y);
     return Rect(left, top, std::max(first.m_x, second.m_x) - left,
       std::max(first.m_y, second.m_y) - top);
+  }
+
+  NodeId get_parent(const Document& document, const NodeId& id) {
+    if(auto node = document.find(id)) {
+      return node->m_parent;
+    }
+    return NodeId();
   }
 
   void normalize(std::vector<AnchorIndex>& selection) {
@@ -105,6 +112,10 @@ void PathEditTool::press(ToolContext& context, const PointerEvent& event) {
   m_is_applied = false;
   m_is_marquee_pending = false;
   m_base = path;
+  m_anchor = std::nullopt;
+  context.get_snap_service().begin(
+    get_parent(context.get_document(), path->m_node),
+    std::vector{path->m_node});
   if(auto handle = find_handle(context, *path, m_selection, event.m_position,
       ANCHOR_REACH)) {
     m_handle = handle;
@@ -119,6 +130,7 @@ void PathEditTool::press(ToolContext& context, const PointerEvent& event) {
     if(is_shift(event.m_modifiers)) {
       if(is_selected) {
         std::erase(m_selection, *index);
+        context.get_snap_service().end();
         return;
       }
       m_selection.push_back(*index);
@@ -126,6 +138,7 @@ void PathEditTool::press(ToolContext& context, const PointerEvent& event) {
     } else if(!is_selected) {
       m_selection = std::vector{*index};
     }
+    m_anchor = *index;
     m_gesture = Gesture::PENDING;
     return;
   }
@@ -139,6 +152,7 @@ void PathEditTool::press(ToolContext& context, const PointerEvent& event) {
     m_is_applied = true;
     m_base = edited;
     m_selection = std::vector{AnchorIndex(position->m_contour, inserted)};
+    m_anchor = m_selection.front();
     m_gesture = Gesture::PENDING;
     return;
   }
@@ -173,6 +187,11 @@ void PathEditTool::move(ToolContext& context, const PointerEvent& event) {
     auto delta = context.to_document(event.m_position) - m_press_document;
     if(is_shift(event.m_modifiers)) {
       delta = constrain_to_45_degrees(delta);
+    } else if(m_base && m_anchor && is_valid(*m_base, *m_anchor)) {
+      auto origin =
+        m_base->m_transform.map(get_local(*m_base, *m_anchor).m_point);
+      delta = context.get_snap_service().snap_point(
+        origin + delta, SnapAxes::BOTH, event.m_modifiers) - origin;
     }
     move_points(context, delta);
   } else if(m_gesture == Gesture::HANDLE) {
@@ -392,6 +411,9 @@ void PathEditTool::update_handle(
   auto handle = context.to_document(event.m_position);
   if(is_shift(event.m_modifiers)) {
     handle = center + constrain_to_45_degrees(handle - center);
+  } else {
+    handle = context.get_snap_service().snap_point(
+      handle, SnapAxes::BOTH, event.m_modifiers);
   }
   auto local = inverse->map(handle);
   get_handle(anchor, m_handle->m_side) = local;
@@ -485,6 +507,10 @@ void PathEditTool::finish(ToolContext& context) {
   if(m_is_applied) {
     context.get_editor().get_history().seal();
   }
+  if(m_gesture != Gesture::NONE) {
+    context.get_snap_service().end();
+  }
+  m_anchor = std::nullopt;
   m_gesture = Gesture::NONE;
   m_is_applied = false;
   m_is_marquee_pending = false;

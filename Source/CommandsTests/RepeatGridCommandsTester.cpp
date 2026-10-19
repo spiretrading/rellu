@@ -173,4 +173,47 @@ TEST_SUITE("RepeatGridCommands") {
     auto grid = static_cast<const RepeatGridCommand&>(*made).get_grid();
     REQUIRE(!registry.make("object.repeat_grid", document, std::vector{grid}));
   }
+
+  TEST_CASE("text_series") {
+    auto document = Document();
+    auto board = build_board(document);
+    {
+      auto transaction = Transaction(document);
+      auto text = *document.get(board.m_text).get_text();
+      text.m_repeat_data = {u"Label", u"Second", u"Third"};
+      transaction.replace_payload(board.m_text, Box<Text>(std::move(text)));
+      transaction.commit();
+    }
+    auto history = History(document);
+    auto grid = make_grid(history, board);
+    history.execute(
+      std::make_unique<ResizeRepeatGridCommand>(grid, Size(40, 230)));
+    auto& cells = document.get(grid).m_children;
+    REQUIRE(cells.size() == 4);
+    auto get_content = [&] (std::size_t index) {
+      auto& cell = document.get(cells[index]);
+      return *document.get(cell.m_children.back()).get_text()->m_content;
+    };
+    REQUIRE(get_content(0) == u"Label");
+    REQUIRE(get_content(1) == u"Second");
+    REQUIRE(get_content(2) == u"Third");
+    REQUIRE(get_content(3) == u"Label");
+    auto& copy = *document.get(
+      document.get(cells[1]).m_children.back()).get_text();
+    REQUIRE(copy.m_runs.size() == 1);
+    REQUIRE(copy.m_runs.front().m_length == 6);
+    REQUIRE(copy.m_repeat_data.size() == 3);
+  }
+
+  TEST_CASE("measurer") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto history = History(document);
+    auto measurer = [] (const Text&) { return Rect(0, 0, 60, 25); };
+    history.set_text_measurer(measurer);
+    auto command = history.execute(std::make_unique<RepeatGridCommand>(
+      std::vector{board.m_rectangle, board.m_text}, measurer));
+    auto grid = static_cast<const RepeatGridCommand&>(*command).get_grid();
+    REQUIRE(get_grid(document, grid).m_cell_size == Size(60, 45));
+  }
 }

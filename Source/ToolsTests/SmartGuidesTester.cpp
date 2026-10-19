@@ -122,16 +122,16 @@ TEST_SUITE("SmartGuides") {
     auto& guides = get_guides(tools);
     auto bounds = Rect(200, 200, 10, 10);
     guides.begin(board.m_artboard, std::vector{board.m_moved});
-    REQUIRE(guides.snap_move(bounds, Point(-95.1, 0), Qt::NoModifier).m_x ==
+    REQUIRE(guides.snap_move(bounds, Point(-96.6, 0), Qt::NoModifier).m_x ==
       doctest::Approx(-100));
-    REQUIRE(guides.snap_move(bounds, Point(-94.9, 0), Qt::NoModifier) ==
-      Point(-94.9, 0));
+    REQUIRE(guides.snap_move(bounds, Point(-96, 0), Qt::NoModifier) ==
+      Point(-96, 0));
     REQUIRE(guides.get_lines().empty());
     tools.set_view(make_scale(2, 2), 1, Size(1000, 800));
-    REQUIRE(guides.snap_move(bounds, Point(-97.6, 0), Qt::NoModifier).m_x ==
+    REQUIRE(guides.snap_move(bounds, Point(-98.3, 0), Qt::NoModifier).m_x ==
       doctest::Approx(-100));
-    REQUIRE(guides.snap_move(bounds, Point(-97.4, 0), Qt::NoModifier) ==
-      Point(-97.4, 0));
+    REQUIRE(guides.snap_move(bounds, Point(-98, 0), Qt::NoModifier) ==
+      Point(-98, 0));
   }
 
   TEST_CASE("control") {
@@ -275,17 +275,34 @@ TEST_SUITE("SmartGuides") {
     auto& label = *overlay.m_images.back().m_image;
     REQUIRE(label.height() ==
       static_cast<int>(std::ceil(2 * SmartGuides::LABEL_HEIGHT)));
-    REQUIRE(label.pixelColor(1, label.height() / 2).red() == 255);
+    REQUIRE(label.pixelColor(0, 0).alpha() == 0);
+    auto is_pink = false;
+    for(auto y = 0; y != label.height(); ++y) {
+      for(auto x = 0; x != label.width(); ++x) {
+        auto color = label.pixelColor(x, y);
+        if(color.alpha() == 255) {
+          REQUIRE(color.red() == 255);
+          REQUIRE(color.green() == 73);
+          REQUIRE(color.blue() == 225);
+          is_pink = true;
+        }
+      }
+    }
+    REQUIRE(is_pink);
     auto position = overlay.m_images.back().m_position;
     REQUIRE(position.m_x == doctest::Approx(185 - label.width() / 4.0));
     REQUIRE(position.m_y == doctest::Approx(125 - label.height() / 4.0));
-    auto lines = std::size_t(0);
+    auto alignments = std::size_t(0);
+    auto distances = std::size_t(0);
     for(auto& shape : overlay.m_shapes) {
-      if(shape.m_fill == SmartGuides::COLOR) {
-        ++lines;
+      if(shape.m_fill == SmartGuides::ALIGNMENT_COLOR) {
+        ++alignments;
+      } else if(shape.m_fill == SmartGuides::DISTANCE_COLOR) {
+        ++distances;
       }
     }
-    REQUIRE(lines == 3 + 2 * 4);
+    REQUIRE(alignments == 3);
+    REQUIRE(distances == 2 * 4);
     tools.get_context().set_snap_service(snap);
   }
 

@@ -135,6 +135,10 @@ std::optional<Rect> Rellu::get_alignment_bounds(const Document& document,
   if(!node || node->get_artboard() || node->m_parent.is_nil()) {
     return std::nullopt;
   }
+  auto parent = document.find(node->m_parent);
+  if(!parent || !parent->get_artboard()) {
+    return std::nullopt;
+  }
   return get_world_bounds(
     document, node->m_parent, BoundsType::GEOMETRY, measurer);
 }

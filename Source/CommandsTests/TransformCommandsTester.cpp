@@ -279,4 +279,65 @@ TEST_SUITE("TransformCommands") {
     REQUIRE(document.get(nodes.front()).m_header.m_transform ==
       make_translation(3, 4));
   }
+
+  TEST_CASE("mirror") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto rectangle = make_rectangle_shape(40, 20);
+    std::get<RectangleShape>(rectangle.m_geometry).m_radii =
+      CornerRadii(1, 2, 3, 4);
+    auto image = ImageFill();
+    image.m_size = Size(10, 10);
+    rectangle.m_style.m_fill = image;
+    auto rectangle_id = transaction.append(NodeId(),
+      make_header("Rectangle", make_translation(10, 10)), rectangle);
+    auto triangle = Path();
+    triangle.move_to(Point(0, 0));
+    triangle.line_to(Point(30, 0));
+    triangle.line_to(Point(30, 30));
+    triangle.close();
+    auto path = transaction.append(NodeId(),
+      make_header("Path", make_translation(100, 0)),
+      Shape(PathShape(Shared(std::move(triangle))), Style()));
+    auto group = transaction.append(
+      NodeId(), make_header("Group", make_translation(300, 0)), Group());
+    auto line = transaction.append(group, make_header("Line"),
+      Shape(LineShape(Point(0, 0), Point(10, 5)), Style()));
+    auto text = transaction.append(NodeId(),
+      make_header("Text", make_translation(200, 0)), make_text(u"Hello"));
+    transaction.commit();
+    document.clear_history();
+    auto text_bounds = *get_world_bounds(document, text);
+    auto history = History(document);
+    require_undoable(history, std::make_unique<TransformCommand>(
+      std::vector{rectangle_id, path, group, text}, make_scale(-1, 1),
+      "Flip"));
+    for(auto& id : {rectangle_id, path, group, line, text}) {
+      REQUIRE(get_world_transform(document, id).get_determinant() > 0);
+    }
+    REQUIRE(*get_world_bounds(document, rectangle_id) ==
+      Rect(-50, 10, 40, 20));
+    REQUIRE(get_rectangle(document, rectangle_id).m_radii ==
+      CornerRadii(2, 1, 4, 3));
+    auto& fill = std::get<ImageFill>(
+      document.get(rectangle_id).get_shape()->m_style.m_fill);
+    REQUIRE(fill.m_is_flipped_horizontally);
+    REQUIRE(!fill.m_is_flipped_vertically);
+    auto outline = transform(*std::get<PathShape>(
+      document.get(path).get_shape()->m_geometry).m_path,
+      get_world_transform(document, path));
+    REQUIRE(get_bounds(outline) == Rect(-130, 0, 30, 30));
+    REQUIRE(contains(outline, Point(-128, 25)));
+    REQUIRE(!contains(outline, Point(-102, 25)));
+    auto& segment =
+      std::get<LineShape>(document.get(line).get_shape()->m_geometry);
+    auto world = get_world_transform(document, line);
+    REQUIRE(world.map(segment.m_start).m_x == doctest::Approx(-300));
+    REQUIRE(world.map(segment.m_start).m_y == doctest::Approx(0));
+    REQUIRE(world.map(segment.m_end).m_x == doctest::Approx(-310));
+    REQUIRE(world.map(segment.m_end).m_y == doctest::Approx(5));
+    require_near(*get_world_bounds(document, text),
+      Rect(-text_bounds.get_right(), text_bounds.m_y, text_bounds.m_width,
+        text_bounds.m_height));
+  }
 }

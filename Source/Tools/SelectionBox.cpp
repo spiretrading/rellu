@@ -42,8 +42,15 @@ namespace {
     return Span(start + length - length_after, length_after);
   }
 
+  double get_sign(double value) {
+    if(value < 0) {
+      return -1;
+    }
+    return 1;
+  }
+
   double stretch(double start, double length, double position,
-      double fraction, bool is_centered, double minimum) {
+      double fraction, bool is_centered, bool is_flippable, double minimum) {
     if(fraction == 0.5 || length == 0) {
       return length;
     }
@@ -56,7 +63,11 @@ namespace {
     } else {
       result = start + length - position;
     }
-    return std::max(result, std::min(minimum, length));
+    auto smallest = std::min(minimum, length);
+    if(is_flippable && result < 0) {
+      return std::min(result, -smallest);
+    }
+    return std::max(result, smallest);
   }
 }
 
@@ -110,23 +121,27 @@ std::optional<SelectionBox> Rellu::get_selection_box(const Document& document,
 }
 
 Rect Rellu::resize(const Rect& rect, Handle handle, Point point,
-    bool is_proportional, bool is_centered, double minimum) {
+    bool is_proportional, bool is_centered, bool is_flippable,
+    double minimum) {
   auto fraction = get_fraction(handle);
   auto width = stretch(rect.m_x, rect.m_width, point.m_x, fraction.m_x,
-    is_centered, minimum);
+    is_centered, is_flippable, minimum);
   auto height = stretch(rect.m_y, rect.m_height, point.m_y, fraction.m_y,
-    is_centered, minimum);
+    is_centered, is_flippable, minimum);
   if(is_proportional && rect.m_width > 0 && rect.m_height > 0) {
-    auto factor = 1.0;
+    auto x_factor = width / rect.m_width;
+    auto y_factor = height / rect.m_height;
     if(fraction.m_x == 0.5) {
-      factor = height / rect.m_height;
+      x_factor = std::abs(y_factor);
     } else if(fraction.m_y == 0.5) {
-      factor = width / rect.m_width;
+      y_factor = std::abs(x_factor);
     } else {
-      factor = std::max(width / rect.m_width, height / rect.m_height);
+      auto factor = std::max(std::abs(x_factor), std::abs(y_factor));
+      x_factor = get_sign(x_factor) * factor;
+      y_factor = get_sign(y_factor) * factor;
     }
-    width = rect.m_width * factor;
-    height = rect.m_height * factor;
+    width = rect.m_width * x_factor;
+    height = rect.m_height * y_factor;
   }
   auto horizontal =
     place(rect.m_x, rect.m_width, width, fraction.m_x, is_centered);

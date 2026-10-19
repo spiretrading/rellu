@@ -1,17 +1,23 @@
 #include <algorithm>
 #include <cmath>
 #include <QCloseEvent>
+#include <QDesktopServices>
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QResizeEvent>
 #include <QScreen>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include "Rellu/Prototype/KeyNames.hpp"
 #include "Rellu/Prototype/StageDocument.hpp"
 #include "Rellu/Rendering/StripRasterizer.hpp"
+#include "Rellu/Text/FontLibrary.hpp"
+#include "Rellu/Text/TextEditing.hpp"
+#include "Rellu/Text/TextLayout.hpp"
 #include "Rellu/Ui/PreviewWindow.hpp"
+#include "Rellu/Ui/TextMeasurement.hpp"
 
 using namespace Rellu;
 
@@ -76,12 +82,15 @@ class PreviewWindow::View : public Canvas {
         Canvas::wheelEvent(event);
         return;
       }
-      auto delta = static_cast<double>(event->pixelDelta().y());
-      if(delta == 0) {
-        delta = event->angleDelta().y() / WHEEL_STEP * LINE_SCROLL;
+      auto delta = Point(event->pixelDelta().x(), event->pixelDelta().y());
+      if(delta == Point(0, 0)) {
+        delta = Point(event->angleDelta().x() / WHEEL_STEP * LINE_SCROLL,
+          event->angleDelta().y() / WHEEL_STEP * LINE_SCROLL);
       }
-      m_window->handle_changed(
-        m_window->m_player->scroll(-delta / m_window->m_zoom));
+      auto position = m_window->to_viewport(
+        Point(event->position().x(), event->position().y()));
+      m_window->handle_changed(m_window->m_player->scroll(position,
+        Point(-delta.m_x / m_window->m_zoom, -delta.m_y / m_window->m_zoom)));
       event->accept();
     }
 
@@ -269,7 +278,32 @@ void PreviewWindow::rebuild(const PreviewPosition& position) {
   m_view->get_renderer().set_draw_list(nullptr);
   m_composer.reset();
   m_player.reset();
-  m_player = std::make_unique<PreviewPlayer>(copy_document(*m_document));
+  m_player = std::make_unique<PreviewPlayer>(copy_document(*m_document),
+    make_text_measurer(get_default_font_library()));
+  m_player->set_link_handler([] (const std::string& url) {
+    auto address = QString::fromStdString(url).trimmed();
+    if(!address.contains("://") && !address.startsWith("mailto:")) {
+      address.prepend("https://");
+    }
+    QDesktopServices::openUrl(QUrl(address));
+  });
+  m_player->set_text_link_finder([] (const Node& node, Point position) {
+    auto text = node.get_text();
+    if(!text || text->m_content->empty()) {
+      return std::string();
+    }
+    auto lines = measure_lines(*text, get_default_font_library());
+    auto index = std::min(hit_test(lines, *text->m_content, position),
+      text->m_content->size() - 1);
+    auto start = std::size_t(0);
+    for(auto& run : text->m_runs) {
+      if(index < start + run.m_length) {
+        return run.m_hyperlink;
+      }
+      start += run.m_length;
+    }
+    return std::string();
+  });
   m_composer = std::make_unique<PreviewComposer>(
     m_player->get_stage(), StripRasterizer::TOLERANCE);
   m_player->start(position);

@@ -21,7 +21,7 @@ TEST_SUITE("HeaderImporter") {
       "customConstraints": true, "constraintLeft": true,
       "constraintBottom": true, "constraintWidth": true,
       "hasCustomName": true, "nameL10N": "SHAPE_RECTANGLE", "rotation": 0,
-      "aspectLock": {"width": 1, "height": 1}}},
+      "aspectLock": {"width": 2, "height": 1}, "fixed": true}},
       "visualBounds": {"x": 0, "y": 0, "width": 1, "height": 1},
       "shape": {"type": "rect", "x": 0, "y": 0, "width": 1,
       "height": 1}}])", document);
@@ -46,6 +46,8 @@ TEST_SUITE("HeaderImporter") {
     REQUIRE(constraints.m_bottom);
     REQUIRE(constraints.m_width);
     REQUIRE(!constraints.m_height);
+    REQUIRE(header.m_is_fixed_position);
+    REQUIRE(header.m_aspect_lock == Size(2, 1));
   }
 
   TEST_CASE("defaults") {
@@ -64,6 +66,8 @@ TEST_SUITE("HeaderImporter") {
     REQUIRE(header.m_blend_mode == BlendMode::NORMAL);
     REQUIRE(!header.m_is_isolated);
     REQUIRE(!header.m_constraints.m_is_enabled);
+    REQUIRE(!header.m_is_fixed_position);
+    REQUIRE(!header.m_aspect_lock);
   }
 
   TEST_CASE("unsupported_values") {

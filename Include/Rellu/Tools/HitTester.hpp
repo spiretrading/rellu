@@ -20,7 +20,8 @@ namespace Rellu {
    * Finds the nodes of a document drawn at a point or within a region, using
    * their real geometry: fills, strokes, text bounds and artboard frames,
    * within the masks and clips that apply, through references, and leaving
-   * out hidden and locked nodes. Each node's extent in its own space is
+   * out hidden nodes and, unless asked otherwise, locked ones. Each node's
+   * extent in its own space is
    * kept until the document changes it, so that only the subtrees whose
    * extent covers the point are visited.
    */
@@ -50,12 +51,15 @@ namespace Rellu {
        * @param point The point in document space.
        * @param tolerance The distance in document units within which an
        *        outline counts as hit.
+       * @param is_locked_hit Whether locked nodes and their descendants can
+       *        be hit, as by a click selecting them.
        * @return The deepest node drawn at the <i>point</i>, which is the
        *         reference itself for what a reference draws of its source,
        *         an artboard where only its background is drawn, or nil if
        *         nothing is.
        */
-      NodeId hit(Point point, double tolerance) const;
+      NodeId hit(
+        Point point, double tolerance, bool is_locked_hit = false) const;
 
       /**
        * Lists the visible, unlocked children of a container whose drawing
@@ -112,10 +116,10 @@ namespace Rellu {
       std::optional<Placement> place(const Node& node) const;
       const Extent& measure(const NodeId& id, int depth) const;
       NodeId hit(const NodeId& id, Point point, const Matrix& parent,
-        double tolerance, int depth) const;
+        double tolerance, bool is_locked_hit, int depth) const;
       NodeId hit_children(const std::vector<NodeId>& children, Point point,
         const Matrix& world, const Matrix& inverse, double tolerance,
-        int depth) const;
+        bool is_locked_hit, int depth) const;
       void on_change(const ChangeSet& changes);
   };
 }

@@ -3,12 +3,18 @@
 #include <numbers>
 #include <unordered_set>
 #include <variant>
+#include <QPainter>
+#include <QPainterPath>
 #include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/CornerRadiusCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
+#include "Rellu/Commands/StructureCommands.hpp"
+#include "Rellu/Commands/StackCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
+#include "Rellu/Geometry/Polyline.hpp"
+#include "Rellu/Model/ShapeGeometry.hpp"
 #include "Rellu/Tools/PathPoints.hpp"
 #include "Rellu/Tools/SelectTool.hpp"
 #include "Rellu/Tools/TextTool.hpp"
@@ -16,14 +22,47 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto SELECTION_COLOR = make_color(20, 115, 230);
-  constexpr auto CONTEXT_COLOR = make_color(20, 115, 230, 0.45);
-  constexpr auto MARQUEE_FILL = make_color(20, 115, 230, 0.08);
+  constexpr auto SELECTION_COLOR = make_color(38, 128, 235);
+  constexpr auto CONTEXT_COLOR = make_color(38, 128, 235, 0.45);
+  constexpr auto MARQUEE_FILL = make_color(38, 128, 235, 0.08);
   constexpr auto HANDLE_FILL = make_color(255, 255, 255);
+  constexpr auto LOCKED_COLOR = make_color(150, 150, 150);
   constexpr auto LINE_WIDTH = 1.0;
+  constexpr auto DASH_LENGTH = 2.0;
+  constexpr auto RADIUS_DOT_RADIUS = 1.25;
+  constexpr auto BADGE_OFFSET = 3.0;
   constexpr auto MINIMUM_SIZE = 1.0;
   constexpr auto ANGLE_TOLERANCE = 1e-12;
   constexpr auto MAXIMUM_OUTLINES = std::size_t(1000);
+  constexpr auto OUTLINE_FLATNESS = 0.2;
+  constexpr auto MAXIMUM_OUTLINE_SEGMENTS = std::size_t(4096);
+
+  class DragCopyCommand : public Command {
+    public:
+      explicit DragCopyCommand(std::vector<NodeId> nodes)
+        : m_duplicate(std::move(nodes)) {}
+
+      std::string get_label() const override {
+        return m_duplicate.get_label();
+      }
+
+      void apply(const Document& document, Transaction& transaction) override {
+        m_duplicate.apply(document, transaction);
+      }
+
+      bool merge(const Command& command) override {
+        auto translation = dynamic_cast<const TranslateCommand*>(&command);
+        return translation &&
+          translation->get_nodes() == m_duplicate.get_copies();
+      }
+
+      std::optional<std::vector<NodeId>> get_selection() const override {
+        return m_duplicate.get_selection();
+      }
+
+    private:
+      DuplicateCommand m_duplicate;
+  };
 
   bool is_shift(Qt::KeyboardModifiers modifiers) {
     return modifiers.testFlag(Qt::ShiftModifier);
@@ -105,13 +144,31 @@ namespace {
       view.map(corners[2]), view.map(corners[3])});
   }
 
+  void add_dashes(
+      CanvasOverlay& overlay, Point start, Point end, Color color) {
+    auto length = distance(start, end);
+    if(length == 0) {
+      return;
+    }
+    auto direction = (end - start) / length;
+    for(auto offset = 0.0; offset < length; offset += 2 * DASH_LENGTH) {
+      overlay.m_shapes.push_back(make_overlay_line(start + direction * offset,
+        start + direction * std::min(offset + DASH_LENGTH, length),
+        LINE_WIDTH, color));
+    }
+  }
+
   void add_outline(CanvasOverlay& overlay, const std::array<Point, 4>& corners,
-      Color color) {
+      Color color, bool is_bottom_dashed = false) {
     for(auto i = std::size_t(0); i != corners.size(); ++i) {
       auto start = corners[i];
       auto end = corners[(i + 1) % corners.size()];
       auto length = distance(start, end);
       if(length == 0) {
+        continue;
+      }
+      if(is_bottom_dashed && i == 2) {
+        add_dashes(overlay, start, end, color);
         continue;
       }
       auto extension = (end - start) * (LINE_WIDTH / 2 / length);
@@ -207,6 +264,79 @@ namespace {
     service.measure(box->m_transform.map(box->m_rect), *bounds);
   }
 
+  std::optional<Path> get_outline(const Document& document, const NodeId& id) {
+    auto node = document.find(id);
+    auto shape = node ? node->get_shape() : nullptr;
+    if(!shape) {
+      return std::nullopt;
+    }
+    auto world = get_world_transform(document, id);
+    if(auto compound = std::get_if<CompoundShape>(&shape->m_geometry)) {
+      return transform(*compound->m_path, world);
+    }
+    return transform(to_path(shape->m_geometry), world);
+  }
+
+  bool add_path_outline(CanvasOverlay& overlay, const Path& path,
+      const Matrix& view, Color color) {
+    auto polylines = flatten(transform(path, view), OUTLINE_FLATNESS);
+    auto count = std::size_t(0);
+    for(auto& polyline : polylines) {
+      count += polyline.m_points.size();
+    }
+    if(count > MAXIMUM_OUTLINE_SEGMENTS) {
+      return false;
+    }
+    auto add = [&] (Point start, Point end) {
+      auto length = distance(start, end);
+      if(length == 0) {
+        return;
+      }
+      auto extension = (end - start) * (LINE_WIDTH / 2 / length);
+      overlay.m_shapes.push_back(make_overlay_line(
+        start - extension, end + extension, LINE_WIDTH, color));
+    };
+    for(auto& polyline : polylines) {
+      auto& points = polyline.m_points;
+      for(auto i = std::size_t(1); i < points.size(); ++i) {
+        add(points[i - 1], points[i]);
+      }
+      if(polyline.m_is_closed && points.size() > 2) {
+        add(points.back(), points.front());
+      }
+    }
+    return true;
+  }
+
+  std::shared_ptr<const QImage> make_lock_badge(double scale) {
+    auto side = std::max(1, static_cast<int>(
+      std::lround(SelectTool::LOCK_BADGE_SIZE * scale)));
+    auto image = std::make_shared<QImage>(
+      side, side, QImage::Format_RGBA8888_Premultiplied);
+    image->fill(Qt::transparent);
+    auto painter = QPainter(image.get());
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.scale(side / 12.0, side / 12.0);
+    auto grey = QColor::fromRgbF(static_cast<float>(LOCKED_COLOR.m_red),
+      static_cast<float>(LOCKED_COLOR.m_green),
+      static_cast<float>(LOCKED_COLOR.m_blue));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(255, 255, 255));
+    painter.drawRoundedRect(QRectF(0, 0, 12, 12), 2.5, 2.5);
+    painter.setBrush(grey);
+    painter.drawRoundedRect(QRectF(2.5, 5.5, 7, 5), 1, 1);
+    auto shackle = QPainterPath();
+    shackle.moveTo(4, 5.5);
+    shackle.lineTo(4, 4);
+    shackle.arcTo(QRectF(4, 2, 4, 4), 180, -180);
+    shackle.lineTo(8, 5.5);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(grey, 1.2));
+    painter.drawPath(shackle);
+    painter.end();
+    return image;
+  }
+
   Point get_inward(std::size_t corner) {
     if(corner == 0) {
       return Point(1, 1);
@@ -236,7 +366,8 @@ SelectTool::SelectTool()
     m_nudge_key(0),
     m_corner(0),
     m_radius(0),
-    m_inset(0) {}
+    m_inset(0),
+    m_badge_scale(0) {}
 
 void SelectTool::press(ToolContext& context, const PointerEvent& event) {
   if(event.m_button != Qt::LeftButton) {
@@ -318,7 +449,7 @@ void SelectTool::press(ToolContext& context, const PointerEvent& event) {
     return;
   }
   auto hit = context.get_hit_tester().hit(
-    m_press_document, HIT_TOLERANCE / context.get_zoom());
+    m_press_document, HIT_TOLERANCE / context.get_zoom(), true);
   auto background = NodeId();
   if(!hit.is_nil() && is_artboard(document, hit)) {
     background = hit;
@@ -424,12 +555,15 @@ void SelectTool::double_click(
   auto& editor = context.get_editor();
   auto& document = context.get_document();
   auto hit = context.get_hit_tester().hit(context.to_document(
-    event.m_position), HIT_TOLERANCE / context.get_zoom());
+    event.m_position), HIT_TOLERANCE / context.get_zoom(), true);
   if(hit.is_nil() || is_artboard(document, hit)) {
     return;
   }
   auto& edit = editor.get_context();
   auto target = edit.resolve(hit);
+  if(is_locked(document, target)) {
+    return;
+  }
   if(is_text_reference(document, target)) {
     editor.execute(std::make_unique<MakeEditableCommand>(
       std::vector{target}, "Edit Text"));
@@ -437,9 +571,8 @@ void SelectTool::double_click(
   auto node = document.find(target);
   if(node && node->get_text()) {
     editor.get_selection().select(target);
-    auto caret = find_text_caret(
-      context, target, event.m_position, get_default_font_library());
-    editor.get_text_selection().set(target, caret, caret);
+    editor.get_text_selection().set(
+      target, 0, node->get_text()->m_content->size());
     context.request_tool("text");
     return;
   }
@@ -521,6 +654,12 @@ bool SelectTool::key_press(ToolContext& context, const KeyEvent& event) {
   if(nodes.empty()) {
     return false;
   }
+  if(auto reorder =
+      make_stack_nudge(context.get_document(), nodes, delta)) {
+    editor.get_history().seal();
+    editor.execute(std::move(reorder));
+    return true;
+  }
   if(!event.m_is_repeat || m_nudge_key != event.m_key) {
     editor.get_history().seal();
   }
@@ -583,11 +722,9 @@ void SelectTool::draw(
   auto& hover = edit.get_hover();
   if(!is_dragging && m_gesture != Gesture::MARQUEE && !hover.is_nil() &&
       !selection.contains(hover) && !is_artboard(document, hover)) {
-    if(auto& box = get_box(context, hover, m_hover_box)) {
-      add_outline(
-        overlay, to_view(view, box->get_corners()), SELECTION_COLOR);
-    }
+    draw_hover(context, hover, overlay);
   }
+  auto is_greyed = !is_dragging && is_locked_selection(context);
   auto box = std::optional<SelectionBox>();
   if(is_dragging) {
     box = get_gesture_box();
@@ -595,16 +732,22 @@ void SelectTool::draw(
     update_cache(context);
     box = m_cached_box;
     if(m_cached_outlines.size() > 1) {
+      auto color = is_greyed ? LOCKED_COLOR : SELECTION_COLOR;
       for(auto& outline : m_cached_outlines) {
-        add_outline(
-          overlay, to_view(view, outline.get_corners()), SELECTION_COLOR);
+        add_outline(overlay, to_view(view, outline.get_corners()), color);
       }
     }
   }
-  if(box) {
+  if(box && is_greyed) {
+    draw_locked(context, *box, overlay);
+  } else if(box) {
+    auto& nodes = selection.get_nodes();
+    auto node = nodes.size() == 1 ? document.find(nodes.front()) : nullptr;
+    auto text = node ? node->get_text() : nullptr;
     draw_box(context, *box, overlay, m_gesture != Gesture::MOVE &&
       !get_movable(context).empty() &&
-      m_layout_handles.get_grid(context).is_nil());
+      m_layout_handles.get_grid(context).is_nil(),
+      text && std::holds_alternative<AreaFrame>(text->m_frame));
   }
   if(!is_dragging && m_gesture != Gesture::MARQUEE) {
     m_layout_handles.draw(context, overlay);
@@ -621,6 +764,12 @@ void SelectTool::draw(
         shape.m_stroke = SELECTION_COLOR;
         shape.m_stroke_width = LINE_WIDTH;
         overlay.m_shapes.push_back(shape);
+        auto dot = OverlayShape();
+        dot.m_center = point;
+        dot.m_size = Size(2 * RADIUS_DOT_RADIUS, 2 * RADIUS_DOT_RADIUS);
+        dot.m_radius = RADIUS_DOT_RADIUS;
+        dot.m_fill = SELECTION_COLOR;
+        overlay.m_shapes.push_back(dot);
       }
     }
   }
@@ -676,6 +825,7 @@ const std::optional<SelectionBox>& SelectTool::get_box(
     cache.m_revision = context.get_revision();
     cache.m_box = get_selection_box(
       context.get_document(), std::vector{id}, context.get_text_measurer());
+    cache.m_outline = get_outline(context.get_document(), id);
   }
   return cache.m_box;
 }
@@ -689,6 +839,14 @@ std::vector<NodeId> SelectTool::get_movable(
     return is_locked(document, id);
   });
   return nodes;
+}
+
+bool SelectTool::is_locked_selection(const ToolContext& context) const {
+  auto& nodes = context.get_editor().get_selection().get_nodes();
+  return !nodes.empty() && get_movable(context).empty() &&
+    std::any_of(nodes.begin(), nodes.end(), [&] (const auto& id) {
+      return is_locked(context.get_document(), id);
+    });
 }
 
 bool SelectTool::is_rotatable(const ToolContext& context) const {
@@ -840,8 +998,19 @@ void SelectTool::begin_drag(ToolContext& context, const PointerEvent& event) {
   m_box = *box;
   m_delta = Point(0, 0);
   m_gesture = Gesture::MOVE;
-  context.get_editor().get_history().seal();
-  context.get_editor().get_history().hold_layout(m_nodes);
+  auto& editor = context.get_editor();
+  editor.get_history().seal();
+  if(is_alt(event.m_modifiers) && std::none_of(m_nodes.begin(), m_nodes.end(),
+      [&] (const auto& id) {
+        return is_artboard(context.get_document(), id);
+      })) {
+    if(editor.execute(std::make_unique<DragCopyCommand>(m_nodes))) {
+      m_nodes = get_top_level(
+        context.get_document(), editor.get_selection().get_nodes());
+      m_is_applied = true;
+    }
+  }
+  editor.get_history().hold_layout(m_nodes);
   context.get_snap_service().begin(
     get_container(context.get_document(), m_nodes), m_nodes);
 }
@@ -900,8 +1069,14 @@ void SelectTool::update_resize(
     local = inverse->map(context.get_snap_service().snap_point(
       transform.map(local), get_snap_axes(m_handle), event.m_modifiers));
   }
+  auto& document = context.get_document();
+  auto is_flippable = std::none_of(m_nodes.begin(), m_nodes.end(),
+    [&] (const auto& id) {
+      return is_artboard(document, id);
+    });
   auto rect = resize(m_box.m_rect, m_handle, local,
-    is_shift(event.m_modifiers), is_alt(event.m_modifiers), MINIMUM_SIZE);
+    is_shift(event.m_modifiers), is_alt(event.m_modifiers), is_flippable,
+    MINIMUM_SIZE);
   if(rect == m_resized) {
     return;
   }
@@ -1000,7 +1175,7 @@ void SelectTool::update_hover(
   auto hover = context.get_titles().find(event.m_position);
   if(hover.is_nil()) {
     auto hit = context.get_hit_tester().hit(context.to_document(
-      event.m_position), HIT_TOLERANCE / context.get_zoom());
+      event.m_position), HIT_TOLERANCE / context.get_zoom(), true);
     if(!hit.is_nil() && !is_artboard(context.get_document(), hit)) {
       hover = resolve_target(context, hit, event.m_modifiers, false);
     }
@@ -1042,9 +1217,9 @@ std::optional<SelectionBox> SelectTool::get_gesture_box() const {
 }
 
 void SelectTool::draw_box(const ToolContext& context, const SelectionBox& box,
-    CanvasOverlay& overlay, bool has_handles) const {
+    CanvasOverlay& overlay, bool has_handles, bool is_frame) const {
   auto corners = to_view(context.get_view(), box.get_corners());
-  add_outline(overlay, corners, SELECTION_COLOR);
+  add_outline(overlay, corners, SELECTION_COLOR, is_frame);
   if(!has_handles) {
     return;
   }
@@ -1060,5 +1235,47 @@ void SelectTool::draw_box(const ToolContext& context, const SelectionBox& box,
     shape.m_stroke = SELECTION_COLOR;
     shape.m_stroke_width = LINE_WIDTH;
     overlay.m_shapes.push_back(shape);
+  }
+}
+
+void SelectTool::draw_locked(const ToolContext& context,
+    const SelectionBox& box, CanvasOverlay& overlay) const {
+  auto corners = to_view(context.get_view(), box.get_corners());
+  add_outline(overlay, corners, LOCKED_COLOR);
+  for(auto handle : HANDLES) {
+    if(!is_handle_shown(handle, corners)) {
+      continue;
+    }
+    auto shape = OverlayShape();
+    shape.m_center = get_view_point(context, box, handle);
+    shape.m_size = Size(2 * LOCKED_HANDLE_RADIUS, 2 * LOCKED_HANDLE_RADIUS);
+    shape.m_radius = LOCKED_HANDLE_RADIUS;
+    shape.m_fill = LOCKED_COLOR;
+    overlay.m_shapes.push_back(shape);
+  }
+  auto scale = context.get_scale();
+  if(!(scale > 0)) {
+    return;
+  }
+  if(!m_badge || m_badge_scale != scale) {
+    m_badge = make_lock_badge(scale);
+    m_badge_scale = scale;
+  }
+  auto corner = get_view_point(context, box, Handle::TOP_LEFT);
+  auto offset = LOCK_BADGE_SIZE + BADGE_OFFSET;
+  overlay.m_images.push_back(
+    OverlayImage(m_badge, corner - Point(offset, offset)));
+}
+
+void SelectTool::draw_hover(const ToolContext& context, const NodeId& hover,
+    CanvasOverlay& overlay) const {
+  auto& box = get_box(context, hover, m_hover_box);
+  auto& view = context.get_view();
+  if(m_hover_box.m_outline && add_path_outline(
+      overlay, *m_hover_box.m_outline, view, SELECTION_COLOR)) {
+    return;
+  }
+  if(box) {
+    add_outline(overlay, to_view(view, box->get_corners()), SELECTION_COLOR);
   }
 }

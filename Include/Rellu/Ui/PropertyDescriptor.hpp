@@ -8,6 +8,7 @@
 #include <QString>
 #include <QStringList>
 #include "Rellu/Commands/Bounds.hpp"
+#include "Rellu/Editor/TextSelection.hpp"
 #include "Rellu/Geometry/BlendMode.hpp"
 #include "Rellu/Geometry/Color.hpp"
 #include "Rellu/Geometry/Point.hpp"
@@ -15,6 +16,7 @@
 #include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/NodeId.hpp"
+#include "Rellu/Model/Style.hpp"
 
 namespace Rellu {
 
@@ -34,8 +36,8 @@ namespace Rellu {
    * The value of a property, where std::monostate stands for a heading
    * without a value of its own.
    */
-  using PropertyValue = std::variant<
-    std::monostate, bool, int, double, QString, Color, Point, Size, Choice>;
+  using PropertyValue = std::variant<std::monostate, bool, int, double,
+    QString, Color, Point, Size, Choice, Fill>;
 
   /** Describes a property of a node, along with its nested properties. */
   struct PropertyDescriptor {
@@ -71,13 +73,17 @@ namespace Rellu {
    * boolean, component, transform, layout, text, appearance, geometry,
    * fill, stroke, grid, effects and export, each present only for the kinds
    * of node XD shows it for. A reference is described by what it displays.
+   * The text section of text being edited in place describes the
+   * characters selected, or at a caret, the text typed there.
    * @param document The document containing the node.
    * @param id The node's id.
    * @param measurer The function measuring text.
+   * @param selection The text being edited in place, or nullptr.
    * @return The sections, or empty if there is no such node.
    */
   std::vector<PropertyDescriptor> extract_properties(const Document& document,
-    const NodeId& id, const TextMeasurer& measurer = estimate_text_bounds);
+    const NodeId& id, const TextMeasurer& measurer = estimate_text_bounds,
+    const TextSelection* selection = nullptr);
 
   /**
    * Describes the properties several nodes share, a value that differs
@@ -86,11 +92,13 @@ namespace Rellu {
    * @param document The document containing the nodes.
    * @param nodes The nodes' ids.
    * @param measurer The function measuring text.
+   * @param selection The text being edited in place, or nullptr.
    * @return The sections, or empty if there are no nodes.
    */
   std::vector<PropertyDescriptor> extract_common_properties(
     const Document& document, const std::vector<NodeId>& nodes,
-    const TextMeasurer& measurer = estimate_text_bounds);
+    const TextMeasurer& measurer = estimate_text_bounds,
+    const TextSelection* selection = nullptr);
 
   /**
    * Returns the position and size shown for nodes: for a single node, the

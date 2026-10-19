@@ -43,6 +43,23 @@ Animation Rellu::make_default_animation() {
   return Animation(Transition::DISSOLVE, Easing::EASE_OUT, DEFAULT_DURATION);
 }
 
+Animation Rellu::make_empty_animation() {
+  return Animation(Transition::NONE, Easing::EASE_IN, EMPTY_DURATION);
+}
+
+Interaction Rellu::make_empty_interaction(
+    const NodeId& owner, bool is_artboard) {
+  auto interaction = Interaction();
+  interaction.m_owner = owner;
+  if(is_artboard) {
+    interaction.m_trigger = TimeTrigger(DEFAULT_DELAY);
+  } else {
+    interaction.m_trigger = TapTrigger();
+  }
+  interaction.m_action = ArtboardTransition(NodeId(), make_empty_animation());
+  return interaction;
+}
+
 Interaction Rellu::make_default_interaction(
     const NodeId& owner, const NodeId& destination) {
   auto interaction = Interaction();

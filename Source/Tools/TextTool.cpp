@@ -4,16 +4,19 @@
 #include <utility>
 #include <QClipboard>
 #include <QGuiApplication>
+#include <QPainter>
+#include <QPainterPath>
 #include <QString>
+#include <QTransform>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Text/TextEditing.hpp"
+#include "Rellu/Tools/DrawTool.hpp"
 #include "Rellu/Tools/TextTool.hpp"
 
 using namespace Rellu;
 
 namespace {
-  constexpr auto FRAME_COLOR = make_color(20, 115, 230);
-  constexpr auto HIGHLIGHT_COLOR = make_color(20, 115, 230, 0.3);
+  constexpr auto FRAME_COLOR = make_color(0x26, 0x80, 0xEB);
   constexpr auto CARET_COLOR = make_color(0, 0, 0);
   constexpr auto LINE_WIDTH = 1.0;
   constexpr auto MINIMUM_FRAME = 1.0;
@@ -66,18 +69,6 @@ namespace {
       std::max(first.m_y, second.m_y) - top);
   }
 
-  OverlayShape make_quad(const Matrix& transform, const Rect& rect) {
-    auto origin = transform.map(rect.get_top_left());
-    auto right = transform.map(Point(rect.get_right(), rect.get_top()));
-    auto bottom = transform.map(Point(rect.get_left(), rect.get_bottom()));
-    auto shape = OverlayShape();
-    shape.m_center = transform.map(rect.get_center());
-    shape.m_size = Size(distance(origin, right), distance(origin, bottom));
-    shape.m_angle =
-      std::atan2(right.m_y - origin.m_y, right.m_x - origin.m_x);
-    return shape;
-  }
-
   void add_outline(CanvasOverlay& overlay, const Matrix& transform,
       const Rect& rect, Color color) {
     auto corners = std::array<Point, 4>({
@@ -98,6 +89,40 @@ namespace {
     }
   }
 
+  QColor to_qcolor(Color color) {
+    return QColor::fromRgbF(static_cast<float>(color.m_red),
+      static_cast<float>(color.m_green), static_cast<float>(color.m_blue),
+      static_cast<float>(color.m_alpha));
+  }
+
+  QTransform to_qtransform(const Matrix& matrix) {
+    return QTransform(matrix.m_a, matrix.m_b, matrix.m_c, matrix.m_d,
+      matrix.m_tx, matrix.m_ty);
+  }
+
+  QPainterPath to_painter_path(const Path& path) {
+    auto result = QPainterPath();
+    result.setFillRule(Qt::WindingFill);
+    for(auto& segment : path.get_segments()) {
+      auto& points = segment.m_points;
+      auto point = [&] (std::size_t index) {
+        return QPointF(points[index].m_x, points[index].m_y);
+      };
+      if(segment.m_type == SegmentType::MOVE) {
+        result.moveTo(point(0));
+      } else if(segment.m_type == SegmentType::LINE) {
+        result.lineTo(point(0));
+      } else if(segment.m_type == SegmentType::QUADRATIC) {
+        result.quadTo(point(0), point(1));
+      } else if(segment.m_type == SegmentType::CUBIC) {
+        result.cubicTo(point(0), point(1), point(2));
+      } else {
+        result.closeSubpath();
+      }
+    }
+    return result;
+  }
+
   const Text* find_edited(const ToolContext& context) {
     auto& selection = context.get_editor().get_text_selection();
     if(!selection.is_editing()) {
@@ -110,19 +135,8 @@ namespace {
     return node->get_text();
   }
 
-  NodeId find_parent(const Document& document, Point point) {
-    auto& canvas = document.get_canvas();
-    for(auto i = canvas.size(); i != 0; --i) {
-      auto node = document.find(canvas[i - 1]);
-      if(!node || !node->m_header.m_is_visible) {
-        continue;
-      }
-      if(auto artboard = node->get_artboard();
-          artboard && artboard->m_frame.contains(point)) {
-        return node->get_id();
-      }
-    }
-    return NodeId();
+  NodeId find_parent(const ToolContext& context, Point point) {
+    return find_drawing_parent(context, point);
   }
 }
 
@@ -220,7 +234,7 @@ void TextTool::input_method(
     return;
   }
   auto caret = range.m_start + event.m_commit.size();
-  apply(context, replace_text(*text, range, inserted), caret,
+  apply(context, type(context, *text, range, inserted), caret,
     EditKind::INSERT);
   if(!event.m_preedit.empty()) {
     m_preedit = TextRange(caret, caret + event.m_preedit.size());
@@ -437,7 +451,7 @@ bool TextTool::key_press(ToolContext& context, const KeyEvent& event) {
       return false;
     }
     if(is_shift(event.m_modifiers)) {
-      insert(context, u"\v");
+      insert(context, u"\u2028");
     } else {
       insert(context, u"\n");
     }
@@ -505,11 +519,10 @@ void TextTool::draw(const ToolContext& context, CanvasOverlay& overlay) const {
   auto transform = view * get_node_transform(context);
   add_outline(overlay, transform, geometry.m_bounds, FRAME_COLOR);
   auto range = get_range(context);
-  for(auto& rect :
-      get_selection_rects(geometry.m_lines, range.m_start, range.m_end)) {
-    auto shape = make_quad(transform, rect);
-    shape.m_fill = HIGHLIGHT_COLOR;
-    overlay.m_shapes.push_back(shape);
+  if(range.m_start != range.m_end) {
+    if(auto highlight = get_highlight(context, range)) {
+      overlay.m_images.push_back(std::move(*highlight));
+    }
   }
   auto pixel = 1 / std::max(context.get_scale(), 1e-9);
   if(m_preedit) {
@@ -562,6 +575,8 @@ const TextTool::Geometry& TextTool::get_geometry(
   }
   m_geometry.m_id = id;
   m_geometry.m_revision = context.get_revision();
+  m_geometry.m_fills = std::nullopt;
+  m_geometry.m_clip = std::nullopt;
   if(auto text = find_text(context)) {
     m_geometry.m_lines = measure_lines(*text, *m_library);
     m_geometry.m_bounds = measure_text(*text, *m_library);
@@ -640,6 +655,87 @@ void TextTool::move_caret(
   m_goal = goal;
 }
 
+std::optional<OverlayImage> TextTool::get_highlight(
+    const ToolContext& context, TextRange range) const {
+  auto& geometry = get_geometry(context);
+  auto scale = std::max(context.get_scale(), 1e-9);
+  auto transform = make_scale(scale, scale) * context.get_view() *
+    get_node_transform(context);
+  auto size = context.get_size();
+  if(m_highlight.m_image && m_highlight.m_id == geometry.m_id &&
+      m_highlight.m_revision == geometry.m_revision &&
+      m_highlight.m_range == range && m_highlight.m_transform == transform &&
+      m_highlight.m_size == size) {
+    return OverlayImage(m_highlight.m_image, m_highlight.m_position);
+  }
+  auto text = find_text(context);
+  if(!text) {
+    return std::nullopt;
+  }
+  if(!geometry.m_fills) {
+    auto layout = lay_out(*text, *m_library);
+    m_geometry.m_fills = outline(layout);
+    m_geometry.m_clip = layout.m_clip;
+  }
+  auto area = QPainterPath();
+  area.setFillRule(Qt::WindingFill);
+  for(auto& rect :
+      get_selection_rects(geometry.m_lines, range.m_start, range.m_end)) {
+    area.addRect(QRectF(rect.m_x, rect.m_y, rect.m_width, rect.m_height));
+  }
+  if(auto& clip = geometry.m_clip) {
+    auto frame = QPainterPath();
+    frame.addRect(
+      QRectF(clip->m_x, clip->m_y, clip->m_width, clip->m_height));
+    area = area.intersected(frame);
+  }
+  auto mapping = to_qtransform(transform);
+  auto bounds = mapping.map(area).boundingRect().intersected(
+    QRectF(0, 0, size.m_width * scale, size.m_height * scale));
+  if(bounds.isEmpty()) {
+    return std::nullopt;
+  }
+  auto left = std::floor(bounds.left());
+  auto top = std::floor(bounds.top());
+  auto width = static_cast<int>(std::ceil(bounds.right()) - left);
+  auto height = static_cast<int>(std::ceil(bounds.bottom()) - top);
+  auto image = std::make_shared<QImage>(
+    width, height, QImage::Format_RGBA8888_Premultiplied);
+  image->fill(Qt::transparent);
+  auto painter = QPainter(image.get());
+  painter.setRenderHint(QPainter::Antialiasing);
+  painter.translate(-left, -top);
+  painter.setWorldTransform(mapping, true);
+  painter.fillPath(area, to_qcolor(HIGHLIGHT_COLOR));
+  painter.setClipPath(area);
+  for(auto& fill : *geometry.m_fills) {
+    painter.fillPath(
+      to_painter_path(fill.m_path), to_qcolor(HIGHLIGHTED_TEXT_COLOR));
+  }
+  painter.end();
+  m_highlight.m_id = geometry.m_id;
+  m_highlight.m_revision = geometry.m_revision;
+  m_highlight.m_range = range;
+  m_highlight.m_transform = transform;
+  m_highlight.m_size = size;
+  m_highlight.m_image = std::move(image);
+  m_highlight.m_position = Point(left / scale, top / scale);
+  return OverlayImage(m_highlight.m_image, m_highlight.m_position);
+}
+
+Text TextTool::type(const ToolContext& context, const Text& text,
+    TextRange range, std::u16string_view inserted) const {
+  auto result = replace_text(text, range, inserted);
+  auto& pending =
+    context.get_editor().get_text_selection().get_pending_style();
+  if(!pending || inserted.empty()) {
+    return result;
+  }
+  return edit_text_style(result,
+    TextRange(range.m_start, range.m_start + inserted.size()),
+    make_style_edit(*pending));
+}
+
 void TextTool::replace(ToolContext& context, TextRange range,
     std::u16string_view text, EditKind kind) {
   auto current = find_text(context);
@@ -649,7 +745,7 @@ void TextTool::replace(ToolContext& context, TextRange range,
   if(m_preedit) {
     m_preedit = std::nullopt;
   }
-  apply(context, replace_text(*current, range, text),
+  apply(context, type(context, *current, range, text),
     range.m_start + text.size(), kind);
 }
 
@@ -681,7 +777,7 @@ void TextTool::create(ToolContext& context, Rect frame, bool is_area) {
   auto& editor = context.get_editor();
   auto& document = context.get_document();
   commit(context);
-  auto parent = find_parent(document, frame.get_top_left());
+  auto parent = find_parent(context, frame.get_top_left());
   auto inverse = invert(Rellu::get_world_transform(document, parent));
   if(!inverse) {
     return;
@@ -696,18 +792,16 @@ void TextTool::create(ToolContext& context, Rect frame, bool is_area) {
   text.m_content = Shared(std::u16string());
   text.m_base_style = style;
   text.m_style.m_fill = SolidFill(style.m_color);
-  auto origin = top_left;
   if(is_area) {
     text.m_frame = AreaFrame(Size(std::max(bottom_right.m_x - top_left.m_x,
       MINIMUM_FRAME), std::max(bottom_right.m_y - top_left.m_y,
         MINIMUM_FRAME)));
   } else {
     text.m_frame = PositionedFrame();
-    origin.m_y += measure_lines(text, *m_library).front().m_ascent;
   }
   auto header = NodeHeader();
   header.m_id = generate_node_id();
-  header.m_transform = make_translation(origin.m_x, origin.m_y);
+  header.m_transform = make_translation(top_left.m_x, top_left.m_y);
   auto id = header.m_id;
   editor.get_history().seal();
   editor.execute(std::make_unique<EditTextCommand>(

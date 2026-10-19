@@ -3,14 +3,18 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <QImage>
 #include "Rellu/Commands/TextCommands.hpp"
+#include "Rellu/Geometry/Color.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
+#include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Text/TextLayout.hpp"
@@ -56,17 +60,21 @@ namespace Rellu {
 
   /**
    * Creates and edits text as Adobe XD's text tool does. A click creates
-   * point text and a drag creates area text in XD's default style; a click
-   * on existing text edits it. While editing, the pointer places the caret
-   * and selects by character, a double click selects a word and a triple
-   * click a paragraph; keys move the caret by character, word, line and
-   * text, Shift extending the selection; typing, deleting, the clipboard and
-   * input methods edit the selection, and typing a run of characters is one
-   * undoable step until the caret moves. Escape or a click outside the text
-   * ends editing and requests the tool named select, removing the text if
-   * it is empty, as does selecting other nodes. The text edited and its
-   * selection are the editor's TextSelection, so that another tool hands
-   * text over for editing by setting it and requesting this tool.
+   * point text whose first baseline starts at the click and a drag creates
+   * area text, both in XD's default style; a click on existing text edits
+   * it. While editing, the pointer places the caret and selects by
+   * character, a double click selects a word and a triple click a
+   * paragraph; keys move the caret by character, word, line and text, Shift
+   * extending the selection; typing, deleting, the clipboard and input
+   * methods edit the selection, text typed at a caret taking the
+   * TextSelection's pending style if set, and typing a run of characters is
+   * one undoable step until the caret moves. The selection is highlighted
+   * in solid blue with its characters drawn in white. Escape or a click
+   * outside the text ends editing and requests the tool named select,
+   * removing the text if it is empty, as does selecting other nodes. The
+   * text edited and its selection are the editor's TextSelection, so that
+   * another tool hands text over for editing by setting it and requesting
+   * this tool.
    */
   class TextTool : public Tool {
     public:
@@ -80,6 +88,13 @@ namespace Rellu {
       /** The longest time between the clicks of a triple click. */
       static constexpr auto TRIPLE_CLICK_INTERVAL =
         std::chrono::milliseconds(500);
+
+      /** The color the selected range is highlighted in. */
+      static constexpr auto HIGHLIGHT_COLOR = make_color(0x33, 0x99, 0xFF);
+
+      /** The color the selected characters are drawn in. */
+      static constexpr auto HIGHLIGHTED_TEXT_COLOR =
+        make_color(0xFF, 0xFF, 0xFF);
 
       /**
        * Constructs a TextTool.
@@ -180,6 +195,17 @@ namespace Rellu {
         std::optional<std::uint64_t> m_revision;
         std::vector<LineGeometry> m_lines;
         Rect m_bounds = Rect(0, 0, 0, 0);
+        std::optional<std::vector<TextFill>> m_fills;
+        std::optional<Rect> m_clip;
+      };
+      struct Highlight {
+        NodeId m_id;
+        std::optional<std::uint64_t> m_revision;
+        TextRange m_range;
+        Matrix m_transform;
+        Size m_size = Size(0, 0);
+        std::shared_ptr<const QImage> m_image;
+        Point m_position = Point(0, 0);
       };
       const FontLibrary* m_library;
       Gesture m_gesture;
@@ -194,6 +220,7 @@ namespace Rellu {
       std::optional<std::chrono::steady_clock::time_point> m_double_click;
       Point m_double_click_position;
       mutable Geometry m_geometry;
+      mutable Highlight m_highlight;
 
       const Text* find_text(const ToolContext& context) const;
       void sync(ToolContext& context);
@@ -208,6 +235,10 @@ namespace Rellu {
         std::size_t caret, bool is_moving);
       void move_caret(
         ToolContext& context, std::size_t caret, bool is_extending);
+      std::optional<OverlayImage> get_highlight(
+        const ToolContext& context, TextRange range) const;
+      Text type(const ToolContext& context, const Text& text, TextRange range,
+        std::u16string_view inserted) const;
       void replace(ToolContext& context, TextRange range,
         std::u16string_view text, EditKind kind);
       void apply(ToolContext& context, Text text, std::size_t caret,

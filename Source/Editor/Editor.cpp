@@ -133,7 +133,27 @@ bool Editor::redo() {
 }
 
 void Editor::select_all() {
-  m_selection.select_all(m_context.get_scope());
+  if(auto& container = m_context.get_container(); !container.is_nil()) {
+    m_selection.select_all(container);
+    return;
+  }
+  auto nodes = std::vector<NodeId>();
+  auto add = [&] (const NodeId& id) {
+    if(!m_document->get(id).m_header.m_is_locked) {
+      nodes.push_back(id);
+    }
+  };
+  for(auto& id : m_document->get_canvas()) {
+    auto& node = m_document->get(id);
+    if(!node.get_artboard()) {
+      add(id);
+    } else if(!node.m_header.m_is_locked) {
+      for(auto& child : node.m_children) {
+        add(child);
+      }
+    }
+  }
+  m_selection.select(nodes);
 }
 
 void Editor::on_selection() {

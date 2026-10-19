@@ -82,6 +82,11 @@ namespace {
       "easing": "ease-out", "destinationType": "previous-artboard"},
       "triggerEvent": "keys-gamepad", "action": "previous-artboard",
       "id": "f9dcc966-a8c0-4241-92bb-e2e0cb2a2866"},
+      {"properties": {"transition": "dissolve", "duration": 0.3,
+      "easing": "ease-out", "preserveScrollPosition": false,
+      "destinationType": "previous-artboard"}, "triggerEvent": "tap",
+      "action": "artboard-transition",
+      "id": "0d614b08-8ff5-45bd-89bb-68e718016d00"},
       {"properties": {"subtype": "play"}, "triggerEvent": "time",
       "action": "video-playback",
       "id": "0dee9cd4-956a-4eef-ad45-237f36c96b7d"},
@@ -112,7 +117,7 @@ TEST_SUITE("PrototypeImporter") {
       std::less<>>({{"interactions.interactions.<id>[].action:str", 1},
       {"interactions.interactions.<id>[].id:str", 1},
       {"interactions.interactions.<id>[].triggerEvent:str", 1}}));
-    REQUIRE(document.get_prototype().m_interactions.size() == 7);
+    REQUIRE(document.get_prototype().m_interactions.size() == 8);
     auto& tap = find(document, TAP_ID);
     REQUIRE(tap.m_owner == BUTTON_ID);
     REQUIRE(std::holds_alternative<TapTrigger>(tap.m_trigger));
@@ -136,6 +141,10 @@ TEST_SUITE("PrototypeImporter") {
     REQUIRE(keys.m_trigger ==
       Trigger(KeyTrigger("Ctrl+K", KeyDevice::KEYBOARD)));
     REQUIRE(std::holds_alternative<PreviousArtboard>(keys.m_action));
+    auto& previous =
+      find(document, id("0d614b08-8ff5-45bd-89bb-68e718016d00"));
+    REQUIRE(std::holds_alternative<TapTrigger>(previous.m_trigger));
+    REQUIRE(std::holds_alternative<PreviousArtboard>(previous.m_action));
     auto& video = find(document, id("0dee9cd4-956a-4eef-ad45-237f36c96b7d"));
     REQUIRE(video.m_action ==
       Action(VideoPlayback(SOURCE_ID, VideoCommand::PLAY)));

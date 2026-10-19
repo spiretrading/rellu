@@ -151,7 +151,14 @@ namespace {
       XdObject& properties) {
     auto name = interaction.get_json().value("action"_L1).toString();
     auto action = [&] () -> std::optional<Action> {
-      if(name == "artboard-transition"_L1) {
+      if(name == "artboard-transition"_L1 &&
+          properties.get_json().value("destinationType"_L1).toString() ==
+            "previous-artboard"_L1) {
+        read_animation(properties);
+        properties.ignore({"preserveScrollPosition"_L1, "destination"_L1});
+        properties.consume("destinationType"_L1);
+        return PreviousArtboard();
+      } else if(name == "artboard-transition"_L1) {
         auto transition = ArtboardTransition();
         transition.m_destination = read_destination(properties);
         transition.m_animation = read_animation(properties);
@@ -200,6 +207,13 @@ namespace {
           properties.consume("subtype"_L1);
         }
         return playback;
+      } else if(name == "hyperlink"_L1) {
+        auto link = Hyperlink();
+        if(auto url = properties.get_string("hyperlinkUrl"_L1)) {
+          link.m_url = to_std_string(*url);
+        }
+        properties.ignore({"redirectHyperlinkUrl"_L1});
+        return link;
       }
       return std::nullopt;
     }();

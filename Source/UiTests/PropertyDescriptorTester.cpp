@@ -83,7 +83,7 @@ TEST_SUITE("PropertyDescriptor") {
     REQUIRE(get_text(properties, "appearance.opacity") == "1");
     REQUIRE(get_text(properties, "appearance.blend_mode") == "Pass Through");
     REQUIRE(find_property(properties, "fill")->m_is_mixed);
-    REQUIRE(is_read_only(properties, "fill.enabled"));
+    REQUIRE(!is_read_only(properties, "fill.enabled"));
     REQUIRE(get_text(properties, "stroke.enabled") == "No");
     REQUIRE(get_text(properties, "export.marked") == "No");
   }
@@ -324,5 +324,36 @@ TEST_SUITE("PropertyDescriptor") {
     REQUIRE(to_text(Size(3, 4)) == "3 x 4");
     REQUIRE(to_text(Choice(1, QStringList({"A", "B"}))) == "B");
     REQUIRE(to_text(Choice(5, QStringList({"A", "B"}))) == "5");
+  }
+
+  TEST_CASE("header_properties") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(ids.m_background).m_header;
+      header.m_aspect_lock = Size(100, 50);
+      header.m_is_fixed_position = true;
+      header.m_constraints.m_is_enabled = true;
+      header.m_constraints.m_is_custom = true;
+      header.m_constraints.m_left = true;
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    auto properties = extract_properties(document, ids.m_background);
+    REQUIRE(get_text(properties, "transform.lock_aspect") == "Yes");
+    REQUIRE(!is_read_only(properties, "transform.lock_aspect"));
+    REQUIRE(get_text(properties, "transform.fixed_position") == "Yes");
+    REQUIRE(!is_read_only(properties, "transform.fixed_position"));
+    REQUIRE(get_text(properties, "layout.responsive.mode") == "Manual");
+    REQUIRE(get_text(properties, "layout.responsive.left") == "Yes");
+    REQUIRE(get_text(properties, "layout.responsive.right") == "No");
+    REQUIRE(!is_read_only(properties, "layout.responsive.width"));
+    REQUIRE(get_text(properties, "fill.paint") == "Solid");
+    auto artboard = extract_properties(document, ids.m_artboard);
+    REQUIRE(get_text(artboard, "transform.lock_aspect") == "No");
+    REQUIRE(get_text(artboard, "layout.responsive") == "No");
+    REQUIRE(!find_property(artboard, "layout.responsive.mode"));
+    REQUIRE(to_text(Fill(GradientFill())) == "Gradient");
   }
 }

@@ -417,6 +417,7 @@ namespace {
       Writer(const Document& document, const XdWriteOptions& options);
 
       QByteArray write();
+      std::string write_list(const std::vector<NodeId>& nodes) const;
 
     private:
       const Document* m_document;
@@ -850,6 +851,17 @@ namespace {
     }
     return make_archive(entries);
   }
+
+  std::string Writer::write_list(const std::vector<NodeId>& nodes) const {
+    auto out = std::string();
+    write_nodes(nodes, out);
+    return out;
+  }
+}
+
+std::string Rellu::write_xd_nodes(const Document& document,
+    const std::vector<NodeId>& nodes, const XdWriteOptions& options) {
+  return Writer(document, options).write_list(nodes);
 }
 
 QByteArray Rellu::write_xd(

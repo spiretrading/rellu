@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Command.hpp"
 #include "Rellu/Geometry/Point.hpp"
 
@@ -84,17 +85,22 @@ namespace Rellu {
     public:
 
       /**
-       * Constructs a GroupCommand naming the group Group.
+       * Constructs a GroupCommand naming the group Group N, as Adobe XD
+       * does, N being one more than the largest such number in use.
        * @param nodes The nodes to group, none of them an artboard.
+       * @param measurer The function measuring text.
        */
-      explicit GroupCommand(std::vector<NodeId> nodes);
+      explicit GroupCommand(std::vector<NodeId> nodes,
+        TextMeasurer measurer = estimate_text_bounds);
 
       /**
        * Constructs a GroupCommand.
        * @param nodes The nodes to group, none of them an artboard.
        * @param name The group's name.
+       * @param measurer The function measuring text.
        */
-      GroupCommand(std::vector<NodeId> nodes, std::string name) noexcept;
+      GroupCommand(std::vector<NodeId> nodes, std::string name,
+        TextMeasurer measurer = estimate_text_bounds) noexcept;
 
       /** Returns the group made by the last application, or nil. */
       const NodeId& get_group() const;
@@ -106,6 +112,7 @@ namespace Rellu {
     private:
       std::vector<NodeId> m_nodes;
       std::string m_name;
+      TextMeasurer m_measurer;
       NodeId m_group;
   };
 

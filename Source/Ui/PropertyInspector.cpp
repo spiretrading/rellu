@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <exception>
 #include <memory>
@@ -7,7 +8,6 @@
 #include <utility>
 #include <QAbstractButton>
 #include <QCheckBox>
-#include <QColorDialog>
 #include <QComboBox>
 #include <QFocusEvent>
 #include <QFrame>
@@ -18,11 +18,14 @@
 #include <QLineEdit>
 #include <QLinearGradient>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
+#include <QRadialGradient>
 #include <QScrollBar>
 #include <QSlider>
 #include <QTimer>
 #include <QToolButton>
+#include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
@@ -238,6 +241,7 @@ namespace {
     std::function<void (const std::string&)> m_finish;
     std::function<void (const std::string&, QWidget*, bool, Updater)>
       m_register;
+    std::function<void (QWidget&, const std::string&)> m_pick;
     ActionRegistry* m_actions;
     bool m_is_enabled;
   };
@@ -303,6 +307,31 @@ namespace {
     QObject::connect(&button, &QToolButton::clicked, action, [action] {
       action->trigger();
     });
+  }
+
+  QToolButton* make_toggle(const Binding& binding, const std::string& path,
+      Glyph glyph, const QString& tip) {
+    auto property = binding.m_find(path);
+    if(!property) {
+      return nullptr;
+    }
+    auto editor = binding.m_editor(*property);
+    auto button = make_icon_button(glyph, tip);
+    button->setCheckable(true);
+    button->setEnabled(binding.m_is_enabled && editor);
+    if(editor) {
+      QObject::connect(button, &QToolButton::clicked, button,
+        [=, commit = binding.m_commit, finish = binding.m_finish] {
+          commit(path, button->isChecked());
+          finish(path);
+        });
+    }
+    binding.m_register(path, button, static_cast<bool>(editor),
+      [=] (const PropertyDescriptor& property) {
+        auto value = std::get_if<bool>(&property.m_value);
+        button->setChecked(value && *value && !property.m_is_mixed);
+      });
+    return button;
   }
 
   QToolButton* make_action_button(const Binding& binding, Glyph glyph,
@@ -676,8 +705,7 @@ namespace {
     return container;
   }
 
-  void paint_swatch(QToolButton& button, const PropertyDescriptor* color,
-      const PropertyDescriptor* section) {
+  void paint_swatch(QToolButton& button, const PropertyDescriptor* property) {
     auto ratio = button.devicePixelRatioF();
     auto pixmap = QPixmap(static_cast<int>(SWATCH_WIDTH * ratio),
       static_cast<int>(SWATCH_HEIGHT * ratio));
@@ -695,28 +723,35 @@ namespace {
         painter.drawRect(QRectF(x, y, 6, 6).intersected(bounds));
       }
     }
-    auto stops = section ? find_property(
-      section->m_children, section->m_path + ".stops") : nullptr;
-    auto image = section ? find_property(
-      section->m_children, section->m_path + ".image") : nullptr;
-    if(color && !color->m_is_mixed) {
-      if(auto value = std::get_if<Color>(&color->m_value)) {
-        painter.setBrush(to_qcolor(*value));
-        painter.drawRoundedRect(bounds, 2, 2);
+    auto fill = Fill();
+    if(property && !property->m_is_mixed) {
+      if(auto color = std::get_if<Color>(&property->m_value)) {
+        fill = SolidFill(*color);
+      } else if(auto value = std::get_if<Fill>(&property->m_value)) {
+        fill = *value;
       }
-    } else if(stops && !stops->m_children.empty()) {
-      auto gradient = QLinearGradient(bounds.topLeft(), bounds.topRight());
-      for(auto i = std::size_t(0); i != stops->m_children.size(); ++i) {
-        auto& stop = stops->m_children[i];
-        if(auto value = std::get_if<Color>(&stop.m_value)) {
-          gradient.setColorAt(static_cast<double>(i) /
-            std::max<std::size_t>(stops->m_children.size() - 1, 1),
-            to_qcolor(*value));
-        }
-      }
-      painter.setBrush(gradient);
+    }
+    if(auto solid = std::get_if<SolidFill>(&fill)) {
+      painter.setBrush(to_qcolor(solid->m_color));
       painter.drawRoundedRect(bounds, 2, 2);
-    } else if(image) {
+    } else if(auto gradient = std::get_if<GradientFill>(&fill)) {
+      auto set_stops = [&] (QGradient& paint) {
+        for(auto& stop : gradient->m_stops) {
+          paint.setColorAt(
+            std::clamp(stop.m_offset, 0.0, 1.0), to_qcolor(stop.m_color));
+        }
+      };
+      if(std::holds_alternative<RadialGradient>(gradient->m_geometry)) {
+        auto paint = QRadialGradient(bounds.center(), bounds.width() / 2);
+        set_stops(paint);
+        painter.setBrush(paint);
+      } else {
+        auto paint = QLinearGradient(bounds.topLeft(), bounds.topRight());
+        set_stops(paint);
+        painter.setBrush(paint);
+      }
+      painter.drawRoundedRect(bounds, 2, 2);
+    } else if(std::holds_alternative<ImageFill>(fill)) {
       painter.setBrush(QColor(0x9A, 0xB8, 0xD6));
       painter.drawRoundedRect(bounds, 2, 2);
       painter.setBrush(QColor(0x5C, 0x8A, 0x5C));
@@ -730,69 +765,122 @@ namespace {
     button.setIcon(QIcon(pixmap));
   }
 
-  QToolButton* make_swatch(const Binding& binding,
-      const std::string& color_path, const std::string& section_path) {
+  QToolButton* make_swatch(const Binding& binding, const std::string& path) {
     auto button = new QToolButton();
     button->setObjectName("swatch");
     button->setFocusPolicy(Qt::NoFocus);
     button->setAutoRaise(true);
     button->setIconSize(QSize(SWATCH_WIDTH, SWATCH_HEIGHT));
     button->setFixedSize(SWATCH_WIDTH + 4, SWATCH_HEIGHT + 4);
-    auto color = binding.m_find(color_path);
-    auto editor = color ? binding.m_editor(*color) : nullptr;
+    auto property = binding.m_find(path);
+    auto editor = property ? binding.m_editor(*property) : nullptr;
     button->setEnabled(binding.m_is_enabled);
-    auto value = std::make_shared<Color>();
+    if(property) {
+      button->setAccessibleName(property->m_label);
+    }
     if(editor) {
       QObject::connect(button, &QToolButton::clicked, button,
-        [=, commit = binding.m_commit, finish = binding.m_finish] {
-          auto chosen = QColorDialog::getColor(to_qcolor(*value), button,
-            "Color", QColorDialog::ShowAlphaChannel);
-          if(chosen.isValid()) {
-            commit(color_path, Color(chosen.redF(), chosen.greenF(),
-              chosen.blueF(), chosen.alphaF()));
-            finish(color_path);
+        [=, pick = binding.m_pick] {
+          if(pick) {
+            pick(*button, path);
           }
         });
     }
-    auto update = [=] (const PropertyDescriptor& property) {
-      if(property.m_path == color_path) {
-        if(auto color_value = std::get_if<Color>(&property.m_value)) {
-          *value = *color_value;
-        }
-        paint_swatch(*button, &property, nullptr);
-      } else {
-        paint_swatch(*button,
-          find_property(property.m_children, color_path), &property);
-      }
-    };
-    if(color) {
-      binding.m_register(color_path, button, static_cast<bool>(editor),
-        update);
-    } else if(!section_path.empty() && binding.m_find(section_path)) {
-      binding.m_register(section_path, button, false, update);
+    if(property) {
+      binding.m_register(path, button, static_cast<bool>(editor),
+        [=] (const PropertyDescriptor& property) {
+          paint_swatch(*button, &property);
+        });
     } else {
-      paint_swatch(*button, nullptr, nullptr);
+      paint_swatch(*button, nullptr);
     }
     return button;
   }
 
+  QToolButton* make_eyedropper(
+      const Binding& binding, const std::string& color_path) {
+    auto dropper =
+      make_icon_button(Glyph::EYEDROPPER, "Pick color from screen");
+    dropper->setObjectName("icon_toggle");
+    auto probe = PropertyDescriptor();
+    probe.m_path = color_path;
+    auto property = binding.m_find(color_path);
+    auto editor = binding.m_editor(property ? *property : probe);
+    dropper->setEnabled(binding.m_is_enabled && editor);
+    if(editor) {
+      QObject::connect(dropper, &QToolButton::clicked, dropper,
+        [=, commit = binding.m_commit, finish = binding.m_finish] {
+          pick_screen_color([=] (const Color& color) {
+            commit(color_path, color);
+            finish(color_path);
+          });
+        });
+    }
+    return dropper;
+  }
+
   QWidget* make_style_row(const Binding& binding, const std::string& path,
-      const QString& label, bool has_eyedropper,
-      const std::string& color_path, const std::string& section_path) {
+      const QString& label, const std::string& swatch_path,
+      const std::string& dropper_path) {
     auto layout = static_cast<QHBoxLayout*>(nullptr);
     auto row = make_row(layout, 14);
     if(auto box = make_check(binding, path)) {
       layout->addWidget(box);
     }
-    layout->addWidget(make_swatch(binding, color_path, section_path));
+    layout->addWidget(make_swatch(binding, swatch_path));
     layout->addWidget(make_label(label, "row_label"), 1);
-    if(has_eyedropper) {
-      auto dropper =
-        make_icon_button(Glyph::EYEDROPPER, "Pick color from screen");
-      dropper->setEnabled(false);
-      layout->addWidget(dropper);
+    if(!dropper_path.empty()) {
+      layout->addWidget(make_eyedropper(binding, dropper_path));
     }
     return row;
+  }
+
+  QWidget* make_slider(const Binding& binding, const std::string& path,
+      const QString& label, double minimum, double maximum) {
+    auto property = binding.m_find(path);
+    if(!property) {
+      return nullptr;
+    }
+    auto editor = binding.m_editor(*property);
+    auto display = get_display(path, editor);
+    auto container = new QWidget();
+    auto column = new QVBoxLayout(container);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(4);
+    column->addWidget(make_label(label));
+    auto layout = static_cast<QHBoxLayout*>(nullptr);
+    auto row = make_row(layout, 16);
+    auto slider = new QSlider(Qt::Horizontal);
+    slider->setObjectName("opacity_slider");
+    slider->setAccessibleName(property->m_label);
+    slider->setFocusPolicy(Qt::NoFocus);
+    auto scale = display.m_scale;
+    slider->setRange(static_cast<int>(std::lround(minimum * scale)),
+      static_cast<int>(std::lround(maximum * scale)));
+    slider->setEnabled(binding.m_is_enabled && editor);
+    layout->addWidget(slider, 1);
+    layout->addWidget(
+      make_number(binding, path, QString(), std::nullopt, 44));
+    column->addWidget(row);
+    if(editor) {
+      QObject::connect(slider, &QSlider::sliderMoved, slider,
+        [=, commit = binding.m_commit] (int value) {
+          commit(path, value / scale);
+        });
+      QObject::connect(slider, &QSlider::sliderReleased, slider,
+        [=, finish = binding.m_finish] {
+          finish(path);
+        });
+    }
+    binding.m_register(path, slider, false,
+      [=] (const PropertyDescriptor& property) {
+        if(auto value = std::get_if<double>(&property.m_value)) {
+          if(!slider->isSliderDown()) {
+            slider->setValue(static_cast<int>(std::lround(*value * scale)));
+          }
+        }
+      });
+    return container;
   }
 
   void build_align(const Binding& binding, QVBoxLayout& layout) {
@@ -919,11 +1007,10 @@ namespace {
     };
     place(make_number(binding, "transform.width", "W"), 0, 0);
     place(make_number(binding, "transform.height", "H"), 1, 0);
-    if(binding.m_find("transform.lock_aspect")) {
-      auto lock = make_icon_button(Glyph::LOCK_ASPECT, "Lock Aspect");
+    if(auto lock = make_toggle(binding, "transform.lock_aspect",
+        Glyph::LOCK_ASPECT, "Lock Aspect")) {
       lock->setFixedSize(16, 36);
       lock->setIconSize(QSize(12, 12));
-      lock->setEnabled(false);
       layout->addWidget(lock, 0, 1, 2, 1, Qt::AlignCenter);
     }
     place(make_number(binding, "transform.x", "X"), 0, 2);
@@ -979,6 +1066,149 @@ namespace {
     }
   }
 
+  class PinDiagram : public QWidget {
+    public:
+      std::array<bool, 4> m_pins = std::array<bool, 4>();
+      std::function<void (int side)> m_toggle;
+
+      PinDiagram() {
+        setObjectName("pin_diagram");
+        setFixedSize(64, 64);
+        setCursor(Qt::PointingHandCursor);
+      }
+
+    protected:
+      void paintEvent(QPaintEvent*) override {
+        auto painter = QPainter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        auto outer = QRectF(1.5, 1.5, width() - 3, height() - 3);
+        auto inner = QRectF(22.5, 22.5, width() - 45, height() - 45);
+        auto ink = isEnabled() ? Colors::ICON : Colors::DISABLED_TEXT;
+        painter.setPen(QPen(Colors::BORDER, 1));
+        painter.setBrush(Colors::BUTTON);
+        painter.drawRect(outer);
+        painter.setPen(QPen(ink, 1));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(inner);
+        auto center = outer.center();
+        auto lines = std::array<QLineF, 4>({
+          QLineF(center.x(), outer.top() + 4, center.x(), inner.top() - 3),
+          QLineF(inner.right() + 3, center.y(), outer.right() - 4, center.y()),
+          QLineF(center.x(), inner.bottom() + 3, center.x(),
+            outer.bottom() - 4),
+          QLineF(outer.left() + 4, center.y(), inner.left() - 3, center.y())});
+        for(auto i = 0; i != 4; ++i) {
+          auto color = m_pins[i] && isEnabled() ? Colors::ACTIVE :
+            m_pins[i] ? Colors::SECONDARY_TEXT : Colors::BORDER;
+          auto pen = QPen(color, m_pins[i] ? 2.0 : 1.0);
+          if(!m_pins[i]) {
+            pen.setDashPattern({2, 2});
+          }
+          painter.setPen(pen);
+          painter.drawLine(lines[i]);
+        }
+      }
+
+      void mousePressEvent(QMouseEvent* event) override {
+        auto position = event->position();
+        auto center = QPointF(width() / 2.0, height() / 2.0);
+        auto dx = position.x() - center.x();
+        auto dy = position.y() - center.y();
+        if(std::abs(dx) < 10 && std::abs(dy) < 10) {
+          return;
+        }
+        auto side = 0;
+        if(std::abs(dx) > std::abs(dy)) {
+          side = dx > 0 ? 1 : 3;
+        } else {
+          side = dy > 0 ? 2 : 0;
+        }
+        if(m_toggle) {
+          m_toggle(side);
+        }
+      }
+  };
+
+  void build_constraints(const Binding& binding, SectionFrame& frame) {
+    auto mode = binding.m_find("layout.responsive.mode");
+    if(!mode) {
+      return;
+    }
+    auto layout = static_cast<QHBoxLayout*>(nullptr);
+    auto modes = make_row(layout, 0);
+    auto editor = binding.m_editor(*mode);
+    auto buttons = std::make_shared<std::vector<QToolButton*>>();
+    for(auto [index, text] : {std::pair(0, "Auto"), std::pair(1, "Manual")}) {
+      auto button = new QToolButton();
+      button->setObjectName("text_button");
+      button->setFocusPolicy(Qt::NoFocus);
+      button->setCheckable(true);
+      button->setText(text);
+      button->setAccessibleName(text);
+      button->setEnabled(binding.m_is_enabled && editor);
+      layout->addWidget(button, 1);
+      buttons->push_back(button);
+      if(editor) {
+        QObject::connect(button, &QToolButton::clicked, button,
+          [=, commit = binding.m_commit, finish = binding.m_finish] {
+            commit("layout.responsive.mode",
+              Choice(index, QStringList({"Auto", "Manual"})));
+            finish("layout.responsive.mode");
+          });
+      }
+    }
+    binding.m_register("layout.responsive.mode", modes, false,
+      [=] (const PropertyDescriptor& property) {
+        auto choice = std::get_if<Choice>(&property.m_value);
+        for(auto i = std::size_t(0); i != buttons->size(); ++i) {
+          (*buttons)[i]->setChecked(choice && !property.m_is_mixed &&
+            choice->m_index == static_cast<int>(i));
+        }
+      });
+    frame.m_layout->addWidget(modes);
+    auto pins = make_row(layout, 16);
+    auto diagram = new PinDiagram();
+    auto paths = std::array<std::string, 4>({"layout.responsive.top",
+      "layout.responsive.right", "layout.responsive.bottom",
+      "layout.responsive.left"});
+    auto is_editable = false;
+    for(auto i = 0; i != 4; ++i) {
+      auto property = binding.m_find(paths[i]);
+      if(!property) {
+        continue;
+      }
+      auto pin_editor = binding.m_editor(*property);
+      is_editable |= static_cast<bool>(pin_editor);
+      binding.m_register(paths[i], diagram, static_cast<bool>(pin_editor),
+        [=] (const PropertyDescriptor& property) {
+          auto value = std::get_if<bool>(&property.m_value);
+          diagram->m_pins[i] = value && *value && !property.m_is_mixed;
+          diagram->update();
+        });
+    }
+    diagram->setEnabled(binding.m_is_enabled && is_editable);
+    diagram->m_toggle = [=, commit = binding.m_commit,
+        finish = binding.m_finish] (int side) {
+      commit(paths[side], !diagram->m_pins[side]);
+      finish(paths[side]);
+    };
+    layout->addWidget(diagram);
+    auto checks = new QWidget();
+    auto checks_layout = new QVBoxLayout(checks);
+    checks_layout->setContentsMargins(0, 0, 0, 0);
+    checks_layout->setSpacing(10);
+    if(auto box =
+        make_check(binding, "layout.responsive.width", "Fix Width")) {
+      checks_layout->addWidget(box);
+    }
+    if(auto box =
+        make_check(binding, "layout.responsive.height", "Fix Height")) {
+      checks_layout->addWidget(box);
+    }
+    layout->addWidget(checks, 1);
+    frame.m_layout->addWidget(pins);
+  }
+
   void build_layout(const Binding& binding, SectionFrame& frame) {
     auto layout = static_cast<QHBoxLayout*>(nullptr);
     auto row = make_row(layout);
@@ -987,6 +1217,7 @@ namespace {
       layout->addWidget(toggle);
     }
     frame.m_layout->addWidget(row);
+    build_constraints(binding, frame);
     for(auto [path, label] : {std::pair("layout.padding", "Padding"),
         std::pair("layout.stack", "Stack")}) {
       if(!binding.m_find(path)) {
@@ -1182,14 +1413,13 @@ namespace {
   }
 
   void build_fill(const Binding& binding, SectionFrame& frame) {
-    frame.m_layout->addWidget(
-      make_style_row(
-        binding, "fill.enabled", "Fill", true, "fill.color", "fill"));
+    frame.m_layout->addWidget(make_style_row(
+      binding, "fill.enabled", "Fill", "fill.paint", "fill.color"));
   }
 
   void build_stroke(const Binding& binding, SectionFrame& frame) {
-    frame.m_layout->addWidget(make_style_row(
-      binding, "stroke.enabled", "Border", true, "stroke.color", ""));
+    frame.m_layout->addWidget(make_style_row(binding, "stroke.enabled",
+      "Border", "stroke.color", "stroke.color"));
     if(!binding.m_find("stroke.width")) {
       return;
     }
@@ -1235,6 +1465,7 @@ namespace {
     auto layout = static_cast<QHBoxLayout*>(nullptr);
     auto row = make_row(layout, 14);
     if(auto box = make_check(binding, "grid.visible")) {
+      box->setToolTip("Show/Hide Grid");
       layout->addWidget(box);
     }
     if(auto type = make_combo(binding, "grid.type")) {
@@ -1247,7 +1478,7 @@ namespace {
     }
     if(binding.m_find("grid.columns")) {
       auto columns = make_row(layout, 12);
-      layout->addWidget(make_swatch(binding, "grid.column_color", ""));
+      layout->addWidget(make_swatch(binding, "grid.column_color"));
       layout->addWidget(make_label("Columns", "row_label"), 1);
       layout->addWidget(make_number(
         binding, "grid.columns", QString(), std::nullopt, 40));
@@ -1264,11 +1495,10 @@ namespace {
       layout->addWidget(make_segments(binding, "grid.linked_margins", {
         Segment(1, Glyph::MARGINS_LINKED, "Linked Margins"),
         Segment(0, Glyph::MARGINS_SEPARATE, "Different Margins")}));
-      auto linked = binding.m_find("grid.linked_margins");
-      if(linked && std::get<bool>(linked->m_value)) {
+      if(binding.m_find("grid.margin_linked")) {
         layout->addStretch(1);
         layout->addWidget(make_number(
-          binding, "grid.margin_top", QString(), std::nullopt, 40));
+          binding, "grid.margin_linked", QString(), std::nullopt, 40));
       } else {
         for(auto path : {"grid.margin_top", "grid.margin_right",
             "grid.margin_bottom", "grid.margin_left"}) {
@@ -1282,7 +1512,7 @@ namespace {
       frame.m_layout->addWidget(defaults);
     } else {
       auto square = make_row(layout, 12);
-      layout->addWidget(make_swatch(binding, "grid.color", ""));
+      layout->addWidget(make_swatch(binding, "grid.color"));
       layout->addWidget(make_label("Square Size", "row_label"), 1);
       layout->addWidget(make_number(
         binding, "grid.size", QString(), std::nullopt, 40));
@@ -1299,7 +1529,7 @@ namespace {
         continue;
       }
       frame.m_layout->addWidget(
-        make_style_row(binding, path, label, false, path + ".color", ""));
+        make_style_row(binding, path, label, path + ".color", ""));
       if(std::get<bool>(row->m_value) && binding.m_find(path + ".x")) {
         auto layout = static_cast<QHBoxLayout*>(nullptr);
         auto offsets = make_row(layout, 12);
@@ -1322,12 +1552,13 @@ namespace {
       }
       frame.m_layout->addWidget(row);
       if(std::get<bool>(blur->m_value)) {
-        for(auto [path, label] : {
-            std::pair("effects.blur.amount", "Blur Amount"),
-            std::pair("effects.blur.brightness", "Brightness"),
-            std::pair("effects.blur.opacity", "Effect Opacity")}) {
-          if(auto field = make_number(binding, path, label)) {
-            frame.m_layout->addWidget(field);
+        for(auto [path, label, minimum, maximum] : {
+            std::tuple("effects.blur.amount", "Blur Amount", 0.0, 50.0),
+            std::tuple("effects.blur.brightness", "Brightness", -50.0, 50.0),
+            std::tuple("effects.blur.opacity", "Effect Opacity", 0.0, 1.0)}) {
+          if(auto slider = make_slider(
+              binding, path, label, minimum, maximum)) {
+            frame.m_layout->addWidget(slider);
           }
         }
       }
@@ -1355,7 +1586,7 @@ namespace {
       } else if(std::holds_alternative<Choice>(child.m_value)) {
         row_layout->addWidget(make_combo(binding, child.m_path), 1);
       } else if(std::holds_alternative<Color>(child.m_value)) {
-        row_layout->addWidget(make_swatch(binding, child.m_path, ""));
+        row_layout->addWidget(make_swatch(binding, child.m_path));
       } else if(!std::holds_alternative<std::monostate>(child.m_value)) {
         row_layout->addWidget(
           make_text_field(binding, child.m_path, QString()), 1);
@@ -1441,10 +1672,30 @@ PropertyInspector::PropertyInspector(QWidget* parent)
       m_generation(0),
       m_is_committing(false),
       m_is_rebuild_pending(false),
+      m_is_locked(false),
       m_scroll(new QScrollArea()),
       m_content(nullptr),
-      m_layout(nullptr) {
+      m_layout(nullptr),
+      m_picker(new ColorPicker(this)) {
   setObjectName("inspector");
+  m_picker->set_close_handler([this] {
+    auto path = std::exchange(m_picked_path, std::string());
+    if(!path.empty()) {
+      seal(path);
+    }
+  });
+  m_picker->set_change_handler([this] (const Fill& fill) {
+    if(m_picked_path.empty()) {
+      return;
+    } else if(m_picked_path.ends_with(".paint")) {
+      apply(m_picked_path, fill);
+    } else if(auto solid = std::get_if<SolidFill>(&fill)) {
+      apply(m_picked_path, solid->m_color);
+    }
+  });
+  m_picker->set_add_handler([this] (const Fill& fill) {
+    add_swatch(fill);
+  });
   m_scroll->setObjectName("inspector_scroll");
   m_scroll->setFrameShape(QFrame::NoFrame);
   m_scroll->setWidgetResizable(true);
@@ -1459,6 +1710,7 @@ PropertyInspector::~PropertyInspector() = default;
 
 void PropertyInspector::set_document(Document* document) {
   m_selection_subscription.release();
+  m_text_selection_subscription.release();
   m_editor = nullptr;
   attach(document);
   rebuild();
@@ -1470,6 +1722,7 @@ Editor* PropertyInspector::get_editor() const {
 
 void PropertyInspector::set_editor(Editor* editor) {
   m_selection_subscription.release();
+  m_text_selection_subscription.release();
   m_editor = editor;
   if(!m_editor) {
     attach(nullptr);
@@ -1488,6 +1741,10 @@ void PropertyInspector::set_editor(Editor* editor) {
     set_nodes(std::move(nodes));
   };
   m_selection_subscription = m_editor->get_selection().subscribe(follow);
+  m_text_selection_subscription =
+    m_editor->get_text_selection().subscribe([this] {
+      refresh();
+    });
   follow();
 }
 
@@ -1528,6 +1785,9 @@ const std::vector<NodeId>& PropertyInspector::get_nodes() const {
 }
 
 void PropertyInspector::set_nodes(std::vector<NodeId> nodes) {
+  if(nodes != m_nodes && m_picker->isVisible()) {
+    m_picker->hide();
+  }
   m_nodes = std::move(nodes);
   m_current = m_nodes.empty() ? NodeId() : m_nodes.back();
   m_edited_path.clear();
@@ -1594,7 +1854,9 @@ void PropertyInspector::refresh() {
     std::erase_if(m_nodes, [&] (const auto& id) {
       return !m_document->find(id);
     });
-    properties = extract_common_properties(*m_document, m_nodes, m_measurer);
+    auto selection = m_editor ? &m_editor->get_text_selection() : nullptr;
+    properties = extract_common_properties(
+      *m_document, m_nodes, m_measurer, selection);
     for(auto& id : m_nodes) {
       if(auto source = get_source(*m_document, id); !source.is_nil()) {
         m_sources.push_back(source);
@@ -1604,7 +1866,10 @@ void PropertyInspector::refresh() {
     m_nodes.clear();
   }
   m_current = m_nodes.empty() ? NodeId() : m_nodes.back();
-  auto is_same = is_same_structure(properties, m_properties);
+  auto is_locked = find_lock();
+  auto is_same = is_same_structure(properties, m_properties) &&
+    is_locked == m_is_locked;
+  m_is_locked = is_locked;
   m_properties = std::move(properties);
   if(is_same && !m_is_rebuild_pending && !m_sections.empty()) {
     update_fields();
@@ -1698,8 +1963,12 @@ void PropertyInspector::rebuild() {
       m_fields.push_back(std::make_unique<Field>(
         path, input, is_editable, std::move(update)));
     };
+    binding.m_pick = [this] (QWidget& anchor, const std::string& path) {
+      open_picker(QRect(anchor.mapToGlobal(QPoint(0, 0)), anchor.size()),
+        path);
+    };
     binding.m_actions = m_actions;
-    binding.m_is_enabled = !is_empty;
+    binding.m_is_enabled = !is_empty && !m_is_locked;
     auto current = static_cast<SectionFrame*>(nullptr);
     auto frames = std::vector<SectionFrame>();
     frames.reserve(sections.size());
@@ -1712,7 +1981,7 @@ void PropertyInspector::rebuild() {
         frames.push_back(make_section(
           has_header(path) ? section.m_label : QString(), has_info(path)));
         current = &frames.back();
-        current->m_widget->setEnabled(!is_empty);
+        current->m_widget->setEnabled(!is_empty && !m_is_locked);
         m_layout->addWidget(current->m_widget);
       }
       auto& frame = *current;
@@ -1776,9 +2045,35 @@ void PropertyInspector::update_fields() {
   }
 }
 
+ColorPicker& PropertyInspector::get_color_picker() {
+  return *m_picker;
+}
+
+bool PropertyInspector::open_color_picker(std::string_view path) {
+  auto field = find_field(path);
+  if(!field || !field->isEnabled()) {
+    return false;
+  }
+  open_picker(QRect(field->mapToGlobal(QPoint(0, 0)), field->size()),
+    std::string(path));
+  return true;
+}
+
+bool PropertyInspector::is_locked() const {
+  return m_is_locked;
+}
+
 void PropertyInspector::commit(
     int generation, const std::string& path, const PropertyValue& value) {
-  if(generation != m_generation || !m_editor) {
+  if(generation != m_generation) {
+    return;
+  }
+  apply(path, value);
+}
+
+void PropertyInspector::apply(
+    const std::string& path, const PropertyValue& value) {
+  if(!m_editor) {
     return;
   }
   auto editor = m_property_editors.find(path);
@@ -1804,11 +2099,89 @@ void PropertyInspector::commit(
 }
 
 void PropertyInspector::finish(int generation, const std::string& path) {
-  if(generation != m_generation || !m_editor || path != m_edited_path) {
+  if(generation != m_generation) {
+    return;
+  }
+  seal(path);
+}
+
+void PropertyInspector::seal(const std::string& path) {
+  if(!m_editor || path != m_edited_path) {
     return;
   }
   m_editor->get_history().seal();
   m_edited_path.clear();
+}
+
+void PropertyInspector::open_picker(
+    const QRect& anchor, const std::string& path) {
+  auto property = find_property(m_properties, path);
+  if(!property || !m_editor) {
+    return;
+  }
+  if(m_picker->isVisible()) {
+    m_picker->hide();
+  }
+  auto is_fill = path.ends_with(".paint");
+  auto fill = Fill(SolidFill());
+  if(auto value = std::get_if<Fill>(&property->m_value)) {
+    fill = *value;
+    if(std::holds_alternative<NoFill>(fill)) {
+      fill = SolidFill(Color(1, 1, 1, 1));
+    }
+  } else if(auto color = std::get_if<Color>(&property->m_value)) {
+    fill = SolidFill(*color);
+  }
+  m_picker->set_gradient_enabled(is_fill);
+  m_picker->set_fill(fill);
+  m_picker->set_swatches(m_editor->get_document().get_resources().m_swatches);
+  m_picked_path = path;
+  auto window = this->window();
+  auto left = mapToGlobal(QPoint(0, 0)).x();
+  if(window) {
+    left = std::min(left, window->mapToGlobal(QPoint(0, 0)).x() +
+      window->width());
+  }
+  m_picker->popup(QRect(left, anchor.top(), 1, anchor.height()));
+}
+
+void PropertyInspector::add_swatch(const Fill& fill) {
+  if(!m_editor) {
+    return;
+  }
+  auto swatch = ColorSwatch();
+  if(auto solid = std::get_if<SolidFill>(&fill)) {
+    swatch.m_color = solid->m_color;
+  } else if(auto gradient = std::get_if<GradientFill>(&fill)) {
+    swatch.m_gradient = gradient->m_stops;
+    if(!gradient->m_stops.empty()) {
+      swatch.m_color = gradient->m_stops.front().m_color;
+    }
+  } else {
+    return;
+  }
+  auto& swatches = m_editor->get_document().get_resources().m_swatches;
+  if(std::any_of(swatches.begin(), swatches.end(), [&] (const auto& entry) {
+      return entry.m_color == swatch.m_color &&
+        entry.m_gradient == swatch.m_gradient;
+    })) {
+    return;
+  }
+  seal(m_edited_path);
+  try {
+    m_editor->execute(std::make_unique<AddSwatchCommand>(std::move(swatch)));
+  } catch(const std::exception&) {}
+  m_picker->set_swatches(m_editor->get_document().get_resources().m_swatches);
+}
+
+bool PropertyInspector::find_lock() const {
+  if(!m_document) {
+    return false;
+  }
+  return std::any_of(m_nodes.begin(), m_nodes.end(), [&] (const auto& id) {
+    auto node = m_document->find(id);
+    return node && node->m_header.m_is_locked;
+  });
 }
 
 bool PropertyInspector::is_affected(const ChangeSet& changes) const {

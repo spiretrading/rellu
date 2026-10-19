@@ -23,6 +23,7 @@
 #include "Rellu/Ui/PropertyInspector.hpp"
 #include "Rellu/Ui/PrototypeInspector.hpp"
 #include "Rellu/Ui/RecentFiles.hpp"
+#include "Rellu/Ui/TextActions.hpp"
 #include "Rellu/Ui/Toolbar.hpp"
 #include "ComponentDrop.hpp"
 #include "ComponentThumbnails.hpp"
@@ -32,8 +33,9 @@ namespace Rellu {
 
   /**
    * The application's top-level window editing one document, laid out as
-   * Adobe XD's editor: the menu row, the app bar, the toolbar, the left
-   * panel, the canvas and the property inspector.
+   * Adobe XD's editor: the menu row, merged into the title bar where the
+   * platform allows, the app bar, the toolbar, the left panel, the canvas
+   * and the property inspector.
    */
   class MainWindow : public QMainWindow {
     public:
@@ -67,6 +69,13 @@ namespace Rellu {
       bool make_new();
 
       /**
+       * Replaces the current document with its file's saved contents,
+       * discarding its unsaved changes, as File &gt; Revert to Saved does.
+       * @return <code>true</code> iff the document was reloaded.
+       */
+      bool revert();
+
+      /**
        * Saves the current document to its file, asking for a path if it has
        * none.
        * @return <code>true</code> iff the document was saved.
@@ -81,14 +90,21 @@ namespace Rellu {
 
     protected:
       void closeEvent(QCloseEvent* event) override;
+      void changeEvent(QEvent* event) override;
       bool eventFilter(QObject* watched, QEvent* event) override;
+      bool nativeEvent(
+        const QByteArray& type, void* message, qintptr* result) override;
 
     private:
       DocumentView* m_view;
+      QWidget* m_menu_row;
+      QMenuBar* m_menu_bar;
+      QWidget* m_maximize;
       ActionRegistry m_actions;
       CommandRegistry m_commands;
       std::unique_ptr<EditActions> m_edit_actions;
       std::unique_ptr<ComponentActions> m_component_actions;
+      std::unique_ptr<TextActions> m_text_actions;
       ComponentThumbnails m_thumbnails;
       std::unique_ptr<ComponentDrop> m_component_drop;
       AppBar* m_app_bar;
@@ -132,6 +148,9 @@ namespace Rellu {
       void zoom_to_selection();
       double get_zoom() const;
       void update_zoom();
+      void add_asset_actions();
+      void update_asset_actions();
+      bool is_caption(QPoint position) const;
   };
 }
 

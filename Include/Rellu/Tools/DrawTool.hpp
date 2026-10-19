@@ -14,7 +14,8 @@ namespace Rellu {
   /**
    * Draws a new node by dragging, as Adobe XD's drawing tools do. The node
    * appears as soon as the drag spans it, follows the pointer and the
-   * modifier keys, and is selected; the whole drag is one undoable step.
+   * modifier keys, and is selected; the whole drag is one undoable step,
+   * which the tool may complete when the drag is released.
    * Both ends of the drag snap through the context's snap service.
    * Escape abandons a drag and otherwise returns to the select tool. The
    * tool stays active once a node is drawn.
@@ -66,11 +67,19 @@ namespace Rellu {
       virtual void click(ToolContext& context, Point point);
 
       /**
+       * Completes the step drawing a node once the drag is released, by
+       * merging commands into it. Does nothing by default.
+       * @param context The context worked in.
+       * @param id The node drawn.
+       */
+      virtual void complete(ToolContext& context, const NodeId& id);
+
+      /**
        * Finds the container a node drawn from a point goes in, whose
        * children and frame the drawing snaps to.
        * @param context The context worked in.
        * @param point The point in document space.
-       * @return The artboard given by find_drawing_parent by default.
+       * @return The container given by find_drawing_parent by default.
        */
       virtual NodeId find_parent(const ToolContext& context, Point point) const;
 
@@ -104,6 +113,16 @@ namespace Rellu {
    *         <i>point</i>, or nil for the pasteboard.
    */
   NodeId find_drawing_parent(const Document& document, Point point);
+
+  /**
+   * Finds the container a node drawn from a point goes in, as Adobe XD
+   * does: the group entered, unless it is or lies within a repeat grid,
+   * stack or component instance, and otherwise the artboard given by
+   * find_drawing_parent.
+   * @param context The context drawn in.
+   * @param point The point in document space.
+   */
+  NodeId find_drawing_parent(const ToolContext& context, Point point);
 }
 
 #endif

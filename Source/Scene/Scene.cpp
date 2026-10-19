@@ -63,14 +63,16 @@ std::vector<DrawRegion> Scene::update(
 void Scene::on_change(const ChangeSet& changes) {
   m_is_changed = true;
   for(auto& id : changes.m_inserted) {
-    mark(id);
+    mark(id, false);
   }
   for(auto& id : changes.m_moved) {
-    mark(id);
+    mark(id, false);
   }
   for(auto& change : changes.m_modified) {
-    if(is_set(change.m_mask, DRAWN)) {
-      mark(change.m_id);
+    if(change.m_mask == ChangeMask::TRANSFORM) {
+      mark(change.m_id, true);
+    } else if(is_set(change.m_mask, DRAWN)) {
+      mark(change.m_id, false);
     }
   }
   for(auto& id : changes.m_removed) {
@@ -84,8 +86,12 @@ void Scene::on_change(const ChangeSet& changes) {
   }
 }
 
-void Scene::mark(const NodeId& id) {
-  m_builder.invalidate(id);
+void Scene::mark(const NodeId& id, bool is_moved) {
+  if(is_moved) {
+    m_builder.invalidate_transform(id);
+  } else {
+    m_builder.invalidate(id);
+  }
   mark_dependents(id);
   auto node = m_document->find(id);
   if(!node) {

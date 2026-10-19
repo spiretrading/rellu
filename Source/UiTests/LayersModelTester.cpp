@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <chrono>
+#include <memory>
+#include <utility>
 #include <string>
 #include <vector>
 #include <doctest/doctest.h>
@@ -451,5 +453,41 @@ TEST_SUITE("LayersModel") {
     REQUIRE(find_time < 100);
     REQUIRE(rename_time < 100);
     view.hide();
+  }
+
+  TEST_CASE("drag_and_drop") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto model = LayersModel();
+    model.set_document(&document);
+    auto card = model.find(ids.m_card);
+    REQUIRE(!model.flags(card).testFlag(Qt::ItemIsDragEnabled));
+    auto moves = std::vector<std::pair<NodeId, std::size_t>>();
+    model.set_move_handler([&] (const auto& nodes, const auto& parent,
+        auto index) {
+      REQUIRE(nodes == std::vector{ids.m_ellipse});
+      moves.emplace_back(parent, index);
+      return true;
+    });
+    REQUIRE(model.flags(card).testFlag(Qt::ItemIsDragEnabled));
+    REQUIRE(model.flags(card).testFlag(Qt::ItemIsDropEnabled));
+    REQUIRE(!model.flags(model.find(ids.m_instance)).testFlag(
+      Qt::ItemIsDropEnabled));
+    auto data = std::unique_ptr<QMimeData>(
+      model.mimeData({model.find(ids.m_ellipse)}));
+    REQUIRE(data->hasFormat(LayersModel::MIME_TYPE));
+    REQUIRE(model.canDropMimeData(data.get(), Qt::MoveAction, 0, 0, card));
+    REQUIRE(!model.canDropMimeData(data.get(), Qt::MoveAction, 0, 0,
+      model.find(ids.m_instance)));
+    REQUIRE(model.dropMimeData(data.get(), Qt::MoveAction, 0, 0, card));
+    REQUIRE(model.dropMimeData(data.get(), Qt::MoveAction, 2, 0, card));
+    REQUIRE(model.dropMimeData(data.get(), Qt::MoveAction, -1, 0, card));
+    REQUIRE(moves == std::vector<std::pair<NodeId, std::size_t>>({
+      std::pair(ids.m_card, 2), std::pair(ids.m_card, 0),
+      std::pair(ids.m_card, 2)}));
+    auto artboard = std::unique_ptr<QMimeData>(
+      model.mimeData({model.find(ids.m_artboard)}));
+    REQUIRE(!model.canDropMimeData(
+      artboard.get(), Qt::MoveAction, 0, 0, card));
   }
 }

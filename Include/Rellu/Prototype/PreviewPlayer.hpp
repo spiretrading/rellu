@@ -1,5 +1,6 @@
 #ifndef RELLU_PROTOTYPE_PREVIEW_PLAYER_HPP
 #define RELLU_PROTOTYPE_PREVIEW_PLAYER_HPP
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -88,6 +89,14 @@ namespace Rellu {
    */
   class PreviewPlayer {
     public:
+
+      /**
+       * Finds the address of the hyperlink a text node shows at a point,
+       * given the node and the point in its local coordinates, returning
+       * an empty address if there is none.
+       */
+      using TextLinkFinder =
+        std::function<std::string (const Node& node, Point position)>;
 
       /** The distance in viewport units a press moves before it drags. */
       static constexpr auto DRAG_THRESHOLD = 4.0;
@@ -207,6 +216,37 @@ namespace Rellu {
       bool scroll(double delta);
 
       /**
+       * Scrolls the innermost scroll group under a point that can scroll in
+       * the direction asked for, or the artboard shown if there is none, as
+       * the mouse wheel does.
+       * @param position The position in the viewport.
+       * @param delta The distance to scroll right and down.
+       * @return <code>true</code> iff a scroll changed.
+       */
+      bool scroll(Point position, Point delta);
+
+      /**
+       * Returns the distance a scroll group's content is scrolled from where
+       * the document places it.
+       * @param group The scroll group.
+       */
+      Point get_scroll(const NodeId& group) const;
+
+      /**
+       * Sets the function opening the web pages of hyperlinks.
+       * @param handler The function, given the page's address.
+       */
+      void set_link_handler(
+        std::function<void (const std::string& url)> handler);
+
+      /**
+       * Sets the function finding the hyperlinks of text, which a tap
+       * opens through the link handler when no tap interaction applies.
+       * @param finder The function.
+       */
+      void set_text_link_finder(TextLinkFinder finder);
+
+      /**
        * Handles a key press, triggering the matching key trigger of the
        * topmost artboard shown.
        * @param chord The key pressed.
@@ -291,6 +331,11 @@ namespace Rellu {
       double m_time;
       std::optional<Point> m_press;
       bool m_is_dragging;
+      std::optional<Point> m_drag_point;
+      NodeId m_drag_group;
+      std::unordered_map<NodeId, Point> m_scrolls;
+      std::function<void (const std::string& url)> m_link_handler;
+      TextLinkFinder m_text_link_finder;
 
       PreviewPlayer(const PreviewPlayer&) = delete;
       PreviewPlayer& operator =(const PreviewPlayer&) = delete;
@@ -323,6 +368,9 @@ namespace Rellu {
         bool& is_shared) const;
       void discard(const NodeId& root);
       bool update_hover(Point position);
+      std::vector<NodeId> find_scroll_groups(Point position) const;
+      std::string find_text_link(Point position) const;
+      bool scroll_group(const NodeId& group, Point delta);
       std::vector<PreviewLayer> get_screen_layers(const Screen& screen,
         Point position, double opacity) const;
   };

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <optional>
@@ -84,6 +85,28 @@ namespace {
       return std::make_unique<SetRepeatGridSpacingCommand>(
         nodes, orientation, *number);
     };
+  }
+
+  void wrap_stack_position(PropertyEditors& editors, const std::string& path,
+      Orientation orientation) {
+    auto editor = editors.find(path);
+    if(!editor) {
+      return;
+    }
+    auto wrapped = *editor;
+    auto setter = editor->m_setter;
+    wrapped.m_setter = [=] (const Document& document,
+        const std::vector<NodeId>& nodes, const PropertyValue& value) ->
+        std::unique_ptr<Command> {
+      if(!setter || !nodes.empty() && std::all_of(nodes.begin(), nodes.end(),
+          [&] (const auto& id) {
+            return get_stack_direction(document, id) == orientation;
+          })) {
+        return nullptr;
+      }
+      return setter(document, nodes, value);
+    };
+    editors.add(path, std::move(wrapped));
   }
 
   void wrap_grid_size(
@@ -203,4 +226,21 @@ void Rellu::add_layout_property_editors(
     make_grid_spacing_setter(Orientation::VERTICAL)));
   wrap_grid_size(editors, "transform.width", true);
   wrap_grid_size(editors, "transform.height", false);
+  wrap_stack_position(editors, "transform.x", Orientation::HORIZONTAL);
+  wrap_stack_position(editors, "transform.y", Orientation::VERTICAL);
+}
+
+std::optional<Orientation> Rellu::get_stack_direction(
+    const Document& document, const NodeId& id) {
+  auto node = document.find(id);
+  if(!node || node->m_parent.is_nil()) {
+    return std::nullopt;
+  }
+  auto parent = document.find(node->m_parent);
+  auto group = parent ? parent->get_group() : nullptr;
+  if(!group || !group->m_stack || group->m_stack->m_has_background &&
+      parent->m_children.front() == id) {
+    return std::nullopt;
+  }
+  return group->m_stack->m_orientation;
 }

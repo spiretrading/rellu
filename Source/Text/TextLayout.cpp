@@ -677,11 +677,17 @@ Rect Rellu::measure_text(const Text& text, const FontLibrary& library) {
         bounds = box;
       }
     });
-  if(auto frame = std::get_if<AutoHeightFrame>(&text.m_frame)) {
-    auto height = bounds ? std::max(bounds->get_bottom(), 0.0) : 0.0;
-    return Rect(0, 0, frame->m_width, height);
+  if(!bounds) {
+    bounds = Rect(0, 0, 0, 0);
   }
-  return bounds.value_or(Rect(0, 0, 0, 0));
+  auto left = std::round(bounds->get_left());
+  auto top = std::round(bounds->get_top());
+  auto right = std::round(bounds->get_right());
+  auto bottom = std::round(bounds->get_bottom());
+  if(auto frame = std::get_if<AutoHeightFrame>(&text.m_frame)) {
+    return Rect(0, 0, frame->m_width, std::max(bottom, 0.0));
+  }
+  return Rect(left, top, right - left, bottom - top);
 }
 
 StoredLayout Rellu::store_layout(const Text& text, const FontLibrary& library) {

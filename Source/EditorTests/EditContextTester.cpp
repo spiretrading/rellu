@@ -86,7 +86,7 @@ TEST_SUITE("EditContext") {
       transaction.replace_header(header);
       transaction.commit();
     }
-    REQUIRE(context.resolve(scene.m_ellipse).is_nil());
+    REQUIRE(context.resolve(scene.m_ellipse) == scene.m_group);
   }
 
   TEST_CASE("hover") {

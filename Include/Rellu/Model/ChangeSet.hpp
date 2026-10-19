@@ -36,7 +36,7 @@ namespace Rellu {
     /** The header's isolation. */
     ISOLATION = 1 << 6,
 
-    /** The header's constraints. */
+    /** The header's constraints, aspect lock or fixed position. */
     CONSTRAINTS = 1 << 7,
 
     /** The header's export mark. */

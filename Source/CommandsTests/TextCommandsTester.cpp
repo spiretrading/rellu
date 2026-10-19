@@ -120,6 +120,39 @@ TEST_SUITE("TextCommands") {
     REQUIRE(rejoined.m_runs.front().m_style.m_font.m_size == 30);
   }
 
+  TEST_CASE("hyperlink") {
+    auto text = make_runs(u"Hello world", {TextRun(11, make_style(10))});
+    auto edit = TextStyleEdit();
+    edit.m_hyperlink = "https://example.com";
+    auto edited = edit_text_style(text, TextRange(0, 5), edit);
+    REQUIRE(get_lengths(edited) == std::vector<std::size_t>{5, 6});
+    REQUIRE(edited.m_runs[0].m_hyperlink == "https://example.com");
+    REQUIRE(edited.m_runs[1].m_hyperlink.empty());
+    REQUIRE(edited.m_runs[0].m_style == edited.m_runs[1].m_style);
+    auto typed = replace_text(edited, TextRange(5, 5), u"!");
+    REQUIRE(get_lengths(typed) == std::vector<std::size_t>{6, 6});
+    edit.m_hyperlink = "";
+    auto cleared = edit_text_style(edited, TextRange(0, 11), edit);
+    REQUIRE(get_lengths(cleared) == std::vector<std::size_t>{11});
+    auto command = SetTextStyleCommand(std::vector<NodeId>(), edit);
+    REQUIRE(command.get_label() == "Change Hyperlink");
+  }
+
+  TEST_CASE("style_edit") {
+    auto style = make_style(10);
+    style.m_color = make_color(255, 0, 0);
+    style.m_is_underlined = true;
+    style.m_transform = TextTransform::UPPERCASE;
+    style.m_script = TextScript::SUBSCRIPT;
+    style.m_letter_spacing = 50;
+    REQUIRE(edit_style(make_style(20), make_style_edit(style)) == style);
+    auto edit = TextStyleEdit();
+    edit.m_size = 30;
+    auto edited = edit_style(style, edit);
+    REQUIRE(edited.m_font.m_size == 30);
+    REQUIRE(edited.m_color == style.m_color);
+  }
+
   TEST_CASE("whole_style") {
     auto text = Text();
     text.m_content = Shared(std::u16string(u"abc"));

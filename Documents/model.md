@@ -71,7 +71,10 @@ Every node shares a common header and carries one kind-specific payload:
 
 The common header holds: `id`, `name`, `is_visible`, `is_locked`, `transform`,
 `opacity`, `blend_mode`, `is_isolated` (XD `isolation: isolate`),
-`constraints` (responsive resize, below) and `is_marked_for_export`.
+`constraints` (responsive resize, below), `is_marked_for_export`,
+`is_fixed_position` (XD `meta.ux.fixed`, Fix Position When Scrolling) and
+`aspect_lock` (XD `meta.ux.aspectLock`, the size whose proportions a resize
+keeps while Lock Aspect is on).
 
 ### Groups and their roles
 

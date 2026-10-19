@@ -5,8 +5,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
+#include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Ui/LayoutProperties.hpp"
@@ -16,7 +19,6 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto LINE_HEIGHT_RATIO = 1.2;
   const auto PASS_THROUGH = QString("Pass Through");
   const auto BLEND_MODE_ORDER = std::to_array({BlendMode::NORMAL,
     BlendMode::DARKEN, BlendMode::MULTIPLY, BlendMode::COLOR_BURN,
@@ -41,6 +43,7 @@ namespace {
   const auto SCROLL_DIRECTIONS = QStringList(
     {"None", "Horizontal", "Vertical", "Horizontal & Vertical"});
   const auto ARTBOARD_SCROLLING = QStringList({"None", "Vertical"});
+  const auto RESIZE_MODES = QStringList({"Auto", "Manual"});
   const auto ORIENTATIONS = QStringList({"Portrait", "Landscape"});
   const auto GRID_TYPES = QStringList({"Layout", "Square"});
   const auto BOOLEAN_OPERATIONS =
@@ -201,6 +204,8 @@ namespace {
     if(frame && node.get_artboard()) {
       add(section, "width", "W", frame->m_width);
       add(section, "height", "H", frame->m_height);
+      add(section, "lock_aspect", "Lock Aspect",
+        static_cast<bool>(node.m_header.m_aspect_lock));
       add(section, "x", "X", frame->m_x);
       add(section, "y", "Y", frame->m_y);
       add(section, "orientation", "Orientation", Choice(
@@ -214,9 +219,13 @@ namespace {
       add(section, "height", "H", frame->m_height).m_is_read_only =
         is_point_text(displayed);
     }
-    add(section, "lock_aspect", "Lock Aspect", false).m_is_read_only = true;
-    add(section, "x", "X", origin.m_x);
-    add(section, "y", "Y", origin.m_y);
+    add(section, "lock_aspect", "Lock Aspect",
+      static_cast<bool>(node.m_header.m_aspect_lock));
+    auto stack = get_stack_direction(document, node.get_id());
+    add(section, "x", "X", origin.m_x).m_is_read_only =
+      stack == Orientation::HORIZONTAL;
+    add(section, "y", "Y", origin.m_y).m_is_read_only =
+      stack == Orientation::VERTICAL;
     auto rotation = std::atan2(transform.m_b, transform.m_a) *
       180 / std::numbers::pi;
     add(section, "rotation", "Rotation", rotation == 0 ? 0.0 : rotation);
@@ -228,16 +237,31 @@ namespace {
     }
     add(section, "scroll", "Scroll", Choice(scroll, SCROLL_DIRECTIONS));
     if(!find_artboard(document, node.get_id()).is_nil()) {
-      add(section, "fixed_position", "Fix Position When Scrolling", false).
-        m_is_read_only = true;
+      add(section, "fixed_position", "Fix Position When Scrolling",
+        node.m_header.m_is_fixed_position);
     }
     return section;
   }
 
   PropertyDescriptor make_layout(const Node& node, const Node& displayed) {
     auto section = make_property("layout", "Layout");
-    add(section, "responsive", "Responsive Resize",
-      displayed.m_header.m_constraints.m_is_enabled);
+    auto& constraints = node.m_header.m_constraints;
+    auto& responsive = add(section, "responsive", "Responsive Resize",
+      constraints.m_is_enabled);
+    if(constraints.m_is_enabled && !displayed.get_artboard()) {
+      add(responsive, "mode", "Resize",
+        Choice(constraints.m_is_custom ? 1 : 0, RESIZE_MODES));
+      for(auto [name, label, value] : {
+          std::tuple("top", "Pin Top Edge", constraints.m_top),
+          std::tuple("right", "Pin Right Edge", constraints.m_right),
+          std::tuple("bottom", "Pin Bottom Edge", constraints.m_bottom),
+          std::tuple("left", "Pin Left Edge", constraints.m_left),
+          std::tuple("width", "Fix Width", constraints.m_width),
+          std::tuple("height", "Fix Height", constraints.m_height)}) {
+        add(responsive, name, label, value).m_is_read_only =
+          !constraints.m_is_custom;
+      }
+    }
     add_layout_properties(displayed, section);
     if(auto artboard = displayed.get_artboard()) {
       add(section, "scrolling", "Scrolling",
@@ -254,19 +278,60 @@ namespace {
     return left.m_family == right.m_family && left.m_style == right.m_style;
   }
 
-  PropertyDescriptor make_text(const Text& text) {
+  double get_natural_line_height(
+      const TextStyle& style, const TextMeasurer& measurer) {
+    auto line = Text();
+    line.m_content = Shared(std::u16string());
+    line.m_base_style = style;
+    return std::round(measurer(line).m_height);
+  }
+
+  std::vector<TextRun> get_described_runs(
+      const Text& text, const TextSelection* selection) {
+    if(!selection) {
+      return get_runs(text);
+    }
+    auto size = text.m_content->size();
+    auto range = selection->get_range();
+    range.m_start = std::min(range.m_start, size);
+    range.m_end = std::min(range.m_end, size);
+    if(range.m_start == range.m_end) {
+      auto run = get_typing_run(text, range.m_start);
+      if(auto& pending = selection->get_pending_style()) {
+        run.m_style = *pending;
+      }
+      return {run};
+    }
+    auto runs = std::vector<TextRun>();
+    auto start = std::size_t(0);
+    for(auto& run : get_runs(text)) {
+      auto end = start + run.m_length;
+      if(start < range.m_end && end > range.m_start) {
+        runs.push_back(run);
+      }
+      start = end;
+    }
+    return runs;
+  }
+
+  PropertyDescriptor make_text(const Text& text, const TextMeasurer& measurer,
+      const TextSelection* selection) {
     auto section = make_property("text", "Text");
-    auto runs = std::vector<const TextStyle*>();
-    for(auto& run : text.m_runs) {
-      runs.push_back(&run.m_style);
+    auto described = get_described_runs(text, selection);
+    if(described.empty()) {
+      described.push_back(TextRun(0, text.m_base_style));
     }
-    if(runs.empty()) {
-      runs.push_back(&text.m_base_style);
-    }
-    auto& style = *runs.front();
+    auto& run = described.front();
+    auto& style = run.m_style;
+    auto is_run_mixed = [&] (auto compare) {
+      return std::any_of(described.begin(), described.end(),
+        [&] (const auto& other) {
+          return !compare(other, run);
+        });
+    };
     auto is_mixed = [&] (auto compare) {
-      return std::any_of(runs.begin(), runs.end(), [&] (auto run) {
-        return !compare(*run, style);
+      return is_run_mixed([&] (const auto& left, const auto& right) {
+        return compare(left.m_style, right.m_style);
       });
     };
     add(section, "family", "Font", to_qstring(style.m_font.m_family)).
@@ -290,7 +355,7 @@ namespace {
         });
     auto& paragraph = text.m_paragraph_style;
     auto line_height = paragraph.m_line_height.value_or(
-      std::round(style.m_font.m_size * LINE_HEIGHT_RATIO));
+      get_natural_line_height(style, measurer));
     add(section, "line_height", "Line Spacing", line_height);
     add(section, "paragraph_spacing", "Paragraph Spacing",
       paragraph.m_paragraph_spacing);
@@ -322,8 +387,16 @@ namespace {
         is_mixed([] (const auto& left, const auto& right) {
           return left.m_is_struck_through == right.m_is_struck_through;
         });
-    add(section, "hyperlink", "Insert URL here", QString()).m_is_read_only =
-      true;
+    auto& hyperlink = add(section, "hyperlink", "Insert URL here",
+      to_qstring(run.m_hyperlink));
+    hyperlink.m_is_mixed =
+      is_run_mixed([] (const auto& left, const auto& right) {
+        return left.m_hyperlink == right.m_hyperlink;
+      });
+    if(selection && selection->get_range().m_start ==
+        selection->get_range().m_end) {
+      hyperlink.m_is_read_only = true;
+    }
     return section;
   }
 
@@ -383,6 +456,7 @@ namespace {
       make_property("fill", "Fill", make_choice(fill.index(), FILL_TYPES));
     add(section, "enabled", "Apply Fill",
       !std::holds_alternative<NoFill>(fill));
+    add(section, "paint", "Fill", fill);
     if(auto solid = std::get_if<SolidFill>(&fill)) {
       add(section, "color", "Color", solid->m_color);
     } else if(auto gradient = std::get_if<GradientFill>(&fill)) {
@@ -469,8 +543,10 @@ namespace {
       Choice(!blur || blur->m_is_background ? 0 : 1, BLUR_TYPES));
     if(blur) {
       add(row, "amount", "Blur Amount", blur->m_amount);
-      add(row, "brightness", "Brightness", blur->m_brightness);
-      add(row, "opacity", "Effect Opacity", blur->m_fill_opacity);
+      if(blur->m_is_background) {
+        add(row, "brightness", "Brightness", blur->m_brightness);
+        add(row, "opacity", "Effect Opacity", blur->m_fill_opacity);
+      }
     }
     return section;
   }
@@ -490,16 +566,17 @@ namespace {
       return section;
     }
     auto& margins = grid->m_margins;
-    auto count = std::max(grid->m_column_count, 1);
-    auto width = (artboard.m_frame.m_width - margins.m_left -
-      margins.m_right - grid->m_gutter * (count - 1)) / count;
     add(section, "columns", "Columns", grid->m_column_count);
     add(section, "column_color", "Column Color", grid->m_column_color);
     add(section, "gutter", "Gutter Width", grid->m_gutter);
-    add(section, "column_width", "Column Width", width);
-    add(section, "linked_margins", "Linked Margins",
-      margins.m_top == margins.m_right && margins.m_top == margins.m_bottom &&
-      margins.m_top == margins.m_left);
+    add(section, "column_width", "Column Width",
+      get_column_width(*grid, artboard.m_frame.m_width));
+    auto is_linked = margins.m_left == margins.m_right &&
+      margins.m_top == margins.m_bottom;
+    add(section, "linked_margins", "Linked Margins", is_linked);
+    if(is_linked) {
+      add(section, "margin_linked", "Margins", margins.m_left);
+    }
     add(section, "margin_top", "Top Margin", margins.m_top);
     add(section, "margin_right", "Right Margin", margins.m_right);
     add(section, "margin_bottom", "Bottom Margin", margins.m_bottom);
@@ -576,7 +653,9 @@ namespace {
       }
     }
     for(auto& section : style) {
-      set_read_only(section);
+      if(leaves.empty()) {
+        set_read_only(section);
+      }
       sections.push_back(std::move(section));
     }
   }
@@ -613,7 +692,8 @@ namespace {
 }
 
 std::vector<PropertyDescriptor> Rellu::extract_properties(
-    const Document& document, const NodeId& id, const TextMeasurer& measurer) {
+    const Document& document, const NodeId& id, const TextMeasurer& measurer,
+    const TextSelection* selection) {
   auto sections = std::vector<PropertyDescriptor>();
   auto node = document.find(id);
   if(!node) {
@@ -634,7 +714,11 @@ std::vector<PropertyDescriptor> Rellu::extract_properties(
   }
   sections.push_back(make_layout(*node, displayed));
   if(text) {
-    sections.push_back(make_text(*text));
+    if(selection && (!selection->is_editing() ||
+        selection->get_node() != id)) {
+      selection = nullptr;
+    }
+    sections.push_back(make_text(*text, measurer, selection));
   }
   sections.push_back(make_appearance(displayed));
   if(shape) {
@@ -663,17 +747,18 @@ std::vector<PropertyDescriptor> Rellu::extract_properties(
 
 std::vector<PropertyDescriptor> Rellu::extract_common_properties(
     const Document& document, const std::vector<NodeId>& nodes,
-    const TextMeasurer& measurer) {
+    const TextMeasurer& measurer, const TextSelection* selection) {
   if(nodes.empty()) {
     return {};
   }
-  auto sections = extract_properties(document, nodes.front(), measurer);
+  auto sections =
+    extract_properties(document, nodes.front(), measurer, selection);
   if(nodes.size() == 1) {
     return sections;
   }
   for(auto i = std::size_t(1); i != nodes.size(); ++i) {
-    intersect_properties(
-      sections, extract_properties(document, nodes[i], measurer));
+    intersect_properties(sections,
+      extract_properties(document, nodes[i], measurer, selection));
   }
   auto transform = std::find_if(sections.begin(), sections.end(),
     [] (const auto& section) {
@@ -759,6 +844,11 @@ QString Rellu::to_text(const PropertyValue& value) {
     } else if constexpr(std::same_as<T, Size>) {
       return QString("%1 x %2").arg(
         format_number(value.m_width), format_number(value.m_height));
+    } else if constexpr(std::same_as<T, Fill>) {
+      if(value.index() < static_cast<std::size_t>(FILL_TYPES.size())) {
+        return FILL_TYPES[static_cast<int>(value.index())];
+      }
+      return QString();
     } else {
       if(value.m_index >= 0 && value.m_index < value.m_options.size()) {
         return value.m_options[value.m_index];

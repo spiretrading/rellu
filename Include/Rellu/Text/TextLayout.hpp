@@ -121,7 +121,8 @@ namespace Rellu {
   /**
    * Measures a text node laid out as by lay_out: the frame of area text,
    * otherwise the boxes of its lines from ascent to descent, spanning the
-   * frame's width for auto height text.
+   * frame's width for auto height text, with their edges rounded to whole
+   * units as Adobe XD measures text.
    * @param text The text node's payload.
    * @param library The fonts to resolve the text's fonts with.
    * @return The bounds in the node's local space.

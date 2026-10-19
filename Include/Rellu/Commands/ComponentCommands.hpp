@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Command.hpp"
 #include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
@@ -21,8 +22,11 @@ namespace Rellu {
       /**
        * Constructs a MakeComponentCommand.
        * @param nodes The nodes to make a component of.
+       * @param measurer The function measuring text, which sizes the
+       *        component.
        */
-      explicit MakeComponentCommand(std::vector<NodeId> nodes) noexcept;
+      explicit MakeComponentCommand(std::vector<NodeId> nodes,
+        TextMeasurer measurer = estimate_text_bounds) noexcept;
 
       /** Returns the component made by the last application, or nil. */
       const ComponentId& get_component() const;
@@ -36,6 +40,7 @@ namespace Rellu {
 
     private:
       std::vector<NodeId> m_nodes;
+      TextMeasurer m_measurer;
       ComponentId m_component;
       NodeId m_main;
   };
@@ -116,9 +121,12 @@ namespace Rellu {
        * Constructs a SwapComponentCommand.
        * @param nodes The instances to replace.
        * @param component The component to instantiate.
+       * @param measurer The function measuring text, which sizes the
+       *        instances.
        */
-      SwapComponentCommand(
-        std::vector<NodeId> nodes, const ComponentId& component) noexcept;
+      SwapComponentCommand(std::vector<NodeId> nodes,
+        const ComponentId& component,
+        TextMeasurer measurer = estimate_text_bounds) noexcept;
 
       std::string get_label() const override;
       void apply(const Document& document, Transaction& transaction) override;
@@ -127,6 +135,7 @@ namespace Rellu {
     private:
       std::vector<NodeId> m_nodes;
       ComponentId m_component;
+      TextMeasurer m_measurer;
       std::vector<NodeId> m_selection;
   };
 
@@ -139,9 +148,12 @@ namespace Rellu {
        * @param component The component to instantiate.
        * @param parent The parent, or nil for the canvas.
        * @param transform The instance's transform.
+       * @param measurer The function measuring text, which sizes the
+       *        instance.
        */
       InsertInstanceCommand(const ComponentId& component, const NodeId& parent,
-        const Matrix& transform) noexcept;
+        const Matrix& transform,
+        TextMeasurer measurer = estimate_text_bounds) noexcept;
 
       /** Returns the instance placed by the last application, or nil. */
       const NodeId& get_instance() const;
@@ -154,6 +166,7 @@ namespace Rellu {
       ComponentId m_component;
       NodeId m_parent;
       Matrix m_transform;
+      TextMeasurer m_measurer;
       NodeId m_instance;
   };
 
@@ -168,9 +181,12 @@ namespace Rellu {
        * Constructs a RestoreMainComponentCommand.
        * @param component The component.
        * @param transform The main component's transform on the canvas.
+       * @param measurer The function measuring text, which sizes the main
+       *        component.
        */
-      RestoreMainComponentCommand(
-        const ComponentId& component, const Matrix& transform) noexcept;
+      RestoreMainComponentCommand(const ComponentId& component,
+        const Matrix& transform,
+        TextMeasurer measurer = estimate_text_bounds) noexcept;
 
       /** Returns the main component placed by the last application, or nil. */
       const NodeId& get_main() const;
@@ -182,6 +198,7 @@ namespace Rellu {
     private:
       ComponentId m_component;
       Matrix m_transform;
+      TextMeasurer m_measurer;
       NodeId m_main;
   };
 
@@ -335,8 +352,10 @@ namespace Rellu {
    * Adds the component commands acting on targets: object.make_component,
    * object.ungroup_component and object.reset_main_state.
    * @param registry The registry to add to.
+   * @param measurer The function measuring text, which sizes components.
    */
-  void add_component_commands(CommandRegistry& registry);
+  void add_component_commands(CommandRegistry& registry,
+    TextMeasurer measurer = estimate_text_bounds);
 }
 
 #endif

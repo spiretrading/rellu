@@ -187,4 +187,34 @@ TEST_SUITE("StackCommands") {
     REQUIRE(get_group(document, id).m_padding ==
       Padding(Margins(5, 5, 5, 5), true, true));
   }
+
+  TEST_CASE("move_items") {
+    auto document = Document();
+    auto box = build_box(document);
+    auto history = History(document);
+    history.execute(std::make_unique<SetStackCommand>(
+      std::vector{box.m_group}, Orientation::VERTICAL, estimate_text_bounds));
+    REQUIRE(get_stack_items(document, box.m_group) ==
+      std::vector{box.m_a, box.m_c, box.m_b});
+    REQUIRE(!make_stack_nudge(document, std::vector{box.m_c}, Point(1, 0)));
+    REQUIRE(!make_stack_nudge(document, std::vector{box.m_group},
+      Point(0, 1)));
+    auto down = make_stack_nudge(document, std::vector{box.m_c}, Point(0, 1));
+    REQUIRE(down);
+    REQUIRE(down->get_label() == "Reorder");
+    history.execute(std::move(down));
+    REQUIRE(get_stack_items(document, box.m_group) ==
+      std::vector{box.m_a, box.m_b, box.m_c});
+    require_frame(document, box.m_b, Rect(0, get_frame(document, box.m_a).
+      get_bottom() + get_stack_margin(document,
+        *get_group(document, box.m_group).m_stack, box.m_a), 100, 30));
+    history.execute(make_stack_nudge(
+      document, std::vector{box.m_a, box.m_b}, Point(0, 1)));
+    REQUIRE(get_stack_items(document, box.m_group) ==
+      std::vector{box.m_c, box.m_a, box.m_b});
+    history.execute(make_stack_nudge(
+      document, std::vector{box.m_b}, Point(0, -1)));
+    REQUIRE(get_stack_items(document, box.m_group) ==
+      std::vector{box.m_c, box.m_b, box.m_a});
+  }
 }

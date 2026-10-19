@@ -5,8 +5,8 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto MARQUEE_COLOR = make_color(20, 115, 230);
-  constexpr auto MARQUEE_FILL = make_color(20, 115, 230, 0.08);
+  constexpr auto MARQUEE_COLOR = make_color(38, 128, 235);
+  constexpr auto MARQUEE_FILL = make_color(38, 128, 235, 0.08);
   constexpr auto LINE_WIDTH = 1.0;
 
   Rect make_rect(Point first, Point second) {
@@ -20,6 +20,7 @@ namespace {
 ZoomTool::ZoomTool()
   : m_is_pressed(false),
     m_is_dragging(false),
+    m_is_zooming_out(false),
     m_press(0, 0),
     m_position(0, 0) {}
 
@@ -27,6 +28,7 @@ void ZoomTool::press(ToolContext& context, const PointerEvent& event) {
   if(event.m_button != Qt::LeftButton) {
     return;
   }
+  m_is_zooming_out = event.m_modifiers.testFlag(Qt::AltModifier);
   m_is_pressed = true;
   m_is_dragging = false;
   m_press = event.m_position;
@@ -34,6 +36,7 @@ void ZoomTool::press(ToolContext& context, const PointerEvent& event) {
 }
 
 void ZoomTool::move(ToolContext& context, const PointerEvent& event) {
+  m_is_zooming_out = event.m_modifiers.testFlag(Qt::AltModifier);
   if(!m_is_pressed) {
     return;
   }
@@ -87,6 +90,13 @@ void ZoomTool::cancel(ToolContext& context) {
 
 bool ZoomTool::is_busy() const {
   return m_is_pressed;
+}
+
+ToolCursor ZoomTool::get_cursor() const {
+  if(m_is_zooming_out) {
+    return ToolCursor(CursorKind::ZOOM_OUT);
+  }
+  return ToolCursor(CursorKind::ZOOM_IN);
 }
 
 void ZoomTool::draw(const ToolContext& context, CanvasOverlay& overlay) const {

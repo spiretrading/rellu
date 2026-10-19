@@ -3,7 +3,9 @@
 #include <charconv>
 #include <cmath>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <variant>
 #include <QString>
 #include "Rellu/Io/XdGenerator.hpp"
 #include "Rellu/Io/XdValues.hpp"
@@ -462,7 +464,8 @@ namespace {
   }
 
   XdValue make_range(const TextStyle& style, std::size_t length,
-      const CharacterStyleId& link, const TextStyle& base) {
+      const CharacterStyleId& link, const std::string& hyperlink,
+      const TextStyle& base) {
     auto json = XdValue::make_object();
     json.set("length", length);
     json.set("linkId", link.is_nil() ? std::string() : to_id(link));
@@ -482,7 +485,7 @@ namespace {
     json.set("fill", XdValue::make_object()).set(
       "value", to_argb(style.m_color));
     json.set("strikethrough", style.m_is_struck_through);
-    json.set("hyperlinkUrl", "");
+    json.set("hyperlinkUrl", hyperlink);
     return json;
   }
 
@@ -524,11 +527,15 @@ namespace {
         set_animation(transition->m_animation);
       }
       properties.set("preserveScrollPosition", transition->m_preserve_scroll);
-      properties.set("destination", to_id(transition->m_destination));
+      if(!transition->m_destination.is_nil()) {
+        properties.set("destination", to_id(transition->m_destination));
+      }
     } else if(auto overlay = std::get_if<Overlay>(&interaction.m_action)) {
       action = "overlay-transition";
       set_animation(overlay->m_animation);
-      properties.set("destination", to_id(overlay->m_destination));
+      if(!overlay->m_destination.is_nil()) {
+        properties.set("destination", to_id(overlay->m_destination));
+      }
       auto& position =
         properties.set("overlayPosition", XdValue::make_object());
       position.set("x", overlay->m_position.m_x);
@@ -558,6 +565,9 @@ namespace {
       if(playback->m_target != interaction.m_owner) {
         properties.set("destination", to_id(playback->m_target));
       }
+    } else if(auto link = std::get_if<Hyperlink>(&interaction.m_action)) {
+      action = "hyperlink";
+      properties.set("hyperlinkUrl", link->m_url);
     }
     json.set("triggerEvent", event);
     json.set("action", action);
@@ -670,6 +680,85 @@ namespace {
     return json;
   }
 
+  bool has_default_name(std::string_view name, std::string_view prefix) {
+    if(!name.starts_with(prefix) || name.size() == prefix.size()) {
+      return false;
+    }
+    return std::all_of(name.begin() + prefix.size(), name.end(),
+      [] (auto c) {
+        return c >= '0' && c <= '9';
+      });
+  }
+
+  std::string_view get_shape_name_key(
+      const Shape& shape, std::string_view name) {
+    auto& geometry = shape.m_geometry;
+    if(std::holds_alternative<RectangleShape>(geometry)) {
+      if(has_default_name(name, "Rectangle ")) {
+        return "SHAPE_RECTANGLE";
+      } else if(has_default_name(name, "Image ")) {
+        return "SHAPE_IMAGE";
+      }
+    } else if(std::holds_alternative<EllipseShape>(geometry)) {
+      if(has_default_name(name, "Ellipse ")) {
+        return "SHAPE_ELLIPSE";
+      }
+    } else if(std::holds_alternative<PolygonShape>(geometry)) {
+      if(has_default_name(name, "Polygon ")) {
+        return "SHAPE_POLYGON";
+      }
+    } else if(std::holds_alternative<LineShape>(geometry)) {
+      if(has_default_name(name, "Line ")) {
+        return "SHAPE_LINE";
+      }
+    } else if(std::holds_alternative<PathShape>(geometry)) {
+      if(has_default_name(name, "Path ")) {
+        return "SHAPE_PATH";
+      }
+    } else if(auto compound = std::get_if<CompoundShape>(&geometry)) {
+      if(compound->m_operation == CompoundOperation::UNION &&
+          has_default_name(name, "Union ")) {
+        return "SHAPE_UNION";
+      } else if(compound->m_operation == CompoundOperation::SUBTRACT &&
+          has_default_name(name, "Subtraction ")) {
+        return "SHAPE_SUBTRACT";
+      }
+    }
+    return {};
+  }
+
+  std::string_view get_name_key(const Node& node, bool is_component) {
+    auto& name = node.m_header.m_name;
+    if(auto shape = node.get_shape()) {
+      return get_shape_name_key(*shape, name);
+    } else if(auto text = node.get_text()) {
+      if(!name.empty() && to_utf8(*text->m_content) == name) {
+        return "SHAPE_GROUP";
+      }
+    } else if(auto group = node.get_group()) {
+      if(group->m_repeat_grid) {
+        if(has_default_name(name, "Repeat Grid ")) {
+          return "SHAPE_REPEAT_GRID";
+        }
+      } else if(group->m_scroll_group) {
+        if(has_default_name(name, "Scroll Group ")) {
+          return "SHAPE_SCROLLABLE_GROUP";
+        }
+      } else if(group->m_mask) {
+        if(has_default_name(name, "Mask Group ")) {
+          return "SHAPE_MASK";
+        }
+      } else if(is_component || group->m_component_instance) {
+        if(has_default_name(name, "Component ")) {
+          return "SHAPE_COMPONENT";
+        }
+      } else if(has_default_name(name, "Group ")) {
+        return "SHAPE_GROUP";
+      }
+    }
+    return {};
+  }
+
   void add_constraints(
       const NodeHeader& header, bool is_unconstrained, XdValue& ux) {
     if(header.m_is_locked) {
@@ -702,6 +791,14 @@ namespace {
     }
     if(header.m_is_marked_for_export) {
       ux.set("markedForExport", true);
+    }
+    if(header.m_is_fixed_position) {
+      ux.set("fixed", true);
+    }
+    if(auto& lock = header.m_aspect_lock) {
+      auto& size = ux.set("aspectLock", XdValue::make_object());
+      size.set("width", lock->m_width);
+      size.set("height", lock->m_height);
     }
   }
 
@@ -1151,6 +1248,9 @@ XdValue XdGenerator::make_ux(const Node& node) const {
   auto ux = XdValue::make_object();
   auto& header = node.m_header;
   auto& id = node.get_id();
+  if(auto key = get_name_key(node, m_masters.contains(id)); !key.empty()) {
+    ux.set("nameL10N", key);
+  }
   add_constraints(header,
     node.get_reference() && header.m_constraints == Constraints(), ux);
   if(auto& transform = header.m_transform_3d) {
@@ -1167,6 +1267,10 @@ XdValue XdGenerator::make_ux(const Node& node) const {
   if(!node.m_parent.is_nil()) {
     if(auto parent = m_document->find(node.m_parent)) {
       if(auto group = parent->get_group()) {
+        if(group->m_repeat_grid && node.get_group() &&
+            header.m_name.empty()) {
+          ux.set("disableNaming", true);
+        }
         if(group->m_stack) {
           if(auto spacing = group->m_stack->m_spacing.find(id);
               spacing != group->m_stack->m_spacing.end()) {
@@ -1179,6 +1283,9 @@ XdValue XdGenerator::make_ux(const Node& node) const {
   if(auto master = m_masters.find(id); master != m_masters.end()) {
     auto& component = *master->second;
     ux.set("symbolId", to_id(component.m_id));
+    ux.set("width", component.m_size.m_width);
+    ux.set("height", component.m_size.m_height);
+    ux.set("componentType", "componentNoBounds");
     if(!component.m_default_state.is_nil()) {
       ux.set("stateId", to_id(component.m_default_state));
     }
@@ -1219,6 +1326,7 @@ XdValue XdGenerator::make_ux(const Node& node) const {
     }
     ux.set("width", instance.m_size.m_width);
     ux.set("height", instance.m_size.m_height);
+    ux.set("componentType", "componentNoBounds");
     if(instance.m_is_main) {
       ux.set("isMaster", true);
     }
@@ -1336,11 +1444,21 @@ XdValue XdGenerator::make_ux(const Node& node) const {
     auto& ranges = ux.set("rangedStyles", XdValue::make_array());
     if(text->m_runs.empty()) {
       ranges.append(make_range(text->m_base_style,
-        text->m_content->size(), CharacterStyleId(), text->m_base_style));
+        text->m_content->size(), CharacterStyleId(), std::string(),
+        text->m_base_style));
     }
     for(auto& run : text->m_runs) {
       ranges.append(make_range(run.m_style, run.m_length,
-        run.m_character_style, text->m_base_style));
+        run.m_character_style, run.m_hyperlink, text->m_base_style));
+    }
+    if(!text->m_repeat_data.empty()) {
+      auto& data = ux.set("repeatOverrides", XdValue::make_array());
+      for(auto& value : text->m_repeat_data) {
+        auto& entry = data.append(XdValue::make_object());
+        entry.set("overrideType", "text");
+        entry.set("data", to_utf8(value));
+        entry.set("type", "RepeatOverride");
+      }
     }
   }
   if(auto interactions = m_interactions.find(id);

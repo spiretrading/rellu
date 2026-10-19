@@ -17,6 +17,7 @@
 #include <QWheelEvent>
 #include "Rellu/Rendering/StripRasterizer.hpp"
 #include "Rellu/Tools/PathEditTool.hpp"
+#include "Rellu/Ui/TextMeasurement.hpp"
 #include "DocumentView.hpp"
 
 using namespace Rellu;
@@ -96,6 +97,31 @@ namespace {
     draw(Qt::black, 1.5);
     painter.end();
     return QCursor(pixmap, CURSOR_SIZE / 2, CURSOR_SIZE / 2);
+  }
+
+  QCursor make_zoom_cursor(bool is_zooming_out) {
+    auto pixmap = QPixmap(CURSOR_SIZE, CURSOR_SIZE);
+    pixmap.fill(Qt::transparent);
+    auto painter = QPainter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    auto center = QPointF(9.5, 9.5);
+    auto draw = [&] (const QColor& color, double width) {
+      painter.setPen(QPen(color, width, Qt::SolidLine, Qt::RoundCap,
+        Qt::RoundJoin));
+      painter.setBrush(Qt::NoBrush);
+      painter.drawEllipse(center, 6.5, 6.5);
+      painter.drawLine(QPointF(14.5, 14.5), QPointF(20.5, 20.5));
+      painter.drawLine(QPointF(6.5, 9.5), QPointF(12.5, 9.5));
+      if(!is_zooming_out) {
+        painter.drawLine(QPointF(9.5, 6.5), QPointF(9.5, 12.5));
+      }
+    };
+    draw(Qt::white, 4);
+    draw(Qt::black, 1.6);
+    painter.setPen(QPen(Qt::black, 3, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(QPointF(15.5, 15.5), QPointF(20, 20));
+    painter.end();
+    return QCursor(pixmap, 9, 9);
   }
 }
 
@@ -517,6 +543,16 @@ void DocumentView::update_cursor() {
     setCursor(*m_rotate_cursor);
   } else if(cursor.m_kind == CursorKind::CROSSHAIR) {
     setCursor(Qt::CrossCursor);
+  } else if(cursor.m_kind == CursorKind::ZOOM_IN) {
+    if(!m_zoom_in_cursor) {
+      m_zoom_in_cursor = make_zoom_cursor(false);
+    }
+    setCursor(*m_zoom_in_cursor);
+  } else if(cursor.m_kind == CursorKind::ZOOM_OUT) {
+    if(!m_zoom_out_cursor) {
+      m_zoom_out_cursor = make_zoom_cursor(true);
+    }
+    setCursor(*m_zoom_out_cursor);
   } else {
     unsetCursor();
   }
@@ -550,9 +586,11 @@ void DocumentView::attach_tools() {
   if(!editor) {
     return;
   }
-  m_tools = std::make_unique<ToolManager>(*editor);
+  m_tools = std::make_unique<ToolManager>(
+    *editor, make_text_measurer(get_default_font_library()));
   m_tool_subscription = m_tools->subscribe([this] {
     update();
+    update_cursor();
   });
   m_tools->get_context().set_navigator(ViewNavigator(
     [this] (const auto& factor, const auto& center) {

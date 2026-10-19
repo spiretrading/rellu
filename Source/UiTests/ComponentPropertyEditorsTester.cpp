@@ -57,6 +57,7 @@ TEST_SUITE("ComponentPropertyEditors") {
       std::make_unique<MakeComponentCommand>(std::vector{ids.m_card}));
     auto component =
       static_cast<const MakeComponentCommand&>(*make).get_component();
+    ids.m_card = static_cast<const MakeComponentCommand&>(*make).get_main();
     auto add = history.execute(std::make_unique<AddStateCommand>(
       component, "Pressed", StateKind::NEW));
     auto state = static_cast<const AddStateCommand&>(*add).get_state();

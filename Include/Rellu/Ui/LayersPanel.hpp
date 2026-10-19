@@ -1,7 +1,11 @@
 #ifndef RELLU_UI_LAYERS_PANEL_HPP
 #define RELLU_UI_LAYERS_PANEL_HPP
+#include <cstddef>
 #include <functional>
+#include <vector>
 #include <QLabel>
+#include <QLineEdit>
+#include <QMenu>
 #include <QToolButton>
 #include <QTreeView>
 #include <QWidget>
@@ -9,17 +13,39 @@
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Model/Subscription.hpp"
+#include "Rellu/Ui/ActionRegistry.hpp"
 #include "Rellu/Ui/LayersModel.hpp"
 
 namespace Rellu {
+
+  /** Lists the kinds of layer the Layers panel's filter lists. */
+  enum class LayerFilter : unsigned char {
+
+    /** Every layer. */
+    ALL,
+
+    /** Component instances and main components. */
+    COMPONENTS,
+
+    /** Groups. */
+    GROUPS,
+
+    /** Shapes. */
+    SHAPES,
+
+    /** Text. */
+    TEXT
+  };
 
   /**
    * The Layers panel, listing a document's layers as Adobe XD does: the
    * artboards while the current layer is not inside one, otherwise the
    * layers of the artboard holding the current layer under a heading
-   * naming it. With an editor, the layers selected are the editor's
-   * selection, the current layer being its primary node, and layers are
-   * renamed in place.
+   * naming it, or every layer matching the search and filter. With an
+   * editor, the layers selected are the editor's selection, the current
+   * layer being its primary node, layers are renamed in place, dragged to
+   * reorder and reparent them, shown, hidden, locked and unlocked with the
+   * buttons appearing on hover, and act through a context menu.
    */
   class LayersPanel : public QWidget {
     public:
@@ -100,17 +126,90 @@ namespace Rellu {
        */
       void set_activation_handler(CurrentHandler handler);
 
+      /**
+       * Sets the registry whose actions the context menu lists.
+       * @param actions The registry, or <code>nullptr</code> for none. It
+       *        must outlive this panel or be replaced first.
+       */
+      void set_actions(ActionRegistry* actions);
+
+      /** Returns the text layers are searched for. */
+      QString get_search() const;
+
+      /**
+       * Lists only the layers whose names contain a text, ignoring case,
+       * along with their ancestors, searching the whole document.
+       * @param text The text, or empty to list every layer.
+       */
+      void set_search(const QString& text);
+
+      /** Returns the kind of layer listed. */
+      LayerFilter get_filter() const;
+
+      /**
+       * Lists only the layers of a kind, along with their ancestors.
+       * @param filter The kind of layer listed.
+       */
+      void set_filter(LayerFilter filter);
+
+      /**
+       * Returns <code>true</code> iff a layer's row is hidden by the search
+       * or filter.
+       * @param id The layer's id.
+       */
+      bool is_filtered_out(const NodeId& id);
+
+      /**
+       * Shows or hides a layer, as its eye button does.
+       * @param id The layer's id.
+       * @return <code>true</code> iff the layer changed.
+       */
+      bool toggle_visibility(const NodeId& id);
+
+      /**
+       * Locks or unlocks a layer, as its lock button does.
+       * @param id The layer's id.
+       * @return <code>true</code> iff the layer changed.
+       */
+      bool toggle_lock(const NodeId& id);
+
+      /**
+       * Moves layers as dragging them in the panel does.
+       * @param nodes The layers to move.
+       * @param parent The new parent's id, or nil for the canvas.
+       * @param index The position among the parent's other children, in z
+       *        order.
+       * @return <code>true</code> iff the layers moved.
+       */
+      bool move(const std::vector<NodeId>& nodes, const NodeId& parent,
+        std::size_t index);
+
+      /**
+       * Makes the context menu of the selected layers.
+       * @param parent The menu's parent.
+       * @return The menu.
+       */
+      QMenu* make_context_menu(QWidget* parent);
+
+    protected:
+      bool eventFilter(QObject* watched, QEvent* event) override;
+
     private:
       LayersModel* m_model;
       QTreeView* m_view;
+      QLineEdit* m_search;
+      QToolButton* m_filter_button;
       QToolButton* m_back;
       QLabel* m_heading;
       Editor* m_editor;
+      ActionRegistry* m_actions;
+      LayerFilter m_filter;
       Subscription m_subscription;
       Subscription m_document_subscription;
       NodeId m_current;
       NodeId m_scope;
       bool m_is_synchronizing;
+      bool m_is_filtered;
       CurrentHandler m_current_handler;
       CurrentHandler m_activation_handler;
 
@@ -119,6 +218,9 @@ namespace Rellu {
       void on_current(const QModelIndex& index);
       void update_scope();
       void show_artboards();
+      bool is_searching() const;
+      bool apply_filter(const QModelIndex& index);
+      bool is_match(const QModelIndex& index) const;
   };
 }
 

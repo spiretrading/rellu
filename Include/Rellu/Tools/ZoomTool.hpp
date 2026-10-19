@@ -8,8 +8,8 @@ namespace Rellu {
   /**
    * Zooms the view as Adobe XD's zoom tool does: a click zooms in about the
    * pointer, a click with Alt zooms out, and a drag zooms to the rectangle
-   * dragged. Escape abandons a drag and otherwise returns to the select
-   * tool.
+   * dragged. The pointer is a magnifier showing whether a click zooms in or
+   * out. Escape abandons a drag and otherwise returns to the select tool.
    */
   class ZoomTool : public Tool {
     public:
@@ -29,12 +29,14 @@ namespace Rellu {
       bool key_press(ToolContext& context, const KeyEvent& event) override;
       void cancel(ToolContext& context) override;
       bool is_busy() const override;
+      ToolCursor get_cursor() const override;
       void draw(
         const ToolContext& context, CanvasOverlay& overlay) const override;
 
     private:
       bool m_is_pressed;
       bool m_is_dragging;
+      bool m_is_zooming_out;
       Point m_press;
       Point m_position;
   };

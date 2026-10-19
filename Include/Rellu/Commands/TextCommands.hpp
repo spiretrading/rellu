@@ -65,6 +65,9 @@ namespace Rellu {
     /** The placement relative to the baseline. */
     std::optional<TextScript> m_script;
 
+    /** The URL the text links to, empty to link nowhere. */
+    std::optional<std::string> m_hyperlink;
+
     bool operator ==(const TextStyleEdit&) const = default;
   };
 
@@ -131,6 +134,20 @@ namespace Rellu {
    * @param range The range.
    */
   TextStyle get_style(const Text& text, const TextRange& range);
+
+  /**
+   * Applies a style edit to a style.
+   * @param style The style.
+   * @param edit The properties to set.
+   * @return The edited <i>style</i>.
+   */
+  TextStyle edit_style(TextStyle style, const TextStyleEdit& edit);
+
+  /**
+   * Makes the style edit setting every character property of a style.
+   * @param style The style.
+   */
+  TextStyleEdit make_style_edit(const TextStyle& style);
 
   /**
    * Replaces a range of a text's content, the characters inserted extending

@@ -304,22 +304,72 @@ namespace {
     return 0;
   }
 
+  constexpr auto TAP = 0;
+  constexpr auto DRAG = 1;
+  constexpr auto TIME = 2;
+  constexpr auto HOVER = 3;
+  constexpr auto KEYS = 4;
+  constexpr auto VOICE = 5;
+
+  constexpr auto TRANSITION = 0;
+  constexpr auto AUTO_ANIMATE = 1;
+  constexpr auto HYPERLINK = 2;
+  constexpr auto OVERLAY = 3;
+  constexpr auto SCROLL_TO = 4;
+  constexpr auto PREVIOUS = 5;
+  constexpr auto STATE = 6;
+  constexpr auto AUDIO = 7;
+  constexpr auto SPEECH = 8;
+  constexpr auto VIDEO = 9;
+
   int get_type_index(const Action& action) {
     if(auto transition = std::get_if<ArtboardTransition>(&action)) {
       if(transition->m_animation.m_transition == Transition::AUTO_ANIMATE) {
-        return 1;
+        return AUTO_ANIMATE;
       }
-      return 0;
+      return TRANSITION;
+    } else if(std::holds_alternative<Hyperlink>(action)) {
+      return HYPERLINK;
     } else if(std::holds_alternative<Overlay>(action)) {
-      return 2;
+      return OVERLAY;
     } else if(std::holds_alternative<PreviousArtboard>(action)) {
-      return 4;
+      return PREVIOUS;
     } else if(std::holds_alternative<StateTransition>(action)) {
-      return 5;
+      return STATE;
     } else if(std::holds_alternative<VideoPlayback>(action)) {
-      return 8;
+      return VIDEO;
     }
-    return 0;
+    return TRANSITION;
+  }
+
+  std::vector<int> get_triggers(
+      bool is_artboard, bool has_states, int current) {
+    auto triggers = std::vector<int>();
+    if(is_artboard) {
+      triggers = {TIME, KEYS, VOICE};
+    } else if(has_states) {
+      triggers = {TAP, DRAG, HOVER, KEYS, VOICE};
+    } else {
+      triggers = {TAP, DRAG, KEYS, VOICE};
+    }
+    if(!std::ranges::contains(triggers, current)) {
+      triggers.insert(std::ranges::upper_bound(triggers, current), current);
+    }
+    return triggers;
+  }
+
+  std::vector<int> get_types(bool has_states, int current) {
+    auto types = std::vector<int>(
+      {TRANSITION, AUTO_ANIMATE, HYPERLINK, OVERLAY, SCROLL_TO, PREVIOUS});
+    if(has_states) {
+      types.push_back(STATE);
+    }
+    types.push_back(AUDIO);
+    types.push_back(SPEECH);
+    if(!std::ranges::contains(types, current)) {
+      types.insert(std::ranges::upper_bound(types, current), current);
+    }
+    return types;
   }
 
   QString summarize(const Interaction& interaction) {
@@ -359,7 +409,7 @@ const std::vector<std::string>& PrototypeInspector::get_trigger_labels() {
 
 const std::vector<std::string>& PrototypeInspector::get_type_labels() {
   static const auto LABELS = std::vector<std::string>({"Transition",
-    "Auto-Animate", "Overlay", "Scroll To", "Previous Artboard",
+    "Auto-Animate", "Hyperlink", "Overlay", "Scroll To", "Previous Artboard",
     "Transition to State", "Audio Playback", "Speech Playback",
     "Video Playback"});
   return LABELS;
@@ -404,6 +454,12 @@ void PrototypeInspector::set_editor(Editor* editor) {
     });
   }
   refresh();
+}
+
+void PrototypeInspector::set_fixed_position_factory(
+    FixedPositionFactory factory) {
+  m_fixed_position_factory = std::move(factory);
+  schedule();
 }
 
 const NodeId& PrototypeInspector::get_node() const {
@@ -508,10 +564,9 @@ void PrototypeInspector::rebuild() {
       return;
     }
     auto& document = m_editor->get_document();
-    auto interaction = make_default_interaction(m_node, NodeId());
-    if(auto node = document.find(m_node); node && node->get_artboard()) {
-      interaction.m_trigger = TimeTrigger(DEFAULT_DELAY);
-    }
+    auto node = document.find(m_node);
+    auto interaction =
+      make_empty_interaction(m_node, node && node->get_artboard());
     auto command = std::make_unique<AddInteractionCommand>(interaction);
     auto id = command->get_interaction().m_id;
     try {
@@ -553,30 +608,30 @@ void PrototypeInspector::rebuild() {
     auto& base = *current;
     auto is_artboard = static_cast<bool>(document->get(m_node).get_artboard());
     auto states = find_states(*document, m_node);
+    auto trigger_index = get_trigger_index(base.m_trigger);
+    auto trigger_kinds =
+      get_triggers(is_artboard, !states.empty(), trigger_index);
     auto triggers = std::vector<Option>();
-    for(auto i = 0; i != 6; ++i) {
-      auto is_enabled = i != 5;
-      if(is_artboard) {
-        is_enabled = is_enabled && (i == 2 || i == 4);
-      } else if(i == 3) {
-        is_enabled = !states.empty();
-      }
+    for(auto kind : trigger_kinds) {
       triggers.push_back(Option(QString::fromStdString(
-        get_trigger_labels()[i]), is_enabled));
+        get_trigger_labels()[kind]), kind != VOICE));
     }
-    auto trigger = make_combo(triggers, get_trigger_index(base.m_trigger));
+    auto trigger = make_combo(triggers, static_cast<int>(
+      std::ranges::find(trigger_kinds, trigger_index) -
+        trigger_kinds.begin()));
     QObject::connect(trigger, &QComboBox::activated, this,
-      [this, base] (int index) {
+      [this, base, trigger_kinds] (int index) {
         auto changed = base;
-        if(index == 0) {
+        auto kind = trigger_kinds[index];
+        if(kind == TAP) {
           changed.m_trigger = TapTrigger();
-        } else if(index == 1) {
+        } else if(kind == DRAG) {
           changed.m_trigger = DragTrigger();
-        } else if(index == 2) {
+        } else if(kind == TIME) {
           changed.m_trigger = TimeTrigger(DEFAULT_DELAY);
-        } else if(index == 3) {
+        } else if(kind == HOVER) {
           changed.m_trigger = HoverTrigger();
-        } else if(index == 4) {
+        } else if(kind == KEYS) {
           changed.m_trigger = KeyTrigger();
         } else {
           return;
@@ -623,49 +678,53 @@ void PrototypeInspector::rebuild() {
       add_field(*section.m_layout, "device", "Device", device);
     }
     section.m_layout->addWidget(make_rule());
+    auto type_index = get_type_index(base.m_action);
+    auto type_kinds = get_types(!states.empty(), type_index);
     auto types = std::vector<Option>();
-    for(auto i = 0; i != 9; ++i) {
-      auto is_enabled = i != 3 && i != 6 && i != 7;
-      if(i == 5) {
-        is_enabled = !states.empty();
-      }
-      types.push_back(
-        Option(QString::fromStdString(get_type_labels()[i]), is_enabled));
+    for(auto kind : type_kinds) {
+      types.push_back(Option(QString::fromStdString(get_type_labels()[kind]),
+        kind != SCROLL_TO && kind != AUDIO && kind != SPEECH));
     }
-    auto type = make_combo(types, get_type_index(base.m_action));
+    auto type = make_combo(types, static_cast<int>(
+      std::ranges::find(type_kinds, type_index) - type_kinds.begin()));
     QObject::connect(type, &QComboBox::activated, this,
-      [this, base, states] (int index) {
+      [this, base, states, type_kinds] (int selected) {
         auto changed = base;
+        auto index = type_kinds[selected];
         auto destination = get_destination(base.m_action);
-        auto animation = make_default_animation();
+        auto animation = destination.is_nil() ? make_empty_animation() :
+          make_default_animation();
         if(auto previous = get_animation(changed.m_action)) {
           animation = *previous;
         }
-        if(index == 0) {
+        if(index == TRANSITION) {
           if(animation.m_transition == Transition::AUTO_ANIMATE) {
             animation.m_transition = Transition::DISSOLVE;
           }
           changed.m_action = ArtboardTransition(destination, animation);
-        } else if(index == 1) {
+        } else if(index == AUTO_ANIMATE) {
           animation.m_transition = Transition::AUTO_ANIMATE;
           changed.m_action = ArtboardTransition(destination, animation);
-        } else if(index == 2) {
+        } else if(index == HYPERLINK) {
+          changed.m_action = Hyperlink();
+        } else if(index == OVERLAY) {
           if(!std::ranges::contains(
               OVERLAY_TRANSITIONS, animation.m_transition)) {
-            animation.m_transition = Transition::DISSOLVE;
+            animation.m_transition = destination.is_nil() ?
+              Transition::NONE : Transition::DISSOLVE;
           }
           changed.m_action =
             Overlay(destination, Point(0, 0), animation);
-        } else if(index == 4) {
+        } else if(index == PREVIOUS) {
           changed.m_action = PreviousArtboard();
-        } else if(index == 5 && !states.empty()) {
+        } else if(index == STATE && !states.empty()) {
           if(!std::ranges::contains(
               STATE_TRANSITIONS, animation.m_transition)) {
             animation.m_transition = Transition::DISSOLVE;
           }
           auto target = states.size() > 1 ? states[1].m_id : states[0].m_id;
           changed.m_action = StateTransition(target, animation);
-        } else if(index == 8) {
+        } else if(index == VIDEO) {
           changed.m_action = VideoPlayback(base.m_owner, VideoCommand::PLAY);
         } else {
           return;
@@ -674,7 +733,9 @@ void PrototypeInspector::rebuild() {
       });
     add_field(*section.m_layout, "type", "Type", type);
     auto action = base.m_action;
-    if(auto transition = std::get_if<ArtboardTransition>(&action)) {
+    if(auto transition = std::get_if<ArtboardTransition>(&action);
+        transition &&
+        transition->m_animation.m_transition != Transition::AUTO_ANIMATE) {
       auto preserve = new QCheckBox("Preserve Scroll Position");
       preserve->setChecked(transition->m_preserve_scroll);
       QObject::connect(preserve, &QCheckBox::clicked, this,
@@ -715,9 +776,32 @@ void PrototypeInspector::rebuild() {
           } else if(auto overlay = std::get_if<Overlay>(&changed.m_action)) {
             overlay->m_destination = target;
           }
+          auto animation = get_animation(changed.m_action);
+          if(get_destination(base.m_action).is_nil() && !target.is_nil() &&
+              *animation == make_empty_animation()) {
+            *animation = make_default_animation();
+          }
           apply(std::move(changed));
         });
       add_field(*section.m_layout, "destination", "Destination", box);
+    }
+    if(auto link = std::get_if<Hyperlink>(&action)) {
+      auto url = new QLineEdit();
+      url->setObjectName("text_field");
+      url->setText(QString::fromStdString(link->m_url));
+      url->setPlaceholderText("https://");
+      QObject::connect(url, &QLineEdit::editingFinished, this,
+        [this, base, url] {
+          auto changed = base;
+          auto& target = std::get<Hyperlink>(changed.m_action).m_url;
+          auto text = url->text().trimmed().toStdString();
+          if(target == text) {
+            return;
+          }
+          target = std::move(text);
+          apply(std::move(changed));
+        });
+      add_field(*section.m_layout, "url", "URL", url);
     }
     if(auto state = std::get_if<StateTransition>(&action)) {
       auto options = std::vector<Option>();
@@ -805,6 +889,8 @@ void PrototypeInspector::rebuild() {
           }
         }
         auto box = make_combo(options, selected);
+        box->setEnabled(!get_destination(action).is_nil() ||
+          std::holds_alternative<StateTransition>(action));
         QObject::connect(box, &QComboBox::activated, this,
           [this, base, choices] (int index) {
             auto changed = base;
@@ -907,7 +993,20 @@ void PrototypeInspector::rebuild() {
       auto scrolling = make_section("Scrolling");
       auto fixed = new QCheckBox("Fix Position When Scrolling");
       fixed->setChecked(is_fixed(*document, m_node));
-      fixed->setEnabled(false);
+      fixed->setEnabled(static_cast<bool>(m_fixed_position_factory));
+      auto node = m_node;
+      QObject::connect(fixed, &QCheckBox::clicked, this,
+        [this, node] (bool is_checked) {
+          if(!m_editor || !m_fixed_position_factory) {
+            return;
+          }
+          if(auto command = m_fixed_position_factory(node, is_checked)) {
+            try {
+              m_editor->execute(std::move(command));
+            } catch(const std::invalid_argument&) {}
+          }
+          schedule();
+        });
       add_field(*scrolling.m_layout, "fixed", QString(), fixed);
       m_layout->addWidget(scrolling.m_widget);
       m_layout->addWidget(make_rule());

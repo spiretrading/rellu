@@ -23,7 +23,8 @@ namespace Rellu {
 
   /**
    * Draws shapes as Adobe XD's rectangle, ellipse, polygon and line tools
-   * do, in the artboard under the start of the drag or on the pasteboard,
+   * do, in the group entered, the artboard under the start of the drag or
+   * on the pasteboard,
    * styled as XD styles them and named after their kind with the next
    * number free, such as Rectangle 1. Shift draws a square, circle or
    * regular polygon, or constrains a line to multiples of 45 degrees, and

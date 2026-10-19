@@ -48,8 +48,8 @@ TEST_SUITE("TextEditing") {
         doctest::Approx(layout.m_glyphs[i].m_origin.m_x));
       REQUIRE(line.m_carets[i + 1] > line.m_carets[i]);
     }
-    REQUIRE(line.m_carets.back() ==
-      doctest::Approx(measure_text(text, get_library()).get_right()));
+    REQUIRE(std::round(line.m_carets.back()) ==
+      measure_text(text, get_library()).get_right());
   }
 
   TEST_CASE("aligned_carets") {

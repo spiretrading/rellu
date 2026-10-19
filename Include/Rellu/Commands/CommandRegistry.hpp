@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Command.hpp"
 
 namespace Rellu {
@@ -61,8 +62,11 @@ namespace Rellu {
    * object.nudge_right, object.nudge_up and object.nudge_down by one pixel
    * with their _large variants by ten.
    * @param registry The registry to add to.
+   * @param measurer The function measuring text wherever the commands
+   *        measure bounds.
    */
-  void add_standard_commands(CommandRegistry& registry);
+  void add_standard_commands(CommandRegistry& registry,
+    TextMeasurer measurer = estimate_text_bounds);
 }
 
 #endif

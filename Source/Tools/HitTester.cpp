@@ -272,9 +272,10 @@ Document& HitTester::get_document() const {
   return *m_document;
 }
 
-NodeId HitTester::hit(Point point, double tolerance) const {
-  return hit_children(
-    m_document->get_canvas(), point, Matrix(), Matrix(), tolerance, 0);
+NodeId HitTester::hit(
+    Point point, double tolerance, bool is_locked_hit) const {
+  return hit_children(m_document->get_canvas(), point, Matrix(), Matrix(),
+    tolerance, is_locked_hit, 0);
 }
 
 std::vector<NodeId> HitTester::query(
@@ -296,7 +297,7 @@ std::vector<NodeId> HitTester::query(
   }
   for(auto& child : *children) {
     auto node = m_document->find(child);
-    if(!node) {
+    if(!node || node->m_header.m_is_locked) {
       continue;
     }
     auto& extent = measure(child, 0);
@@ -388,8 +389,7 @@ const HitTester::Extent& HitTester::measure(
   if(node) {
     placement = place(*node);
   }
-  if(placement && placement->m_source->m_header.m_is_visible &&
-      !node->m_header.m_is_locked) {
+  if(placement && placement->m_source->m_header.m_is_visible) {
     auto& source = *placement->m_source;
     if(auto artboard = source.get_artboard()) {
       extent.m_local =
@@ -429,12 +429,12 @@ const HitTester::Extent& HitTester::measure(
 }
 
 NodeId HitTester::hit(const NodeId& id, Point point, const Matrix& parent,
-    double tolerance, int depth) const {
+    double tolerance, bool is_locked_hit, int depth) const {
   if(depth > MAXIMUM_DEPTH) {
     return NodeId();
   }
   auto node = m_document->find(id);
-  if(!node) {
+  if(!node || (node->m_header.m_is_locked && !is_locked_hit)) {
     return NodeId();
   }
   auto& extent = measure(id, depth);
@@ -458,7 +458,7 @@ NodeId HitTester::hit(const NodeId& id, Point point, const Matrix& parent,
       return NodeId();
     }
     auto child = hit_children(*placement->m_children, point, world, *inverse,
-      tolerance, depth + 1);
+      tolerance, is_locked_hit, depth + 1);
     if(!child.is_nil()) {
       return child;
     }
@@ -483,7 +483,7 @@ NodeId HitTester::hit(const NodeId& id, Point point, const Matrix& parent,
       return NodeId();
     }
     auto child = hit_children(*placement->m_children, point, world, *inverse,
-      tolerance, depth + 1);
+      tolerance, is_locked_hit, depth + 1);
     if(child.is_nil() || placement->m_owns_children) {
       return child;
     }
@@ -494,7 +494,7 @@ NodeId HitTester::hit(const NodeId& id, Point point, const Matrix& parent,
 
 NodeId HitTester::hit_children(const std::vector<NodeId>& children,
     Point point, const Matrix& world, const Matrix& inverse, double tolerance,
-    int depth) const {
+    bool is_locked_hit, int depth) const {
   auto local = inverse.map(point);
   auto local_tolerance = tolerance * get_scale(inverse);
   for(auto i = children.rbegin(); i != children.rend(); ++i) {
@@ -503,7 +503,7 @@ NodeId HitTester::hit_children(const std::vector<NodeId>& children,
         !is_inside(inflate(*extent.m_parent, local_tolerance), local)) {
       continue;
     }
-    auto result = hit(*i, point, world, tolerance, depth);
+    auto result = hit(*i, point, world, tolerance, is_locked_hit, depth);
     if(!result.is_nil()) {
       return result;
     }

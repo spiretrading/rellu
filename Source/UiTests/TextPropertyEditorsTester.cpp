@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cmath>
 #include <doctest/doctest.h>
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Text/TextLayout.hpp"
@@ -69,12 +71,117 @@ TEST_SUITE("TextPropertyEditors") {
     REQUIRE(runs[1].m_style.m_is_underlined);
     REQUIRE(!runs[0].m_style.m_is_underlined);
     REQUIRE(editor.get_history().get_undo_label() == "Underline");
-    editor.get_text_selection().set(ids.m_label, 3, 3);
+    editor.get_text_selection().set(ids.m_label, 0, 23);
     REQUIRE(apply(editor, editors, "text.color", ids.m_label,
       make_color(255, 0, 0)));
     for(auto& run : get_text(document, ids.m_label).m_runs) {
       REQUIRE(run.m_style.m_color == make_color(255, 0, 0));
     }
+  }
+
+  TEST_CASE("caret") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto editors = make_editors(editor);
+    auto& selection = editor.get_text_selection();
+    selection.set(ids.m_label, 3, 3);
+    REQUIRE(!apply(editor, editors, "text.size", ids.m_label, 30.0));
+    REQUIRE(!apply(editor, editors, "text.underline", ids.m_label, true));
+    REQUIRE(editor.get_history().get_undo_count() == 0);
+    REQUIRE(get_text(document, ids.m_label).m_runs.size() == 1);
+    auto& pending = selection.get_pending_style();
+    REQUIRE(pending);
+    REQUIRE(pending->m_font.m_size == 30);
+    REQUIRE(pending->m_is_underlined);
+    REQUIRE(pending->m_font.m_family == "Roboto");
+    auto properties = extract_properties(
+      document, ids.m_label, estimate_text_bounds, &selection);
+    REQUIRE(find_property(properties, "text.size")->m_value ==
+      PropertyValue(30.0));
+    REQUIRE(find_property(properties, "text.hyperlink")->m_is_read_only);
+    selection.set(ids.m_label, 4, 4);
+    REQUIRE(!selection.get_pending_style());
+  }
+
+  TEST_CASE("empty_text") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto editors = make_editors(editor);
+    {
+      auto transaction = Transaction(document);
+      auto text = get_text(document, ids.m_label);
+      text.m_content = Shared(std::u16string());
+      text.m_runs.clear();
+      transaction.replace_payload(ids.m_label, text);
+      transaction.commit();
+    }
+    editor.get_text_selection().set(ids.m_label, 0, 0);
+    REQUIRE(apply(editor, editors, "text.size", ids.m_label, 30.0));
+    REQUIRE(get_text(document, ids.m_label).m_base_style.m_font.m_size == 30);
+    REQUIRE(!editor.get_text_selection().get_pending_style());
+  }
+
+  TEST_CASE("selection_descriptors") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto editors = make_editors(editor);
+    auto& selection = editor.get_text_selection();
+    selection.set(ids.m_label, 0, 5);
+    REQUIRE(apply(editor, editors, "text.size", ids.m_label, 30.0));
+    auto describe = [&] (std::size_t anchor, std::size_t caret) {
+      selection.set(ids.m_label, anchor, caret);
+      return extract_properties(
+        document, ids.m_label, estimate_text_bounds, &selection);
+    };
+    auto first = describe(1, 2);
+    auto size = find_property(first, "text.size");
+    REQUIRE(size->m_value == PropertyValue(30.0));
+    REQUIRE(!size->m_is_mixed);
+    auto second = describe(8, 9);
+    REQUIRE(find_property(second, "text.size")->m_value ==
+      PropertyValue(14.0));
+    auto both = describe(3, 9);
+    REQUIRE(find_property(both, "text.size")->m_is_mixed);
+    auto caret = describe(5, 5);
+    REQUIRE(find_property(caret, "text.size")->m_value ==
+      PropertyValue(30.0));
+    selection.clear();
+    auto whole = extract_properties(
+      document, ids.m_label, estimate_text_bounds, &selection);
+    REQUIRE(find_property(whole, "text.size")->m_is_mixed);
+  }
+
+  TEST_CASE("hyperlink") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto editors = make_editors(editor);
+    auto& selection = editor.get_text_selection();
+    selection.set(ids.m_label, 0, 5);
+    REQUIRE(apply(editor, editors, "text.hyperlink", ids.m_label,
+      QString(" https://example.com ")));
+    auto& runs = get_text(document, ids.m_label).m_runs;
+    REQUIRE(runs.size() == 2);
+    REQUIRE(runs.front().m_hyperlink == "https://example.com");
+    REQUIRE(runs.back().m_hyperlink.empty());
+    REQUIRE(editor.get_history().get_undo_label() == "Change Hyperlink");
+    auto properties = extract_properties(
+      document, ids.m_label, estimate_text_bounds, &selection);
+    auto hyperlink = find_property(properties, "text.hyperlink");
+    REQUIRE(hyperlink->m_value ==
+      PropertyValue(QString("https://example.com")));
+    REQUIRE(!hyperlink->m_is_read_only);
+    selection.clear();
+    REQUIRE(find_property(extract_properties(document, ids.m_label),
+      "text.hyperlink")->m_is_mixed);
+    selection.set(ids.m_label, 2, 2);
+    REQUIRE(!apply(editor, editors, "text.hyperlink", ids.m_label,
+      QString("https://other.com")));
+    REQUIRE(get_text(document, ids.m_label).m_runs.front().m_hyperlink ==
+      "https://example.com");
   }
 
   TEST_CASE("fonts") {
@@ -132,12 +239,44 @@ TEST_SUITE("TextPropertyEditors") {
       Choice(0, QStringList())));
     REQUIRE(std::holds_alternative<PositionedFrame>(
       get_text(document, ids.m_label).m_frame));
+    auto& library = get_default_font_library();
+    auto width = 0.0;
+    for(auto& line : measure_lines(get_text(document, ids.m_label), library)) {
+      width = std::max(width, line.m_carets.back() - line.m_carets.front());
+    }
+    REQUIRE(apply(editor, editors, "text.frame", ids.m_label,
+      Choice(1, QStringList())));
+    auto& text = get_text(document, ids.m_label);
+    REQUIRE(std::get<AutoHeightFrame>(text.m_frame).m_width ==
+      std::ceil(width));
+    REQUIRE(measure_lines(text, library).size() == 2);
   }
 
   TEST_CASE("descriptors") {
     auto document = Document();
     auto ids = build_test_document(document);
     auto properties = extract_properties(document, ids.m_label);
+    REQUIRE(find_property(properties, "text.line_height")->m_value ==
+      PropertyValue(17.0));
+    auto& library = get_default_font_library();
+    auto measured = extract_properties(
+      document, ids.m_label, make_text_measurer(library));
+    auto& text = get_text(document, ids.m_label);
+    auto lines = measure_lines(text, library);
+    REQUIRE(find_property(measured, "text.line_height")->m_value ==
+      PropertyValue(lines.front().m_ascent + lines.front().m_descent));
+    {
+      auto transaction = Transaction(document);
+      auto label = text;
+      label.m_base_style = get_default_text_style();
+      label.m_runs.clear();
+      transaction.replace_payload(ids.m_label, label);
+      transaction.commit();
+    }
+    auto default_style = extract_properties(
+      document, ids.m_label, make_text_measurer(library));
+    REQUIRE(find_property(default_style, "text.line_height")->m_value ==
+      PropertyValue(27.0));
     auto family = find_property(properties, "text.family");
     REQUIRE(family);
     REQUIRE(family->m_value == PropertyValue(QString("Roboto")));

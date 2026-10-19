@@ -11,7 +11,7 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto PATH_COLOR = make_color(20, 115, 230);
+  constexpr auto PATH_COLOR = make_color(38, 128, 235);
   constexpr auto WHITE = make_color(255, 255, 255);
   constexpr auto LINE_WIDTH = 1.0;
   constexpr auto ANCHOR_SIZE = 7.0;

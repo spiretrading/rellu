@@ -1,7 +1,12 @@
 #include <exception>
 #include <memory>
 #include <utility>
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QKeySequence>
+#include <QMimeData>
 #include "Rellu/Commands/CompositeCommand.hpp"
+#include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Ui/EditActions.hpp"
 
 using namespace Rellu;
@@ -9,6 +14,13 @@ using namespace Rellu;
 namespace {
   QString escape(const std::string& label) {
     return QString::fromStdString(label).replace("&", "&&");
+  }
+
+  const QMimeData* get_system_data() {
+    if(auto clipboard = QGuiApplication::clipboard()) {
+      return clipboard->mimeData();
+    }
+    return nullptr;
   }
 
   QString make_history_text(const QString& text, const std::string& label) {
@@ -23,7 +35,8 @@ EditActions::EditActions(
     ActionRegistry& actions, const CommandRegistry& commands)
     : m_actions(&actions),
       m_commands(&commands),
-      m_editor(nullptr) {
+      m_editor(nullptr),
+      m_measurer(estimate_text_bounds) {
   set_action("edit.undo", [this] {
     run([&] { m_editor->undo(); });
   });
@@ -47,10 +60,22 @@ EditActions::EditActions(
       m_command_actions.push_back(name);
     }
   }
+  auto& remove = m_actions->get("edit.delete");
+  auto shortcuts = remove.shortcuts();
+  if(!shortcuts.contains(QKeySequence(Qt::Key_Backspace))) {
+    shortcuts.append(QKeySequence(Qt::Key_Backspace));
+    remove.setShortcuts(shortcuts);
+  }
+  if(auto clipboard = QGuiApplication::clipboard()) {
+    m_clipboard_connection = QObject::connect(clipboard,
+      &QClipboard::dataChanged, [this] { update(); });
+  }
   update();
 }
 
-EditActions::~EditActions() = default;
+EditActions::~EditActions() {
+  QObject::disconnect(m_clipboard_connection);
+}
 
 Editor* EditActions::get_editor() const {
   return m_editor;
@@ -59,9 +84,6 @@ Editor* EditActions::get_editor() const {
 void EditActions::set_editor(Editor* editor) {
   m_selection_subscription.release();
   m_history_subscription.release();
-  if(editor != m_editor) {
-    m_clipboard.clear();
-  }
   m_editor = editor;
   if(m_editor) {
     m_selection_subscription = m_editor->get_selection().subscribe([this] {
@@ -76,6 +98,14 @@ void EditActions::set_editor(Editor* editor) {
 
 Clipboard& EditActions::get_clipboard() {
   return m_clipboard;
+}
+
+void EditActions::set_view_provider(ViewProvider provider) {
+  m_view_provider = std::move(provider);
+}
+
+void EditActions::set_text_measurer(TextMeasurer measurer) {
+  m_measurer = std::move(measurer);
 }
 
 void EditActions::set_error_handler(ErrorHandler handler) {
@@ -104,7 +134,9 @@ void EditActions::update() {
   m_actions->set_enabled("edit.copy", is_copyable);
   m_actions->set_enabled("edit.cut", is_copyable &&
     m_commands->make("edit.delete", *document, nodes));
-  m_actions->set_enabled("edit.paste", !m_clipboard.is_empty());
+  m_actions->set_enabled("edit.paste",
+    !m_clipboard.is_empty() || (get_system_data() &&
+      Clipboard::is_loadable(*get_system_data())));
   m_actions->set_enabled("edit.select_all", true);
   m_actions->set_enabled(
     "edit.deselect_all", !m_editor->get_selection().is_empty());
@@ -140,12 +172,25 @@ void EditActions::run(auto operation) {
   update();
 }
 
+bool EditActions::copy_selection() {
+  if(!m_clipboard.copy(m_editor->get_document(),
+      m_editor->get_selection().get_nodes(), m_measurer)) {
+    return false;
+  }
+  if(auto clipboard = QGuiApplication::clipboard()) {
+    if(auto data = m_clipboard.make_mime_data()) {
+      clipboard->setMimeData(data.release());
+    }
+  }
+  return true;
+}
+
 void EditActions::cut() {
   run([&] {
     auto& document = m_editor->get_document();
     auto& nodes = m_editor->get_selection().get_nodes();
     auto command = m_commands->make("edit.delete", document, nodes);
-    if(!command || !m_clipboard.copy(document, nodes)) {
+    if(!command || !copy_selection()) {
       return;
     }
     auto commands = std::vector<std::unique_ptr<Command>>();
@@ -157,14 +202,23 @@ void EditActions::cut() {
 
 void EditActions::copy() {
   run([&] {
-    m_clipboard.copy(
-      m_editor->get_document(), m_editor->get_selection().get_nodes());
+    copy_selection();
   });
 }
 
 void EditActions::paste() {
   run([&] {
-    if(auto command = m_clipboard.make_paste_command()) {
+    if(auto data = get_system_data()) {
+      m_clipboard.load(*data, m_measurer);
+    }
+    auto target = PasteTarget();
+    target.m_artboard = find_artboard(
+      m_editor->get_document(), m_editor->get_selection().get_primary());
+    target.m_focus = m_editor->get_context().get_artboard();
+    if(m_view_provider) {
+      target.m_view = m_view_provider();
+    }
+    if(auto command = m_clipboard.make_paste_command(target)) {
       m_editor->execute(std::move(command));
     }
   });

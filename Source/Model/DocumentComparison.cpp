@@ -83,6 +83,10 @@ namespace {
       left.m_constraints == right.m_constraints, subject, "constraints");
     collector.check(left.m_is_marked_for_export ==
       right.m_is_marked_for_export, subject, "export marking");
+    collector.check(left.m_is_fixed_position == right.m_is_fixed_position,
+      subject, "fixed position");
+    collector.check(
+      left.m_aspect_lock == right.m_aspect_lock, subject, "aspect lock");
     collector.check(left.m_opaque == right.m_opaque, subject, "opaque data");
   }
 
@@ -157,6 +161,8 @@ namespace {
     collector.check(left.m_paragraph_style == right.m_paragraph_style,
       subject, "paragraph style");
     collector.check(left.m_layout == right.m_layout, subject, "layout");
+    collector.check(left.m_repeat_data == right.m_repeat_data, subject,
+      "repeat data");
   }
 
   void compare(const Reference& left, const Reference& right,
@@ -201,6 +207,7 @@ namespace {
     collector.check(left.m_states == right.m_states, subject, "states");
     collector.check(left.m_default_state == right.m_default_state, subject,
       "default state");
+    collector.check(left.m_size == right.m_size, subject, "size");
     collector.check(left.m_link == right.m_link, subject, "link");
   }
 

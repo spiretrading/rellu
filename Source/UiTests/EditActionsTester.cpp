@@ -2,6 +2,9 @@
 #include <string>
 #include <vector>
 #include <doctest/doctest.h>
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QKeySequence>
 #include <QWidget>
 #include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Ui/EditActions.hpp"
@@ -20,6 +23,7 @@ namespace {
 
     Fixture()
         : m_actions(m_window) {
+      QGuiApplication::clipboard()->clear();
       add_xd_menus(m_actions);
       add_standard_commands(m_commands);
       m_edit_actions = std::make_unique<EditActions>(m_actions, m_commands);
@@ -51,6 +55,8 @@ TEST_SUITE("EditActions") {
     REQUIRE(fixture.is_enabled("edit.select_all"));
     REQUIRE(!fixture.is_enabled("edit.deselect_all"));
     REQUIRE(!fixture.is_enabled("object.path.add"));
+    REQUIRE(actions.get("edit.delete").shortcuts().contains(
+      QKeySequence(Qt::Key_Backspace)));
     editor.get_selection().select(ids.m_ellipse);
     REQUIRE(fixture.is_enabled("edit.deselect_all"));
     REQUIRE(fixture.is_enabled("edit.delete"));
@@ -131,6 +137,10 @@ TEST_SUITE("EditActions") {
     auto other = Document();
     auto other_editor = Editor(other);
     fixture.m_edit_actions->set_editor(&other_editor);
-    REQUIRE(!fixture.is_enabled("edit.paste"));
+    REQUIRE(fixture.is_enabled("edit.paste"));
+    REQUIRE(actions.trigger("edit.paste"));
+    auto foreign = other_editor.get_selection().get_primary();
+    REQUIRE(other.is_on_canvas(foreign));
+    REQUIRE(other.get(foreign).get_shape());
   }
 }

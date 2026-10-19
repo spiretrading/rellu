@@ -79,14 +79,16 @@ namespace {
     return std::make_unique<DuplicateCommand>(std::move(nodes));
   }
 
-  std::unique_ptr<Command> make_group(
-      const Document& document, const std::vector<NodeId>& targets) {
-    auto nodes = get_movable(document, targets);
-    if(nodes.empty() || std::any_of(nodes.begin(), nodes.end(),
-        [&] (const auto& id) { return document.get(id).get_artboard(); })) {
-      return nullptr;
-    }
-    return std::make_unique<GroupCommand>(std::move(nodes));
+  CommandFactory make_group_factory(TextMeasurer measurer) {
+    return [measurer = std::move(measurer)] (const auto& document,
+        const auto& targets) -> std::unique_ptr<Command> {
+      auto nodes = get_movable(document, targets);
+      if(nodes.empty() || std::any_of(nodes.begin(), nodes.end(),
+          [&] (const auto& id) { return document.get(id).get_artboard(); })) {
+        return nullptr;
+      }
+      return std::make_unique<GroupCommand>(std::move(nodes), measurer);
+    };
   }
 
   std::unique_ptr<Command> make_ungroup(
@@ -155,10 +157,11 @@ std::unique_ptr<Command> CommandRegistry::make(std::string_view name,
   return entry->second(document, targets);
 }
 
-void Rellu::add_standard_commands(CommandRegistry& registry) {
+void Rellu::add_standard_commands(
+    CommandRegistry& registry, TextMeasurer measurer) {
   registry.add("edit.delete", make_delete);
   registry.add("edit.duplicate", make_duplicate);
-  registry.add("object.group", make_group);
+  registry.add("object.group", make_group_factory(std::move(measurer)));
   registry.add("object.ungroup", make_ungroup);
   registry.add("object.toggle_lock", make_lock_toggle);
   registry.add("object.toggle_visibility", make_visibility_toggle);

@@ -1,6 +1,8 @@
 #include <map>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Io/XdValues.hpp"
 
@@ -168,6 +170,37 @@ void Rellu::add_repeat_grid_importer(XdImporter& importer) {
     grid.m_size =
       Size(json->get_number("width"_L1, 0), json->get_number("height"_L1, 0));
     group->m_repeat_grid = grid;
+  });
+  importer.add_property_importer([] (XdNode& node) {
+    auto text = node.m_payload ?
+      std::get_if<Box<Text>>(&*node.m_payload) : nullptr;
+    if(!text) {
+      return;
+    }
+    auto ux = get_ux(*node.m_json);
+    if(!ux) {
+      return;
+    }
+    auto list = ux->get_array("repeatOverrides"_L1);
+    if(!list) {
+      return;
+    }
+    auto data = std::vector<std::u16string>();
+    for(auto i = std::size_t(0); i != list->get_size(); ++i) {
+      auto entry = list->get_object(i);
+      if(!entry || entry->get_json().value("overrideType"_L1).toString() !=
+          "text"_L1) {
+        return;
+      }
+      auto value = entry->get_string("data"_L1);
+      if(!value) {
+        return;
+      }
+      entry->consume("overrideType"_L1);
+      entry->ignore({"type"_L1});
+      data.push_back(value->toStdU16String());
+    }
+    text->edit().m_repeat_data = std::move(data);
   });
 }
 

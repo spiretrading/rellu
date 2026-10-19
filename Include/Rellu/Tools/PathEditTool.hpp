@@ -15,7 +15,8 @@ namespace Rellu {
    * mode does. A click selects a point, Shift toggles it, and a drag over
    * empty canvas selects the points within a marquee; dragging moves the
    * selected points, or a handle of one, which also turns the opposite
-   * handle of a smooth point unless Alt is held. Clicking a segment adds a
+   * handle of a smooth point unless Alt is held. The point or handle
+   * dragged snaps through the context's snap service. Clicking a segment adds a
    * point, a double click on a point toggles it between corner and smooth,
    * Delete removes the selected points and the arrow keys nudge them. The
    * first edit of a rectangle, ellipse, polygon or line converts it to a
@@ -89,6 +90,7 @@ namespace Rellu {
       std::optional<EditablePath> m_base;
       std::vector<AnchorIndex> m_base_selection;
       std::optional<HandleIndex> m_handle;
+      std::optional<AnchorIndex> m_anchor;
       bool m_is_smooth;
       bool m_is_applied;
       bool m_is_marquee_pending;

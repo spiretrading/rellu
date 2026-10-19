@@ -14,10 +14,32 @@ namespace Rellu {
   inline constexpr auto DEFAULT_DELAY = 1.0;
 
   /**
-   * Returns the animation Adobe XD gives a new interaction: a dissolve,
-   * easing out, over 0.3 seconds.
+   * The duration in seconds of the animation of an interaction without a
+   * destination.
+   */
+  inline constexpr auto EMPTY_DURATION = 0.2;
+
+  /**
+   * Returns the animation Adobe XD gives a new interaction with a
+   * destination: a dissolve, easing out, over 0.3 seconds.
    */
   Animation make_default_animation();
+
+  /**
+   * Returns the animation Adobe XD shows for an interaction without a
+   * destination: none, easing in, over 0.2 seconds.
+   */
+  Animation make_empty_animation();
+
+  /**
+   * Makes the interaction Adobe XD adds with the + of the INTERACTION
+   * section: a transition without a destination, triggered by a tap, or
+   * after a delay for an artboard.
+   * @param owner The node the interaction is attached to.
+   * @param is_artboard Whether the owner is an artboard.
+   * @return The interaction, with a nil id.
+   */
+  Interaction make_empty_interaction(const NodeId& owner, bool is_artboard);
 
   /**
    * Makes the interaction Adobe XD creates when a wire is dragged from a

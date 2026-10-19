@@ -1,4 +1,7 @@
 #include <algorithm>
+#include <array>
+#include <charconv>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <optional>
@@ -57,6 +60,24 @@ namespace {
       return &text->m_style;
     }
     return nullptr;
+  }
+
+  std::optional<Margins> get_padding(const Group& group) {
+    if(group.m_stack) {
+      return group.m_stack->m_padding;
+    } else if(group.m_padding) {
+      return group.m_padding->m_padding;
+    }
+    return std::nullopt;
+  }
+
+  bool has_background(const Group& group) {
+    if(group.m_stack) {
+      return group.m_stack->m_has_background;
+    } else if(group.m_padding) {
+      return group.m_padding->m_has_background;
+    }
+    return false;
   }
 
   Shape* edit_shape(Node& node) {
@@ -509,6 +530,114 @@ namespace {
       [] (auto& style) -> auto& { return style.m_line_height; }));
     fields.push_back(make_paragraph_field("paragraphSpacing",
       [] (auto& style) -> auto& { return style.m_paragraph_spacing; }));
+    fields.push_back(Field(ChangeMask::ROLES, {"contentStackMarginAfter"},
+      false, [] (const Node&, const Node&, Names&) {},
+      [] (Node& node, const Node& source, const Names&) {
+        auto group = std::get_if<Group>(&node.m_payload);
+        auto source_group = source.get_group();
+        if(!group || !source_group) {
+          return;
+        }
+        auto stack = source_group->m_stack;
+        if(stack) {
+          auto spacing = std::map<NodeId, double>();
+          for(auto& entry : stack->m_spacing) {
+            auto position = std::find(source.m_children.begin(),
+              source.m_children.end(), entry.first);
+            auto index =
+              static_cast<std::size_t>(position - source.m_children.begin());
+            if(index < node.m_children.size()) {
+              spacing.emplace(node.m_children[index], entry.second);
+            }
+          }
+          stack->m_spacing = std::move(spacing);
+          if(group->m_stack) {
+            stack->m_padding = group->m_stack->m_padding;
+            stack->m_has_background = group->m_stack->m_has_background;
+          }
+        }
+        auto padding = source_group->m_padding;
+        if(padding && group->m_padding) {
+          padding->m_padding = group->m_padding->m_padding;
+          padding->m_has_background = group->m_padding->m_has_background;
+        }
+        if(group->m_stack != stack) {
+          group->m_stack = std::move(stack);
+        }
+        if(group->m_padding != padding) {
+          group->m_padding = std::move(padding);
+        }
+      }));
+    fields.push_back(Field(ChangeMask::ROLES, {"contentPadding"}, false,
+      [] (const Node& node, const Node& source, Names& names) {
+        auto group = node.get_group();
+        auto source_group = source.get_group();
+        if(group && source_group &&
+            get_padding(*group) != get_padding(*source_group)) {
+          add_name(names, "contentPadding");
+        }
+      },
+      [] (Node& node, const Node& source, const Names&) {
+        auto group = std::get_if<Group>(&node.m_payload);
+        auto source_group = source.get_group();
+        if(!group || !source_group) {
+          return;
+        }
+        if(group->m_stack && source_group->m_stack &&
+            group->m_stack->m_padding != source_group->m_stack->m_padding) {
+          group->m_stack->m_padding = source_group->m_stack->m_padding;
+        }
+        if(group->m_padding && source_group->m_padding &&
+            group->m_padding->m_padding !=
+              source_group->m_padding->m_padding) {
+          group->m_padding->m_padding = source_group->m_padding->m_padding;
+        }
+      }));
+    fields.push_back(Field(ChangeMask::ROLES, {"hasContentBackground"}, false,
+      [] (const Node& node, const Node& source, Names& names) {
+        auto group = node.get_group();
+        auto source_group = source.get_group();
+        if(group && source_group &&
+            has_background(*group) != has_background(*source_group)) {
+          add_name(names, "hasContentBackground");
+        }
+      },
+      [] (Node& node, const Node& source, const Names&) {
+        auto group = std::get_if<Group>(&node.m_payload);
+        auto source_group = source.get_group();
+        if(!group || !source_group) {
+          return;
+        }
+        if(group->m_stack && source_group->m_stack &&
+            group->m_stack->m_has_background !=
+              source_group->m_stack->m_has_background) {
+          group->m_stack->m_has_background =
+            source_group->m_stack->m_has_background;
+        }
+        if(group->m_padding && source_group->m_padding &&
+            group->m_padding->m_has_background !=
+              source_group->m_padding->m_has_background) {
+          group->m_padding->m_has_background =
+            source_group->m_padding->m_has_background;
+        }
+      }));
+    fields.push_back(Field(ChangeMask::ROLES, {"repeatGridStructure"}, false,
+      [] (const Node& node, const Node& source, Names& names) {
+        auto group = node.get_group();
+        auto source_group = source.get_group();
+        if(group && source_group &&
+            group->m_repeat_grid != source_group->m_repeat_grid) {
+          add_name(names, "repeatGridStructure");
+        }
+      },
+      [] (Node& node, const Node& source, const Names&) {
+        auto group = std::get_if<Group>(&node.m_payload);
+        auto source_group = source.get_group();
+        if(group && source_group &&
+            group->m_repeat_grid != source_group->m_repeat_grid) {
+          group->m_repeat_grid = source_group->m_repeat_grid;
+        }
+      }));
     fields.push_back(Field(ChangeMask::ROLES, {"stateId"}, false,
       [] (const Node& node, const Node& source, Names& names) {
         auto instance = get_instance_role(node);
@@ -697,6 +826,28 @@ namespace {
 }
 
 namespace {
+  const auto NUMBER_SEPARATOR = std::string_view(" \xE2\x80\x93 ");
+
+  std::optional<int> get_instance_number(
+      std::string_view name, std::string_view base) {
+    if(!name.starts_with(base)) {
+      return std::nullopt;
+    }
+    name.remove_prefix(base.size());
+    if(!name.starts_with(NUMBER_SEPARATOR)) {
+      return std::nullopt;
+    }
+    name.remove_prefix(NUMBER_SEPARATOR.size());
+    auto number = 0;
+    auto result = std::from_chars(name.data(), name.data() + name.size(),
+      number);
+    if(result.ec != std::errc() || result.ptr != name.data() + name.size() ||
+        number <= 0) {
+      return std::nullopt;
+    }
+    return number;
+  }
+
   NodeId clone(const Document& document, Transaction& transaction,
       const NodeId& id, const std::optional<std::pair<NodeId, std::size_t>>&
         position, std::unordered_map<NodeId, NodeId>& mapping) {
@@ -1098,9 +1249,31 @@ std::unique_ptr<Command> Rellu::make_instance_edit(const Document& document,
   return std::make_unique<InstanceEditCommand>(targets, std::move(command));
 }
 
+std::string Rellu::make_instance_name(
+    const Document& document, const ComponentId& component) {
+  auto& components = document.get_resources().m_components;
+  auto entry = components.find(component);
+  if(entry == components.end()) {
+    return std::string();
+  }
+  auto& name = entry->second.m_name;
+  auto highest = std::optional<int>();
+  for(auto& instance : find_instances(document, component)) {
+    if(auto number =
+        get_instance_number(document.get(instance).m_header.m_name, name)) {
+      highest = std::max(highest.value_or(0), *number);
+    }
+  }
+  if(!highest) {
+    return name;
+  }
+  return name + std::string(NUMBER_SEPARATOR) + std::to_string(*highest + 1);
+}
+
 NodeId Rellu::insert_instance(const Document& document,
     Transaction& transaction, const ComponentId& component,
-    const NodeId& parent, std::size_t index, const Matrix& transform) {
+    const NodeId& parent, std::size_t index, const Matrix& transform,
+    const TextMeasurer& measurer) {
   auto& components = document.get_resources().m_components;
   auto entry = components.find(component);
   if(entry == components.end()) {
@@ -1112,6 +1285,7 @@ NodeId Rellu::insert_instance(const Document& document,
   }
   auto header = master->m_header;
   header.m_id = generate_node_id();
+  header.m_name = make_instance_name(document, component);
   header.m_transform = transform;
   header.m_transform_3d = std::nullopt;
   header.m_opaque = OpaqueData();
@@ -1120,7 +1294,8 @@ NodeId Rellu::insert_instance(const Document& document,
   auto mapping = std::unordered_map<NodeId, NodeId>();
   auto role = ComponentInstance();
   role.m_component = component;
-  if(auto bounds = get_local_bounds(document, master->get_id())) {
+  if(auto bounds = get_local_bounds(
+      document, master->get_id(), BoundsType::GEOMETRY, measurer)) {
     role.m_size = Size(bounds->m_width, bounds->m_height);
   }
   for(auto& source : sources) {
@@ -1177,6 +1352,7 @@ namespace {
 
       void run(const ChangeSet& changes) {
         deduplicate_mains(changes);
+        renumber_copies(changes);
         for(auto& change : changes.m_modified) {
           handle_edit(change.m_id, change.m_mask);
         }
@@ -1185,6 +1361,7 @@ namespace {
           m_sources.pop_front();
           propagate(event);
         }
+        sync_interactions(changes);
       }
 
     private:
@@ -1391,6 +1568,34 @@ namespace {
         }
       }
 
+      void renumber_copies(const ChangeSet& changes) {
+        auto inserted = std::unordered_set<NodeId>(
+          changes.m_inserted.begin(), changes.m_inserted.end());
+        for(auto& id : changes.m_inserted) {
+          auto node = m_document->find(id);
+          auto role = node ? get_instance_role(*node) : nullptr;
+          auto component = role ? find_component(role->m_component) : nullptr;
+          if(!component || role->m_is_main || !get_instance_number(
+              node->m_header.m_name, component->m_name)) {
+            continue;
+          }
+          auto is_taken = false;
+          for(auto& instance : find_instances(*m_document, role->m_component)) {
+            if(instance != id && !inserted.contains(instance) &&
+                m_document->get(instance).m_header.m_name ==
+                  node->m_header.m_name) {
+              is_taken = true;
+              break;
+            }
+          }
+          if(is_taken) {
+            auto header = node->m_header;
+            header.m_name = make_instance_name(*m_document, role->m_component);
+            m_transaction->replace_header(std::move(header));
+          }
+        }
+      }
+
       const std::vector<NodeId>& get_instances(const ComponentId& component) {
         if(!m_instances) {
           m_instances.emplace();
@@ -1413,12 +1618,14 @@ namespace {
         if(!context) {
           return;
         }
-        if(context->m_kind == ContextKind::INSTANCE) {
-          record_override(*context, id, mask);
+        auto recorded = mask;
+        while(context && context->m_kind == ContextKind::INSTANCE) {
+          record_override(*context, id, recorded);
+          recorded = mask & PROPERTY_CHANGES;
           context = find_outer_context(*context);
-          if(!context || context->m_kind == ContextKind::INSTANCE) {
-            return;
-          }
+        }
+        if(!context) {
+          return;
         }
         if(context->m_kind == ContextKind::MAIN) {
           push_main(*context, id, mask);
@@ -1875,12 +2082,243 @@ namespace {
         }
         return true;
       }
+
+      std::vector<NodeId> get_trees(const ComponentId& id) const {
+        auto trees = std::vector<NodeId>();
+        if(auto component = find_component(id)) {
+          trees.push_back(component->m_master);
+          for(auto& state : component->m_states) {
+            trees.push_back(state.m_tree);
+          }
+        }
+        return trees;
+      }
+
+      std::optional<ComponentId> find_tree_component(
+          const NodeId& root) const {
+        if(auto master = m_masters.find(root); master != m_masters.end()) {
+          return master->second;
+        } else if(auto state = m_states.find(root); state != m_states.end()) {
+          return state->second.first;
+        }
+        return std::nullopt;
+      }
+
+      std::vector<Interaction> get_owned(const NodeId& owner) const {
+        auto owned = std::vector<Interaction>();
+        for(auto& interaction : m_document->get_prototype().m_interactions) {
+          if(interaction.m_owner == owner) {
+            owned.push_back(interaction);
+          }
+        }
+        return owned;
+      }
+
+      const Interaction* find_interaction(const InteractionId& id) const {
+        for(auto& interaction : m_document->get_prototype().m_interactions) {
+          if(interaction.m_id == id) {
+            return &interaction;
+          }
+        }
+        return nullptr;
+      }
+
+      bool push_main_interaction(const InteractionId& id,
+          std::unordered_set<ComponentId>& components) {
+        auto interaction = find_interaction(id);
+        if(!interaction) {
+          return false;
+        }
+        auto copy = *interaction;
+        auto node = m_document->find(copy.m_owner);
+        auto role = node ? get_instance_role(*node) : nullptr;
+        if(!role || !role->m_is_main ||
+            is_linked(*m_document, role->m_component)) {
+          return false;
+        }
+        auto tree = get_source_tree(*m_document, *role);
+        if(tree.is_nil() || !m_document->find(tree)) {
+          return false;
+        }
+        components.insert(role->m_component);
+        for(auto& source : get_owned(tree)) {
+          if(derive_inherited_id(source.m_id, copy.m_owner) != copy.m_id) {
+            continue;
+          }
+          if(source.m_trigger != copy.m_trigger ||
+              source.m_action != copy.m_action) {
+            source.m_trigger = copy.m_trigger;
+            source.m_action = copy.m_action;
+            m_transaction->replace_interaction(std::move(source));
+          }
+          return true;
+        }
+        for(auto& other : get_trees(role->m_component)) {
+          for(auto& source : get_owned(other)) {
+            if(derive_inherited_id(source.m_id, copy.m_owner) == copy.m_id) {
+              return true;
+            }
+          }
+        }
+        auto source = copy;
+        source.m_id = generate_node_id();
+        source.m_owner = tree;
+        m_transaction->remove_interaction(copy.m_id);
+        m_transaction->add_interaction(std::move(source));
+        return true;
+      }
+
+      std::optional<InteractionId> remove_main_interaction(
+          const InteractionId& id,
+          std::unordered_set<ComponentId>& components) {
+        for(auto& entry : *m_instances) {
+          for(auto& instance : entry.second) {
+            auto node = m_document->find(instance);
+            auto role = node ? get_instance_role(*node) : nullptr;
+            if(!role || !role->m_is_main ||
+                is_linked(*m_document, role->m_component)) {
+              continue;
+            }
+            auto tree = get_source_tree(*m_document, *role);
+            for(auto& source : get_owned(tree)) {
+              if(derive_inherited_id(source.m_id, instance) == id) {
+                m_transaction->remove_interaction(source.m_id);
+                components.insert(role->m_component);
+                return source.m_id;
+              }
+            }
+          }
+        }
+        return std::nullopt;
+      }
+
+      void inherit_interactions(const NodeId& instance) {
+        auto node = m_document->find(instance);
+        auto role = node ? get_instance_role(*node) : nullptr;
+        if(!role) {
+          return;
+        }
+        auto tree = get_source_tree(*m_document, *role);
+        auto kept = std::unordered_set<InteractionId>();
+        for(auto& source : get_owned(tree)) {
+          auto copy = source;
+          copy.m_id = derive_inherited_id(source.m_id, instance);
+          copy.m_owner = instance;
+          kept.insert(copy.m_id);
+          if(auto existing = find_interaction(copy.m_id)) {
+            copy.m_is_enabled = existing->m_is_enabled;
+            if(*existing != copy) {
+              m_transaction->replace_interaction(std::move(copy));
+            }
+          } else {
+            m_transaction->add_interaction(std::move(copy));
+          }
+        }
+        for(auto& other : get_trees(role->m_component)) {
+          if(other == tree) {
+            continue;
+          }
+          for(auto& source : get_owned(other)) {
+            auto id = derive_inherited_id(source.m_id, instance);
+            if(!kept.contains(id) && find_interaction(id)) {
+              m_transaction->remove_interaction(id);
+            }
+          }
+        }
+      }
+
+      void sync_interactions(const ChangeSet& changes) {
+        auto components = std::unordered_set<ComponentId>();
+        auto instances = std::vector<NodeId>();
+        for(auto& id : changes.m_inserted) {
+          if(auto node = m_document->find(id);
+              node && get_instance_role(*node)) {
+            instances.push_back(id);
+          }
+        }
+        for(auto& change : changes.m_modified) {
+          if(is_set(change.m_mask, ChangeMask::ROLES)) {
+            if(auto node = m_document->find(change.m_id);
+                node && get_instance_role(*node)) {
+              instances.push_back(change.m_id);
+            }
+          }
+        }
+        if(changes.m_interactions.empty() && instances.empty()) {
+          return;
+        }
+        get_instances(ComponentId());
+        auto removed = std::vector<InteractionId>();
+        for(auto& id : changes.m_interactions) {
+          if(find_interaction(id)) {
+            if(!push_main_interaction(id, components)) {
+              if(auto interaction = find_interaction(id)) {
+                if(auto component =
+                    find_tree_component(interaction->m_owner)) {
+                  components.insert(*component);
+                }
+              }
+            }
+          } else {
+            removed.push_back(id);
+            if(auto source = remove_main_interaction(id, components)) {
+              removed.push_back(*source);
+            }
+          }
+        }
+        if(!removed.empty()) {
+          for(auto& entry : *m_instances) {
+            for(auto& instance : entry.second) {
+              for(auto& id : removed) {
+                auto copy = derive_inherited_id(id, instance);
+                if(find_interaction(copy)) {
+                  m_transaction->remove_interaction(copy);
+                }
+              }
+            }
+          }
+        }
+        for(auto& component : components) {
+          auto& list = get_instances(component);
+          instances.insert(instances.end(), list.begin(), list.end());
+        }
+        auto visited = std::unordered_set<NodeId>();
+        for(auto& instance : instances) {
+          if(visited.insert(instance).second) {
+            inherit_interactions(instance);
+          }
+        }
+      }
   };
+}
+
+InteractionId Rellu::derive_inherited_id(
+    const InteractionId& source, const NodeId& owner) {
+  auto hash = [] (std::string_view text, std::uint64_t seed) {
+    for(auto character : text) {
+      seed ^= static_cast<unsigned char>(character);
+      seed *= 0x100000001B3ULL;
+    }
+    return seed;
+  };
+  auto text = to_string(source);
+  auto qualifier = to_string(owner);
+  auto high = hash(qualifier, hash(text, 0xCBF29CE484222325ULL) ^ 0x2F);
+  auto low = hash(qualifier, hash(text, 0x84222325CBF29CE4ULL) ^ 0x5D);
+  auto bytes = std::array<std::uint8_t, NodeId::SIZE>();
+  for(auto i = std::size_t(0); i != 8; ++i) {
+    bytes[i] = static_cast<std::uint8_t>(high >> (56 - 8 * i));
+    bytes[i + 8] = static_cast<std::uint8_t>(low >> (56 - 8 * i));
+  }
+  bytes[6] = static_cast<std::uint8_t>((bytes[6] & 0x0F) | 0x80);
+  bytes[8] = static_cast<std::uint8_t>((bytes[8] & 0x3F) | 0x80);
+  return NodeId(bytes);
 }
 
 bool Rellu::refresh_components(Document& document, ChangeSet& changes) {
   if(document.get_resources().m_components.empty() ||
-      changes.m_modified.empty() && changes.m_inserted.empty()) {
+      changes.m_modified.empty() && changes.m_inserted.empty() &&
+        changes.m_interactions.empty()) {
     return false;
   }
   auto captured = std::optional<ChangeSet>();
@@ -1906,5 +2344,86 @@ bool Rellu::refresh_components(Document& document, ChangeSet& changes) {
     captured->m_modified.begin(), captured->m_modified.end());
   changes.m_components.insert(changes.m_components.end(),
     captured->m_components.begin(), captured->m_components.end());
+  changes.m_interactions.insert(changes.m_interactions.end(),
+    captured->m_interactions.begin(), captured->m_interactions.end());
   return true;
+}
+
+bool Rellu::refresh_component_sizes(Document& document,
+    const ChangeSet& changes, const TextMeasurer& measurer) {
+  auto& components = document.get_resources().m_components;
+  if(components.empty()) {
+    return false;
+  }
+  auto masters = std::unordered_map<NodeId, ComponentId>();
+  for(auto& entry : components) {
+    masters.emplace(entry.second.m_master, entry.first);
+  }
+  auto touched = std::vector<NodeId>(
+    changes.m_inserted.begin(), changes.m_inserted.end());
+  touched.insert(touched.end(), changes.m_moved.begin(), changes.m_moved.end());
+  for(auto& change : changes.m_modified) {
+    touched.push_back(change.m_id);
+  }
+  auto visited = std::unordered_set<NodeId>();
+  auto instances = std::vector<NodeId>();
+  auto roots = std::vector<NodeId>();
+  for(auto& id : touched) {
+    auto current = id;
+    for(auto depth = 0; depth != MAXIMUM_DEPTH && !current.is_nil(); ++depth) {
+      if(!visited.insert(current).second) {
+        break;
+      }
+      auto node = document.find(current);
+      if(!node) {
+        break;
+      }
+      if(get_instance_role(*node)) {
+        instances.push_back(current);
+      }
+      if(node->m_parent.is_nil() && masters.contains(current)) {
+        roots.push_back(current);
+      }
+      current = node->m_parent;
+    }
+  }
+  if(instances.empty() && roots.empty()) {
+    return false;
+  }
+  auto is_changed = false;
+  {
+    auto transaction = Transaction(document);
+    auto measure = [&] (const NodeId& id) -> std::optional<Size> {
+      if(auto bounds =
+          get_local_bounds(document, id, BoundsType::GEOMETRY, measurer)) {
+        return Size(bounds->m_width, bounds->m_height);
+      }
+      return std::nullopt;
+    };
+    for(auto& id : instances) {
+      auto size = measure(id);
+      auto& node = document.get(id);
+      if(!size || *size == get_instance_role(node)->m_size) {
+        continue;
+      }
+      auto group = *node.get_group();
+      group.m_component_instance->m_size = *size;
+      transaction.replace_payload(id, std::move(group));
+      is_changed = true;
+    }
+    for(auto& id : roots) {
+      auto size = measure(id);
+      auto component = components.at(masters.at(id));
+      if(!size || *size == component.m_size) {
+        continue;
+      }
+      component.m_size = *size;
+      transaction.replace_component(std::move(component));
+      is_changed = true;
+    }
+    if(is_changed) {
+      transaction.amend();
+    }
+  }
+  return is_changed;
 }

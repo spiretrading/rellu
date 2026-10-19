@@ -1,8 +1,10 @@
 #ifndef RELLU_UI_EDIT_ACTIONS_HPP
 #define RELLU_UI_EDIT_ACTIONS_HPP
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
+#include <QMetaObject>
 #include <QString>
 #include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Editor/Editor.hpp"
@@ -29,6 +31,12 @@ namespace Rellu {
       using ErrorHandler = std::function<void (const QString& message)>;
 
       /**
+       * The type of function returning the region of the document in view,
+       * or none when it is unknown.
+       */
+      using ViewProvider = std::function<std::optional<Rect> ()>;
+
+      /**
        * Sets the handlers of the actions, which are disabled until an
        * editor is set. The registry must already have Adobe XD's menus.
        * @param actions The registry holding the actions.
@@ -43,15 +51,31 @@ namespace Rellu {
       Editor* get_editor() const;
 
       /**
-       * Sets the editor acted on, emptying the clipboard when the editor
-       * changes.
+       * Sets the editor acted on. What the clipboard holds stays available
+       * to paste into the next editor's document.
        * @param editor The editor, or <code>nullptr</code> for none. It must
        *        outlive this object or be replaced first.
        */
       void set_editor(Editor* editor);
 
-      /** Returns the clipboard cut, copied and pasted through. */
+      /**
+       * Returns the clipboard cut, copied and pasted through, which also
+       * exchanges what it holds with the system clipboard.
+       */
       Clipboard& get_clipboard();
+
+      /**
+       * Sets the function returning the region of the document in view,
+       * which decides where content is pasted.
+       * @param provider The function.
+       */
+      void set_view_provider(ViewProvider provider);
+
+      /**
+       * Sets the function measuring text when what is copied is measured.
+       * @param measurer The function.
+       */
+      void set_text_measurer(TextMeasurer measurer);
 
       /**
        * Sets the function reporting an operation that failed.
@@ -68,6 +92,9 @@ namespace Rellu {
       Editor* m_editor;
       Clipboard m_clipboard;
       ErrorHandler m_error_handler;
+      ViewProvider m_view_provider;
+      TextMeasurer m_measurer;
+      QMetaObject::Connection m_clipboard_connection;
       Subscription m_selection_subscription;
       Subscription m_history_subscription;
       std::vector<std::string> m_names;
@@ -78,6 +105,7 @@ namespace Rellu {
       void set_action(
         const std::string& name, std::function<void ()> handler);
       void run(auto operation);
+      bool copy_selection();
       void cut();
       void copy();
       void paste();

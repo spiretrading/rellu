@@ -10,7 +10,7 @@ namespace {
   constexpr auto MINIMUM_WIDTH = 12.0;
   constexpr auto MAXIMUM_WIDTHS = std::size_t(1 << 14);
   const auto TEXT_COLOR = QColor(112, 112, 112);
-  const auto HIGHLIGHT_COLOR = QColor(20, 115, 230);
+  const auto HIGHLIGHT_COLOR = QColor(38, 128, 235);
 }
 
 ArtboardTitles::ArtboardTitles()

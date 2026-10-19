@@ -337,7 +337,9 @@ TEST_SUITE("TextLayout") {
     auto bounds = measure_text(text, get_library());
     REQUIRE(bounds.m_x == 0);
     REQUIRE(bounds.m_y == -get_ascent());
-    REQUIRE(bounds.m_width > 0);
+    auto lines = measure_lines(text, get_library());
+    REQUIRE(bounds.m_width == std::round(
+      std::max(lines[0].m_carets.back(), lines[1].m_carets.back())));
     REQUIRE(bounds.m_height == height);
     text.m_frame = AutoHeightFrame(150);
     REQUIRE(measure_text(text, get_library()) == Rect(0, 0, 150, height));

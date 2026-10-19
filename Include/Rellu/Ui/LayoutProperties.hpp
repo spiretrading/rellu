@@ -1,6 +1,8 @@
 #ifndef RELLU_UI_LAYOUT_PROPERTIES_HPP
 #define RELLU_UI_LAYOUT_PROPERTIES_HPP
+#include <optional>
 #include "Rellu/Commands/Bounds.hpp"
+#include "Rellu/Model/Layout.hpp"
 #include "Rellu/Model/Node.hpp"
 #include "Rellu/Ui/PropertyDescriptor.hpp"
 #include "Rellu/Ui/PropertyEditors.hpp"
@@ -22,9 +24,22 @@ namespace Rellu {
   void add_layout_properties(const Node& node, PropertyDescriptor& section);
 
   /**
-   * Adds the editors of the properties add_layout_properties describes, and
+   * Returns the direction of the stack a node is an item of, along which
+   * Adobe XD disables the node's position field: X for a horizontal stack,
+   * Y for a vertical one.
+   * @param document The document holding the node.
+   * @param id The node's id.
+   * @return The stack's direction, or <code>std::nullopt</code> if the node
+   *         is not an item of a stack.
+   */
+  std::optional<Orientation> get_stack_direction(
+    const Document& document, const NodeId& id);
+
+  /**
+   * Adds the editors of the properties add_layout_properties describes,
    * makes the width and height of a repeat grid selected alone set the size
-   * it shows rather than scale it.
+   * it shows rather than scale it, and leaves the position of stack items
+   * along their stack's direction to the stack.
    * @param editors The editors to add to, holding the standard editors.
    * @param measurer The function measuring text.
    */

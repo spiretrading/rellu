@@ -128,9 +128,6 @@ NodeId EditContext::resolve(const NodeId& hit) const {
       node = parent;
     }
   }
-  if(node->m_header.m_is_locked) {
-    return NodeId();
-  }
   return node->get_id();
 }
 

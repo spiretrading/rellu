@@ -20,7 +20,10 @@ namespace Rellu {
    * points and handles to multiples of 45 degrees. Clicking the first point
    * closes the path and Enter or Escape finishes an open one, after which
    * Escape returns to the select tool. A double click on a point toggles it
-   * between corner and smooth. With a single path selected, clicking one of
+   * between corner and smooth. Points placed and handles dragged snap
+   * through the context's snap service, and a path started while a group is
+   * entered goes in that group, as find_drawing_parent finds. With a single
+   * path selected, clicking one of
    * its open ends continues it and clicking a segment adds a point. Every
    * point is one undoable step, and abandoning the tool keeps the points
    * placed.

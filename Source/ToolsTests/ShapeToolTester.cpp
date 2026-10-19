@@ -252,4 +252,32 @@ TEST_SUITE("ShapeTool") {
     REQUIRE(get_geometry(node) ==
       ShapeGeometry(RectangleShape(Rect(0, 0, 50, 30))));
   }
+
+  TEST_CASE("entered_group") {
+    auto document = Document();
+    auto artboard = build_artboard(document);
+    auto transaction = Transaction(document);
+    auto group = transaction.append(
+      artboard, make_header("Group", make_translation(50, 50)), Group());
+    auto inner = transaction.append(
+      group, make_header("Rectangle"), make_rectangle_shape(40, 40));
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    REQUIRE(editor.get_context().enter(group));
+    tools.set_tool("ellipse");
+    drag(tools, Point(300, 300), Point(340, 320));
+    auto& node = get_drawn(editor);
+    REQUIRE(node.m_parent == group);
+    REQUIRE(document.get(group).m_children ==
+      std::vector{inner, node.get_id()});
+    REQUIRE(*get_world_bounds(document, node.get_id()) ==
+      Rect(300, 300, 40, 20));
+    REQUIRE(editor.get_context().get_container() == group);
+    editor.get_context().exit();
+    drag(tools, Point(400, 300), Point(440, 320));
+    REQUIRE(get_drawn(editor).m_parent == artboard);
+  }
 }

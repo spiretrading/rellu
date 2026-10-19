@@ -241,12 +241,149 @@ QVariant LayersModel::headerData(
 
 Qt::ItemFlags LayersModel::flags(const QModelIndex& index) const {
   if(!index.isValid()) {
+    if(m_move_handler) {
+      return Qt::ItemIsDropEnabled;
+    }
     return Qt::NoItemFlags;
   }
+  auto flags = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
   if(m_rename_handler && index.column() == NAME) {
-    return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable;
+    flags |= Qt::ItemIsEditable;
   }
-  return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+  if(m_move_handler) {
+    flags |= Qt::ItemIsDragEnabled;
+    auto id = get_id(index);
+    if(auto node = m_document ? m_document->find(id) : nullptr) {
+      auto group = node->get_group();
+      if(node->get_artboard() || (group && !group->m_component_instance &&
+          !group->m_repeat_grid)) {
+        flags |= Qt::ItemIsDropEnabled;
+      }
+    }
+  }
+  return flags;
+}
+
+Qt::DropActions LayersModel::supportedDropActions() const {
+  return Qt::MoveAction;
+}
+
+QStringList LayersModel::mimeTypes() const {
+  return QStringList({MIME_TYPE});
+}
+
+QMimeData* LayersModel::mimeData(const QModelIndexList& indexes) const {
+  auto ids = QStringList();
+  for(auto& index : indexes) {
+    if(index.column() != NAME) {
+      continue;
+    }
+    auto id = QString::fromStdString(to_string(get_id(index)));
+    if(!ids.contains(id)) {
+      ids.push_back(id);
+    }
+  }
+  auto data = new QMimeData();
+  data->setData(MIME_TYPE, ids.join('\n').toUtf8());
+  return data;
+}
+
+bool LayersModel::canDropMimeData(const QMimeData* data,
+    Qt::DropAction action, int row, int column,
+    const QModelIndex& parent) const {
+  if(!m_move_handler || !m_document || !data ||
+      !data->hasFormat(MIME_TYPE)) {
+    return false;
+  }
+  auto nodes = std::vector<NodeId>();
+  for(auto& text : QString::fromUtf8(data->data(MIME_TYPE)).split('\n')) {
+    if(auto id = parse_node_id(text.toStdString());
+        id && m_document->find(*id)) {
+      nodes.push_back(*id);
+    }
+  }
+  return !nodes.empty() && is_movable(nodes, get_id(parent));
+}
+
+bool LayersModel::dropMimeData(const QMimeData* data, Qt::DropAction action,
+    int row, int column, const QModelIndex& parent) {
+  if(!canDropMimeData(data, action, row, column, parent)) {
+    return false;
+  }
+  auto nodes = std::vector<NodeId>();
+  for(auto& text : QString::fromUtf8(data->data(MIME_TYPE)).split('\n')) {
+    if(auto id = parse_node_id(text.toStdString())) {
+      if(m_document->find(*id) &&
+          std::find(nodes.begin(), nodes.end(), *id) == nodes.end()) {
+        nodes.push_back(*id);
+      }
+    }
+  }
+  auto parent_id = get_id(parent);
+  auto& children = m_document->get_children(parent_id);
+  auto rows = std::vector<NodeId>(children.rbegin(), children.rend());
+  auto is_moved = [&] (const NodeId& id) {
+    return std::find(nodes.begin(), nodes.end(), id) != nodes.end();
+  };
+  auto above = std::size_t(0);
+  auto limit = row < 0 ? std::size_t(0) :
+    std::min(static_cast<std::size_t>(row), rows.size());
+  for(auto i = std::size_t(0); i != limit; ++i) {
+    if(!is_moved(rows[i])) {
+      ++above;
+    }
+  }
+  auto others = static_cast<std::size_t>(std::count_if(rows.begin(),
+    rows.end(), [&] (const auto& id) { return !is_moved(id); }));
+  return m_move_handler(nodes, parent_id, others - above);
+}
+
+void LayersModel::set_move_handler(MoveHandler handler) {
+  m_move_handler = std::move(handler);
+}
+
+bool LayersModel::is_movable(
+    const std::vector<NodeId>& nodes, const NodeId& parent) const {
+  if(!m_document || nodes.empty()) {
+    return false;
+  }
+  auto container = parent.is_nil() ? nullptr : m_document->find(parent);
+  if(!parent.is_nil()) {
+    if(!container) {
+      return false;
+    }
+    auto group = container->get_group();
+    if(!container->get_artboard() &&
+        (!group || group->m_component_instance || group->m_repeat_grid)) {
+      return false;
+    }
+  }
+  for(auto& id : nodes) {
+    auto node = m_document->find(id);
+    if(!node || (node->m_parent.is_nil() && !m_document->is_on_canvas(id))) {
+      return false;
+    } else if(container && node->get_artboard()) {
+      return false;
+    }
+    if(auto owner = m_document->find(node->m_parent)) {
+      auto group = owner->get_group();
+      if(owner->get_reference() || owner->get_shape() ||
+          (group && (group->m_component_instance || group->m_repeat_grid))) {
+        return false;
+      }
+    }
+    for(auto current = parent; !current.is_nil();) {
+      if(current == id) {
+        return false;
+      }
+      auto ancestor = m_document->find(current);
+      if(!ancestor) {
+        break;
+      }
+      current = ancestor->m_parent;
+    }
+  }
+  return true;
 }
 
 bool LayersModel::setData(

@@ -84,6 +84,8 @@ namespace {
       "edit.color_profile", "profiles"),
     Item(MENU, "edit.preferences.language", "Language", "", "edit.preferences",
       "language"),
+    Item(CHECKED, "edit.preferences.language.english", "English", "",
+      "edit.preferences.language", "languages"),
     Item(CHECKED, "edit.preferences.productivity_tips",
       "Show Productivity Tips", "", "edit.preferences", "tips"),
     Item(CHECKED, "edit.preferences.auto_link", "Auto-create Link when Sharing",

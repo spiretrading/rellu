@@ -166,7 +166,9 @@ namespace {
         ux.get_number("linkedElementLastModified"_L1, 0);
       component.m_link = std::move(link);
     }
-    ux.ignore({"width"_L1, "height"_L1, "linkedElementBookmarkRef"_L1});
+    component.m_size = Size(
+      ux.get_number("width"_L1, 0), ux.get_number("height"_L1, 0));
+    ux.ignore({"linkedElementBookmarkRef"_L1});
     ignore_component_keys(ux);
     component.m_states = import_states(ux, import);
     node.m_states.get<MasterComponent>().m_component = std::move(component);

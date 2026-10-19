@@ -326,4 +326,21 @@ TEST_SUITE("PenTool") {
     REQUIRE(setup.get_pen().get_path(tools.get_context()).is_nil());
     REQUIRE(setup.get_contours(id).front().m_anchors.size() == 2);
   }
+
+  TEST_CASE("snapping") {
+    auto setup = Setup();
+    click(setup.m_tools, Point(203, 302));
+    click(setup.m_tools, Point(402, 397));
+    auto id = setup.get_drawn();
+    auto contours = setup.get_contours(id);
+    auto transform = get_world_transform(setup.m_document, id);
+    REQUIRE(transform.map(contours.front().m_anchors[0].m_point) ==
+      Point(203, 300));
+    REQUIRE(transform.map(contours.front().m_anchors[1].m_point) ==
+      Point(400, 397));
+    click(setup.m_tools, Point(599, 497), Qt::ControlModifier);
+    contours = setup.get_contours(id);
+    REQUIRE(transform.map(contours.front().m_anchors[2].m_point) ==
+      Point(599, 497));
+  }
 }

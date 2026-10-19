@@ -17,6 +17,7 @@
 #include "Rellu/Model/Subscription.hpp"
 #include "Rellu/Ui/ActionRegistry.hpp"
 #include "Rellu/Ui/AppBar.hpp"
+#include "Rellu/Ui/ColorPicker.hpp"
 #include "Rellu/Ui/PropertyDescriptor.hpp"
 #include "Rellu/Ui/PropertyEditors.hpp"
 
@@ -29,7 +30,11 @@ namespace Rellu {
    * the editor's selection and edits the properties that have a property
    * editor through commands, each field's successive entries merging into
    * one undoable step until the field is left; the other properties are
-   * shown read-only. Its buttons trigger the actions of an ActionRegistry.
+   * shown read-only, and every field is disabled while an inspected node is
+   * locked. The text section of text being edited in place follows its caret
+   * and selection. Its swatches open Adobe XD's color picker, whose edits
+   * merge into one undoable step until it closes. Its buttons trigger the
+   * actions of an ActionRegistry.
    */
   class PropertyInspector : public QWidget {
     public:
@@ -141,6 +146,23 @@ namespace Rellu {
        */
       QWidget* find_display(std::string_view path) const;
 
+      /** Returns the color picker the swatches open. */
+      ColorPicker& get_color_picker();
+
+      /**
+       * Opens the color picker editing a property, as clicking its swatch
+       * does.
+       * @param path The property's path, such as fill.paint or stroke.color.
+       * @return <code>true</code> iff the property is shown as editable.
+       */
+      bool open_color_picker(std::string_view path);
+
+      /**
+       * Returns <code>true</code> iff the fields are disabled because an
+       * inspected node is locked.
+       */
+      bool is_locked() const;
+
     private:
       struct Field;
       Document* m_document;
@@ -149,6 +171,7 @@ namespace Rellu {
       Workspace m_workspace;
       Subscription m_subscription;
       Subscription m_selection_subscription;
+      Subscription m_text_selection_subscription;
       PropertyEditors m_property_editors;
       TextMeasurer m_measurer;
       std::vector<NodeId> m_nodes;
@@ -158,12 +181,15 @@ namespace Rellu {
       std::vector<std::pair<std::string, QWidget*>> m_sections;
       std::vector<std::unique_ptr<Field>> m_fields;
       std::string m_edited_path;
+      std::string m_picked_path;
       int m_generation;
       bool m_is_committing;
       bool m_is_rebuild_pending;
+      bool m_is_locked;
       QScrollArea* m_scroll;
       QWidget* m_content;
       QVBoxLayout* m_layout;
+      ColorPicker* m_picker;
 
       void attach(Document* document);
       void refresh();
@@ -172,6 +198,11 @@ namespace Rellu {
       void commit(
         int generation, const std::string& path, const PropertyValue& value);
       void finish(int generation, const std::string& path);
+      void apply(const std::string& path, const PropertyValue& value);
+      void seal(const std::string& path);
+      void open_picker(const QRect& anchor, const std::string& path);
+      void add_swatch(const Fill& fill);
+      bool find_lock() const;
       bool is_affected(const ChangeSet& changes) const;
       void on_change(const ChangeSet& changes);
   };

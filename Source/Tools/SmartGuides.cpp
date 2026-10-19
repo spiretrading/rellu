@@ -14,7 +14,6 @@ using namespace Rellu;
 namespace {
   constexpr auto TOLERANCE = 1e-6;
   constexpr auto MAXIMUM_LABELS = std::size_t(256);
-  constexpr auto LABEL_RADIUS = 2.0;
   constexpr auto OBJECTS_PER_BIN = std::size_t(4);
   constexpr auto MAXIMUM_BINS = std::size_t(4096);
   constexpr auto MINIMUM_WIDE_BINS = std::size_t(4);
@@ -293,10 +292,10 @@ void SmartGuides::measure(
 void SmartGuides::draw(const Matrix& view, CanvasOverlay& overlay) const {
   auto scale = m_context->get_scale();
   for(auto& line : m_lines) {
-    draw_line(view, line, overlay);
+    draw_line(view, line, ALIGNMENT_COLOR, overlay);
   }
   for(auto& line : m_measured_lines) {
-    draw_line(view, line, overlay);
+    draw_line(view, line, DISTANCE_COLOR, overlay);
   }
   for(auto& distance : m_distances) {
     draw_distance(view, distance, scale, overlay);
@@ -522,7 +521,9 @@ std::optional<double> SmartGuides::find_alignment(bool is_x,
         return entry.m_value < bound;
       });
     for(; i != entries.end() && i->m_value <= value + threshold; ++i) {
-      keep_closest(best, i->m_value - value);
+      if(std::abs(i->m_value - value) < threshold) {
+        keep_closest(best, i->m_value - value);
+      }
     }
     if(m_square_grid) {
       auto& frame = m_square_grid->m_frame;
@@ -532,7 +533,7 @@ std::optional<double> SmartGuides::find_alignment(bool is_x,
       auto line = extent.m_start +
         std::round((value - extent.m_start) / size) * size;
       if(line >= extent.m_start && line <= extent.m_end &&
-          std::abs(line - value) <= threshold) {
+          std::abs(line - value) < threshold) {
         keep_closest(best, line - value);
       }
     }
@@ -558,7 +559,7 @@ std::optional<double> SmartGuides::find_spacing(
   auto best = std::optional<double>();
   auto consider = [&] (double start) {
     auto offset = start - along.m_start;
-    if(std::abs(offset) <= threshold) {
+    if(std::abs(offset) < threshold) {
       keep_closest(best, offset);
     }
   };
@@ -703,13 +704,9 @@ std::shared_ptr<const QImage> SmartGuides::get_label(
     std::max(height, 1), QImage::Format_RGBA8888_Premultiplied);
   image->fill(Qt::transparent);
   auto painter = QPainter(image.get());
-  painter.setRenderHint(QPainter::Antialiasing);
-  painter.setPen(Qt::NoPen);
-  painter.setBrush(to_qcolor(COLOR));
-  painter.drawRoundedRect(QRectF(0, 0, image->width(), image->height()),
-    LABEL_RADIUS * scale, LABEL_RADIUS * scale);
+  painter.setRenderHint(QPainter::TextAntialiasing);
   painter.setFont(font);
-  painter.setPen(QColor(255, 255, 255));
+  painter.setPen(to_qcolor(LABEL_COLOR));
   painter.drawText(QRectF(0, 0, image->width(), image->height()),
     Qt::AlignCenter | Qt::TextSingleLine, content);
   painter.end();
@@ -719,7 +716,7 @@ std::shared_ptr<const QImage> SmartGuides::get_label(
 }
 
 void SmartGuides::draw_line(const Matrix& view, const GuideLine& line,
-    CanvasOverlay& overlay) const {
+    Color color, CanvasOverlay& overlay) const {
   auto start = view.map(line.m_start);
   auto end = view.map(line.m_end);
   auto length = distance(start, end);
@@ -728,7 +725,7 @@ void SmartGuides::draw_line(const Matrix& view, const GuideLine& line,
   }
   auto extension = (end - start) * (LINE_WIDTH / 2 / length);
   overlay.m_shapes.push_back(make_overlay_line(
-    start - extension, end + extension, LINE_WIDTH, COLOR));
+    start - extension, end + extension, LINE_WIDTH, color));
 }
 
 void SmartGuides::draw_distance(const Matrix& view,
@@ -744,13 +741,13 @@ void SmartGuides::draw_distance(const Matrix& view,
   auto normal = Point(-direction.m_y, direction.m_x);
   auto cap = normal * (CAP_LENGTH / 2);
   overlay.m_shapes.push_back(
-    make_overlay_line(start - cap, start + cap, LINE_WIDTH, COLOR));
+    make_overlay_line(start - cap, start + cap, LINE_WIDTH, DISTANCE_COLOR));
   overlay.m_shapes.push_back(
-    make_overlay_line(end - cap, end + cap, LINE_WIDTH, COLOR));
+    make_overlay_line(end - cap, end + cap, LINE_WIDTH, DISTANCE_COLOR));
   auto middle = interpolate(start, end, 0.5);
   if(!(scale > 0)) {
     overlay.m_shapes.push_back(
-      make_overlay_line(start, end, LINE_WIDTH, COLOR));
+      make_overlay_line(start, end, LINE_WIDTH, DISTANCE_COLOR));
     return;
   }
   auto label = get_label(format_distance(distance.get_length()), scale);
@@ -763,12 +760,12 @@ void SmartGuides::draw_distance(const Matrix& view,
   auto center = middle;
   if(length > 2 * half) {
     overlay.m_shapes.push_back(make_overlay_line(
-      start, middle - direction * half, LINE_WIDTH, COLOR));
+      start, middle - direction * half, LINE_WIDTH, DISTANCE_COLOR));
     overlay.m_shapes.push_back(make_overlay_line(
-      middle + direction * half, end, LINE_WIDTH, COLOR));
+      middle + direction * half, end, LINE_WIDTH, DISTANCE_COLOR));
   } else {
     overlay.m_shapes.push_back(
-      make_overlay_line(start, end, LINE_WIDTH, COLOR));
+      make_overlay_line(start, end, LINE_WIDTH, DISTANCE_COLOR));
     center = middle + normal * (get_extent(normal) + CAP_LENGTH / 2);
   }
   overlay.m_images.push_back(OverlayImage(label, center - size / 2));

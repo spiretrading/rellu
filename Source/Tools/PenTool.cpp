@@ -36,6 +36,13 @@ namespace {
     }
     return point;
   }
+
+  NodeId get_parent(const Document& document, const NodeId& id) {
+    if(auto node = document.find(id)) {
+      return node->m_parent;
+    }
+    return NodeId();
+  }
 }
 
 PenTool::PenTool() noexcept
@@ -82,6 +89,8 @@ void PenTool::press(ToolContext& context, const PointerEvent& event) {
     }
     m_anchor = anchors.size() - 1;
     m_is_dragging = true;
+    context.get_snap_service().begin(get_parent(context.get_document(),
+      path->m_node), std::vector{path->m_node});
     if(distance(view.map(anchors.back().m_point), event.m_position) <=
         ANCHOR_REACH) {
       return;
@@ -89,6 +98,9 @@ void PenTool::press(ToolContext& context, const PointerEvent& event) {
     if(is_shift(event.m_modifiers)) {
       auto previous = path->m_transform.map(anchors.back().m_point);
       point = previous + constrain_to_45_degrees(point - previous);
+    } else {
+      point = context.get_snap_service().snap_point(
+        point, SnapAxes::BOTH, event.m_modifiers);
     }
     anchors.push_back(make_anchor(to_local(*path, point)));
     m_anchor = anchors.size() - 1;
@@ -130,6 +142,7 @@ void PenTool::move(ToolContext& context, const PointerEvent& event) {
   }
   if(!event.m_buttons.testFlag(Qt::LeftButton)) {
     m_is_dragging = false;
+    context.get_snap_service().end();
     if(m_is_closing) {
       finish();
     }
@@ -149,6 +162,7 @@ void PenTool::release(ToolContext& context, const PointerEvent& event) {
   if(m_is_dragged) {
     drag(context, event);
   }
+  context.get_snap_service().end();
   m_is_dragging = false;
   m_is_dragged = false;
   if(m_is_closing) {
@@ -205,6 +219,9 @@ bool PenTool::key_press(ToolContext& context, const KeyEvent& event) {
 }
 
 void PenTool::cancel(ToolContext& context) {
+  if(m_is_dragging) {
+    context.get_snap_service().end();
+  }
   finish();
   context.get_editor().get_history().seal();
 }
@@ -300,7 +317,10 @@ void PenTool::apply(ToolContext& context, const EditablePath& path,
 
 void PenTool::start(ToolContext& context, Point point) {
   auto& document = context.get_document();
-  auto parent = find_drawing_parent(document, point);
+  auto parent = find_drawing_parent(context, point);
+  auto& snap = context.get_snap_service();
+  snap.begin(parent, std::vector<NodeId>());
+  point = snap.snap_point(point, SnapAxes::BOTH, m_modifiers);
   auto inverse = invert(get_world_transform(document, parent));
   if(!inverse) {
     return;
@@ -342,6 +362,9 @@ void PenTool::drag(ToolContext& context, const PointerEvent& event) {
   auto handle = context.to_document(event.m_position);
   if(is_shift(event.m_modifiers)) {
     handle = center + constrain_to_45_degrees(handle - center);
+  } else {
+    handle = context.get_snap_service().snap_point(
+      handle, SnapAxes::BOTH, event.m_modifiers);
   }
   auto local = to_local(*path, handle);
   auto mirror = anchor.m_point * 2 - local;

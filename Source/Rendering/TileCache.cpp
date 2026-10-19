@@ -3,6 +3,7 @@
 #include <bit>
 #include <cmath>
 #include <stdexcept>
+#include <QImage>
 #include <QMatrix4x4>
 #include "Rellu/Rendering/Shaders.hpp"
 #include "Rellu/Rendering/TileCache.hpp"
@@ -14,7 +15,7 @@ namespace {
   constexpr auto UNIFORMS_SIZE = 24 * sizeof(float);
   constexpr auto MINIMUM_UNIFORM_COUNT = std::size_t(64);
   constexpr auto MAXIMUM_RENDERERS = std::size_t(2);
-  constexpr auto MAXIMUM_POOL = std::size_t(64);
+  constexpr auto PAGE_SLOTS = 8;
   constexpr auto MINIMUM_MARGIN = 512;
   constexpr auto DEFAULT_BUDGET = std::chrono::milliseconds(10);
 
@@ -74,6 +75,7 @@ TileCache::TileCache()
     m_descriptor(nullptr),
     m_sample_count(1),
     m_uniform_stride(0),
+    m_is_fill_current(false),
     m_uniform_capacity(0),
     m_is_corners_uploaded(false) {}
 
@@ -88,7 +90,8 @@ int TileCache::get_tile_size() const {
 void TileCache::set_tile_size(int size) {
   clear();
   m_bindings.clear();
-  m_textures.clear();
+  m_pages.clear();
+  m_slots.clear();
   m_tile_size = std::max(1, size);
 }
 
@@ -185,6 +188,9 @@ void TileCache::initialize(
   create(*m_linear);
   m_blank.reset(rhi.newTexture(QRhiTexture::RGBA8, QSize(1, 1)));
   create(*m_blank);
+  m_fill.reset(rhi.newTexture(QRhiTexture::RGBA8, QSize(1, 1)));
+  create(*m_fill);
+  m_is_fill_current = false;
   m_layout_uniforms.reset(rhi.newBuffer(QRhiBuffer::Dynamic,
     QRhiBuffer::UniformBuffer, m_uniform_stride));
   create(*m_layout_uniforms);
@@ -211,6 +217,8 @@ void TileCache::initialize(
   m_pipeline->setRenderPassDescriptor(&descriptor);
   m_pipeline->setSampleCount(sample_count);
   create(*m_pipeline);
+  m_renderers.push_back(std::make_unique<PathRenderer>());
+  m_renderers.back()->initialize(rhi, descriptor, sample_count);
 }
 
 void TileCache::release() {
@@ -219,13 +227,16 @@ void TileCache::release() {
   m_is_view_complete = false;
   m_is_complete = false;
   m_bindings.clear();
-  m_textures.clear();
+  m_pages.clear();
+  m_slots.clear();
   for(auto& renderer : m_renderers) {
     renderer->release();
   }
   m_renderers.clear();
   m_pipeline.reset();
   m_layout.reset();
+  m_fill.reset();
+  m_is_fill_current = false;
   m_blank.reset();
   m_linear.reset();
   m_nearest.reset();
@@ -244,6 +255,7 @@ void TileCache::render(QRhiCommandBuffer& buffer, QRhiRenderTarget& target,
   if(m_background != background) {
     clear();
     m_background = background;
+    m_is_fill_current = false;
   }
   auto size = target.pixelSize();
   auto scale = view.m_a;
@@ -313,54 +325,72 @@ void TileCache::render(QRhiCommandBuffer& buffer, QRhiRenderTarget& target,
     return left.m_distance < right.m_distance;
   });
   auto start_time = std::chrono::steady_clock::now();
-  auto rendered = std::size_t(0);
+  auto index = std::size_t(0);
+  auto used = std::size_t(0);
   auto commands = DrawSequence();
   auto is_prefetching = merged.empty() || merged.front().m_priority >= 2;
-  while(rendered != merged.size() && rendered != MAXIMUM_RENDERERS &&
-      (is_prefetching || merged[rendered].m_priority < 2) &&
-      (rendered == 0 ||
-        std::chrono::steady_clock::now() - start_time < m_budget)) {
-    auto& need = merged[rendered];
-    auto tiles = need.m_tiles;
-    auto extent = query(drawing, tiles, commands);
-    if(commands.size() > m_batch_size &&
-        (tiles.width() > 1 || tiles.height() > 1)) {
-      auto is_vertical = tiles.height() > 1;
-      auto length = is_vertical ? tiles.height() : tiles.width();
-      auto count = static_cast<int>(std::min<std::size_t>(length,
-        (commands.size() + m_batch_size - 1) / m_batch_size));
-      auto parts = std::vector<Need>();
-      for(auto i = 0; i != count; ++i) {
-        auto first = length * i / count;
-        auto last = length * (i + 1) / count - 1;
-        auto part = need;
-        if(is_vertical) {
-          part.m_tiles.setTop(tiles.top() + first);
-          part.m_tiles.setBottom(tiles.top() + last);
-        } else {
-          part.m_tiles.setLeft(tiles.left() + first);
-          part.m_tiles.setRight(tiles.left() + last);
-        }
-        parts.push_back(part);
+  auto split = [&] (std::size_t count) {
+    auto need = merged[index];
+    auto& tiles = need.m_tiles;
+    auto is_vertical = tiles.height() > 1;
+    auto length = is_vertical ? tiles.height() : tiles.width();
+    auto parts = static_cast<int>(
+      std::min<std::size_t>(static_cast<std::size_t>(length), count));
+    auto pieces = std::vector<Need>();
+    for(auto i = 0; i != parts; ++i) {
+      auto first = length * i / parts;
+      auto last = length * (i + 1) / parts - 1;
+      auto piece = need;
+      if(is_vertical) {
+        piece.m_tiles.setTop(tiles.top() + first);
+        piece.m_tiles.setBottom(tiles.top() + last);
+      } else {
+        piece.m_tiles.setLeft(tiles.left() + first);
+        piece.m_tiles.setRight(tiles.left() + last);
       }
-      merged[rendered] = parts.front();
-      merged.insert(
-        merged.begin() + rendered + 1, parts.begin() + 1, parts.end());
+      pieces.push_back(piece);
+    }
+    merged[index] = pieces.front();
+    merged.insert(
+      merged.begin() + index + 1, pieces.begin() + 1, pieces.end());
+  };
+  while(index != merged.size() && used != MAXIMUM_RENDERERS &&
+      (is_prefetching || merged[index].m_priority < 2) &&
+      (used == 0 ||
+        std::chrono::steady_clock::now() - start_time < m_budget)) {
+    auto tiles = trim(drawing, merged[index].m_tiles);
+    if(tiles.isEmpty()) {
+      ++index;
       continue;
     }
-    if(m_renderers.size() == rendered) {
+    merged[index].m_tiles = tiles;
+    auto area = static_cast<double>(tiles.width()) * tiles.height();
+    auto estimate = epoch.m_density * area;
+    if(area > 1 && estimate > static_cast<double>(m_batch_size)) {
+      split(static_cast<std::size_t>(
+        std::ceil(estimate / static_cast<double>(m_batch_size))));
+      continue;
+    }
+    auto extent = query(drawing, tiles, commands);
+    epoch.m_density = static_cast<double>(commands.size()) / area;
+    if(commands.size() > m_batch_size && area > 1) {
+      split((commands.size() + m_batch_size - 1) / m_batch_size);
+      continue;
+    }
+    if(m_renderers.size() == used) {
       m_renderers.push_back(std::make_unique<PathRenderer>());
       m_renderers.back()->initialize(*m_rhi, *m_descriptor, m_sample_count);
     }
-    render_tiles(buffer, tiles, commands, extent, *m_renderers[rendered],
+    render_tiles(buffer, tiles, commands, extent, *m_renderers[used],
       background);
-    ++rendered;
+    ++used;
+    ++index;
   }
-  m_is_view_complete = std::all_of(merged.begin() + rendered,
-    merged.end(), [] (const auto& need) {
+  m_is_view_complete = std::all_of(merged.begin() + index, merged.end(),
+    [] (const auto& need) {
       return need.m_priority >= 2;
     });
-  m_is_complete = rendered == merged.size();
+  m_is_complete = index == merged.size();
   if(m_is_view_complete && m_placeholder) {
     discard(*m_placeholder);
     m_placeholder.reset();
@@ -379,26 +409,29 @@ void TileCache::render(QRhiCommandBuffer& buffer, QRhiRenderTarget& target,
         break;
       }
       auto tile = epoch.m_tiles.find(eviction.second);
-      if(m_textures.size() < MAXIMUM_POOL) {
-        m_textures.push_back(std::move(tile->second.m_texture));
-      } else {
-        auto texture = tile->second.m_texture.get();
-        std::erase_if(m_bindings, [&] (const auto& binding) {
-          return binding.first.first == texture;
-        });
-      }
+      recycle(tile->second.m_slot);
       epoch.m_tiles.erase(tile);
     }
   }
   auto projection = m_rhi->clipSpaceCorrMatrix();
   projection.ortho(0, static_cast<float>(size.width()),
     static_cast<float>(size.height()), 0, -1, 1);
-  auto source = std::array<float, 4>({0, 0, 1, 1});
-  if(m_rhi->isYUpInFramebuffer()) {
-    source = std::array<float, 4>({0, 1, 1, 0});
-  }
+  auto is_flipped = m_rhi->isYUpInFramebuffer();
   auto quads = std::vector<Quad>();
-  auto add = [&] (QRhiTexture* texture, bool is_linear, const QRectF& rect) {
+  auto add = [&] (QRhiTexture* texture, bool is_linear, const QRectF& rect,
+      const QRectF& area) {
+    auto size = QSizeF(texture->pixelSize());
+    auto inset = is_linear ? 0.5 : 0;
+    auto left = (area.left() + inset) / size.width();
+    auto right = (area.right() - inset) / size.width();
+    auto top = (area.top() + inset) / size.height();
+    auto bottom = (area.bottom() - inset) / size.height();
+    if(is_flipped) {
+      std::swap(top, bottom);
+    }
+    auto source = std::array<float, 4>({static_cast<float>(left),
+      static_cast<float>(top), static_cast<float>(right),
+      static_cast<float>(bottom)});
     auto quad = Quad(texture, is_linear, Uniforms());
     std::copy(projection.constData(), projection.constData() + 16,
       quad.m_uniforms.begin());
@@ -420,11 +453,13 @@ void TileCache::render(QRhiCommandBuffer& buffer, QRhiRenderTarget& target,
           translation.x(),
         factor * (tile.y() * m_tile_size + placeholder.m_anchor.y()) +
           translation.y(), factor * m_tile_size, factor * m_tile_size);
-      if(rect.intersects(screen)) {
-        add(entry.second.m_texture.get(), true, rect);
+      if(entry.second.m_slot >= 0 && rect.intersects(screen)) {
+        add(&get_page(entry.second.m_slot), true, rect, QRectF(
+          get_origin(entry.second.m_slot), QSizeF(m_tile_size, m_tile_size)));
       }
     }
   }
+  auto is_filling = false;
   for(auto row = visible.top(); row <= visible.bottom(); ++row) {
     for(auto column = visible.left(); column <= visible.right(); ++column) {
       auto tile = epoch.m_tiles.find(to_key(column, row));
@@ -432,14 +467,28 @@ void TileCache::render(QRhiCommandBuffer& buffer, QRhiRenderTarget& target,
         continue;
       }
       tile->second.m_frame = m_frame;
-      add(tile->second.m_texture.get(), false, QRectF(
+      auto rect = QRectF(
         column * m_tile_size + epoch.m_anchor.x() + translation.x(),
         row * m_tile_size + epoch.m_anchor.y() + translation.y(),
-        m_tile_size, m_tile_size));
+        m_tile_size, m_tile_size);
+      if(tile->second.m_slot >= 0) {
+        add(&get_page(tile->second.m_slot), false, rect, QRectF(
+          get_origin(tile->second.m_slot), QSizeF(m_tile_size, m_tile_size)));
+      } else if(m_placeholder) {
+        add(m_fill.get(), false, rect, QRectF(0, 0, 1, 1));
+        is_filling = true;
+      }
     }
   }
   reserve_uniforms(quads.size());
   auto batch = m_rhi->nextResourceUpdateBatch();
+  if(is_filling && !m_is_fill_current) {
+    auto fill = QImage(1, 1, QImage::Format_RGBA8888);
+    fill.setPixel(0, 0, qRgba(background.red(), background.green(),
+      background.blue(), background.alpha()));
+    batch->uploadTexture(m_fill.get(), fill);
+    m_is_fill_current = true;
+  }
   if(!m_is_corners_uploaded) {
     batch->uploadStaticBuffer(m_corners.get(), CORNERS.data());
     m_is_corners_uploaded = true;
@@ -470,19 +519,16 @@ void TileCache::render(QRhiCommandBuffer& buffer, QRhiRenderTarget& target,
 
 void TileCache::discard(Epoch& epoch) {
   for(auto& entry : epoch.m_tiles) {
-    if(!entry.second.m_texture) {
-      continue;
-    }
-    if(m_textures.size() < MAXIMUM_POOL) {
-      m_textures.push_back(std::move(entry.second.m_texture));
-    } else {
-      auto texture = entry.second.m_texture.get();
-      std::erase_if(m_bindings, [&] (const auto& binding) {
-        return binding.first.first == texture;
-      });
-    }
+    recycle(entry.second.m_slot);
   }
   epoch.m_tiles.clear();
+}
+
+void TileCache::recycle(int& slot) {
+  if(slot >= 0) {
+    m_slots.push_back(slot);
+    slot = -1;
+  }
 }
 
 void TileCache::start(double scale, QPoint translation, QSize size) {
@@ -505,22 +551,55 @@ void TileCache::start(double scale, QPoint translation, QSize size) {
   auto anchor = -translation - QPoint((frame.width() - size.width()) / 2,
     (frame.height() - size.height()) / 2);
   m_epoch.emplace(scale, anchor, frame,
-    std::unordered_map<std::uint64_t, Tile>());
+    std::unordered_map<std::uint64_t, Tile>(), 0);
   m_is_view_complete = false;
   m_is_complete = false;
 }
 
-QRect TileCache::query(
-    const Drawing& drawing, const QRect& tiles, DrawSequence& commands) {
+Rect TileCache::get_region(const QRect& tiles) const {
   auto& epoch = *m_epoch;
   auto scale = epoch.m_scale;
   auto anchor = epoch.m_anchor;
   auto pixels = QRect(tiles.x() * m_tile_size, tiles.y() * m_tile_size,
     tiles.width() * m_tile_size, tiles.height() * m_tile_size);
-  auto region = Rect((pixels.x() + anchor.x()) / scale,
+  return inflate(Rect((pixels.x() + anchor.x()) / scale,
     (pixels.y() + anchor.y()) / scale, pixels.width() / scale,
-    pixels.height() / scale);
-  auto area = drawing.query(inflate(region, 1 / scale), scale, commands);
+    pixels.height() / scale), 1 / scale);
+}
+
+QRect TileCache::trim(const Drawing& drawing, const QRect& tiles) {
+  auto& epoch = *m_epoch;
+  if(drawing.is_empty(get_region(tiles), epoch.m_scale)) {
+    for(auto row = tiles.top(); row <= tiles.bottom(); ++row) {
+      for(auto column = tiles.left(); column <= tiles.right(); ++column) {
+        auto& tile = epoch.m_tiles[to_key(column, row)];
+        recycle(tile.m_slot);
+        tile.m_is_stale = false;
+        tile.m_frame = m_frame;
+      }
+    }
+    return QRect();
+  } else if(tiles.width() == 1 && tiles.height() == 1) {
+    return tiles;
+  }
+  auto bounds = QRect();
+  for(auto row = tiles.top(); row <= tiles.bottom(); ++row) {
+    for(auto column = tiles.left(); column <= tiles.right(); ++column) {
+      auto tile = QRect(column, row, 1, 1);
+      if(!trim(drawing, tile).isEmpty()) {
+        bounds |= tile;
+      }
+    }
+  }
+  return bounds;
+}
+
+QRect TileCache::query(
+    const Drawing& drawing, const QRect& tiles, DrawSequence& commands) {
+  auto& epoch = *m_epoch;
+  auto pixels = QRect(tiles.x() * m_tile_size, tiles.y() * m_tile_size,
+    tiles.width() * m_tile_size, tiles.height() * m_tile_size);
+  auto area = drawing.query(get_region(tiles), epoch.m_scale, commands);
   return (to_pixels(DrawRegion(area, 1), get_view()) &
     QRect(QPoint(0, 0), epoch.m_size)) | pixels;
 }
@@ -544,8 +623,8 @@ void TileCache::render_tiles(QRhiCommandBuffer& buffer, const QRect& tiles,
   for(auto row = tiles.top(); row <= tiles.bottom(); ++row) {
     for(auto column = tiles.left(); column <= tiles.right(); ++column) {
       auto& tile = epoch.m_tiles[to_key(column, row)];
-      if(!tile.m_texture) {
-        tile.m_texture = make_texture();
+      if(tile.m_slot < 0) {
+        tile.m_slot = allocate();
       }
       tile.m_is_stale = false;
       tile.m_frame = m_frame;
@@ -557,23 +636,40 @@ void TileCache::render_tiles(QRhiCommandBuffer& buffer, const QRect& tiles,
       auto description = QRhiTextureCopyDescription();
       description.setPixelSize(QSize(m_tile_size, m_tile_size));
       description.setSourceTopLeft(source);
-      description.setDestinationTopLeft(QPoint(0, 0));
-      copies->copyTexture(tile.m_texture.get(), &texture, description);
+      description.setDestinationTopLeft(get_origin(tile.m_slot));
+      copies->copyTexture(&get_page(tile.m_slot), &texture, description);
     }
   }
   buffer.resourceUpdate(copies);
 }
 
-std::unique_ptr<QRhiTexture> TileCache::make_texture() {
-  if(!m_textures.empty()) {
-    auto texture = std::move(m_textures.back());
-    m_textures.pop_back();
-    return texture;
+int TileCache::allocate() {
+  if(m_slots.empty()) {
+    auto side = std::min(PAGE_SLOTS * m_tile_size,
+      m_rhi->resourceLimit(QRhi::TextureSizeMax));
+    auto texture = std::unique_ptr<QRhiTexture>(
+      m_rhi->newTexture(QRhiTexture::RGBA8, QSize(side, side)));
+    create(*texture);
+    m_pages.push_back(std::move(texture));
+    auto count = (side / m_tile_size) * (side / m_tile_size);
+    auto page = static_cast<int>(m_pages.size()) - 1;
+    for(auto i = count; i-- > 0;) {
+      m_slots.push_back(page * PAGE_SLOTS * PAGE_SLOTS + i);
+    }
   }
-  auto texture = std::unique_ptr<QRhiTexture>(m_rhi->newTexture(
-    QRhiTexture::RGBA8, QSize(m_tile_size, m_tile_size)));
-  create(*texture);
-  return texture;
+  auto slot = m_slots.back();
+  m_slots.pop_back();
+  return slot;
+}
+
+QRhiTexture& TileCache::get_page(int slot) const {
+  return *m_pages[slot / (PAGE_SLOTS * PAGE_SLOTS)];
+}
+
+QPoint TileCache::get_origin(int slot) const {
+  auto index = slot % (PAGE_SLOTS * PAGE_SLOTS);
+  auto columns = get_page(slot).pixelSize().width() / m_tile_size;
+  return QPoint(index % columns * m_tile_size, index / columns * m_tile_size);
 }
 
 void TileCache::reserve_uniforms(std::size_t count) {

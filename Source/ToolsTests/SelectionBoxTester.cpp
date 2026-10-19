@@ -40,22 +40,44 @@ TEST_SUITE("SelectionBox") {
   TEST_CASE("resize") {
     auto rect = Rect(0, 0, 100, 50);
     REQUIRE(resize(rect, Handle::BOTTOM_RIGHT, Point(150, 80), false, false,
-      1) == Rect(0, 0, 150, 80));
-    REQUIRE(resize(rect, Handle::TOP_LEFT, Point(-10, 10), false, false, 1) ==
-      Rect(-10, 10, 110, 40));
-    REQUIRE(resize(rect, Handle::RIGHT, Point(120, 500), false, false, 1) ==
-      Rect(0, 0, 120, 50));
+      true, 1) == Rect(0, 0, 150, 80));
+    REQUIRE(resize(rect, Handle::TOP_LEFT, Point(-10, 10), false, false, true,
+      1) == Rect(-10, 10, 110, 40));
+    REQUIRE(resize(rect, Handle::RIGHT, Point(120, 500), false, false, true,
+      1) == Rect(0, 0, 120, 50));
     REQUIRE(resize(rect, Handle::BOTTOM_RIGHT, Point(200, 60), true, false,
-      1) == Rect(0, 0, 200, 100));
-    REQUIRE(resize(rect, Handle::RIGHT, Point(200, 0), true, false, 1) ==
+      true, 1) == Rect(0, 0, 200, 100));
+    REQUIRE(resize(rect, Handle::RIGHT, Point(200, 0), true, false, true, 1) ==
       Rect(0, -25, 200, 100));
-    REQUIRE(resize(rect, Handle::RIGHT, Point(120, 0), false, true, 1) ==
-      Rect(-20, 0, 140, 50));
+    REQUIRE(resize(rect, Handle::RIGHT, Point(120, 0), false, true, true,
+      1) == Rect(-20, 0, 140, 50));
     REQUIRE(resize(rect, Handle::BOTTOM_RIGHT, Point(150, 75), true, true,
-      1) == Rect(-50, -25, 200, 100));
-    REQUIRE(resize(rect, Handle::LEFT, Point(300, 0), false, false, 1) ==
-      Rect(99, 0, 1, 50));
+      true, 1) == Rect(-50, -25, 200, 100));
+    REQUIRE(resize(rect, Handle::LEFT, Point(300, 0), false, false, false,
+      1) == Rect(99, 0, 1, 50));
     REQUIRE(resize(Rect(0, 0, 100, 0), Handle::BOTTOM, Point(50, 30), false,
-      false, 1) == Rect(0, 0, 100, 0));
+      false, true, 1) == Rect(0, 0, 100, 0));
+  }
+
+  TEST_CASE("flip") {
+    auto rect = Rect(0, 0, 100, 50);
+    REQUIRE(resize(rect, Handle::LEFT, Point(300, 0), false, false, true,
+      1) == Rect(300, 0, -200, 50));
+    REQUIRE(resize(rect, Handle::RIGHT, Point(-40, 0), false, false, true,
+      1) == Rect(0, 0, -40, 50));
+    REQUIRE(resize(rect, Handle::RIGHT, Point(0, 0), false, false, true, 1) ==
+      Rect(0, 0, 1, 50));
+    REQUIRE(resize(rect, Handle::RIGHT, Point(-0.5, 0), false, false, true,
+      1) == Rect(0, 0, -1, 50));
+    REQUIRE(resize(rect, Handle::BOTTOM_RIGHT, Point(-20, 60), false, false,
+      true, 1) == Rect(0, 0, -20, 60));
+    REQUIRE(resize(rect, Handle::TOP, Point(0, 80), false, false, true, 1) ==
+      Rect(0, 80, 100, -30));
+    REQUIRE(resize(rect, Handle::RIGHT, Point(20, 0), false, true, true, 1) ==
+      Rect(80, 0, -60, 50));
+    REQUIRE(resize(rect, Handle::BOTTOM_RIGHT, Point(-200, 25), true, false,
+      true, 1) == Rect(0, 0, -200, 100));
+    REQUIRE(resize(rect, Handle::BOTTOM, Point(0, -50), true, false, true,
+      1) == Rect(0, 0, 100, -50));
   }
 }

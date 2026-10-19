@@ -511,4 +511,93 @@ TEST_SUITE("PreviewPlayer") {
     REQUIRE(reports[3].starts_with("Interaction not found: "));
     REQUIRE(player->get_artboard() == scene.m_home);
   }
+
+  TEST_CASE("scroll_group") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    auto group = NodeId();
+    auto top = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto payload = Group();
+      payload.m_scroll_group =
+        ScrollGroup(ScrollDirection::VERTICAL, Size(100, 100), Point(0, 0));
+      group = transaction.append(
+        scene.m_home, make_stage_header("List", 250, 10), payload);
+      top = add_box(transaction, group, "Top", Rect(0, 0, 100, 100),
+        make_color(0, 0, 0));
+      add_box(transaction, group, "Bottom", Rect(0, 100, 100, 150),
+        make_color(255, 0, 0));
+      transaction.commit();
+    }
+    add_interaction(document, top, TapTrigger(),
+      ArtboardTransition(scene.m_second, make_linear(Transition::NONE)));
+    auto player = make_player(document, scene.m_home);
+    REQUIRE(player->scroll(Point(260, 20), Point(0, 100)));
+    REQUIRE(player->get_scroll(group) == Point(0, 100));
+    REQUIRE(player->get_scroll() == 0);
+    REQUIRE(player->scroll(Point(260, 20), Point(0, 100)));
+    REQUIRE(player->get_scroll(group) == Point(0, 150));
+    REQUIRE(!player->scroll(Point(260, 20), Point(0, 10)));
+    tap(*player, Point(260, 20));
+    REQUIRE(player->get_artboard() == scene.m_home);
+    player->press(Point(260, 20));
+    player->move(Point(260, 120));
+    player->release(Point(260, 120));
+    REQUIRE(player->get_scroll(group) == Point(0, 50));
+    REQUIRE(player->scroll(Point(260, 20), Point(0, -50)));
+    REQUIRE(player->get_scroll(group) == Point(0, 0));
+    REQUIRE(!player->scroll(Point(260, 20), Point(0, -10)));
+    tap(*player, Point(260, 20));
+    REQUIRE(player->get_artboard() == scene.m_second);
+  }
+
+  TEST_CASE("hyperlink") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    add_interaction(document, scene.m_button, TapTrigger(),
+      Hyperlink("https://www.example.com"));
+    auto player = make_player(document, scene.m_home);
+    tap(*player, Point(20, 20));
+    REQUIRE(player->get_reports().size() == 1);
+    auto opened = std::vector<std::string>();
+    player->set_link_handler([&] (const std::string& url) {
+      opened.push_back(url);
+    });
+    tap(*player, Point(20, 20));
+    REQUIRE(opened == std::vector<std::string>({"https://www.example.com"}));
+    REQUIRE(player->get_artboard() == scene.m_home);
+  }
+
+  TEST_CASE("text_link") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    auto label = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto text = Text();
+      text.m_content = Shared(std::u16string(u"Help"));
+      text.m_frame = AreaFrame(Size(100, 20));
+      label = transaction.append(
+        scene.m_home, make_stage_header("Help", 10, 250), text);
+      transaction.commit();
+    }
+    auto player = make_player(document, scene.m_home);
+    auto opened = std::vector<std::string>();
+    player->set_link_handler([&] (const std::string& url) {
+      opened.push_back(url);
+    });
+    auto positions = std::vector<Point>();
+    player->set_text_link_finder([&] (const Node& node, Point position) {
+      positions.push_back(position);
+      return node.get_id() == label ? std::string("https://help") :
+        std::string();
+    });
+    tap(*player, Point(20, 255));
+    REQUIRE(opened == std::vector<std::string>({"https://help"}));
+    REQUIRE(positions.size() == 1);
+    REQUIRE(positions.front() == Point(10, 5));
+    tap(*player, Point(300, 280));
+    REQUIRE(opened.size() == 1);
+  }
 }

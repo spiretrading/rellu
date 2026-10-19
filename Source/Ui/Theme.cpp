@@ -265,6 +265,11 @@ QToolButton#text_button {
 QToolButton#text_button:disabled {
   color: #B8B8B8;
 }
+QToolButton#text_button:checked {
+  background: #FFFFFF;
+  border: 1px solid #2680EB;
+  color: #2680EB;
+}
 QToolButton#swatch {
   border: none;
   background: transparent;

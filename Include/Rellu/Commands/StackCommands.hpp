@@ -1,10 +1,12 @@
 #ifndef RELLU_COMMANDS_STACK_COMMANDS_HPP
 #define RELLU_COMMANDS_STACK_COMMANDS_HPP
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Command.hpp"
+#include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Model/Layout.hpp"
 
 namespace Rellu {
@@ -160,6 +162,41 @@ namespace Rellu {
       double m_value;
       TextMeasurer m_measurer;
   };
+
+  /**
+   * Moves items of a stack one place toward its start or end, labelled
+   * Reorder, as Adobe XD's arrow keys do along a stack's direction.
+   */
+  class MoveStackItemsCommand : public Command {
+    public:
+
+      /**
+       * Constructs a MoveStackItemsCommand.
+       * @param nodes The items, all of the same stack.
+       * @param is_forward Whether the items move toward the stack's end.
+       */
+      MoveStackItemsCommand(
+        std::vector<NodeId> nodes, bool is_forward) noexcept;
+
+      std::string get_label() const override;
+      void apply(const Document& document, Transaction& transaction) override;
+
+    private:
+      std::vector<NodeId> m_nodes;
+      bool m_is_forward;
+  };
+
+  /**
+   * Makes the command an arrow key performs on nodes that are items of one
+   * stack when the key points along the stack's direction.
+   * @param document The document holding the nodes.
+   * @param nodes The nodes.
+   * @param delta The direction of the arrow key.
+   * @return A MoveStackItemsCommand, or <code>nullptr</code> if the nodes
+   *         are not items of one stack or the key points across it.
+   */
+  std::unique_ptr<Command> make_stack_nudge(const Document& document,
+    const std::vector<NodeId>& nodes, Point delta);
 
   /**
    * Returns the padding of a group whose padding is on.

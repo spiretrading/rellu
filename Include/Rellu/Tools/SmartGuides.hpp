@@ -52,20 +52,27 @@ namespace Rellu {
    * edges and centers of what is moved, resized or drawn snap to those of
    * the other children of its container and of its artboard, to the
    * artboard's guides and visible layout or square grid, and to the spacing
-   * between its neighbours. Magenta lines show what lined up and labelled
-   * distances show equal spacing. Holding Ctrl suspends snapping.
+   * between its neighbours. Cyan lines show what lined up and pink
+   * distances, labelled with plain text, show equal spacing and the
+   * measurements taken while Alt is held. Holding Ctrl suspends snapping.
    */
   class SmartGuides : public SnapService {
     public:
 
       /**
-       * The distance in logical units within which an edge or center
-       * snaps.
+       * The distance in logical units that an edge or center must be
+       * within, exclusively, to snap.
        */
-      static constexpr auto THRESHOLD = 5.0;
+      static constexpr auto THRESHOLD = 4.0;
 
-      /** The color of the lines and labels. */
-      static constexpr auto COLOR = make_color(255, 0, 255);
+      /** The color of the lines along what lined up. */
+      static constexpr auto ALIGNMENT_COLOR = make_color(32, 224, 255);
+
+      /** The color of the lines showing distances. */
+      static constexpr auto DISTANCE_COLOR = make_color(255, 74, 225);
+
+      /** The color of the text labelling distances. */
+      static constexpr auto LABEL_COLOR = make_color(255, 73, 225);
 
       /** The width in logical units of a line. */
       static constexpr auto LINE_WIDTH = 1.0;
@@ -179,7 +186,7 @@ namespace Rellu {
       void add_spacing(bool is_x, const Rect& rect);
       std::shared_ptr<const QImage> get_label(
         const std::string& text, double scale) const;
-      void draw_line(const Matrix& view, const GuideLine& line,
+      void draw_line(const Matrix& view, const GuideLine& line, Color color,
         CanvasOverlay& overlay) const;
       void draw_distance(const Matrix& view, const GuideDistance& distance,
         double scale, CanvasOverlay& overlay) const;

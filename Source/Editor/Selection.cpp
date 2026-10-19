@@ -107,8 +107,7 @@ void Selection::select_all(const NodeId& container) {
   }
   auto nodes = std::vector<NodeId>();
   for(auto& child : m_document->get_children(container)) {
-    auto& header = m_document->get(child).m_header;
-    if(header.m_is_visible && !header.m_is_locked) {
+    if(!m_document->get(child).m_header.m_is_locked) {
       nodes.push_back(child);
     }
   }

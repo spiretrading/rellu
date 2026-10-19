@@ -3,9 +3,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
+#include <QImage>
 #include "Rellu/Geometry/Matrix.hpp"
+#include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
 #include "Rellu/Geometry/Shapes.hpp"
@@ -22,10 +25,16 @@ namespace Rellu {
    * edit context, a double click enters a group, hands the text clicked
    * to the tool named text for editing or hands the shape clicked to the
    * tool named path_edit, as Enter does for a single selected shape, Ctrl
-   * selects the deepest node, Shift toggles, and a drag over empty canvas
-   * draws a marquee. The
-   * selection's box resizes by its handles and rotates from just outside
-   * its corners. A single selected rectangle also shows a corner radius
+   * selects the deepest node, Shift toggles, a drag with Alt held moves a
+   * copy of the selection, and a drag over empty canvas
+   * draws a marquee. The pointer hovering a node outlines it, a shape by
+   * its own outline and anything else by its box. The selection's box
+   * resizes by its handles, flipping what it holds when dragged past the
+   * opposite side, and rotates from just outside its corners. Locked nodes
+   * are selected by a click but not moved: their box is grey, with small
+   * grey handles that do nothing and a lock badge at its top left corner.
+   * Text in a fixed size frame shows the frame's bottom edge dashed.
+   * A single selected rectangle also shows a corner radius
    * handle inside each corner, which rounds every corner alike, or only
    * its own corner while Alt is held. A repeat grid or stack selected
    * alone is also edited through LayoutHandles, a repeat grid without the
@@ -64,7 +73,13 @@ namespace Rellu {
       static constexpr auto LARGE_NUDGE = 10.0;
 
       /** The radius in logical units of a corner radius handle. */
-      static constexpr auto RADIUS_HANDLE_RADIUS = 3.0;
+      static constexpr auto RADIUS_HANDLE_RADIUS = 4.0;
+
+      /** The radius in logical units of a handle of a locked node. */
+      static constexpr auto LOCKED_HANDLE_RADIUS = 2.5;
+
+      /** The width and height in logical units of the lock badge. */
+      static constexpr auto LOCK_BADGE_SIZE = 12.0;
 
       /**
        * The smallest distance in logical units between a corner radius
@@ -127,6 +142,7 @@ namespace Rellu {
         NodeId m_id;
         std::optional<std::uint64_t> m_revision;
         std::optional<SelectionBox> m_box;
+        std::optional<Path> m_outline;
       };
       Gesture m_gesture;
       Point m_press;
@@ -159,12 +175,15 @@ namespace Rellu {
       mutable std::vector<SelectionBox> m_cached_outlines;
       mutable CachedBox m_hover_box;
       mutable CachedBox m_container_box;
+      mutable double m_badge_scale;
+      mutable std::shared_ptr<const QImage> m_badge;
 
       void update_cache(const ToolContext& context) const;
       std::optional<SelectionBox> get_box(const ToolContext& context) const;
       const std::optional<SelectionBox>& get_box(const ToolContext& context,
         const NodeId& id, CachedBox& cache) const;
       std::vector<NodeId> get_movable(const ToolContext& context) const;
+      bool is_locked_selection(const ToolContext& context) const;
       bool is_rotatable(const ToolContext& context) const;
       std::optional<Grab> find_grab(
         const ToolContext& context, Point position) const;
@@ -185,7 +204,11 @@ namespace Rellu {
       void finish(ToolContext& context);
       std::optional<SelectionBox> get_gesture_box() const;
       void draw_box(const ToolContext& context, const SelectionBox& box,
-        CanvasOverlay& overlay, bool has_handles) const;
+        CanvasOverlay& overlay, bool has_handles, bool is_frame) const;
+      void draw_locked(const ToolContext& context, const SelectionBox& box,
+        CanvasOverlay& overlay) const;
+      void draw_hover(const ToolContext& context, const NodeId& hover,
+        CanvasOverlay& overlay) const;
   };
 }
 

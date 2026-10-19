@@ -169,11 +169,11 @@ namespace {
     auto outline = stroker.createStroke(path);
     auto clip = QPainterPath();
     clip.addRect(QRectF(4, 0, 20, GRID));
+    auto faint = color;
+    faint.setAlphaF(0.3f * color.alphaF());
+    fill(painter, faint, outline.intersected(clip));
     stroke(painter, color, outline.intersected(clip), 1.2);
-    line(painter, color, QPointF(4, 12), QPointF(13, 12), 1.2);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(color);
-    painter.drawEllipse(QPointF(13, 12), 1.5, 1.5);
+    line(painter, color, QPointF(4, 12), QPointF(20, 12), 1.2);
   }
 
   void paint_join(
@@ -463,16 +463,15 @@ namespace {
           painter.rotate(90);
           painter.translate(-12, -12);
         }
-        auto dash = make_pen(color, 1.2);
-        dash.setDashPattern({1.5, 1.5});
-        painter.setPen(dash);
-        painter.drawLine(QPointF(12, 3.5), QPointF(12, 20.5));
-        painter.setPen(make_pen(color, 1.2));
+        line(painter, color, QPointF(12, 4), QPointF(12, 20), 1.2);
+        auto faint = color;
+        faint.setAlphaF(0.35f * color.alphaF());
+        fill_polygon(painter, faint, {QPointF(10, 6.5), QPointF(10, 17.5),
+          QPointF(3.5, 17.5)});
+        painter.setPen(make_pen(color, 1.2, Qt::FlatCap, Qt::MiterJoin));
         painter.setBrush(Qt::NoBrush);
-        painter.drawPolygon(make_polygon(
-          {QPointF(4.5, 7.5), QPointF(10, 12), QPointF(4.5, 16.5)}));
-        fill_polygon(painter, color,
-          {QPointF(19.5, 7.5), QPointF(14, 12), QPointF(19.5, 16.5)});
+        painter.drawPolygon(make_polygon({QPointF(14, 6.5),
+          QPointF(14, 17.5), QPointF(20.5, 17.5)}));
         painter.restore();
         break;
       }

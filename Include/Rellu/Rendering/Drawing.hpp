@@ -84,6 +84,14 @@ namespace Rellu {
       Rect query(
         const Rect& region, double scale, DrawSequence& commands) const;
 
+      /**
+       * Tests whether no command draws within a region, so that the region
+       * shows only what lies beneath the drawing.
+       * @param region The region in document coordinates.
+       * @param scale The number of pixels per document unit drawn at.
+       */
+      bool is_empty(const Rect& region, double scale) const;
+
     private:
       struct Entry;
       std::vector<std::shared_ptr<const DrawList>> m_lists;

@@ -4,8 +4,12 @@
 #include <optional>
 #include <utility>
 #include <variant>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/CornerRadiusCommands.hpp"
+#include "Rellu/Commands/EffectCommands.hpp"
+#include "Rellu/Commands/HeaderCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
+#include "Rellu/Commands/PolygonCommands.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/StyleCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
@@ -15,6 +19,10 @@
 using namespace Rellu;
 
 namespace {
+  constexpr auto MAXIMUM_BLUR = 50.0;
+  constexpr auto MAXIMUM_BRIGHTNESS = 50.0;
+  constexpr auto MAXIMUM_COLUMNS = 100.0;
+
   class SetBlendModeCommand : public Command {
     public:
       SetBlendModeCommand(
@@ -104,11 +112,24 @@ namespace {
       if(!number || !(*number > 0) || targets.empty()) {
         return nullptr;
       }
+      auto lock = std::optional<Size>();
+      if(targets.size() == 1) {
+        lock = document.get(targets.front()).m_header.m_aspect_lock;
+        if(lock && !(lock->m_width > 0 && lock->m_height > 0)) {
+          lock = std::nullopt;
+        }
+      }
       auto resize = [&] (Rect bounds) {
         if(is_width) {
           bounds.m_width = *number;
+          if(lock) {
+            bounds.m_height = *number * lock->m_height / lock->m_width;
+          }
         } else {
           bounds.m_height = *number;
+          if(lock) {
+            bounds.m_width = *number * lock->m_width / lock->m_height;
+          }
         }
         return bounds;
       };
@@ -360,6 +381,288 @@ namespace {
     return std::make_unique<SetLockCommand>(nodes, *is_locked);
   }
 
+  PropertyEditor make_editor(PropertySetter setter);
+  PropertyEditor make_number_editor(PropertySetter setter,
+    std::optional<double> minimum, std::optional<double> maximum);
+
+  std::optional<double> get_numeric(const PropertyValue& value) {
+    if(auto number = std::get_if<int>(&value)) {
+      return static_cast<double>(*number);
+    }
+    return get_number(value);
+  }
+
+  PropertySetter make_bool_setter(auto make) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      auto flag = std::get_if<bool>(&value);
+      if(!flag || nodes.empty()) {
+        return nullptr;
+      }
+      return make(document, nodes, *flag);
+    };
+  }
+
+  PropertySetter make_constraint_setter(
+      std::optional<bool> ConstraintsEdit::* member) {
+    return make_bool_setter(
+      [=] (const Document&, const std::vector<NodeId>& nodes, bool flag) {
+        auto edit = ConstraintsEdit();
+        edit.*member = flag;
+        return std::make_unique<SetConstraintsCommand>(nodes, edit);
+      });
+  }
+
+  std::unique_ptr<Command> set_resize_mode(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto choice = std::get_if<Choice>(&value);
+    if(!choice || nodes.empty() || choice->m_index < 0 ||
+        choice->m_index > 1) {
+      return nullptr;
+    }
+    auto edit = ConstraintsEdit();
+    edit.m_is_custom = choice->m_index == 1;
+    return std::make_unique<SetConstraintsCommand>(nodes, edit);
+  }
+
+  PropertySetter make_effect_setter(EffectKind kind, auto edit) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      if(nodes.empty()) {
+        return nullptr;
+      }
+      auto effect = EffectEdit();
+      if(!edit(effect, value)) {
+        return nullptr;
+      }
+      return std::make_unique<SetEffectCommand>(nodes, kind, effect);
+    };
+  }
+
+  void add_effect_editors(PropertyEditors& editors, const std::string& path,
+      EffectKind kind) {
+    editors.add(path, make_editor(make_effect_setter(kind,
+      [] (EffectEdit& edit, const PropertyValue& value) {
+        if(auto flag = std::get_if<bool>(&value)) {
+          edit.m_is_visible = *flag;
+          return true;
+        }
+        return false;
+      })));
+    if(kind != EffectKind::BLUR) {
+      editors.add(path + ".color", make_editor(make_effect_setter(kind,
+        [] (EffectEdit& edit, const PropertyValue& value) {
+          if(auto color = std::get_if<Color>(&value)) {
+            edit.m_color = *color;
+            return true;
+          }
+          return false;
+        })));
+      editors.add(path + ".x", make_number_editor(make_effect_setter(kind,
+        [] (EffectEdit& edit, const PropertyValue& value) {
+          edit.m_x = get_number(value);
+          return static_cast<bool>(edit.m_x);
+        }), std::nullopt, std::nullopt));
+      editors.add(path + ".y", make_number_editor(make_effect_setter(kind,
+        [] (EffectEdit& edit, const PropertyValue& value) {
+          edit.m_y = get_number(value);
+          return static_cast<bool>(edit.m_y);
+        }), std::nullopt, std::nullopt));
+      auto blur = make_number_editor(make_effect_setter(kind,
+        [] (EffectEdit& edit, const PropertyValue& value) {
+          edit.m_blur = get_number(value);
+          return static_cast<bool>(edit.m_blur);
+        }), 0.0, std::nullopt);
+      blur.m_scale = 2;
+      editors.add(path + ".blur", std::move(blur));
+      return;
+    }
+    editors.add(path + ".type", make_editor(make_effect_setter(kind,
+      [] (EffectEdit& edit, const PropertyValue& value) {
+        auto choice = std::get_if<Choice>(&value);
+        if(!choice || choice->m_index < 0 || choice->m_index > 1) {
+          return false;
+        }
+        edit.m_is_background = choice->m_index == 0;
+        return true;
+      })));
+    editors.add(path + ".amount", make_number_editor(make_effect_setter(kind,
+      [] (EffectEdit& edit, const PropertyValue& value) {
+        edit.m_blur = get_number(value);
+        return static_cast<bool>(edit.m_blur);
+      }), 0.0, MAXIMUM_BLUR));
+    editors.add(path + ".brightness", make_number_editor(make_effect_setter(
+      kind, [] (EffectEdit& edit, const PropertyValue& value) {
+        edit.m_brightness = get_number(value);
+        return static_cast<bool>(edit.m_brightness);
+      }), -MAXIMUM_BRIGHTNESS, MAXIMUM_BRIGHTNESS));
+    auto opacity = make_number_editor(make_effect_setter(kind,
+      [] (EffectEdit& edit, const PropertyValue& value) {
+        edit.m_fill_opacity = get_number(value);
+        return static_cast<bool>(edit.m_fill_opacity);
+      }), 0.0, 1.0);
+    opacity.m_scale = 100;
+    opacity.m_suffix = "%";
+    editors.add(path + ".opacity", std::move(opacity));
+  }
+
+  PropertySetter make_grid_setter(auto edit) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      if(nodes.empty()) {
+        return nullptr;
+      }
+      auto grid = GridEdit();
+      if(!edit(document, nodes, grid, value)) {
+        return nullptr;
+      }
+      return std::make_unique<SetGridCommand>(nodes, grid);
+    };
+  }
+
+  PropertySetter make_grid_number_setter(
+      std::optional<double> GridEdit::* member) {
+    return make_grid_setter([=] (const Document&, const std::vector<NodeId>&,
+        GridEdit& edit, const PropertyValue& value) {
+      edit.*member = get_numeric(value);
+      return static_cast<bool>(edit.*member);
+    });
+  }
+
+  std::optional<Margins> get_margins(
+      const Document& document, const std::vector<NodeId>& nodes) {
+    for(auto& id : nodes) {
+      if(auto artboard = document.get(id).get_artboard()) {
+        if(auto& grid = artboard->m_layout_grid) {
+          return grid->m_margins;
+        }
+        return make_default_grid(*artboard).m_margins;
+      }
+    }
+    return std::nullopt;
+  }
+
+  void add_grid_editors(PropertyEditors& editors) {
+    editors.add("grid.visible", make_editor(make_grid_setter(
+      [] (const Document&, const std::vector<NodeId>&, GridEdit& edit,
+          const PropertyValue& value) {
+        if(auto flag = std::get_if<bool>(&value)) {
+          edit.m_is_visible = *flag;
+          return true;
+        }
+        return false;
+      })));
+    editors.add("grid.type", make_editor(make_grid_setter(
+      [] (const Document&, const std::vector<NodeId>&, GridEdit& edit,
+          const PropertyValue& value) {
+        auto choice = std::get_if<Choice>(&value);
+        if(!choice || choice->m_index < 0 || choice->m_index > 1) {
+          return false;
+        }
+        edit.m_type =
+          choice->m_index == 0 ? GridType::LAYOUT : GridType::SQUARE;
+        return true;
+      })));
+    editors.add("grid.columns", make_number_editor(make_grid_setter(
+      [] (const Document&, const std::vector<NodeId>&, GridEdit& edit,
+          const PropertyValue& value) {
+        auto number = get_numeric(value);
+        if(!number) {
+          return false;
+        }
+        edit.m_column_count = static_cast<int>(std::lround(*number));
+        return true;
+      }), 1.0, MAXIMUM_COLUMNS));
+    editors.add("grid.gutter", make_number_editor(
+      make_grid_number_setter(&GridEdit::m_gutter), 0.0, std::nullopt));
+    editors.add("grid.column_width", make_number_editor(
+      make_grid_number_setter(&GridEdit::m_column_width), 1.0, std::nullopt));
+    editors.add("grid.linked_margins", make_editor(make_grid_setter(
+      [] (const Document& document, const std::vector<NodeId>& nodes,
+          GridEdit& edit, const PropertyValue& value) {
+        auto flag = std::get_if<bool>(&value);
+        auto margins = get_margins(document, nodes);
+        if(!flag || !margins) {
+          return false;
+        }
+        if(*flag) {
+          edit.m_right = margins->m_left;
+          edit.m_bottom = margins->m_top;
+        } else {
+          edit.m_top = margins->m_top;
+        }
+        return true;
+      })));
+    editors.add("grid.margin_linked", make_number_editor(make_grid_setter(
+      [] (const Document&, const std::vector<NodeId>&, GridEdit& edit,
+          const PropertyValue& value) {
+        auto number = get_numeric(value);
+        if(!number) {
+          return false;
+        }
+        edit.m_left = *number;
+        edit.m_right = *number;
+        return true;
+      }), 0.0, std::nullopt));
+    editors.add("grid.margin_top", make_number_editor(
+      make_grid_number_setter(&GridEdit::m_top), 0.0, std::nullopt));
+    editors.add("grid.margin_right", make_number_editor(
+      make_grid_number_setter(&GridEdit::m_right), 0.0, std::nullopt));
+    editors.add("grid.margin_bottom", make_number_editor(
+      make_grid_number_setter(&GridEdit::m_bottom), 0.0, std::nullopt));
+    editors.add("grid.margin_left", make_number_editor(
+      make_grid_number_setter(&GridEdit::m_left), 0.0, std::nullopt));
+    editors.add("grid.column_color", make_editor(make_grid_setter(
+      [] (const Document&, const std::vector<NodeId>&, GridEdit& edit,
+          const PropertyValue& value) {
+        if(auto color = std::get_if<Color>(&value)) {
+          edit.m_column_color = *color;
+          return true;
+        }
+        return false;
+      })));
+    editors.add("grid.size", make_number_editor(
+      make_grid_number_setter(&GridEdit::m_square_size), 1.0, std::nullopt));
+    editors.add("grid.color", make_editor(make_grid_setter(
+      [] (const Document&, const std::vector<NodeId>&, GridEdit& edit,
+          const PropertyValue& value) {
+        if(auto color = std::get_if<Color>(&value)) {
+          edit.m_square_color = *color;
+          return true;
+        }
+        return false;
+      })));
+  }
+
+  std::unique_ptr<Command> set_scrolling(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto choice = std::get_if<Choice>(&value);
+    if(!choice || nodes.empty() || choice->m_index < 0 ||
+        choice->m_index > 1) {
+      return nullptr;
+    }
+    return std::make_unique<SetViewportCommand>(
+      nodes, std::nullopt, choice->m_index == 1);
+  }
+
+  std::unique_ptr<Command> set_viewport_height(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto number = get_number(value);
+    if(!number || nodes.empty()) {
+      return nullptr;
+    }
+    return std::make_unique<SetViewportCommand>(nodes, *number, true);
+  }
+
+  std::unique_ptr<Command> set_fill(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto fill = std::get_if<Fill>(&value);
+    if(!fill || nodes.empty()) {
+      return nullptr;
+    }
+    return std::make_unique<SetFillCommand>(nodes, *fill);
+  }
+
   PropertyEditor make_editor(PropertySetter setter) {
     auto editor = PropertyEditor();
     editor.m_setter = std::move(setter);
@@ -479,5 +782,51 @@ PropertyEditors Rellu::make_standard_property_editors(TextMeasurer measurer) {
     make_number_editor(make_dash_setter(true), 0.0, std::nullopt));
   editors.add("stroke.gap",
     make_number_editor(make_dash_setter(false), 0.0, std::nullopt));
+  editors.add("fill.paint", make_editor(set_fill));
+  editors.add("geometry.corners", make_number_editor(
+    [] (const Document&, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      auto count = get_numeric(value);
+      if(!count || nodes.empty()) {
+        return nullptr;
+      }
+      return std::make_unique<SetCornerCountCommand>(
+        nodes, static_cast<int>(std::lround(*count)));
+    }, SetCornerCountCommand::MINIMUM_CORNERS,
+    SetCornerCountCommand::MAXIMUM_CORNERS));
+  editors.add("transform.lock_aspect", make_editor(make_bool_setter(
+    [=] (const Document&, const std::vector<NodeId>& nodes, bool flag) {
+      return std::make_unique<SetAspectLockCommand>(nodes, flag, measurer);
+    })));
+  editors.add("transform.fixed_position", make_editor(make_bool_setter(
+    [] (const Document&, const std::vector<NodeId>& nodes, bool flag) {
+      return std::make_unique<SetFixedPositionCommand>(nodes, flag);
+    })));
+  editors.add("layout.responsive",
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_is_enabled)));
+  editors.add("layout.responsive.mode", make_editor(set_resize_mode));
+  editors.add("layout.responsive.top",
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_top)));
+  editors.add("layout.responsive.right",
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_right)));
+  editors.add("layout.responsive.bottom",
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_bottom)));
+  editors.add("layout.responsive.left",
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_left)));
+  editors.add("layout.responsive.width",
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_width)));
+  editors.add("layout.responsive.height",
+    make_editor(make_constraint_setter(&ConstraintsEdit::m_height)));
+  editors.add("layout.scrolling", make_editor(set_scrolling));
+  editors.add("layout.viewport_height",
+    make_number_editor(set_viewport_height, 1.0, std::nullopt));
+  add_effect_editors(editors, "effects.inner_shadow", EffectKind::INNER_SHADOW);
+  add_effect_editors(editors, "effects.drop_shadow", EffectKind::DROP_SHADOW);
+  add_effect_editors(editors, "effects.blur", EffectKind::BLUR);
+  add_grid_editors(editors);
+  editors.add("export.marked", make_editor(make_bool_setter(
+    [] (const Document&, const std::vector<NodeId>& nodes, bool flag) {
+      return std::make_unique<SetExportMarkCommand>(nodes, flag);
+    })));
   return editors;
 }

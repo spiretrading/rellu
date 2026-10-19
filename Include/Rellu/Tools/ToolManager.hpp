@@ -30,11 +30,21 @@ namespace Rellu {
     public:
 
       /**
-       * Constructs a ToolManager whose active tool is the select tool.
+       * Constructs a ToolManager whose active tool is the select tool,
+       * measuring text by its estimated bounds.
        * @param editor The editing state, which must outlive this
        *        ToolManager.
        */
       explicit ToolManager(Editor& editor);
+
+      /**
+       * Constructs a ToolManager whose active tool is the select tool.
+       * @param editor The editing state, which must outlive this
+       *        ToolManager.
+       * @param measurer The function hit testing and tools measure text
+       *        with.
+       */
+      ToolManager(Editor& editor, TextMeasurer measurer);
 
       ~ToolManager();
 

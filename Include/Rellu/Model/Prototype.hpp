@@ -172,9 +172,18 @@ namespace Rellu {
     bool operator ==(const VideoPlayback&) const = default;
   };
 
+  /** Opens a web page. */
+  struct Hyperlink {
+
+    /** The address of the page. */
+    std::string m_url;
+
+    bool operator ==(const Hyperlink&) const = default;
+  };
+
   /** The response to an interaction's trigger. */
   using Action = std::variant<ArtboardTransition, Overlay, StateTransition,
-    PreviousArtboard, VideoPlayback>;
+    PreviousArtboard, VideoPlayback, Hyperlink>;
 
   /** A prototype interaction attached to a node. */
   struct Interaction {

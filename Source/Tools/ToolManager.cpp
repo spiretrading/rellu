@@ -1,6 +1,8 @@
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 #include "Rellu/Text/FontLibrary.hpp"
+#include "Rellu/Tools/ArtboardGrids.hpp"
 #include "Rellu/Tools/ArtboardTool.hpp"
 #include "Rellu/Tools/PathEditTool.hpp"
 #include "Rellu/Tools/PenTool.hpp"
@@ -21,11 +23,15 @@ namespace {
 }
 
 ToolManager::ToolManager(Editor& editor)
+  : ToolManager(editor, estimate_text_bounds) {}
+
+ToolManager::ToolManager(Editor& editor, TextMeasurer measurer)
     : m_editor(&editor),
-      m_hit_tester(editor.get_document()),
+      m_hit_tester(editor.get_document(), measurer),
       m_context(editor, m_hit_tester, m_titles),
       m_tool(nullptr),
       m_has_move(false) {
+  m_context.set_text_measurer(std::move(measurer));
   add_tool("select", std::make_unique<SelectTool>());
   add_tool("rectangle", std::make_unique<ShapeTool>(ShapeKind::RECTANGLE));
   add_tool("ellipse", std::make_unique<ShapeTool>(ShapeKind::ELLIPSE));
@@ -193,6 +199,8 @@ CanvasOverlay ToolManager::draw() {
   if(auto node = document.find(hover); node && node->get_artboard()) {
     highlights.insert(hover);
   }
+  draw_artboard_grids(
+    document, m_context.get_view(), m_context.get_size(), overlay);
   m_titles.draw(overlay, m_context.get_scale(), highlights);
   m_tool->draw(m_context, overlay);
   m_context.get_snap_service().draw(m_context.get_view(), overlay);

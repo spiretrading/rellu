@@ -45,6 +45,17 @@ namespace Rellu {
     const XdWriteOptions& options = {});
 
   /**
+   * Writes nodes with their descendants as the JSON array of Adobe XD
+   * nodes they are saved as, for exchanges such as the clipboard.
+   * @param document The document holding the nodes.
+   * @param nodes The nodes.
+   * @param options The options, of which the text layout applies.
+   * @return The JSON text of the array.
+   */
+  std::string write_xd_nodes(const Document& document,
+    const std::vector<NodeId>& nodes, const XdWriteOptions& options = {});
+
+  /**
    * Returns the components in the order their masters are written: those
    * listed first, then the rest by id.
    * @param document The document.
