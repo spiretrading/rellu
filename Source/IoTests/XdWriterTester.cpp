@@ -474,6 +474,28 @@ TEST_SUITE("XdWriter") {
       to_string(document.get(built.m_reference).get_reference()->m_source));
   }
 
+  TEST_CASE("main_component") {
+    auto document = Document();
+    auto built = build(document);
+    REQUIRE(!get_ux(find_written(XdPackage(write_xd(document)),
+      built.m_instance)).contains("isMaster"_L1));
+    {
+      auto transaction = Transaction(document);
+      auto group = *document.get(built.m_instance).get_group();
+      group.m_component_instance->m_is_main = true;
+      transaction.replace_payload(built.m_instance, group);
+      transaction.commit();
+    }
+    auto bytes = write_xd(document);
+    REQUIRE(get_ux(find_written(XdPackage(bytes), built.m_instance)).value(
+      "isMaster"_L1).toBool());
+    auto imported = Document();
+    import_package(bytes, imported);
+    REQUIRE(imported.get(built.m_instance).get_group()->
+      m_component_instance->m_is_main);
+    REQUIRE(join(filter(find_differences(document, imported))) == "");
+  }
+
   TEST_CASE("text") {
     auto document = Document();
     auto built = build(document);

@@ -23,7 +23,8 @@ namespace Rellu {
    * snap guides. Modifier keys pressed or released during a gesture replay
    * the most recent pointer move, so that constraints apply at once. Tools
    * are registered by name; the select, rectangle, ellipse, polygon, line,
-   * artboard, zoom and text tools are registered from the start.
+   * pen, path_edit, artboard, zoom, text and prototype tools are registered
+   * from the start.
    */
   class ToolManager {
     public:

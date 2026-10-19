@@ -101,6 +101,15 @@ namespace Rellu {
       std::size_t get_redo_count() const;
 
       /**
+       * Returns the records of the nodes the most recent change that can be
+       * undone modified, as they were before it, each paired with its node's
+       * id, a null record standing for a node the change inserted. The list
+       * is empty if there is no change to undo.
+       */
+      const std::vector<std::pair<NodeId, std::shared_ptr<const Node>>>&
+        get_original_records() const;
+
+      /**
        * Reverts the most recent committed or redone change, throwing
        * std::logic_error while a transaction is open.
        * @return <code>true</code> iff there was a change to undo.

@@ -9,6 +9,7 @@
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
+#include "Rellu/Ui/LayoutProperties.hpp"
 #include "Rellu/Ui/NodeDescription.hpp"
 #include "Rellu/Ui/PropertyDescriptor.hpp"
 
@@ -157,26 +158,37 @@ namespace {
       return section;
     }
     auto& instance = *group->m_component_instance;
-    section.m_label = "Component (Instance)";
+    section.m_label = instance.m_is_main ? "Component (Main)" :
+      "Component (Instance)";
     auto& components = document.get_resources().m_components;
     auto component = components.find(instance.m_component);
     if(component == components.end()) {
-      add(section, "name", "Name", QString("Missing"));
+      add(section, "name", "Name", QString("Missing")).m_is_read_only = true;
       return section;
     }
-    add(section, "name", "Name", to_qstring(component->second.m_name));
-    auto states = QStringList();
+    auto& definition = component->second;
+    auto is_linked = static_cast<bool>(definition.m_link);
+    add(section, "name", "Name", to_qstring(definition.m_name)).
+      m_is_read_only = !instance.m_is_main || is_linked;
+    auto states = QStringList({"Default State"});
     auto index = 0;
-    for(auto& state : component->second.m_states) {
-      if(state.m_id == instance.m_state) {
+    for(auto& state : definition.m_states) {
+      if(state.m_id == instance.m_state &&
+          state.m_id != definition.m_default_state) {
         index = static_cast<int>(states.size());
       }
       states.push_back(to_qstring(state.m_name));
     }
-    if(states.isEmpty()) {
-      states.push_back("Default State");
-    }
     add(section, "state", "State", Choice(index, states));
+    if(instance.m_is_main) {
+      add(section, "main", "Main Component", true).m_is_read_only = true;
+      if(index != 0 && !is_linked) {
+        add(section, "state_name", "State Name", states[index]);
+      }
+    }
+    if(is_linked) {
+      add(section, "linked", "Linked", true).m_is_read_only = true;
+    }
     return section;
   }
 
@@ -226,6 +238,7 @@ namespace {
     auto section = make_property("layout", "Layout");
     add(section, "responsive", "Responsive Resize",
       displayed.m_header.m_constraints.m_is_enabled);
+    add_layout_properties(displayed, section);
     if(auto artboard = displayed.get_artboard()) {
       add(section, "scrolling", "Scrolling",
         Choice(artboard->m_viewport_height ? 1 : 0, ARTBOARD_SCROLLING));

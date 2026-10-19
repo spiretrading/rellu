@@ -22,6 +22,8 @@ namespace Rellu {
         NodeHeader header, Point start, Point end,
         Qt::KeyboardModifiers modifiers) override;
       void click(ToolContext& context, Point point) override;
+      NodeId find_parent(
+        const ToolContext& context, Point point) const override;
   };
 }
 

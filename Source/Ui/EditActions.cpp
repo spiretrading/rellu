@@ -112,8 +112,10 @@ void EditActions::update() {
     auto command = m_commands->make(name, *document, nodes);
     m_actions->set_enabled(name, static_cast<bool>(command));
     if(command && (name == "object.toggle_lock" ||
-        name == "object.toggle_visibility")) {
+        name == "object.toggle_visibility" || name == "object.ungroup")) {
       m_actions->get(name).setText(escape(command->get_label()));
+    } else if(!command && name == "object.ungroup") {
+      m_actions->get(name).setText("Ungroup");
     }
   }
 }

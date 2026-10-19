@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include "Rellu/Tools/SmartGuides.hpp"
 #include "Rellu/Tools/ToolContext.hpp"
 
 using namespace Rellu;
@@ -10,7 +11,8 @@ ToolContext::ToolContext(
     : m_editor(&editor),
       m_hit_tester(&hit_tester),
       m_titles(&titles),
-      m_snap_service(&m_default_snap_service),
+      m_default_snap_service(std::make_unique<SmartGuides>(*this)),
+      m_snap_service(m_default_snap_service.get()),
       m_measurer(estimate_text_bounds),
       m_scale(1),
       m_size(0, 0),

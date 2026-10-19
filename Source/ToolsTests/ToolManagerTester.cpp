@@ -32,11 +32,11 @@ TEST_SUITE("ToolManager") {
     auto tools = ToolManager(editor);
     REQUIRE(tools.get_tool_name() == "select");
     for(auto name : {"select", "rectangle", "ellipse", "polygon", "line",
-        "artboard", "zoom", "text"}) {
+        "pen", "path_edit", "artboard", "zoom", "text"}) {
       REQUIRE(tools.has_tool(name));
     }
-    REQUIRE(!tools.has_tool("pen"));
-    REQUIRE_THROWS_AS(tools.set_tool("pen"), std::out_of_range);
+    REQUIRE(!tools.has_tool("missing"));
+    REQUIRE_THROWS_AS(tools.set_tool("missing"), std::out_of_range);
     REQUIRE_THROWS_AS(tools.add_tool("zoom", std::make_unique<ShapeTool>(
       ShapeKind::LINE)), std::invalid_argument);
     auto changes = 0;

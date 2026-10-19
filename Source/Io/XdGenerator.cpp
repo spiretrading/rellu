@@ -1219,6 +1219,9 @@ XdValue XdGenerator::make_ux(const Node& node) const {
     }
     ux.set("width", instance.m_size.m_width);
     ux.set("height", instance.m_size.m_height);
+    if(instance.m_is_main) {
+      ux.set("isMaster", true);
+    }
     ux.set("syncMap", make_sync_map(instance.m_sync_map));
     auto overrides = make_overrides(instance.m_overrides, id);
     if(!overrides.get_members().empty()) {
@@ -1284,6 +1287,7 @@ XdValue XdGenerator::make_ux(const Node& node) const {
       }
     }
     if(auto& stack = group->m_stack) {
+      ux.set("isContentAware", true);
       ux.set("contentStackType",
         stack->m_orientation == Orientation::HORIZONTAL ? "horizontal" :
           "vertical");

@@ -264,6 +264,9 @@ this table.
   published as usual, but they join that revision, so a single undo reverts
   both; a revision left with no net change is discarded. The commands
   layer's history merges consecutive steps this way.
+- The document exposes the records the most recent revision replaced
+  (`get_original_records`), so that the commands layer can compare a step's
+  result with the state before it.
 - The commands layer (separate module) builds named user actions on top of
   transactions; the model itself knows nothing about tools or UI.
 
@@ -333,6 +336,16 @@ refinements:
   state trees, as XD stores them. The state trees are not validated on
   insert or replace: consumers must tolerate a state whose tree is missing
   or is not a group root.
+- `ComponentInstance::m_is_main` marks the main component on the canvas
+  (XD `isMaster`). The master in `Resources` stays the component's
+  definition; the commands layer keeps the two in step
+  (`refresh_components`, Commands/Components.hpp): an edit of the main
+  component changes the master, or the tree of the state the main
+  component shows, and then every instance except the properties an
+  instance overrides; an edit of any other instance adds the XD names of
+  the properties it changed to the instance's overrides. An instance mirrors
+  the master or, in a state other than the default, that state's tree: its
+  sync map maps its nodes to the nodes of that tree.
 - `resolve_reference` (ReferenceResolution.hpp) is the single rule for what a
   reference renders: the final non-reference source, with the nearest
   transform and children overrides.
@@ -342,6 +355,23 @@ refinements:
   added or removed, nested ones first, so that one undo reverts both. The XD
   session skips compound shapes with children the importer could not
   represent, as the writer does.
+- Layouts are recomputed the same way (`refresh_layouts`,
+  Commands/Layouts.hpp), innermost first, only for the stacks, padding
+  groups and repeat grids a step changed. A stack's order is the reverse of
+  its children's z order (the topmost child comes first), its background is
+  the bottom-most child, hidden children take no space, and the last item
+  has no spacing entry. Measuring is by geometric bounds. Edits keep the
+  stored gaps and the stack's start: items after a resized item shift by
+  the change, removed items close up with the spacing of the item before
+  them, inserted items take the most common spacing, and an item that was
+  only moved takes the place in the order its center calls for. A padding
+  background is kept around the content (edits of the background itself
+  are undone, as in XD). A repeat grid's cells are complete copies in row
+  major order, cell `i` translated by its column and row pitch from the
+  first; an edit in one cell is repeated in every other cell except text
+  content and image fills, the cell size follows the first cell's content,
+  and new cells copy the nearest existing cell. XD keeps text data series
+  as `repeatOverrides` on each text node, which the model leaves opaque.
 
 ## Open questions
 
@@ -350,5 +380,6 @@ refinements:
 - How XD rounds polygon corners.
 - Whether any XD text uses characters outside the Basic Multilingual Plane
   (none in the corpus), which would confirm the UTF-16 offset assumption.
-- Exact stack and padding recomputation rules after an edit; until they are
-  needed, imported layouts are taken as given.
+- How XD orders a stack turned on from the inspector (the plugin API keeps
+  the z order; Rellu orders by position) and what new cells copy when
+  columns are added (rows copy the last cell).

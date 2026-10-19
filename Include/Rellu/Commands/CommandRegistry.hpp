@@ -54,7 +54,8 @@ namespace Rellu {
 
   /**
    * Adds the standard commands acting on targets: edit.delete,
-   * edit.duplicate, object.group, object.ungroup, object.toggle_lock,
+   * edit.duplicate, object.group, object.ungroup (Ungroup Grid when the
+   * targets are repeat grids), object.toggle_lock,
    * object.toggle_visibility, arrange.bring_to_front, arrange.bring_forward,
    * arrange.send_backward, arrange.send_to_back, and object.nudge_left,
    * object.nudge_right, object.nudge_up and object.nudge_down by one pixel

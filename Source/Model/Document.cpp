@@ -105,6 +105,16 @@ std::size_t Document::get_redo_count() const {
   return m_redo.size();
 }
 
+const std::vector<std::pair<NodeId, std::shared_ptr<const Node>>>&
+    Document::get_original_records() const {
+  static const auto EMPTY =
+    std::vector<std::pair<NodeId, std::shared_ptr<const Node>>>();
+  if(m_undo.empty()) {
+    return EMPTY;
+  }
+  return m_undo.back().m_nodes;
+}
+
 bool Document::undo() {
   if(m_has_transaction) {
     throw std::logic_error("Undo while a transaction is open.");

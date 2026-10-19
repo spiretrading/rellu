@@ -141,6 +141,12 @@ namespace Rellu {
     /** The instance's own copies of the component's states. */
     std::vector<ComponentState> m_states;
 
+    /**
+     * Whether the instance is the component's main component, whose edits
+     * change the component itself.
+     */
+    bool m_is_main = false;
+
     bool operator ==(const ComponentInstance&) const = default;
   };
 

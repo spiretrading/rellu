@@ -17,11 +17,18 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QSettings>
+#include <QToolButton>
 #include <QVBoxLayout>
+#include "Rellu/Commands/AlignCommands.hpp"
+#include "Rellu/Commands/ComponentCommands.hpp"
+#include "Rellu/Commands/PathCommands.hpp"
+#include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
+#include "Rellu/Ui/ComponentPropertyEditors.hpp"
+#include "Rellu/Ui/LayoutProperties.hpp"
 #include "Rellu/Ui/PropertyEditors.hpp"
 #include "Rellu/Ui/TextMeasurement.hpp"
 #include "Rellu/Ui/TextPropertyEditors.hpp"
@@ -85,10 +92,16 @@ MainWindow::MainWindow(QWidget* parent)
       m_layers(new LayersPanel()),
       m_plugins(new PluginsPanel()),
       m_inspector(new PropertyInspector()),
+      m_prototype_inspector(new PrototypeInspector()),
+      m_preview(nullptr),
       m_inspector_frame(new QWidget()),
       m_recent_files(MAXIMUM_RECENT_FILES),
       m_measurer(make_text_measurer(get_default_font_library())) {
   add_standard_commands(m_commands);
+  add_align_commands(m_commands, m_measurer);
+  add_path_commands(m_commands);
+  add_repeat_grid_commands(m_commands);
+  add_component_commands(m_commands);
   m_view->get_renderer().set_background(PASTEBOARD);
   m_view->installEventFilter(this);
   m_inspector->set_measurer(m_measurer);
@@ -100,6 +113,8 @@ MainWindow::MainWindow(QWidget* parent)
       }
       return &m_session->get_editor().get_text_selection();
     });
+  add_layout_property_editors(editors, m_measurer);
+  add_component_property_editors(editors);
   m_inspector->set_property_editors(std::move(editors));
   m_inspector->set_actions(&m_actions);
   m_layers->set_activation_handler([this] (const auto& id) {
@@ -120,6 +135,7 @@ MainWindow::MainWindow(QWidget* parent)
   auto bar = make_layout();
   add_xd_menus(m_actions);
   add_actions();
+  add_component_actions();
   m_actions.build(*bar);
   restore_settings();
   update_title();
@@ -253,6 +269,8 @@ QMenuBar* MainWindow::make_layout() {
   auto inspector_layout = new QVBoxLayout(m_inspector_frame);
   inspector_layout->setContentsMargins(1, 0, 0, 0);
   inspector_layout->addWidget(m_inspector);
+  inspector_layout->addWidget(m_prototype_inspector);
+  m_prototype_inspector->hide();
   body_layout->addWidget(m_inspector_frame);
   layout->addWidget(body, 1);
   setCentralWidget(central);
@@ -314,11 +332,39 @@ void MainWindow::add_actions() {
     m_actions.get("window.document").setChecked(true);
     activateWindow();
   });
+  m_actions.set_handler("window.preview", [this] { toggle_preview(); });
+  for(auto button : m_app_bar->findChildren<QToolButton*>()) {
+    if(button->accessibleName() == "Desktop Preview") {
+      button->setEnabled(true);
+      connect(button, &QToolButton::clicked, this, [this] {
+        m_actions.get("window.preview").trigger();
+      });
+    }
+  }
   m_actions.set_handler("help.about", [this] {
     QMessageBox::about(this, "About Rellu", "Rellu\n\n"
       "An editor for Adobe XD documents.");
   });
   add_tool_actions();
+}
+
+void MainWindow::add_component_actions() {
+  m_component_actions = std::make_unique<ComponentActions>(m_actions);
+  m_component_actions->set_reveal_handler([this] (const auto& id) {
+    reveal(id);
+  });
+  m_component_actions->set_component_handler([this] (const auto& id) {
+    show_panel("assets");
+    m_assets->reveal(id);
+  });
+  m_assets->set_thumbnailer([this] (const auto& document,
+      const auto& component, int size) {
+    return m_thumbnails.render(document, component, size);
+  });
+  m_assets->set_main_component_handler([this] (const auto& component) {
+    m_component_actions->edit_main_component(component);
+  });
+  m_component_drop = std::make_unique<ComponentDrop>(*m_view);
 }
 
 void MainWindow::add_tool_actions() {
@@ -333,15 +379,24 @@ void MainWindow::add_tool_actions() {
 }
 
 void MainWindow::select_tool(const std::string& name) {
-  if(auto tools = m_view->get_tools(); tools && tools->has_tool(name)) {
-    tools->set_tool(name);
+  auto tool = name;
+  if(tool == "select" && m_app_bar->get_workspace() == Workspace::PROTOTYPE) {
+    tool = "prototype";
+  }
+  if(auto tools = m_view->get_tools(); tools && tools->has_tool(tool)) {
+    tools->set_tool(tool);
   }
   update_tool();
 }
 
 void MainWindow::update_tool() {
   if(auto tools = m_view->get_tools()) {
-    m_toolbar->set_tool(tools->get_tool_name());
+    if(auto& name = tools->get_tool_name();
+        name == "prototype" || name == "path_edit") {
+      m_toolbar->set_tool("select");
+    } else {
+      m_toolbar->set_tool(tools->get_tool_name());
+    }
   }
 }
 
@@ -373,6 +428,9 @@ void MainWindow::set_workspace(Workspace workspace) {
   }
   if(workspace != Workspace::DESIGN && m_toolbar->get_tool() != "zoom") {
     select_tool("select");
+  } else if(auto tools = m_view->get_tools();
+      tools && tools->get_tool_name() == "prototype") {
+    select_tool("select");
   }
   for(auto& tool : m_toolbar->get_tools()) {
     m_actions.set_enabled("tool." + tool.m_name,
@@ -380,7 +438,40 @@ void MainWindow::set_workspace(Workspace workspace) {
       tool.m_name == "zoom");
   }
   m_inspector->set_workspace(workspace);
+  m_inspector->setVisible(workspace != Workspace::PROTOTYPE);
+  m_prototype_inspector->setVisible(workspace == Workspace::PROTOTYPE);
   show_panel(m_toolbar->get_panel());
+}
+
+void MainWindow::toggle_preview() {
+  auto& action = m_actions.get("window.preview");
+  if(m_preview && m_preview->isVisible()) {
+    m_preview->close();
+    action.setChecked(false);
+    return;
+  }
+  auto start = NodeId();
+  if(m_session) {
+    start = find_preview_start(m_session->get_document(),
+      m_session->get_editor().get_selection().get_nodes());
+  }
+  if(start.is_nil()) {
+    action.setChecked(false);
+    return;
+  }
+  if(!m_preview) {
+    m_preview = new PreviewWindow(this);
+    m_preview->addAction(&action);
+    m_preview->set_close_handler([this] {
+      m_actions.get("window.preview").setChecked(false);
+    });
+  }
+  m_preview->setWindowTitle("Preview : " + m_session->get_name());
+  m_preview->play(m_session->get_document(), start);
+  m_preview->show();
+  m_preview->raise();
+  m_preview->activateWindow();
+  action.setChecked(true);
 }
 
 void MainWindow::restore_settings() {
@@ -491,10 +582,14 @@ void MainWindow::install(
   m_view->set_document(std::move(document));
   m_session = std::move(session);
   auto& editor = m_session->get_editor();
+  editor.get_history().set_text_measurer(m_measurer);
   m_layers->set_editor(&editor);
-  m_assets->set_document(&m_session->get_document());
+  m_assets->set_editor(&editor);
   m_inspector->set_editor(&editor);
+  m_prototype_inspector->set_editor(&editor);
   m_edit_actions->set_editor(&editor);
+  m_component_actions->set_editor(&editor);
+  m_component_drop->set_editor(&editor);
   m_history_subscription = editor.get_history().subscribe([this] {
     update_title();
   });
@@ -518,7 +613,17 @@ void MainWindow::detach() {
   m_history_subscription.release();
   m_selection_subscription.release();
   m_edit_actions->set_editor(nullptr);
+  if(m_component_actions) {
+    m_component_actions->set_editor(nullptr);
+  }
+  if(m_component_drop) {
+    m_component_drop->set_editor(nullptr);
+  }
   m_inspector->set_editor(nullptr);
+  m_prototype_inspector->set_editor(nullptr);
+  if(m_preview) {
+    m_preview->close();
+  }
   m_layers->set_editor(nullptr);
   m_assets->set_document(nullptr);
   if(m_view) {

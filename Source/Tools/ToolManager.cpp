@@ -2,6 +2,9 @@
 #include <unordered_set>
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Tools/ArtboardTool.hpp"
+#include "Rellu/Tools/PathEditTool.hpp"
+#include "Rellu/Tools/PenTool.hpp"
+#include "Rellu/Tools/PrototypeTool.hpp"
 #include "Rellu/Tools/SelectTool.hpp"
 #include "Rellu/Tools/ShapeTool.hpp"
 #include "Rellu/Tools/TextTool.hpp"
@@ -28,9 +31,12 @@ ToolManager::ToolManager(Editor& editor)
   add_tool("ellipse", std::make_unique<ShapeTool>(ShapeKind::ELLIPSE));
   add_tool("polygon", std::make_unique<ShapeTool>(ShapeKind::POLYGON));
   add_tool("line", std::make_unique<ShapeTool>(ShapeKind::LINE));
+  add_tool("pen", std::make_unique<PenTool>());
+  add_tool("path_edit", std::make_unique<PathEditTool>());
   add_tool("artboard", std::make_unique<ArtboardTool>());
   add_tool("zoom", std::make_unique<ZoomTool>());
   add_tool("text", std::make_unique<TextTool>(get_default_font_library()));
+  add_tool("prototype", std::make_unique<PrototypeTool>());
   m_tool = m_tools.at("select").get();
   m_name = "select";
   m_document_subscription =

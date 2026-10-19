@@ -41,6 +41,9 @@ void DrawTool::press(ToolContext& context, const PointerEvent& event) {
   m_press = event.m_position;
   m_start = context.to_document(event.m_position);
   m_header = std::nullopt;
+  auto& snap = context.get_snap_service();
+  snap.begin(find_parent(context, m_start), std::vector<NodeId>());
+  m_start = snap.snap_point(m_start, SnapAxes::BOTH, event.m_modifiers);
   context.get_editor().get_history().seal();
 }
 
@@ -121,6 +124,10 @@ void DrawTool::draw(const ToolContext& context, CanvasOverlay& overlay) const {
 
 void DrawTool::click(ToolContext& context, Point point) {}
 
+NodeId DrawTool::find_parent(const ToolContext& context, Point point) const {
+  return find_drawing_parent(context.get_document(), point);
+}
+
 void DrawTool::update(ToolContext& context, const PointerEvent& event) {
   if(!m_is_applied && distance(event.m_position, m_press) < DRAG_THRESHOLD) {
     return;
@@ -130,8 +137,10 @@ void DrawTool::update(ToolContext& context, const PointerEvent& event) {
     m_header->m_id = generate_node_id();
     m_header->m_name = make_node_name(context.get_document(), m_prefix);
   }
-  auto command = make_command(context, *m_header, m_start,
-    context.to_document(event.m_position), event.m_modifiers);
+  auto end = context.get_snap_service().snap_point(
+    context.to_document(event.m_position), SnapAxes::BOTH, event.m_modifiers);
+  auto command =
+    make_command(context, *m_header, m_start, end, event.m_modifiers);
   if(!command) {
     return;
   }
@@ -143,6 +152,9 @@ void DrawTool::update(ToolContext& context, const PointerEvent& event) {
 void DrawTool::finish(ToolContext& context) {
   if(m_is_applied) {
     context.get_editor().get_history().seal();
+  }
+  if(m_is_pressed) {
+    context.get_snap_service().end();
   }
   m_is_pressed = false;
   m_is_applied = false;

@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "Rellu/Commands/StructureCommands.hpp"
+#include "Rellu/Commands/StyleCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Editor/Editor.hpp"
 #include "../CommandsTests/Fixture.hpp"
@@ -160,6 +161,32 @@ TEST_SUITE("Editor") {
     REQUIRE(editor.undo());
     REQUIRE(document.find(scene.m_loose));
     REQUIRE(selection.get_nodes() == std::vector{scene.m_rectangle});
+  }
+
+  TEST_CASE("instance_edit") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto editor = Editor(document);
+    auto& selection = editor.get_selection();
+    selection.select(scene.m_reference);
+    auto command = editor.execute(std::make_unique<SetFillCommand>(
+      std::vector{scene.m_reference}, Fill(SolidFill(make_color(0, 0, 255)))));
+    REQUIRE(command);
+    REQUIRE(dynamic_cast<const SetFillCommand*>(command));
+    auto& node = document.get(scene.m_reference);
+    REQUIRE(!node.get_reference());
+    REQUIRE(std::get<SolidFill>(node.get_shape()->m_style.m_fill).m_color ==
+      make_color(0, 0, 255));
+    auto& overrides = document.get(scene.m_instance).get_group()->
+      m_component_instance->m_overrides;
+    REQUIRE(overrides.m_properties.at(scene.m_reference) ==
+      std::vector<std::string>{"fill"});
+    REQUIRE(editor.merge(std::make_unique<SetFillCommand>(
+      std::vector{scene.m_reference}, Fill(SolidFill(make_color(0, 255, 0))))));
+    REQUIRE(editor.get_history().get_undo_count() == 1);
+    REQUIRE(editor.undo());
+    REQUIRE(document.get(scene.m_reference).get_reference());
+    REQUIRE(selection.get_nodes() == std::vector{scene.m_reference});
   }
 
   TEST_CASE("const_access") {

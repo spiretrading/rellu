@@ -16,6 +16,7 @@
 #include <QStyleHints>
 #include <QWheelEvent>
 #include "Rellu/Rendering/StripRasterizer.hpp"
+#include "Rellu/Tools/PathEditTool.hpp"
 #include "DocumentView.hpp"
 
 using namespace Rellu;
@@ -208,6 +209,13 @@ bool DocumentView::event(QEvent* event) {
     if(auto tool = get_text_tool(); tool && tool->is_text_key(
         m_tools->get_context(),
         to_key_event(*static_cast<QKeyEvent*>(event)))) {
+      event->accept();
+      return true;
+    }
+    if(auto tool = m_tools ?
+        dynamic_cast<PathEditTool*>(&m_tools->get_tool()) : nullptr; tool &&
+        tool->is_edit_key(m_tools->get_context(),
+          to_key_event(*static_cast<QKeyEvent*>(event)))) {
       event->accept();
       return true;
     }

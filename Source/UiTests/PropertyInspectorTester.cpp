@@ -7,8 +7,11 @@
 #include <QLineEdit>
 #include <QToolButton>
 #include <QWidget>
+#include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Editor/Editor.hpp"
+#include "Rellu/Ui/ComponentActions.hpp"
+#include "Rellu/Ui/ComponentPropertyEditors.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "TestDocument.hpp"
@@ -367,5 +370,61 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(triggered == 1);
     actions.set_enabled("object.align.left", false);
     REQUIRE(!left->isEnabled());
+  }
+
+  TEST_CASE("component_section") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto window = QWidget();
+    auto actions = ActionRegistry(window);
+    add_xd_menus(actions);
+    auto editor = Editor(document);
+    auto component_actions = ComponentActions(actions);
+    component_actions.set_editor(&editor);
+    auto inspector = PropertyInspector();
+    inspector.set_actions(&actions);
+    auto editors = make_standard_property_editors(estimate_text_bounds);
+    add_component_property_editors(editors);
+    inspector.set_property_editors(std::move(editors));
+    inspector.set_editor(&editor);
+    editor.get_selection().select(ids.m_instance);
+    auto section = inspector.find_section("component");
+    REQUIRE(section);
+    auto edit_main = static_cast<QToolButton*>(nullptr);
+    for(auto button : section->findChildren<QToolButton*>()) {
+      if(button->text() == "Edit Main Component") {
+        edit_main = button;
+      }
+    }
+    REQUIRE(edit_main);
+    REQUIRE(edit_main->isEnabled());
+    edit_main->click();
+    auto main = find_main_component(document, ids.m_component);
+    REQUIRE(editor.get_selection().get_primary() == main);
+    section = inspector.find_section("component");
+    auto add = static_cast<QToolButton*>(nullptr);
+    for(auto button : section->findChildren<QToolButton*>()) {
+      if(button->toolTip() == "Add State") {
+        add = button;
+      }
+    }
+    REQUIRE(add);
+    REQUIRE(add->isEnabled());
+    REQUIRE(add->menu()->actions().size() == 3);
+    add->menu()->actions().front()->trigger();
+    REQUIRE(get_text(inspector, "component.state_name") == "New State");
+    auto& state_name = get_line(inspector, "component.state_name");
+    state_name.setText("Pressed");
+    Q_EMIT state_name.textEdited("Pressed");
+    Q_EMIT state_name.editingFinished();
+    REQUIRE(document.get_resources().m_components.at(ids.m_component).
+      m_states.front().m_name == "Pressed");
+    auto combo = qobject_cast<QComboBox*>(
+      inspector.find_field("component.state"));
+    REQUIRE(combo);
+    REQUIRE(combo->count() == 2);
+    Q_EMIT combo->activated(0);
+    REQUIRE(get_instance_role(document.get(main))->m_state.is_nil());
+    REQUIRE(!find_property(inspector.get_properties(), "component.state_name"));
   }
 }

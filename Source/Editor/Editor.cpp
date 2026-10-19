@@ -1,5 +1,6 @@
 #include <any>
 #include <optional>
+#include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Editor/Editor.hpp"
 
@@ -74,15 +75,19 @@ const Command* Editor::capture(auto apply) {
 }
 
 const Command* Editor::execute(std::unique_ptr<Command> command) {
-  return capture([&] {
+  command = make_instance_edit(
+    *m_document, m_selection.get_nodes(), std::move(command));
+  return get_edited_command(capture([&] {
     return m_history.execute(std::move(command));
-  });
+  }));
 }
 
 const Command* Editor::merge(std::unique_ptr<Command> command) {
-  return capture([&] {
+  command = make_instance_edit(
+    *m_document, m_selection.get_nodes(), std::move(command));
+  return get_edited_command(capture([&] {
     return m_history.merge(std::move(command));
-  });
+  }));
 }
 
 bool Editor::execute(const CommandRegistry& registry, std::string_view name) {

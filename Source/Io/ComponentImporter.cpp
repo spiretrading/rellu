@@ -210,6 +210,7 @@ namespace {
       ux.get_number("width"_L1, 0), ux.get_number("height"_L1, 0));
     instance.m_sync_map = read_sync_map(ux);
     instance.m_overrides = read_overrides(ux, node.m_header.m_id);
+    instance.m_is_main = ux.get_bool("isMaster"_L1, false);
     ignore_component_keys(ux);
     ignore_link_keys(ux);
     instance.m_states = import_states(ux, import);

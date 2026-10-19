@@ -1,0 +1,348 @@
+#include <algorithm>
+#include <cmath>
+#include <QCloseEvent>
+#include <QGuiApplication>
+#include <QKeyEvent>
+#include <QMouseEvent>
+#include <QResizeEvent>
+#include <QScreen>
+#include <QVBoxLayout>
+#include <QWheelEvent>
+#include "Rellu/Prototype/KeyNames.hpp"
+#include "Rellu/Prototype/StageDocument.hpp"
+#include "Rellu/Rendering/StripRasterizer.hpp"
+#include "Rellu/Ui/PreviewWindow.hpp"
+
+using namespace Rellu;
+
+namespace {
+  const auto BACKGROUND = QColor(0, 0, 0);
+  constexpr auto SCREEN_FRACTION = 0.9;
+  constexpr auto WHEEL_STEP = 120.0;
+  constexpr auto LINE_SCROLL = 48.0;
+
+  bool is_artboard(const Document& document, const NodeId& id) {
+    auto node = document.find(id);
+    return node && node->get_artboard() && document.is_on_canvas(id);
+  }
+}
+
+class PreviewWindow::View : public Canvas {
+  public:
+    explicit View(PreviewWindow& window)
+        : m_window(&window) {
+      setFocusPolicy(Qt::StrongFocus);
+      setMouseTracking(true);
+    }
+
+  protected:
+    void mousePressEvent(QMouseEvent* event) override {
+      if(event->button() != Qt::LeftButton || !m_window->m_player) {
+        Canvas::mousePressEvent(event);
+        return;
+      }
+      m_window->handle_changed(m_window->m_player->press(get_point(*event)));
+      event->accept();
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override {
+      if(!m_window->m_player) {
+        Canvas::mouseMoveEvent(event);
+        return;
+      }
+      m_window->handle_changed(m_window->m_player->move(get_point(*event)));
+      event->accept();
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override {
+      if(event->button() != Qt::LeftButton || !m_window->m_player) {
+        Canvas::mouseReleaseEvent(event);
+        return;
+      }
+      m_window->handle_changed(
+        m_window->m_player->release(get_point(*event)));
+      event->accept();
+    }
+
+    void leaveEvent(QEvent* event) override {
+      if(m_window->m_player) {
+        m_window->handle_changed(m_window->m_player->leave());
+      }
+      Canvas::leaveEvent(event);
+    }
+
+    void wheelEvent(QWheelEvent* event) override {
+      if(!m_window->m_player) {
+        Canvas::wheelEvent(event);
+        return;
+      }
+      auto delta = static_cast<double>(event->pixelDelta().y());
+      if(delta == 0) {
+        delta = event->angleDelta().y() / WHEEL_STEP * LINE_SCROLL;
+      }
+      m_window->handle_changed(
+        m_window->m_player->scroll(-delta / m_window->m_zoom));
+      event->accept();
+    }
+
+    void keyPressEvent(QKeyEvent* event) override {
+      if(m_window->m_player && !event->isAutoRepeat()) {
+        auto chord = make_key_chord(event->key(), event->modifiers(),
+          event->text().toStdU16String());
+        if(m_window->m_player->press_key(chord)) {
+          m_window->handle_changed(true);
+          event->accept();
+          return;
+        }
+      }
+      Canvas::keyPressEvent(event);
+    }
+
+  private:
+    PreviewWindow* m_window;
+
+    Point get_point(const QMouseEvent& event) const {
+      return m_window->to_viewport(
+        Point(event.position().x(), event.position().y()));
+    }
+};
+
+NodeId Rellu::find_preview_start(
+    const Document& document, const std::vector<NodeId>& selection) {
+  for(auto& id : selection) {
+    auto current = id;
+    for(auto depth = 0; depth != 512 && !current.is_nil(); ++depth) {
+      auto node = document.find(current);
+      if(!node) {
+        break;
+      }
+      if(is_artboard(document, current)) {
+        return current;
+      }
+      current = node->m_parent;
+    }
+  }
+  auto& prototype = document.get_prototype();
+  for(auto& flow : prototype.m_flows) {
+    if(is_artboard(document, flow.m_artboard)) {
+      return flow.m_artboard;
+    }
+  }
+  if(is_artboard(document, prototype.m_home_artboard)) {
+    return prototype.m_home_artboard;
+  }
+  for(auto& id : document.get_canvas()) {
+    if(is_artboard(document, id)) {
+      return id;
+    }
+  }
+  return NodeId();
+}
+
+PreviewWindow::PreviewWindow(QWidget* parent)
+    : QWidget(parent, Qt::Window),
+      m_document(nullptr),
+      m_view(new View(*this)),
+      m_zoom(1),
+      m_offset(0, 0) {
+  setObjectName("preview_window");
+  setWindowTitle("Preview");
+  auto layout = new QVBoxLayout(this);
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->addWidget(m_view);
+  m_view->get_renderer().set_background(BACKGROUND);
+  m_frames.setInterval(FRAME_INTERVAL);
+  m_frames.setTimerType(Qt::PreciseTimer);
+  QObject::connect(&m_frames, &QTimer::timeout, this, [this] {
+    auto elapsed = m_clock.isValid() ? m_clock.restart() / 1000.0 : 0.0;
+    advance(elapsed);
+  });
+  m_changes.setSingleShot(true);
+  m_changes.setInterval(CHANGE_DELAY);
+  QObject::connect(&m_changes, &QTimer::timeout, this, [this] {
+    reload();
+  });
+}
+
+PreviewWindow::~PreviewWindow() {
+  m_frames.stop();
+  m_changes.stop();
+  m_subscription.release();
+  m_view->get_renderer().set_draw_list(nullptr);
+  m_composer.reset();
+  m_player.reset();
+}
+
+void PreviewWindow::play(Document& document, const NodeId& artboard) {
+  stop();
+  m_document = &document;
+  m_subscription = document.subscribe([this] (const auto& changes) {
+    m_changes.start();
+  });
+  auto position = PreviewPosition();
+  position.m_artboard = artboard;
+  rebuild(position);
+  resize_to_artboard();
+}
+
+void PreviewWindow::stop() {
+  m_frames.stop();
+  m_changes.stop();
+  m_subscription.release();
+  m_view->get_renderer().set_draw_list(nullptr);
+  m_composer.reset();
+  m_player.reset();
+  m_document = nullptr;
+  m_shown = NodeId();
+  m_view->update();
+}
+
+Document* PreviewWindow::get_document() const {
+  return m_document;
+}
+
+PreviewPlayer* PreviewWindow::get_player() const {
+  return m_player.get();
+}
+
+Canvas& PreviewWindow::get_view() const {
+  return *m_view;
+}
+
+double PreviewWindow::get_zoom() const {
+  return m_zoom;
+}
+
+Point PreviewWindow::to_viewport(Point point) const {
+  return Point((point.m_x - m_offset.m_x) / m_zoom,
+    (point.m_y - m_offset.m_y) / m_zoom);
+}
+
+void PreviewWindow::reload() {
+  m_changes.stop();
+  if(!m_document || !m_player) {
+    return;
+  }
+  rebuild(m_player->get_position());
+}
+
+void PreviewWindow::advance(double seconds) {
+  if(!m_player) {
+    return;
+  }
+  auto is_animating = m_player->is_animating();
+  handle_changed(m_player->advance(seconds) || is_animating);
+}
+
+void PreviewWindow::update_frame() {
+  if(!m_player || !m_composer) {
+    m_view->get_renderer().set_draw_list(nullptr);
+    m_view->update();
+    return;
+  }
+  fit();
+  m_view->get_renderer().set_draw_list(
+    m_composer->compose(m_player->get_layers()));
+  m_view->get_renderer().set_view(make_translation(m_offset.m_x,
+    m_offset.m_y) * make_scale(m_zoom, m_zoom));
+  m_view->update();
+}
+
+void PreviewWindow::set_close_handler(std::function<void ()> handler) {
+  m_close_handler = std::move(handler);
+}
+
+void PreviewWindow::resizeEvent(QResizeEvent* event) {
+  QWidget::resizeEvent(event);
+  update_frame();
+}
+
+void PreviewWindow::closeEvent(QCloseEvent* event) {
+  stop();
+  QWidget::closeEvent(event);
+  if(m_close_handler) {
+    m_close_handler();
+  }
+}
+
+void PreviewWindow::rebuild(const PreviewPosition& position) {
+  m_view->get_renderer().set_draw_list(nullptr);
+  m_composer.reset();
+  m_player.reset();
+  m_player = std::make_unique<PreviewPlayer>(copy_document(*m_document));
+  m_composer = std::make_unique<PreviewComposer>(
+    m_player->get_stage(), StripRasterizer::TOLERANCE);
+  m_player->start(position);
+  m_clock.restart();
+  handle_changed(true);
+}
+
+void PreviewWindow::fit() {
+  auto viewport = m_player ? m_player->get_viewport() : Size(0, 0);
+  if(viewport.m_width <= 0 || viewport.m_height <= 0 || width() <= 0 ||
+      height() <= 0) {
+    m_zoom = 1;
+    m_offset = Point(0, 0);
+    return;
+  }
+  auto zoom = std::min(width() / viewport.m_width,
+    height() / viewport.m_height);
+  if(zoom != m_zoom && m_composer) {
+    m_composer->set_tolerance(StripRasterizer::TOLERANCE /
+      std::max(zoom * devicePixelRatio(), 1.0 / 64));
+  }
+  m_zoom = zoom;
+  m_offset = Point((width() - viewport.m_width * zoom) / 2,
+    (height() - viewport.m_height * zoom) / 2);
+}
+
+void PreviewWindow::resize_to_artboard() {
+  if(!m_player) {
+    return;
+  }
+  auto viewport = m_player->get_viewport();
+  if(viewport.m_width <= 0 || viewport.m_height <= 0) {
+    return;
+  }
+  auto size = QSize(static_cast<int>(std::ceil(viewport.m_width)),
+    static_cast<int>(std::ceil(viewport.m_height)));
+  if(auto screen = this->screen() ? this->screen() :
+      QGuiApplication::primaryScreen()) {
+    auto available = screen->availableGeometry().size() * SCREEN_FRACTION;
+    if(size.width() > available.width() ||
+        size.height() > available.height()) {
+      auto scale = std::min(
+        static_cast<double>(available.width()) / size.width(),
+        static_cast<double>(available.height()) / size.height());
+      size = QSize(static_cast<int>(size.width() * scale),
+        static_cast<int>(size.height() * scale));
+    }
+  }
+  resize(size);
+}
+
+void PreviewWindow::update_timer() {
+  auto is_needed = m_player &&
+    (m_player->is_animating() || m_player->get_next_time());
+  if(is_needed && !m_frames.isActive()) {
+    m_clock.restart();
+    m_frames.start();
+  } else if(!is_needed && m_frames.isActive()) {
+    m_frames.stop();
+  }
+}
+
+void PreviewWindow::handle_changed(bool is_changed) {
+  if(!m_player) {
+    return;
+  }
+  auto& artboard = m_player->get_artboard();
+  if(artboard != m_shown) {
+    m_shown = artboard;
+    is_changed = true;
+  }
+  if(is_changed) {
+    update_frame();
+  }
+  update_timer();
+}

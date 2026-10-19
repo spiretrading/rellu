@@ -14,13 +14,18 @@
 #include "Rellu/Ui/ActionRegistry.hpp"
 #include "Rellu/Ui/AppBar.hpp"
 #include "Rellu/Ui/AssetsPanel.hpp"
+#include "Rellu/Ui/ComponentActions.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/EditActions.hpp"
 #include "Rellu/Ui/LayersPanel.hpp"
 #include "Rellu/Ui/PluginsPanel.hpp"
+#include "Rellu/Ui/PreviewWindow.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
+#include "Rellu/Ui/PrototypeInspector.hpp"
 #include "Rellu/Ui/RecentFiles.hpp"
 #include "Rellu/Ui/Toolbar.hpp"
+#include "ComponentDrop.hpp"
+#include "ComponentThumbnails.hpp"
 #include "DocumentView.hpp"
 
 namespace Rellu {
@@ -83,6 +88,9 @@ namespace Rellu {
       ActionRegistry m_actions;
       CommandRegistry m_commands;
       std::unique_ptr<EditActions> m_edit_actions;
+      std::unique_ptr<ComponentActions> m_component_actions;
+      ComponentThumbnails m_thumbnails;
+      std::unique_ptr<ComponentDrop> m_component_drop;
       AppBar* m_app_bar;
       Toolbar* m_toolbar;
       QStackedWidget* m_left_panel;
@@ -90,6 +98,8 @@ namespace Rellu {
       LayersPanel* m_layers;
       PluginsPanel* m_plugins;
       PropertyInspector* m_inspector;
+      PrototypeInspector* m_prototype_inspector;
+      PreviewWindow* m_preview;
       QWidget* m_inspector_frame;
       RecentFiles m_recent_files;
       TextMeasurer m_measurer;
@@ -100,11 +110,13 @@ namespace Rellu {
 
       QMenuBar* make_layout();
       void add_actions();
+      void add_component_actions();
       void add_tool_actions();
       void select_tool(const std::string& name);
       void update_tool();
       void show_panel(const std::string& name);
       void set_workspace(Workspace workspace);
+      void toggle_preview();
       void restore_settings();
       void save_settings() const;
       void update_recent_files();

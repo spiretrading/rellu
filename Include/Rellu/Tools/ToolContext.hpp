@@ -2,6 +2,7 @@
 #define RELLU_TOOLS_TOOL_CONTEXT_HPP
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include "Rellu/Commands/Bounds.hpp"
@@ -36,7 +37,8 @@ namespace Rellu {
     public:
 
       /**
-       * Constructs a ToolContext viewing the document unscaled.
+       * Constructs a ToolContext viewing the document unscaled, snapping
+       * with SmartGuides.
        * @param editor The editing state, which must outlive this ToolContext.
        * @param hit_tester The hit tester of the <i>editor</i>'s document,
        *        which must outlive this ToolContext.
@@ -152,7 +154,7 @@ namespace Rellu {
       Editor* m_editor;
       HitTester* m_hit_tester;
       ArtboardTitles* m_titles;
-      SnapService m_default_snap_service;
+      std::unique_ptr<SnapService> m_default_snap_service;
       SnapService* m_snap_service;
       TextMeasurer m_measurer;
       Matrix m_view;

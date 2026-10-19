@@ -35,6 +35,7 @@ namespace {
   constexpr auto HIT_COUNT = 5000;
   constexpr auto MARQUEE_COUNT = 200;
   constexpr auto DRAG_FRAMES = 60;
+  constexpr auto SNAP_COUNT = 1000;
   constexpr auto MAXIMUM_FRAMES = 2000;
   constexpr auto SCENE_BUDGET = std::chrono::milliseconds(8);
   const auto SIZE = QSize(1920, 1080);
@@ -338,6 +339,36 @@ namespace {
     auto hover = get_statistics(hover_times);
     std::printf("  hover: median %.3f ms, max %.3f ms\n", hover.m_median,
       hover.m_maximum);
+    auto measure_snapping = [&] (const NodeId& moved) {
+      auto& snap = tools.get_context().get_snap_service();
+      auto container = document.get(moved).m_parent;
+      auto extent = get_world_bounds(document, moved);
+      if(!extent) {
+        return;
+      }
+      auto moved_bounds = *extent;
+      start = Clock::now();
+      snap.begin(container, std::vector{moved});
+      snap.snap_move(moved_bounds, Point(1, 1), Qt::NoModifier);
+      auto collection = to_milliseconds(Clock::now() - start);
+      auto snap_times = std::vector<double>();
+      for(auto i = 0; i != SNAP_COUNT; ++i) {
+        auto snap_start = Clock::now();
+        snap.snap_move(moved_bounds, Point(0.37 * i, 0.53 * i),
+          Qt::NoModifier);
+        snap_times.push_back(to_milliseconds(Clock::now() - snap_start));
+      }
+      snap.end();
+      auto snapping = get_statistics(snap_times);
+      std::printf("  smart guides among %zu siblings: collection %.2f ms, "
+        "snap median %.4f ms, max %.3f ms\n",
+        document.get(container).m_children.size(), collection,
+        snapping.m_median, snapping.m_maximum);
+    };
+    measure_snapping(*shape);
+    if(!document.get(largest).m_children.empty()) {
+      measure_snapping(document.get(largest).m_children.front());
+    }
     auto press = view.map(center);
     drag("deep", document, scene, renderer, harness, tools, press,
       Qt::ControlModifier);

@@ -163,6 +163,14 @@ document window.
 Release Notes...; Provide Feedback...; About XD; Manage My Account...; Sign
 Out... (account); Updates....
 
+With a component instance selected, Object > Ungroup Component is offered
+(invoked through UI Automation on 2026-10-19); it dissolves the instance
+into its parent, its children becoming ordinary layers with their own ids.
+Make Component on a group gives the main component a new id, keeps the
+children's ids on the canvas and copies them with new ids into the
+resource master, which has no transform; Duplicate of a main component
+makes an ordinary instance.
+
 Items are disabled when they do not apply (for example Save on an unchanged
 document, everything selection-based with no selection). XD has no in-app
 keyboard shortcut reference on Windows; the shortcuts above are the menu

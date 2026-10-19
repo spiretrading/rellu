@@ -135,6 +135,8 @@ namespace {
       instance, "overrides");
     collector.check(
       left_instance.m_states == right_instance.m_states, instance, "states");
+    collector.check(
+      left_instance.m_is_main == right_instance.m_is_main, instance, "main");
   }
 
   void compare(const Shape& left, const Shape& right,

@@ -15,6 +15,7 @@ namespace Rellu {
    * Draws a new node by dragging, as Adobe XD's drawing tools do. The node
    * appears as soon as the drag spans it, follows the pointer and the
    * modifier keys, and is selected; the whole drag is one undoable step.
+   * Both ends of the drag snap through the context's snap service.
    * Escape abandons a drag and otherwise returns to the select tool. The
    * tool stays active once a node is drawn.
    */
@@ -63,6 +64,15 @@ namespace Rellu {
        * @param point The point in document space.
        */
       virtual void click(ToolContext& context, Point point);
+
+      /**
+       * Finds the container a node drawn from a point goes in, whose
+       * children and frame the drawing snaps to.
+       * @param context The context worked in.
+       * @param point The point in document space.
+       * @return The artboard given by find_drawing_parent by default.
+       */
+      virtual NodeId find_parent(const ToolContext& context, Point point) const;
 
     private:
       bool m_is_pressed;

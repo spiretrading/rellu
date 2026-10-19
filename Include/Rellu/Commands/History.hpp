@@ -9,6 +9,7 @@
 #include <vector>
 #include "Rellu/Commands/Command.hpp"
 #include "Rellu/Commands/Compounds.hpp"
+#include "Rellu/Commands/Layouts.hpp"
 #include "Rellu/Commands/Signal.hpp"
 #include "Rellu/Model/ChangeSet.hpp"
 #include "Rellu/Model/Document.hpp"
@@ -19,8 +20,10 @@ namespace Rellu {
   /**
    * The labelled undo and redo history of a document. Each step is one
    * command, or one transaction committed on the document by other means.
-   * A command's step also holds the recomputed results of the compound
-   * shapes whose operands it changed, as refresh_compounds makes them. The
+   * A command's step also holds the changes it causes in components, as
+   * refresh_components makes them, the recomputed results of the compound
+   * shapes whose operands it changed, as refresh_compounds makes them, and
+   * the recomputed layouts it called for, as refresh_layouts makes them. The
    * most recent step stays open to merging until it is sealed, undone or
    * followed by another step. Once a History is attached, the document must
    * be undone, redone and cleared only through it.
@@ -44,6 +47,26 @@ namespace Rellu {
        * @param filter The test, or empty to accept every compound shape.
        */
       void set_compound_filter(CompoundFilter filter);
+
+      /**
+       * Sets the function measuring text when commands' steps recompute
+       * layouts, by default estimate_text_bounds.
+       * @param measurer The function measuring text.
+       */
+      void set_text_measurer(TextMeasurer measurer);
+
+      /**
+       * Keeps stack items where they are while they are dragged, the other
+       * items of their stacks making room for them, until released.
+       * @param nodes The items dragged.
+       */
+      void hold_layout(std::vector<NodeId> nodes);
+
+      /**
+       * Releases the items held, placing them in their stacks as part of the
+       * most recent step if that step was made while they were held.
+       */
+      void release_layout();
 
       /**
        * Applies a command as a new step, propagating any exception it throws
@@ -144,6 +167,8 @@ namespace Rellu {
       bool m_is_applying;
       bool m_is_recording;
       CompoundFilter m_filter;
+      LayoutOptions m_layout;
+      std::size_t m_hold;
       ChangeSet m_changes;
       Signal m_signal;
       Subscription m_subscription;

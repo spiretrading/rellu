@@ -17,6 +17,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QLinearGradient>
+#include <QMenu>
 #include <QPainter>
 #include <QScrollBar>
 #include <QSlider>
@@ -821,8 +822,12 @@ namespace {
   void build_boolean(const Binding& binding, QVBoxLayout& layout) {
     auto row_layout = static_cast<QHBoxLayout*>(nullptr);
     auto row = make_row(row_layout, 2);
-    row_layout->addWidget(make_text_button(
-      binding, "Repeat Grid", "object.repeat_grid", Glyph::REPEAT_GRID));
+    auto is_grid = static_cast<bool>(binding.m_find("layout.repeat_grid"));
+    auto grid_button = make_text_button(binding, "Repeat Grid",
+      is_grid ? "object.ungroup" : "object.repeat_grid", Glyph::REPEAT_GRID);
+    grid_button->setCheckable(true);
+    grid_button->setChecked(is_grid);
+    row_layout->addWidget(grid_button);
     row_layout->addStretch(1);
     auto buttons = std::make_shared<std::vector<QToolButton*>>();
     for(auto [glyph, tip, action] : {
@@ -857,6 +862,23 @@ namespace {
         "object.make_component"));
       return;
     }
+    auto is_main = static_cast<bool>(binding.m_find("component.main"));
+    if(is_main) {
+      auto add = make_icon_button(Glyph::PLUS, "Add State");
+      auto menu = new QMenu(add);
+      for(auto name : {"component.add_state", "component.add_hover_state",
+          "component.add_toggle_state"}) {
+        if(auto action =
+            binding.m_actions ? binding.m_actions->find(name) : nullptr) {
+          menu->addAction(action);
+        }
+      }
+      add->setMenu(menu);
+      add->setPopupMode(QToolButton::InstantPopup);
+      add->setEnabled(binding.m_is_enabled && !menu->isEmpty() &&
+        !binding.m_find("component.linked"));
+      frame.m_header->addWidget(add);
+    }
     if(auto name = make_text_field(binding, "component.name", QString())) {
       frame.m_layout->addWidget(name);
     }
@@ -866,8 +888,16 @@ namespace {
       layout->addWidget(state, 1);
     }
     frame.m_layout->addWidget(row);
-    frame.m_layout->addWidget(make_text_button(
-      binding, "Edit Main Component", "object.edit_main_component"));
+    if(auto state_name =
+        make_text_field(binding, "component.state_name", QString())) {
+      frame.m_layout->addWidget(state_name);
+      frame.m_layout->addWidget(make_text_button(
+        binding, "Delete State", "component.delete_state"));
+    }
+    if(!is_main) {
+      frame.m_layout->addWidget(make_text_button(
+        binding, "Edit Main Component", "object.edit_main_component"));
+    }
   }
 
   void build_transform(const Binding& binding, SectionFrame& frame) {
@@ -957,6 +987,43 @@ namespace {
       layout->addWidget(toggle);
     }
     frame.m_layout->addWidget(row);
+    for(auto [path, label] : {std::pair("layout.padding", "Padding"),
+        std::pair("layout.stack", "Stack")}) {
+      if(!binding.m_find(path)) {
+        continue;
+      }
+      auto toggle_row = make_row(layout);
+      layout->addWidget(make_label(label, "row_label"), 1);
+      layout->addWidget(make_switch(binding, path));
+      frame.m_layout->addWidget(toggle_row);
+      if(std::string_view(path) == "layout.padding" &&
+          binding.m_find("layout.padding.top")) {
+        auto sides = make_row(layout, 10);
+        for(auto [side, letter] : {std::pair("layout.padding.top", "T"),
+            std::pair("layout.padding.right", "R"),
+            std::pair("layout.padding.bottom", "B"),
+            std::pair("layout.padding.left", "L")}) {
+          layout->addWidget(make_number(binding, side, letter), 1);
+        }
+        frame.m_layout->addWidget(sides);
+      } else if(std::string_view(path) == "layout.stack" &&
+          binding.m_find("layout.stack.orientation")) {
+        auto stack = make_row(layout, 14);
+        layout->addWidget(make_segments(binding, "layout.stack.orientation", {
+          Segment(1, Glyph::DISTRIBUTE_VERTICALLY, "Vertical"),
+          Segment(0, Glyph::DISTRIBUTE_HORIZONTALLY, "Horizontal")}));
+        layout->addWidget(
+          make_number(binding, "layout.stack.spacing", "Spacing"), 1);
+        frame.m_layout->addWidget(stack);
+      }
+    }
+    if(binding.m_find("layout.repeat_grid")) {
+      for(auto [path, label] : {
+          std::pair("layout.repeat_grid.column_spacing", "Column Spacing"),
+          std::pair("layout.repeat_grid.row_spacing", "Row Spacing")}) {
+        frame.m_layout->addWidget(make_number(binding, path, label));
+      }
+    }
     if(binding.m_find("layout.scrolling")) {
       frame.m_layout->addWidget(make_label("SCROLLING", "section_heading"));
       frame.m_layout->addWidget(make_combo(binding, "layout.scrolling"));
@@ -1783,7 +1850,7 @@ void PropertyInspector::on_change(const ChangeSet& changes) {
     [&] (const auto& id) {
       return !m_document->find(id);
     });
-  if(is_removed || is_affected(changes)) {
+  if(is_removed || is_affected(changes) || !changes.m_components.empty()) {
     refresh();
   }
 }

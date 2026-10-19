@@ -3,9 +3,13 @@
 #include <numbers>
 #include <unordered_set>
 #include <variant>
+#include "Rellu/Commands/ComponentCommands.hpp"
+#include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/CornerRadiusCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
+#include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
+#include "Rellu/Tools/PathPoints.hpp"
 #include "Rellu/Tools/SelectTool.hpp"
 #include "Rellu/Tools/TextTool.hpp"
 
@@ -158,6 +162,51 @@ namespace {
     return Point(rect.get_left(), rect.get_bottom());
   }
 
+  NodeId get_container(
+      const Document& document, const std::vector<NodeId>& nodes) {
+    if(nodes.empty()) {
+      return NodeId();
+    }
+    if(auto node = document.find(nodes.front())) {
+      return node->m_parent;
+    }
+    return NodeId();
+  }
+
+  SnapAxes get_snap_axes(Handle handle) {
+    if(is_corner(handle)) {
+      return SnapAxes::BOTH;
+    } else if(handle == Handle::LEFT || handle == Handle::RIGHT) {
+      return SnapAxes::HORIZONTAL;
+    }
+    return SnapAxes::VERTICAL;
+  }
+
+  void measure(ToolContext& context, const std::optional<SelectionBox>& box,
+      NodeId target, Qt::KeyboardModifiers modifiers) {
+    auto& service = context.get_snap_service();
+    auto& document = context.get_document();
+    auto& selection = context.get_editor().get_selection();
+    if(!box || !is_alt(modifiers) || selection.is_empty()) {
+      service.measure(std::nullopt, Rect());
+      return;
+    }
+    if(target.is_nil() || selection.contains(target)) {
+      target = find_artboard(document, selection.get_nodes().front());
+    }
+    if(target.is_nil() || selection.contains(target)) {
+      service.measure(std::nullopt, Rect());
+      return;
+    }
+    auto bounds = get_world_bounds(document, target, BoundsType::GEOMETRY,
+      context.get_text_measurer());
+    if(!bounds) {
+      service.measure(std::nullopt, Rect());
+      return;
+    }
+    service.measure(box->m_transform.map(box->m_rect), *bounds);
+  }
+
   Point get_inward(std::size_t corner) {
     if(corner == 0) {
       return Point(1, 1);
@@ -207,7 +256,12 @@ void SelectTool::press(ToolContext& context, const PointerEvent& event) {
   m_is_reselecting = false;
   m_is_marquee_pending = false;
   m_is_applied = false;
+  context.get_snap_service().measure(std::nullopt, Rect());
   if(!is_control(modifiers)) {
+    if(m_layout_handles.press(context, event)) {
+      m_gesture = Gesture::LAYOUT;
+      return;
+    }
     if(auto grab = find_grab(context, m_press)) {
       m_nodes = get_movable(context);
       m_box = *get_box(context);
@@ -227,7 +281,8 @@ void SelectTool::press(ToolContext& context, const PointerEvent& event) {
         m_raw_angle = 0;
       }
       editor.get_history().seal();
-      context.get_snap_service().begin(m_nodes);
+      context.get_snap_service().begin(
+        get_container(document, m_nodes), m_nodes);
       return;
     }
     if(auto corner = find_radius_handle(context, m_press)) {
@@ -326,6 +381,10 @@ void SelectTool::move(ToolContext& context, const PointerEvent& event) {
     update_hover(context, event);
     return;
   }
+  if(m_gesture == Gesture::LAYOUT) {
+    m_layout_handles.move(context, event);
+    return;
+  }
   if(m_gesture == Gesture::PENDING) {
     if(distance(event.m_position, m_press) < DRAG_THRESHOLD) {
       return;
@@ -371,6 +430,10 @@ void SelectTool::double_click(
   }
   auto& edit = editor.get_context();
   auto target = edit.resolve(hit);
+  if(is_text_reference(document, target)) {
+    editor.execute(std::make_unique<MakeEditableCommand>(
+      std::vector{target}, "Edit Text"));
+  }
   auto node = document.find(target);
   if(node && node->get_text()) {
     editor.get_selection().select(target);
@@ -380,6 +443,11 @@ void SelectTool::double_click(
     context.request_tool("text");
     return;
   }
+  if(target == hit && is_point_editable(document, target)) {
+    editor.get_selection().select(target);
+    context.request_tool("path_edit");
+    return;
+  }
   if(!node || !is_enterable(*node) || target == hit) {
     return;
   }
@@ -387,6 +455,11 @@ void SelectTool::double_click(
     return;
   }
   auto inner = edit.resolve(hit);
+  if(is_repeat_grid(document, target) && inner != hit &&
+      document.find(inner) && is_enterable(document.get(inner)) &&
+      edit.enter(inner)) {
+    inner = edit.resolve(hit);
+  }
   if(!inner.is_nil()) {
     editor.get_selection().select(inner);
   }
@@ -394,6 +467,7 @@ void SelectTool::double_click(
 
 void SelectTool::leave(ToolContext& context) {
   if(m_gesture == Gesture::NONE) {
+    context.get_snap_service().measure(std::nullopt, Rect());
     context.get_editor().get_context().set_hover(NodeId());
     m_cursor = ToolCursor();
   }
@@ -418,6 +492,15 @@ bool SelectTool::key_press(ToolContext& context, const KeyEvent& event) {
       return true;
     }
     return false;
+  }
+  if(event.m_key == Qt::Key_Return || event.m_key == Qt::Key_Enter) {
+    auto& nodes = editor.get_selection().get_nodes();
+    if(m_gesture != Gesture::NONE || nodes.size() != 1 ||
+        !is_point_editable(context.get_document(), nodes.front())) {
+      return false;
+    }
+    context.request_tool("path_edit");
+    return true;
   }
   auto delta = Point(0, 0);
   if(event.m_key == Qt::Key_Left) {
@@ -461,7 +544,9 @@ bool SelectTool::key_release(ToolContext& context, const KeyEvent& event) {
 
 void SelectTool::cancel(ToolContext& context) {
   auto& editor = context.get_editor();
-  if((m_gesture == Gesture::MOVE || m_gesture == Gesture::RESIZE ||
+  if(m_gesture == Gesture::LAYOUT) {
+    m_layout_handles.cancel(context);
+  } else if((m_gesture == Gesture::MOVE || m_gesture == Gesture::RESIZE ||
       m_gesture == Gesture::ROTATE || m_gesture == Gesture::RADIUS) &&
       m_is_applied) {
     editor.undo();
@@ -518,7 +603,11 @@ void SelectTool::draw(
   }
   if(box) {
     draw_box(context, *box, overlay, m_gesture != Gesture::MOVE &&
-      !get_movable(context).empty());
+      !get_movable(context).empty() &&
+      m_layout_handles.get_grid(context).is_nil());
+  }
+  if(!is_dragging && m_gesture != Gesture::MARQUEE) {
+    m_layout_handles.draw(context, overlay);
   }
   if(!is_dragging && m_gesture != Gesture::MARQUEE) {
     if(auto handles = get_radius_handles(context)) {
@@ -613,7 +702,8 @@ bool SelectTool::is_rotatable(const ToolContext& context) const {
 std::optional<SelectTool::Grab> SelectTool::find_grab(
     const ToolContext& context, Point position) const {
   auto box = get_box(context);
-  if(!box || get_movable(context).empty()) {
+  if(!box || get_movable(context).empty() ||
+      !m_layout_handles.get_grid(context).is_nil()) {
     return std::nullopt;
   }
   auto corners = to_view(context.get_view(), box->get_corners());
@@ -751,7 +841,9 @@ void SelectTool::begin_drag(ToolContext& context, const PointerEvent& event) {
   m_delta = Point(0, 0);
   m_gesture = Gesture::MOVE;
   context.get_editor().get_history().seal();
-  context.get_snap_service().begin(m_nodes);
+  context.get_editor().get_history().hold_layout(m_nodes);
+  context.get_snap_service().begin(
+    get_container(context.get_document(), m_nodes), m_nodes);
 }
 
 void SelectTool::update_move(ToolContext& context, const PointerEvent& event) {
@@ -773,7 +865,14 @@ void SelectTool::update_move(ToolContext& context, const PointerEvent& event) {
   if(raw.m_y == 0) {
     delta.m_y = 0;
   }
-  delta = context.get_snap_service().snap_move(bounds, delta);
+  delta = context.get_snap_service().snap_move(
+    bounds, delta, event.m_modifiers);
+  if(raw.m_x == 0) {
+    delta.m_x = 0;
+  }
+  if(raw.m_y == 0) {
+    delta.m_y = 0;
+  }
   auto step = delta - m_delta;
   if(step == Point(0, 0)) {
     return;
@@ -789,14 +888,17 @@ void SelectTool::update_resize(
   if(!inverse) {
     return;
   }
-  auto point = context.get_snap_service().snap_resize(
-    context.to_document(event.m_position));
-  auto local = inverse->map(point) + m_grab_offset;
+  auto local =
+    inverse->map(context.to_document(event.m_position)) + m_grab_offset;
   auto& transform = m_box.m_transform;
   if(transform.m_a == 1 && transform.m_b == 0 && transform.m_c == 0 &&
       transform.m_d == 1) {
     local = Point(std::round(local.m_x + transform.m_tx) - transform.m_tx,
       std::round(local.m_y + transform.m_ty) - transform.m_ty);
+  }
+  if(transform.m_b == 0 && transform.m_c == 0) {
+    local = inverse->map(context.get_snap_service().snap_point(
+      transform.map(local), get_snap_axes(m_handle), event.m_modifiers));
   }
   auto rect = resize(m_box.m_rect, m_handle, local,
     is_shift(event.m_modifiers), is_alt(event.m_modifiers), MINIMUM_SIZE);
@@ -883,7 +985,9 @@ void SelectTool::update_hover(
     ToolContext& context, const PointerEvent& event) {
   auto& edit = context.get_editor().get_context();
   m_cursor = ToolCursor();
-  if(auto grab = find_grab(context, event.m_position)) {
+  if(auto cursor = m_layout_handles.hover(context, event.m_position)) {
+    m_cursor = *cursor;
+  } else if(auto grab = find_grab(context, event.m_position)) {
     auto box = *get_box(context);
     auto center = context.to_view(box.get_center());
     auto point = get_view_point(context, box, grab->m_handle);
@@ -902,11 +1006,15 @@ void SelectTool::update_hover(
     }
   }
   edit.set_hover(hover);
+  measure(context, get_box(context), hover, event.m_modifiers);
 }
 
 void SelectTool::finish(ToolContext& context) {
-  if(m_gesture == Gesture::MOVE || m_gesture == Gesture::RESIZE ||
+  if(m_gesture == Gesture::LAYOUT) {
+    m_layout_handles.release(context);
+  } else if(m_gesture == Gesture::MOVE || m_gesture == Gesture::RESIZE ||
       m_gesture == Gesture::ROTATE) {
+    context.get_editor().get_history().release_layout();
     context.get_editor().get_history().seal();
     context.get_snap_service().end();
   } else if(m_gesture == Gesture::RADIUS) {

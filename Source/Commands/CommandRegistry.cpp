@@ -2,8 +2,10 @@
 #include <stdexcept>
 #include <unordered_set>
 #include "Rellu/Commands/CommandRegistry.hpp"
+#include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
+#include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 
@@ -89,10 +91,13 @@ namespace {
 
   std::unique_ptr<Command> make_ungroup(
       const Document& document, const std::vector<NodeId>& targets) {
+    if(auto command = make_ungroup_grid_command(document, targets)) {
+      return command;
+    }
     auto nodes = get_top_level(document, targets);
     if(std::none_of(nodes.begin(), nodes.end(),
         [&] (const auto& id) { return is_ungroupable(document, id); })) {
-      return nullptr;
+      return make_ungroup_component(document, nodes);
     }
     return std::make_unique<UngroupCommand>(std::move(nodes));
   }

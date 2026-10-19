@@ -17,6 +17,8 @@ namespace Rellu {
    * The editing state of a document: its history, selection and context.
    * Commands executed through the Editor select what they produce, and
    * undoing or redoing them restores the selection from before or after.
+   * A command editing selected nodes inside component instances first makes
+   * them editable, as make_instance_edit prepares it.
    * Changing the selection seals the most recent step to merging.
    */
   class Editor {

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <doctest/doctest.h>
 #include "SampleDocument.hpp"
 
@@ -347,5 +348,42 @@ TEST_SUITE("Undo") {
     REQUIRE(changes[1].m_moved == changes[0].m_moved);
     REQUIRE(changes[1].m_modified == changes[0].m_modified);
     REQUIRE(changes[2] == changes[0]);
+  }
+
+  TEST_CASE("original_records") {
+    auto document = Document();
+    REQUIRE(document.get_original_records().empty());
+    auto sample = build_sample(document);
+    auto original = document.get(sample.m_text);
+    auto added = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto header = original.m_header;
+      header.m_name = "First";
+      transaction.replace_header(header);
+      added = transaction.append(sample.m_artboard, make_header("Added"),
+        Group());
+      REQUIRE(transaction.commit());
+    }
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(sample.m_text).m_header;
+      header.m_name = "Second";
+      transaction.replace_header(header);
+      REQUIRE(transaction.amend());
+    }
+    auto find = [&] (const NodeId& id) {
+      auto& records = document.get_original_records();
+      return std::find_if(records.begin(), records.end(),
+        [&] (const auto& record) { return record.first == id; });
+    };
+    auto& records = document.get_original_records();
+    auto text = find(sample.m_text);
+    REQUIRE(text != records.end());
+    REQUIRE(*text->second == original);
+    auto inserted = find(added);
+    REQUIRE(inserted != records.end());
+    REQUIRE(!inserted->second);
+    REQUIRE(find(sample.m_loose) == records.end());
   }
 }

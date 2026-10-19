@@ -1,4 +1,5 @@
 #include <utility>
+#include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/History.hpp"
 #include "Rellu/Model/Transaction.hpp"
 
@@ -24,6 +25,17 @@ namespace {
       Guard(const Guard&) = delete;
       Guard& operator =(const Guard&) = delete;
   };
+
+  void append(ChangeSet& changes, const ChangeSet& addition) {
+    changes.m_inserted.insert(changes.m_inserted.end(),
+      addition.m_inserted.begin(), addition.m_inserted.end());
+    changes.m_removed.insert(changes.m_removed.end(),
+      addition.m_removed.begin(), addition.m_removed.end());
+    changes.m_moved.insert(changes.m_moved.end(), addition.m_moved.begin(),
+      addition.m_moved.end());
+    changes.m_modified.insert(changes.m_modified.end(),
+      addition.m_modified.begin(), addition.m_modified.end());
+  }
 }
 
 History::History(Document& document)
@@ -32,7 +44,8 @@ History::History(Document& document)
       m_base(document.get_undo_count()),
       m_is_open(false),
       m_is_applying(false),
-      m_is_recording(false) {
+      m_is_recording(false),
+      m_hold(0) {
   m_subscription = document.subscribe([this] (const auto& changes) {
     on_change(changes);
   });
@@ -44,6 +57,48 @@ Document& History::get_document() const {
 
 void History::set_compound_filter(CompoundFilter filter) {
   m_filter = std::move(filter);
+}
+
+void History::set_text_measurer(TextMeasurer measurer) {
+  m_layout.m_measurer = std::move(measurer);
+}
+
+void History::hold_layout(std::vector<NodeId> nodes) {
+  synchronize();
+  m_layout.m_floating = std::move(nodes);
+  m_hold = m_base + m_undo.size();
+}
+
+void History::release_layout() {
+  auto nodes = std::exchange(m_layout.m_floating, std::vector<NodeId>());
+  if(nodes.empty()) {
+    return;
+  }
+  synchronize();
+  if(m_base + m_undo.size() <= m_hold ||
+      m_document->get_undo_count() != m_base + m_undo.size()) {
+    return;
+  }
+  auto changes = ChangeSet();
+  for(auto& id : nodes) {
+    if(m_document->find(id)) {
+      changes.m_modified.push_back(NodeChange(id, ChangeMask::TRANSFORM));
+    }
+  }
+  {
+    auto guard = Guard(m_is_applying);
+    auto recording = Guard(m_is_recording);
+    if(refresh_layouts(*m_document, changes, m_layout)) {
+      refresh_compounds(
+        *m_document, std::exchange(m_changes, ChangeSet()), m_filter);
+    }
+    m_changes = ChangeSet();
+  }
+  if(m_document->get_undo_count() < m_base + m_undo.size()) {
+    m_undo.pop_back();
+    m_is_open = false;
+  }
+  m_signal();
 }
 
 const Command* History::execute(std::unique_ptr<Command> command) {
@@ -61,6 +116,10 @@ const Command* History::execute(std::unique_ptr<Command> command) {
     return nullptr;
   }
   refresh();
+  if(m_document->get_undo_count() <= m_base + m_undo.size()) {
+    synchronize();
+    return nullptr;
+  }
   auto label = command->get_label();
   auto result = command.get();
   push(Step(std::move(label), std::move(command), std::any()));
@@ -90,6 +149,7 @@ const Command* History::merge(std::unique_ptr<Command> command) {
   }();
   if(is_recorded) {
     refresh();
+    is_recorded = m_document->get_undo_count() == m_base + m_undo.size();
   } else {
     m_changes = ChangeSet();
   }
@@ -244,7 +304,16 @@ void History::synchronize() {
 void History::refresh() {
   auto changes = std::exchange(m_changes, ChangeSet());
   auto guard = Guard(m_is_applying);
-  refresh_compounds(*m_document, changes, m_filter);
+  refresh_components(*m_document, changes);
+  auto recording = Guard(m_is_recording);
+  if(refresh_compounds(*m_document, changes, m_filter)) {
+    append(changes, std::exchange(m_changes, ChangeSet()));
+  }
+  if(refresh_layouts(*m_document, changes, m_layout)) {
+    refresh_compounds(
+      *m_document, std::exchange(m_changes, ChangeSet()), m_filter);
+  }
+  m_changes = ChangeSet();
 }
 
 void History::on_change(const ChangeSet& changes) {

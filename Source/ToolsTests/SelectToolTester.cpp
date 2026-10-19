@@ -1,6 +1,7 @@
 #include <cmath>
 #include <numbers>
 #include <doctest/doctest.h>
+#include "Rellu/Commands/Components.hpp"
 #include "Rellu/Tools/SelectTool.hpp"
 #include "Rellu/Tools/ToolManager.hpp"
 #include "../CommandsTests/Fixture.hpp"
@@ -162,6 +163,40 @@ TEST_SUITE("SelectTool") {
     REQUIRE(selection.get_nodes() == std::vector{board.m_rectangle});
   }
 
+  TEST_CASE("instance_text") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto instance = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto master = transaction.insert_root(make_header("Label"), Group());
+      transaction.append(master, make_header("Text"), make_text(u"Label"));
+      auto component = Component();
+      component.m_name = "Label";
+      component.m_master = master;
+      auto id = transaction.add_component(component);
+      instance = insert_instance(document, transaction, id, board.m_artboard,
+        document.get_children(board.m_artboard).size(),
+        make_translation(50, 200));
+      transaction.commit();
+      document.clear_history();
+    }
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto reference = document.get(instance).m_children.front();
+    for(auto i = 0; i != 2; ++i) {
+      tools.double_click(make_event(Point(170, 315), Qt::LeftButton,
+        Qt::LeftButton, Qt::NoModifier));
+      tools.release(make_event(
+        Point(170, 315), Qt::LeftButton, Qt::NoButton, Qt::NoModifier));
+    }
+    REQUIRE(editor.get_context().get_container() == instance);
+    REQUIRE(document.get(reference).get_text());
+    REQUIRE(tools.get_tool_name() == "text");
+    REQUIRE(editor.get_history().get_undo_label() == "Edit Text");
+  }
+
   TEST_CASE("deep_select") {
     auto document = Document();
     auto board = build_board(document);
@@ -266,6 +301,8 @@ TEST_SUITE("SelectTool") {
     auto board = build_board(document);
     auto editor = Editor(document);
     auto tools = ToolManager(editor);
+    auto snap = SnapService();
+    tools.get_context().set_snap_service(snap);
     tools.set_view(Matrix(), 1, Size(1000, 800));
     auto& history = editor.get_history();
     drag(tools, Point(160, 160), Point(180.4, 170.6));
@@ -477,6 +514,8 @@ TEST_SUITE("SelectTool") {
     auto board = build_board(document);
     auto editor = Editor(document);
     auto tools = ToolManager(editor);
+    auto snap = SnapService();
+    tools.get_context().set_snap_service(snap);
     tools.set_view(Matrix(), 1, Size(1000, 800));
     auto overlay = tools.draw();
     REQUIRE(overlay.m_shapes.empty());
@@ -548,5 +587,43 @@ TEST_SUITE("SelectTool") {
     REQUIRE(overlay.m_shapes.size() == 1);
     require_near(overlay.m_shapes.front().m_center, Point(625, 435));
     REQUIRE(overlay.m_shapes.front().m_size == Size(50, 30));
+  }
+
+  TEST_CASE("stack_drag") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto group = Group();
+    group.m_stack = Stack(Orientation::VERTICAL);
+    auto stack = transaction.append(
+      NodeId(), make_header("Stack", make_translation(100, 100)), group);
+    auto last = add_rectangle(transaction, stack, Rect(0, 90, 100, 20));
+    auto middle = add_rectangle(transaction, stack, Rect(0, 50, 100, 30));
+    auto first = add_rectangle(transaction, stack, Rect(0, 0, 100, 40));
+    auto payload = *document.get(stack).get_group();
+    payload.m_stack->m_spacing.emplace(first, 10);
+    payload.m_stack->m_spacing.emplace(middle, 10);
+    transaction.replace_payload(stack, payload);
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    editor.get_context().enter(stack);
+    click(tools, Point(150, 120));
+    REQUIRE(editor.get_selection().get_nodes() == std::vector{first});
+    tools.press(make_event(
+      Point(150, 120), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
+    drag_to(tools, Point(150, 120), Point(150, 190));
+    REQUIRE(get_bounds(document, middle).m_y == 100);
+    REQUIRE(get_bounds(document, first).m_y == 170);
+    tools.release(make_event(
+      Point(150, 190), Qt::LeftButton, Qt::NoButton, Qt::NoModifier));
+    REQUIRE(document.get(stack).m_children ==
+      std::vector{last, first, middle});
+    REQUIRE(get_bounds(document, first).m_y == 140);
+    REQUIRE(get_bounds(document, last).m_y == 190);
+    REQUIRE(editor.get_history().get_undo_count() == 1);
+    editor.undo();
+    REQUIRE(get_bounds(document, first).m_y == 100);
   }
 }

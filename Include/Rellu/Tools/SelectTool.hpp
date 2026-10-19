@@ -10,6 +10,7 @@
 #include "Rellu/Geometry/Rect.hpp"
 #include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Model/NodeId.hpp"
+#include "Rellu/Tools/LayoutHandles.hpp"
 #include "Rellu/Tools/SelectionBox.hpp"
 #include "Rellu/Tools/Tool.hpp"
 
@@ -18,13 +19,19 @@ namespace Rellu {
   /**
    * Selects, moves, resizes and rotates nodes as Adobe XD's select tool
    * does. A click selects what lies under the pointer at the level of the
-   * edit context, a double click enters a group or hands the text clicked
-   * to the tool named text for editing, Ctrl selects the deepest node,
-   * Shift toggles, and a drag over empty canvas draws a marquee. The
+   * edit context, a double click enters a group, hands the text clicked
+   * to the tool named text for editing or hands the shape clicked to the
+   * tool named path_edit, as Enter does for a single selected shape, Ctrl
+   * selects the deepest node, Shift toggles, and a drag over empty canvas
+   * draws a marquee. The
    * selection's box resizes by its handles and rotates from just outside
    * its corners. A single selected rectangle also shows a corner radius
    * handle inside each corner, which rounds every corner alike, or only
-   * its own corner while Alt is held. Each drag is one undoable step.
+   * its own corner while Alt is held. A repeat grid or stack selected
+   * alone is also edited through LayoutHandles, a repeat grid without the
+   * resize handles, and a double click enters both a repeat grid and the
+   * cell clicked. Stack items dragged make room for each other until
+   * dropped. Each drag is one undoable step.
    */
   class SelectTool : public Tool {
     public:
@@ -96,7 +103,8 @@ namespace Rellu {
         MOVE,
         RESIZE,
         ROTATE,
-        RADIUS
+        RADIUS,
+        LAYOUT
       };
       enum class Target : unsigned char {
         NONE,
@@ -144,6 +152,7 @@ namespace Rellu {
       double m_radius;
       double m_inset;
       ToolCursor m_cursor;
+      LayoutHandles m_layout_handles;
       mutable std::optional<std::uint64_t> m_revision;
       mutable std::vector<NodeId> m_cached_nodes;
       mutable std::optional<SelectionBox> m_cached_box;

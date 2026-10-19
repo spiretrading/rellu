@@ -20,6 +20,11 @@ std::unique_ptr<Command> ArtboardTool::make_command(ToolContext& context,
     "Artboard", NodeId(), std::move(header), std::move(artboard));
 }
 
+NodeId ArtboardTool::find_parent(
+    const ToolContext& context, Point point) const {
+  return NodeId();
+}
+
 void ArtboardTool::click(ToolContext& context, Point point) {
   auto& editor = context.get_editor();
   auto artboard = context.get_titles().find(context.to_view(point));
