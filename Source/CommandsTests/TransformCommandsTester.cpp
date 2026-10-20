@@ -365,8 +365,8 @@ TEST_SUITE("TransformCommands") {
     for(auto& id : {rectangle_id, path, group, line}) {
       REQUIRE(get_world_transform(document, id).get_determinant() > 0);
     }
-    REQUIRE(get_world_transform(document, text) ==
-      Matrix(-1, 0, 0, 1, -200, 0));
+    REQUIRE(get_world_transform(document, text).get_determinant() > 0);
+    REQUIRE(document.get(text).get_text()->m_is_flipped_vertically);
     REQUIRE(*get_world_bounds(document, rectangle_id) ==
       Rect(-50, 10, 40, 20));
     REQUIRE(get_rectangle(document, rectangle_id).m_radii ==
@@ -411,9 +411,10 @@ TEST_SUITE("TransformCommands") {
     REQUIRE(std::get<AutoHeightFrame>(
       document.get(text).get_text()->m_frame).m_width == doctest::Approx(20));
     auto world = get_world_transform(document, text);
-    REQUIRE(world.get_determinant() < 0);
+    REQUIRE(world.get_determinant() > 0);
     REQUIRE(std::atan2(world.m_b, world.m_a) ==
       doctest::Approx(std::numbers::pi));
+    REQUIRE(document.get(text).get_text()->m_is_flipped_vertically);
     require_near(*get_world_bounds(document, text),
       Rect(bounds.m_x - 20, bounds.m_y, 20, bounds.m_height));
   }

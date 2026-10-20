@@ -96,6 +96,7 @@ namespace {
     if(text && style) {
       selection->set_last_style(
         edit_style(*style, edit), text->m_paragraph_style);
+      selection->remember_appearance(*text);
     }
   }
 
@@ -171,6 +172,7 @@ namespace {
           selection->set_last_style(
             *find_text_style(document, nodes, selection),
             edit_paragraph_style(*text, *edit).m_paragraph_style);
+          selection->remember_appearance(*text);
         }
       }
       return std::make_unique<SetParagraphStyleCommand>(

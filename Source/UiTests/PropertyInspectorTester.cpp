@@ -336,8 +336,9 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(!find_property(inspector.get_properties(), "geometry"));
     REQUIRE(get_text(inspector, "transform.x") == "0");
     REQUIRE(get_text(inspector, "transform.y") == "2");
-    REQUIRE(get_text(inspector, "transform.width") == "110");
-    REQUIRE(get_text(inspector, "transform.height") == "68");
+    REQUIRE(is_mixed(inspector, "transform.width"));
+    REQUIRE(is_mixed(inspector, "transform.height"));
+    REQUIRE(get_line(inspector, "transform.width").text().isEmpty());
     REQUIRE(!is_mixed(inspector, "transform.x"));
     enter(inspector, "appearance.opacity", "80");
     REQUIRE(document.get(ids.m_background).m_header.m_opacity == 0.8);
@@ -349,6 +350,34 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(get_world_transform(document, ids.m_ellipse).m_tx == 110);
     REQUIRE(get_world_transform(document, ids.m_background).m_tx == 120);
     REQUIRE(editor.get_history().get_undo_count() == 2);
+    enter(inspector, "transform.width", "40");
+    REQUIRE(get_text(inspector, "transform.width") == "40");
+    REQUIRE(!is_mixed(inspector, "transform.width"));
+    REQUIRE(is_mixed(inspector, "transform.height"));
+    REQUIRE(get_text(inspector, "transform.x") == "10");
+    REQUIRE(editor.get_history().get_undo_label() == "Resize");
+    REQUIRE(editor.get_history().get_undo_count() == 3);
+  }
+
+  TEST_CASE("orientation") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(std::vector<NodeId>({ids.m_artboard}));
+    auto field = inspector.find_field("transform.orientation");
+    REQUIRE(field);
+    auto buttons = field->findChildren<QToolButton*>();
+    REQUIRE(buttons.size() == 2);
+    REQUIRE(buttons[0]->isChecked());
+    REQUIRE(!buttons[1]->isChecked());
+    buttons[1]->click();
+    QCoreApplication::processEvents();
+    REQUIRE(document.get(ids.m_artboard).get_artboard()->m_frame ==
+      Rect(100, 50, 812, 375));
+    REQUIRE(get_text(inspector, "transform.orientation") == "Landscape");
+    REQUIRE(editor.get_history().get_undo_label() == "Resize");
   }
 
   TEST_CASE("action_buttons") {

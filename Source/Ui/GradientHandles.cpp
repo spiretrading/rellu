@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <utility>
 #include <variant>
 #include <vector>
 #include <QPainterPath>
@@ -251,6 +252,153 @@ namespace {
     return to_view.map(angular.m_center +
       Point(0.5 * std::cos(radians), 0.5 * std::sin(radians)));
   }
+
+  void turn_edge(Ellipse& ellipse, Point local, bool is_stepped) {
+    auto delta = local - ellipse.m_center;
+    auto distance = get_length(delta);
+    auto degrees = std::atan2(delta.m_y, delta.m_x) * 180 / std::numbers::pi;
+    if(is_stepped) {
+      if(degrees < 0) {
+        degrees += 360;
+      }
+      degrees = ANGLE_STEP * std::round(degrees / ANGLE_STEP);
+    }
+    auto ratio = ellipse.m_radius_x > 0 ?
+      ellipse.m_radius_y / ellipse.m_radius_x : 1;
+    ellipse.m_angle = degrees * std::numbers::pi / 180;
+    ellipse.m_radius_x = std::max(MINIMUM_RADIUS, distance);
+    ellipse.m_radius_y = std::max(MINIMUM_RADIUS, ratio * distance);
+  }
+
+  int normalize_stops(std::vector<GradientStop>& stops, int index) {
+    if(stops.front().m_offset != 0) {
+      stops.insert(stops.begin(), GradientStop(0, stops.front().m_color));
+      ++index;
+    }
+    if(stops.back().m_offset != 1) {
+      stops.push_back(GradientStop(1, stops.back().m_color));
+    }
+    return index;
+  }
+
+  void sort_stops(std::vector<GradientStop>& stops) {
+    std::stable_sort(stops.begin(), stops.end(),
+      [] (const auto& left, const auto& right) {
+        return left.m_offset < right.m_offset;
+      });
+  }
+
+  Point get_unit_point(const Rect& bounds, Point local) {
+    if(auto inverse = invert(get_box(bounds))) {
+      return inverse->map(local);
+    }
+    return Point(0, 0);
+  }
+
+  Point get_track_point(
+      const GradientFill& fill, const Rect& bounds, double offset) {
+    if(auto linear = std::get_if<LinearGradient>(&fill.m_geometry)) {
+      return get_box(bounds).map(
+        linear->m_start + (linear->m_end - linear->m_start) * offset);
+    } else if(std::holds_alternative<RadialGradient>(fill.m_geometry)) {
+      auto ellipse = get_ellipse(fill, bounds);
+      return get_point(ellipse, ellipse.m_radius_x * offset, 0);
+    }
+    return get_angular_point(fill, get_box(bounds), offset);
+  }
+
+  double get_track_offset(
+      const GradientFill& fill, const Rect& bounds, Point local) {
+    auto unit = get_unit_point(bounds, local);
+    if(auto linear = std::get_if<LinearGradient>(&fill.m_geometry)) {
+      auto direction = linear->m_end - linear->m_start;
+      auto length = dot(direction, direction);
+      return length > 0 ? std::clamp(
+        dot(unit - linear->m_start, direction) / length, 0.0, 1.0) : 0.0;
+    } else if(std::holds_alternative<RadialGradient>(fill.m_geometry)) {
+      auto ellipse = get_ellipse(fill, bounds);
+      if(!(ellipse.m_radius_x > 0)) {
+        return 0;
+      }
+      auto x = make_rotation(-ellipse.m_angle).map(local - ellipse.m_center).
+        m_x;
+      return std::clamp(x / ellipse.m_radius_x, 0.0, 1.0);
+    }
+    return get_angular_offset(std::get<AngularGradient>(fill.m_geometry), unit);
+  }
+
+  GradientEdit nudge_end(const GradientFill& fill, const Rect& bounds,
+      std::vector<GradientStop> stops, int index, Point local) {
+    auto edit = GradientEdit();
+    edit.m_is_handled = true;
+    auto changed = fill;
+    auto unit = get_unit_point(bounds, local);
+    if(auto linear = std::get_if<LinearGradient>(&changed.m_geometry)) {
+      if(index == 0) {
+        linear->m_start = unit;
+      } else {
+        linear->m_end = unit;
+      }
+    } else if(auto angular =
+        std::get_if<AngularGradient>(&changed.m_geometry)) {
+      auto rotation =
+        360 * get_angular_offset(*angular, unit) + angular->m_rotation;
+      auto shift = (std::fmod(rotation + 720, 360) -
+        std::fmod(angular->m_rotation + 720, 360)) / 360;
+      for(auto& stop : changed.m_stops) {
+        if(stop.m_offset != 0 && stop.m_offset != 1) {
+          auto offset = stop.m_offset - shift;
+          stop.m_offset = offset - std::floor(offset);
+        }
+      }
+      sort_stops(changed.m_stops);
+      angular->m_rotation = rotation;
+    } else {
+      auto ellipse = get_ellipse(fill, bounds);
+      if(index == 0) {
+        ellipse.m_center = local;
+      } else {
+        turn_edge(ellipse, local, false);
+      }
+      changed.m_stops = std::move(stops);
+      edit.m_fill = make_radial(std::move(changed), ellipse, bounds);
+      edit.m_stop = index;
+      return edit;
+    }
+    edit.m_fill = std::move(changed);
+    return edit;
+  }
+
+  GradientEdit nudge_stop(const GradientFill& fill, const Rect& bounds,
+      int stop, Point delta) {
+    auto stops = fill.m_stops;
+    auto index = normalize_stops(stops, stop);
+    auto count = static_cast<int>(stops.size());
+    auto local = get_track_point(fill, bounds, stops[index].m_offset) + delta;
+    if(index == 0 || index + 1 == count) {
+      return nudge_end(fill, bounds, std::move(stops), index, local);
+    }
+    stops[index].m_offset = get_track_offset(fill, bounds, local);
+    auto order = std::vector<int>();
+    for(auto i = 0; i != count; ++i) {
+      order.push_back(i);
+    }
+    std::stable_sort(order.begin(), order.end(), [&] (auto left, auto right) {
+      return stops[left].m_offset < stops[right].m_offset;
+    });
+    auto edit = GradientEdit();
+    edit.m_is_handled = true;
+    auto changed = fill;
+    changed.m_stops.clear();
+    for(auto i = 0; i != count; ++i) {
+      changed.m_stops.push_back(stops[order[i]]);
+      if(order[i] == index) {
+        edit.m_stop = i;
+      }
+    }
+    edit.m_fill = std::move(changed);
+    return edit;
+  }
 }
 
 bool GradientHandles::is_editable(const GradientFill& fill) {
@@ -262,6 +410,58 @@ bool GradientHandles::is_editable(const GradientFill& fill) {
       static_cast<bool>(invert(fill.m_transform));
   }
   return fill.m_transform.is_identity();
+}
+
+GradientEdit GradientHandles::press_key(const GradientFill& fill,
+    const Rect& bounds, double zoom, int stop, int key,
+    Qt::KeyboardModifiers modifiers) {
+  auto edit = GradientEdit();
+  if(!is_editable(fill)) {
+    return edit;
+  }
+  auto count = static_cast<int>(fill.m_stops.size());
+  auto selected = std::clamp(stop, 0, count - 1);
+  if(key == Qt::Key_Tab || key == Qt::Key_Backtab) {
+    auto step = key == Qt::Key_Backtab ||
+      modifiers.testFlag(Qt::ShiftModifier) ? -1 : 1;
+    edit.m_is_handled = true;
+    edit.m_stop = (selected + step + count) % count;
+    return edit;
+  } else if((key == Qt::Key_Left || key == Qt::Key_Right ||
+      key == Qt::Key_Up || key == Qt::Key_Down) &&
+      !(modifiers & (Qt::ControlModifier | Qt::AltModifier |
+        Qt::MetaModifier))) {
+    auto distance = modifiers.testFlag(Qt::ShiftModifier) ? LARGE_NUDGE :
+      NUDGE;
+    if(zoom > 0) {
+      distance /= zoom;
+    }
+    auto delta = Point(0, 0);
+    if(key == Qt::Key_Left) {
+      delta.m_x = -distance;
+    } else if(key == Qt::Key_Right) {
+      delta.m_x = distance;
+    } else if(key == Qt::Key_Up) {
+      delta.m_y = -distance;
+    } else {
+      delta.m_y = distance;
+    }
+    return nudge_stop(fill, bounds, selected, delta);
+  } else if(key != Qt::Key_Delete && key != Qt::Key_Backspace) {
+    return edit;
+  }
+  edit.m_is_handled = true;
+  auto stops = fill.m_stops;
+  selected = normalize_stops(stops, selected);
+  if(selected == 0 || selected + 1 == static_cast<int>(stops.size())) {
+    return edit;
+  }
+  stops.erase(stops.begin() + selected);
+  auto removed = fill;
+  removed.m_stops = std::move(stops);
+  edit.m_fill = std::move(removed);
+  edit.m_stop = selected - 1;
+  return edit;
 }
 
 GradientHandles::GradientHandles()
@@ -524,20 +724,7 @@ GradientEdit GradientHandles::move(const GradientFill& fill,
     auto snapped = snap_unit(frame, unit);
     ellipse.m_center = get_box(bounds).map(snapped);
   } else if(m_part == Part::END) {
-    auto delta = local - ellipse.m_center;
-    auto distance = get_length(delta);
-    auto degrees = std::atan2(delta.m_y, delta.m_x) * 180 / std::numbers::pi;
-    if(modifiers.testFlag(Qt::ShiftModifier)) {
-      if(degrees < 0) {
-        degrees += 360;
-      }
-      degrees = ANGLE_STEP * std::round(degrees / ANGLE_STEP);
-    }
-    auto ratio = ellipse.m_radius_x > 0 ?
-      ellipse.m_radius_y / ellipse.m_radius_x : 1;
-    ellipse.m_angle = degrees * std::numbers::pi / 180;
-    ellipse.m_radius_x = std::max(MINIMUM_RADIUS, distance);
-    ellipse.m_radius_y = std::max(MINIMUM_RADIUS, ratio * distance);
+    turn_edge(ellipse, local, modifiers.testFlag(Qt::ShiftModifier));
   } else if(m_part == Part::RESIZE) {
     auto end = get_point(ellipse, ellipse.m_radius_x, 0);
     auto bottom = get_point(ellipse, 0, ellipse.m_radius_y);

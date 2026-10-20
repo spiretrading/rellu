@@ -387,7 +387,10 @@ namespace Rellu {
 
   /**
    * Adds the component commands acting on targets: object.make_component,
-   * object.ungroup_component and object.reset_main_state.
+   * object.ungroup_component and object.reset_main_state, which applies to
+   * a single instance with overrides other than a main component, an
+   * instance within a main component judged by its copy in the component's
+   * master, as Adobe XD judges it by its canonical sync owner.
    * @param registry The registry to add to.
    * @param measurer The function measuring text, which sizes components.
    */

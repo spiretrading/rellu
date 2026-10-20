@@ -58,11 +58,16 @@ namespace {
 }
 
 SetFillCommand::SetFillCommand(std::vector<NodeId> nodes, Fill fill) noexcept
+  : SetFillCommand(std::move(nodes), std::move(fill), "Change Fill") {}
+
+SetFillCommand::SetFillCommand(
+  std::vector<NodeId> nodes, Fill fill, std::string label) noexcept
   : m_nodes(std::move(nodes)),
-    m_fill(std::move(fill)) {}
+    m_fill(std::move(fill)),
+    m_label(std::move(label)) {}
 
 std::string SetFillCommand::get_label() const {
-  return "Change Fill";
+  return m_label;
 }
 
 void SetFillCommand::apply(const Document& document, Transaction& transaction) {
@@ -98,7 +103,7 @@ void SetFillCommand::apply(const Document& document, Transaction& transaction) {
 
 bool SetFillCommand::merge(const Command& command) {
   auto fill = dynamic_cast<const SetFillCommand*>(&command);
-  if(!fill || fill->m_nodes != m_nodes) {
+  if(!fill || fill->m_nodes != m_nodes || fill->m_label != m_label) {
     return false;
   }
   m_fill = fill->m_fill;

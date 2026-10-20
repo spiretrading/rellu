@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "Rellu/Commands/ArtboardCommands.hpp"
+#include "Rellu/Commands/Bounds.hpp"
 #include "Fixture.hpp"
 
 using namespace Rellu;
@@ -147,6 +148,65 @@ TEST_SUITE("ArtboardCommands") {
       std::vector{scene.m_artboard}, std::nullopt, false));
     REQUIRE(
       !document.get(scene.m_artboard).get_artboard()->m_viewport_height);
+  }
+
+  TEST_CASE("orientation") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto edge = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto artboard = *document.get(scene.m_artboard).get_artboard();
+      artboard.m_guides.push_back(Guide(Orientation::VERTICAL, 350));
+      artboard.m_guides.push_back(Guide(Orientation::HORIZONTAL, 250));
+      transaction.replace_payload(scene.m_artboard, artboard);
+      edge = transaction.append(scene.m_artboard,
+        make_header("Edge", make_translation(350, 10)),
+        make_rectangle_shape(20, 20));
+      transaction.commit();
+    }
+    auto& artboard = *document.get(scene.m_artboard).get_artboard();
+    REQUIRE(get_orientation(artboard) == ArtboardOrientation::LANDSCAPE);
+    auto history = History(document);
+    require_undoable(history, std::make_unique<SetOrientationCommand>(
+      std::vector{scene.m_artboard, scene.m_rectangle},
+      ArtboardOrientation::PORTRAIT));
+    REQUIRE(history.get_undo_label() == "Resize");
+    auto& portrait = *document.get(scene.m_artboard).get_artboard();
+    REQUIRE(portrait.m_frame == Rect(100, 50, 300, 400));
+    REQUIRE(portrait.m_viewport_height == 400.0);
+    REQUIRE(portrait.m_guides ==
+      std::vector{Guide(Orientation::HORIZONTAL, 250)});
+    REQUIRE(get_orientation(portrait) == ArtboardOrientation::PORTRAIT);
+    REQUIRE(document.get(edge).m_parent.is_nil());
+    REQUIRE(document.get(scene.m_rectangle).m_parent == scene.m_artboard);
+    REQUIRE(get_transform(document, scene.m_rectangle) ==
+      make_translation(10, 10));
+    {
+      auto transaction = Transaction(document);
+      auto scrolling = *document.get(scene.m_artboard).get_artboard();
+      scrolling.m_frame = Rect(100, 50, 300, 2000);
+      scrolling.m_viewport_height = 200;
+      transaction.replace_payload(scene.m_artboard, scrolling);
+      transaction.commit();
+    }
+    REQUIRE(history.execute(std::make_unique<SetOrientationCommand>(
+      std::vector{scene.m_artboard}, ArtboardOrientation::PORTRAIT)));
+    REQUIRE(document.get(scene.m_artboard).get_artboard()->m_frame ==
+      Rect(100, 50, 200, 300));
+    REQUIRE(document.get(scene.m_artboard).get_artboard()->
+      m_viewport_height == 300.0);
+    {
+      auto transaction = Transaction(document);
+      auto square = *document.get(scene.m_artboard).get_artboard();
+      square.m_frame = Rect(100, 50, 300, 300);
+      transaction.replace_payload(scene.m_artboard, square);
+      transaction.commit();
+    }
+    history.execute(std::make_unique<SetOrientationCommand>(
+      std::vector{scene.m_artboard}, ArtboardOrientation::PORTRAIT));
+    REQUIRE(document.get(scene.m_artboard).get_artboard()->m_frame ==
+      Rect(100, 50, 300, 300));
   }
 
   TEST_CASE("grid_toggles") {

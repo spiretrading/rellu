@@ -46,7 +46,7 @@ namespace {
     {"None", "Horizontal", "Vertical", "Horizontal & Vertical"});
   const auto ARTBOARD_SCROLLING = QStringList({"None", "Vertical"});
   const auto RESIZE_MODES = QStringList({"Auto", "Manual"});
-  const auto ORIENTATIONS = QStringList({"Portrait", "Landscape"});
+  const auto ORIENTATIONS = QStringList({"Portrait", "Landscape", "Square"});
   const auto GRID_TYPES = QStringList({"Layout", "Square"});
   const auto BOOLEAN_OPERATIONS =
     QStringList({"Add", "Subtract", "Intersect", "Exclude Overlap"});
@@ -225,8 +225,8 @@ namespace {
         static_cast<bool>(node.m_header.m_aspect_lock));
       add(section, "x", "X", frame->m_x);
       add(section, "y", "Y", frame->m_y);
-      add(section, "orientation", "Orientation", Choice(
-        frame->m_width > frame->m_height ? 1 : 0, ORIENTATIONS));
+      add(section, "orientation", "Orientation", make_choice(
+        get_orientation(*node.get_artboard()), ORIENTATIONS));
       return section;
     }
     auto origin = frame ? frame->get_top_left() : transform.map(Point(0, 0));
@@ -679,34 +679,54 @@ namespace {
     }
   }
 
-  bool is_frame_property(std::string_view path) {
-    return path == "transform.x" || path == "transform.y" ||
-      path == "transform.width" || path == "transform.height";
-  }
-
-  double get_frame_value(const Rect& frame, std::string_view path) {
-    if(path == "transform.x") {
-      return frame.m_x;
-    } else if(path == "transform.y") {
-      return frame.m_y;
-    } else if(path == "transform.width") {
-      return frame.m_width;
-    }
-    return frame.m_height;
-  }
-
-  void set_frame(
+  void set_position(
       PropertyDescriptor& section, const std::optional<Rect>& frame) {
     std::erase_if(section.m_children, [&] (auto& property) {
-      if(!is_frame_property(property.m_path)) {
+      if(property.m_path != "transform.x" &&
+          property.m_path != "transform.y") {
         return false;
       } else if(!frame) {
         return true;
       }
-      property.m_value = get_frame_value(*frame, property.m_path);
+      property.m_value =
+        property.m_path == "transform.x" ? frame->m_x : frame->m_y;
       property.m_is_mixed = false;
       return false;
     });
+  }
+
+  std::optional<double> get_shown_number(
+      const std::vector<PropertyDescriptor>& sections, std::string_view path) {
+    auto property = find_property(sections, path);
+    if(!property) {
+      return std::nullopt;
+    }
+    auto value = std::get_if<double>(&property->m_value);
+    if(!value) {
+      return std::nullopt;
+    }
+    return std::round(*value * 100) / 100;
+  }
+
+  void compare_shown(PropertyDescriptor& section,
+      const std::vector<std::vector<PropertyDescriptor>>& nodes) {
+    for(auto& property : section.m_children) {
+      if(property.m_path != "transform.width" &&
+          property.m_path != "transform.height" &&
+          property.m_path != "transform.rotation") {
+        continue;
+      }
+      auto last = find_property(nodes.back(), property.m_path);
+      auto shown = get_shown_number(nodes.back(), property.m_path);
+      if(!last || !shown) {
+        continue;
+      }
+      property.m_value = last->m_value;
+      property.m_is_mixed = std::any_of(nodes.begin(), nodes.end(),
+        [&] (const auto& sections) {
+          return get_shown_number(sections, property.m_path) != shown;
+        });
+    }
   }
 
   void limit_size(
@@ -798,18 +818,22 @@ std::vector<PropertyDescriptor> Rellu::extract_common_properties(
   } else if(nodes.size() == 1) {
     return extract_properties(document, nodes.front(), measurer, selection);
   }
-  auto sections =
-    extract_node_properties(document, nodes.front(), measurer, selection);
-  for(auto i = std::size_t(1); i != nodes.size(); ++i) {
-    intersect_properties(sections,
-      extract_node_properties(document, nodes[i], measurer, selection));
+  auto described = std::vector<std::vector<PropertyDescriptor>>();
+  for(auto& id : nodes) {
+    described.push_back(
+      extract_node_properties(document, id, measurer, selection));
+  }
+  auto sections = described.front();
+  for(auto i = std::size_t(1); i != described.size(); ++i) {
+    intersect_properties(sections, described[i]);
   }
   auto transform = std::find_if(sections.begin(), sections.end(),
     [] (const auto& section) {
       return section.m_path == "transform";
     });
   if(transform != sections.end()) {
-    set_frame(*transform, get_frame(document, nodes, measurer));
+    set_position(*transform, get_frame(document, nodes, measurer));
+    compare_shown(*transform, described);
   }
   limit_size(sections, get_stack_limits(document, nodes));
   return sections;

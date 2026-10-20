@@ -8,7 +8,7 @@ namespace Rellu {
 
   /**
    * Sets the number of corners of polygons, deriving their vertices anew,
-   * labelled Change Corner Count.
+   * labelled Corner Count.
    */
   class SetCornerCountCommand : public Command {
     public:
@@ -43,7 +43,7 @@ namespace Rellu {
 
   /**
    * Sets the star ratio of polygons, deriving their vertices anew, labelled
-   * Change Star Ratio.
+   * Star Ratio.
    */
   class SetStarRatioCommand : public Command {
     public:

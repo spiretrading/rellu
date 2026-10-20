@@ -787,10 +787,8 @@ void TextTool::apply(
     editor.get_history().seal();
   }
   m_last_edit = kind;
-  auto& previous = *node.get_text();
   auto name = std::optional<std::string>();
-  if(node.m_header.m_name.empty() ||
-      node.m_header.m_name == make_text_name(*previous.m_content)) {
+  if(!node.m_header.m_has_custom_name) {
     name = make_text_name(*text.m_content);
   }
   text.m_layout = Shared(store_layout(text, *m_library));
@@ -825,6 +823,10 @@ void TextTool::create(ToolContext& context, Rect frame, bool is_area) {
   text.m_content = Shared(std::u16string());
   text.m_base_style = style;
   text.m_style.m_fill = SolidFill(style.m_color);
+  if(!selection.is_last_fill_enabled()) {
+    text.m_style.m_fill = disable_fill(text.m_style.m_fill);
+  }
+  text.m_style.m_stroke = selection.get_last_border();
   text.m_paragraph_style = selection.get_last_paragraph_style();
   if(is_area) {
     text.m_frame = AutoHeightFrame(
@@ -885,6 +887,7 @@ void TextTool::finish(ToolContext& context) {
     auto style = selection.get_pending_style().value_or(
       get_style(*text, selection.get_range()));
     selection.set_last_style(std::move(style), text->m_paragraph_style);
+    selection.remember_appearance(*text);
     if(text->m_content->empty()) {
       editor.merge(std::make_unique<EditTextCommand>(selection.get_node()));
     }

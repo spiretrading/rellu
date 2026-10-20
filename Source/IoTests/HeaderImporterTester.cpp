@@ -50,6 +50,33 @@ TEST_SUITE("HeaderImporter") {
     REQUIRE(header.m_aspect_lock == Size(2, 1));
   }
 
+  TEST_CASE("custom_name") {
+    auto document = Document();
+    import_nodes(R"([
+      {"type": "shape", "name": "Rectangle 4",
+       "id": "00000000-0000-0000-0000-000000000001",
+       "meta": {"ux": {"nameL10N": "SHAPE_RECTANGLE"}},
+       "shape": {"type": "rect", "x": 0, "y": 0, "width": 1, "height": 1}},
+      {"type": "shape", "name": "Logo",
+       "id": "00000000-0000-0000-0000-000000000002", "meta": {"ux": {}},
+       "shape": {"type": "rect", "x": 0, "y": 0, "width": 1, "height": 1}},
+      {"type": "shape", "name": "Rectangle 5",
+       "id": "00000000-0000-0000-0000-000000000003",
+       "meta": {"ux": {"nameL10N": "SHAPE_RECTANGLE",
+         "hasCustomName": true}},
+       "shape": {"type": "rect", "x": 0, "y": 0, "width": 1, "height": 1}},
+      {"type": "shape", "id": "00000000-0000-0000-0000-000000000004",
+       "shape": {"type": "rect", "x": 0, "y": 0, "width": 1,
+         "height": 1}}])", document);
+    auto is_custom = [&] (const char* id) {
+      return document.get(*parse_node_id(id)).m_header.m_has_custom_name;
+    };
+    REQUIRE(!is_custom("00000000-0000-0000-0000-000000000001"));
+    REQUIRE(is_custom("00000000-0000-0000-0000-000000000002"));
+    REQUIRE(is_custom("00000000-0000-0000-0000-000000000003"));
+    REQUIRE(!is_custom("00000000-0000-0000-0000-000000000004"));
+  }
+
   TEST_CASE("defaults") {
     auto document = Document();
     import_nodes(R"([{"type": "shape",

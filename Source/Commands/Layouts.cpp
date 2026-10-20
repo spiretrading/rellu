@@ -732,6 +732,7 @@ namespace {
     if(is_set(mask, ChangeMask::NAME) &&
         !(source.get_text() && is_set(mask, ChangeMask::TEXT))) {
       header.m_name = from.m_name;
+      header.m_has_custom_name = from.m_has_custom_name;
     }
     if(is_set(mask, ChangeMask::VISIBILITY)) {
       header.m_is_visible = from.m_is_visible;

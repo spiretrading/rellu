@@ -37,8 +37,8 @@ namespace Rellu {
 
   /**
    * Adds the editors of the properties add_layout_properties describes,
-   * makes the width and height of a repeat grid selected alone set the size
-   * it shows rather than scale it, and leaves the position of stack items
+   * makes the width and height of each repeat grid selected set the size it
+   * shows rather than scale it, and leaves the position of stack items
    * along their stack's direction to the stack.
    * @param editors The editors to add to, holding the standard editors.
    * @param measurer The function measuring text.

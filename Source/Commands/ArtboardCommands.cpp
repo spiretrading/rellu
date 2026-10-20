@@ -7,6 +7,7 @@
 #include <utility>
 #include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
+#include "Rellu/Commands/TransformCommands.hpp"
 
 using namespace Rellu;
 
@@ -233,6 +234,14 @@ LayoutGrid Rellu::make_default_grid(
   return grid;
 }
 
+LayoutGrid Rellu::make_initial_grid(
+    const Artboard& artboard, const GridDefaults& defaults) {
+  auto grid = make_default_grid(artboard, defaults);
+  grid.m_type = GridType::SQUARE;
+  grid.m_is_visible = false;
+  return grid;
+}
+
 GridDefaults Rellu::make_grid_defaults(const LayoutGrid& grid, double width,
     const GridDefaults& defaults) {
   auto result = GridDefaults();
@@ -375,6 +384,79 @@ bool SetViewportCommand::merge(const Command& command) {
     m_height = viewport->m_height;
   }
   return true;
+}
+
+void Rellu::fit_to_frame(Artboard& artboard) {
+  if(artboard.m_viewport_height &&
+      *artboard.m_viewport_height > artboard.m_frame.m_height) {
+    artboard.m_viewport_height = artboard.m_frame.m_height;
+  }
+  if(artboard.m_layout_grid) {
+    fit_layout_grid(*artboard.m_layout_grid, artboard.m_frame.get_size());
+  }
+  std::erase_if(artboard.m_guides, [&] (const auto& guide) {
+    auto extent = guide.m_orientation == Orientation::HORIZONTAL ?
+      artboard.m_frame.m_height : artboard.m_frame.m_width;
+    return guide.m_position < 1 || guide.m_position >= extent;
+  });
+}
+
+ArtboardOrientation Rellu::get_orientation(const Artboard& artboard) {
+  auto width = artboard.m_frame.m_width;
+  auto height = artboard.m_frame.m_height;
+  if(artboard.m_viewport_height && *artboard.m_viewport_height > 0) {
+    height = std::min(height, *artboard.m_viewport_height);
+  }
+  if(width < height) {
+    return ArtboardOrientation::PORTRAIT;
+  } else if(width > height) {
+    return ArtboardOrientation::LANDSCAPE;
+  }
+  return ArtboardOrientation::SQUARE;
+}
+
+SetOrientationCommand::SetOrientationCommand(
+  std::vector<NodeId> artboards, ArtboardOrientation orientation) noexcept
+  : m_artboards(std::move(artboards)),
+    m_orientation(orientation) {}
+
+std::string SetOrientationCommand::get_label() const {
+  return "Resize";
+}
+
+void SetOrientationCommand::apply(
+    const Document& document, Transaction& transaction) {
+  auto visited = std::unordered_set<NodeId>();
+  for(auto& id : m_artboards) {
+    auto node = document.find(id);
+    if(!node || !visited.insert(id).second) {
+      continue;
+    }
+    auto artboard = node->get_artboard();
+    if(!artboard) {
+      continue;
+    }
+    auto orientation = get_orientation(*artboard);
+    if(orientation == m_orientation ||
+        orientation == ArtboardOrientation::SQUARE) {
+      continue;
+    }
+    auto payload = *artboard;
+    auto width = payload.m_frame.m_width;
+    auto height = payload.m_frame.m_height;
+    if(payload.m_viewport_height && *payload.m_viewport_height > 0) {
+      height = std::min(height, *payload.m_viewport_height);
+    }
+    if(!(width > 0) || !(height > 0)) {
+      continue;
+    }
+    payload.m_frame.m_width = height;
+    payload.m_frame.m_height = width;
+    payload.m_viewport_height = width;
+    fit_to_frame(payload);
+    transaction.replace_payload(id, std::move(payload));
+    update_artboard_contents(document, transaction, id);
+  }
 }
 
 std::vector<NodeId> Rellu::get_target_artboards(

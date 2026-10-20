@@ -74,15 +74,68 @@ namespace Rellu {
     bool operator ==(const SelectionBox&) const = default;
   };
 
+  /** Lists the kinds of handles Adobe XD shows on a selection box. */
+  enum class HandleStyle : unsigned char {
+
+    /** Round resize handles and round rotate handles. */
+    BOX,
+
+    /** A scroll group's pill shaped viewport handles. */
+    SCROLL_GROUP,
+
+    /** A repeat grid's rotate handles beside its own handles. */
+    REPEAT_GRID
+  };
+
+  /** Lists what dragging a handle of a selection box does. */
+  enum class HandleAction : unsigned char {
+
+    /** Resizes the box. */
+    RESIZE,
+
+    /** Rotates the box. */
+    ROTATE
+  };
+
+  /** A handle of a selection box found under a point. */
+  struct HandleHit {
+
+    /** What dragging the handle does. */
+    HandleAction m_action;
+
+    /** The handle. */
+    Handle m_handle;
+
+    bool operator ==(const HandleHit&) const = default;
+  };
+
   /** The handles Adobe XD shows on a selection box. */
   struct HandleLayout {
+
+    /** The radius in logical units of a resize handle. */
+    static constexpr auto HANDLE_RADIUS = 4.0;
+
+    /** The distance in logical units within which a resize handle is hit. */
+    static constexpr auto HANDLE_REACH = 6.0;
+
+    /** The radius in logical units of a rotate handle. */
+    static constexpr auto ROTATION_RADIUS = 7.0;
+
+    /**
+     * The distance in logical units outside the box's sides of the center
+     * of a rotate handle.
+     */
+    static constexpr auto ROTATION_OFFSET = 2.5;
+
+    /** The kind of handles shown. */
+    HandleStyle m_style = HandleStyle::BOX;
 
     /** Whether each handle, in the order of HANDLES, is shown to resize. */
     std::array<bool, 8> m_resizers = {};
 
     /**
-     * Whether dragging from each handle, in the order of HANDLES, rotates
-     * where no resize handle is shown there, and from just outside it.
+     * Whether each handle, in the order of HANDLES, has a rotate handle
+     * beside it, lying under any resize handle.
      */
     std::array<bool, 8> m_rotators = {};
 
@@ -93,10 +146,19 @@ namespace Rellu {
     bool is_resizer(Handle handle) const;
 
     /**
-     * Returns <code>true</code> iff dragging from a handle rotates.
+     * Returns <code>true</code> iff a handle has a rotate handle.
      * @param handle The handle.
      */
     bool is_rotator(Handle handle) const;
+
+    /**
+     * Finds the handle under a point, the topmost as Adobe XD stacks them.
+     * @param size The width and height of the box in logical units.
+     * @param zoom The number of logical units per document unit.
+     * @param point The point in logical units, measured from the box's top
+     *        left corner along its top and left sides.
+     */
+    std::optional<HandleHit> find(Size size, double zoom, Point point) const;
 
     bool operator ==(const HandleLayout&) const = default;
   };
@@ -129,9 +191,22 @@ namespace Rellu {
    *        selected.
    * @param size The width and height of the box in logical units.
    * @param zoom The number of logical units per document unit.
+   * @param dragged The scroll group handle dragged last, shown over the
+   *        handles it overlaps.
    */
   HandleLayout get_handle_layout(const Document& document,
-    const std::vector<NodeId>& nodes, Size size, double zoom);
+    const std::vector<NodeId>& nodes, Size size, double zoom,
+    std::optional<Handle> dragged = std::nullopt);
+
+  /**
+   * Returns the rect of a scroll group's viewport handle.
+   * @param handle The handle, at the middle of a side.
+   * @param size The width and height of the box in logical units.
+   * @param zoom The number of logical units per document unit.
+   * @return The rect in logical units, measured from the box's top left
+   *         corner along its top and left sides.
+   */
+  Rect get_scroll_handle_rect(Handle handle, Size size, double zoom);
 
   /**
    * Returns the handles Adobe XD shows on the box of a locked selection.

@@ -2,6 +2,7 @@
 #define RELLU_IO_XD_VALUE_HPP
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -193,6 +194,13 @@ namespace Rellu {
    * @param value The value to convert.
    */
   QJsonValue to_json_value(const XdValue& value);
+
+  /**
+   * Parses JSON text, keeping the order of object members.
+   * @param text The UTF-8 JSON text.
+   * @return The value, or none if the text is not JSON.
+   */
+  std::optional<XdValue> parse_xd_value(std::string_view text);
 
   /**
    * Formats a number the way JavaScript does, which is how Adobe XD writes

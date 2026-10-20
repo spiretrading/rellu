@@ -1,4 +1,5 @@
 #include <utility>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/ArtboardPlacement.hpp"
 #include "Rellu/Commands/ArtboardPresets.hpp"
 #include "Rellu/Localization/Localization.hpp"
@@ -101,6 +102,8 @@ void CreateArtboardCommand::apply(
   }
   artboard.m_background = SolidFill(make_color(255, 255, 255));
   artboard.m_viewport_height = size.m_height;
+  artboard.m_layout_grid =
+    make_initial_grid(artboard, document.get_resources().m_grid_defaults);
   auto header = NodeHeader();
   header.m_name = make_artboard_name(
     document, localize("presets", m_preset.m_name), false);

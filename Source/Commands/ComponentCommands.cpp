@@ -29,27 +29,15 @@ namespace {
     return std::string(localize("name", kind)) + ' ';
   }
 
-  bool is_numbered(std::string_view name, std::string_view prefix) {
-    if(!name.starts_with(prefix) || name.size() == prefix.size()) {
-      return false;
-    }
-    return std::all_of(name.begin() + prefix.size(), name.end(),
-      [] (auto c) { return c >= '0' && c <= '9'; });
-  }
-
   bool is_name_property(std::string_view name) {
     return name == "name" || name == "hasCustomName" ||
       name == "isCustomNameInherited";
   }
 
-  bool has_custom_name(const Document& document, const NodeId& id,
-      const Component& component, const std::vector<std::string>& names) {
-    if(std::find(names.begin(), names.end(), "name") != names.end()) {
-      return true;
-    }
-    auto& name = document.get(id).m_header.m_name;
-    return name != component.m_name && !is_numbered(name,
-      component.m_name + std::string(NUMBER_SEPARATOR));
+  bool is_renamed(const Node& node) {
+    auto role = get_instance_role(node);
+    return node.m_header.m_has_custom_name &&
+      !(role && role->m_is_name_inherited);
   }
 
   bool has_structure_overrides(const Overrides& overrides) {
@@ -104,6 +92,36 @@ namespace {
         pending.end(), node->m_children.begin(), node->m_children.end());
     }
     return false;
+  }
+
+  NodeId find_sync_owner(const Document& document, const NodeId& id) {
+    auto outermost = NodeId();
+    for(auto ancestor = find_instance(document, document.get(id).m_parent);
+        !ancestor.is_nil();
+        ancestor = find_instance(document, document.get(ancestor).m_parent)) {
+      outermost = ancestor;
+    }
+    if(outermost.is_nil()) {
+      return id;
+    }
+    auto main = get_instance_role(document.get(outermost));
+    if(!main->m_is_main) {
+      return id;
+    }
+    auto entry = main->m_sync_map.find(id);
+    if(entry == main->m_sync_map.end()) {
+      return NodeId();
+    }
+    auto owner = document.find(entry->second);
+    if(!owner) {
+      return NodeId();
+    }
+    auto role = get_instance_role(*owner);
+    if(!role || role->m_component !=
+        get_instance_role(document.get(id))->m_component) {
+      return NodeId();
+    }
+    return entry->second;
   }
 
   bool is_tree_root(const Document& document, const NodeId& id) {
@@ -606,13 +624,7 @@ namespace {
       const TextMeasurer& measurer) {
     auto node = document.get(id);
     auto& role = *get_instance_role(node);
-    auto names = std::vector<std::string>();
-    if(auto entry = role.m_overrides.m_properties.find(id);
-        entry != role.m_overrides.m_properties.end()) {
-      names = entry->second;
-    }
-    auto is_renamed = has_custom_name(
-      document, id, get_component(document, role.m_component), names);
+    auto has_custom_name = is_renamed(node);
     auto is_nested = is_inside_instance(document, id);
     if(auto parent = document.find(node.m_parent);
         parent && parent->get_reference()) {
@@ -645,8 +657,14 @@ namespace {
       document, transaction, component, node.m_parent, index, rotation,
       measurer);
     auto header = document.get(swapped).m_header;
-    if(is_renamed) {
+    if(has_custom_name) {
       header.m_name = node.m_header.m_name;
+      header.m_has_custom_name = true;
+      auto group = *document.get(swapped).get_group();
+      if(group.m_component_instance->m_is_name_inherited) {
+        group.m_component_instance->m_is_name_inherited = false;
+        transaction.replace_payload(swapped, std::move(group));
+      }
     }
     header.m_is_locked = node.m_header.m_is_locked;
     header.m_opacity = node.m_header.m_opacity;
@@ -765,7 +783,7 @@ void MakeComponentCommand::apply(
   if(nodes.size() == 1 && is_plain_group(document.get(nodes.front()))) {
     m_main = renew(document, transaction, nodes.front());
     name = document.get(m_main).m_header.m_name;
-    if(is_numbered(name, get_prefix("Group"))) {
+    if(!document.get(m_main).m_header.m_has_custom_name) {
       name = make_node_name(document, get_prefix("Component"));
       auto header = document.get(m_main).m_header;
       header.m_name = name + std::string(NUMBER_SEPARATOR) + "1";
@@ -807,6 +825,7 @@ void MakeComponentCommand::apply(
     }
   }
   role.m_is_main = true;
+  role.m_is_name_inherited = document.get(m_main).m_header.m_has_custom_name;
   auto group = *document.get(m_main).get_group();
   group.m_component_instance = std::move(role);
   transaction.replace_payload(m_main, std::move(group));
@@ -893,11 +912,11 @@ void ResetOverridesCommand::apply(
       names = entry->second;
     }
     auto& component = get_component(document, role.m_component);
-    auto is_renamed = has_custom_name(document, id, component, names);
+    auto has_custom_name = is_renamed(document.get(id));
     rebuild(document, transaction, id, role.m_state, false);
     std::erase_if(names, [&] (const auto& name) {
       return name == "width" || name == "height" ||
-        is_renamed && is_name_property(name);
+        has_custom_name && is_name_property(name);
     });
     if(!names.empty()) {
       auto group = *document.get(id).get_group();
@@ -905,10 +924,22 @@ void ResetOverridesCommand::apply(
         id, std::move(names));
       transaction.replace_payload(id, std::move(group));
     }
-    if(is_renamed && document.get(id).m_header.m_name != component.m_name) {
+    if(has_custom_name) {
+      auto is_inherited = false;
+      if(auto master = document.find(component.m_master)) {
+        is_inherited = master->m_header.m_has_custom_name;
+      }
       auto header = document.get(id).m_header;
       header.m_name = component.m_name;
-      transaction.replace_header(std::move(header));
+      header.m_has_custom_name = is_inherited;
+      if(header != document.get(id).m_header) {
+        transaction.replace_header(std::move(header));
+      }
+      auto group = *document.get(id).get_group();
+      if(group.m_component_instance->m_is_name_inherited != is_inherited) {
+        group.m_component_instance->m_is_name_inherited = is_inherited;
+        transaction.replace_payload(id, std::move(group));
+      }
     }
   }
 }
@@ -1102,6 +1133,7 @@ void AddStateCommand::apply(
   auto tree = clone_tree(document, transaction, component.m_master, mapping);
   auto header = document.get(tree).m_header;
   header.m_name = m_name;
+  header.m_has_custom_name = true;
   header.m_opaque = OpaqueData();
   transaction.replace_header(std::move(header));
   auto state = ComponentState();
@@ -1238,7 +1270,15 @@ void RenameComponentCommand::apply(
     if(auto node = id.is_nil() ? nullptr : document.find(id)) {
       auto header = node->m_header;
       header.m_name = m_name;
+      header.m_has_custom_name = true;
+      auto group = node->get_group() ? std::optional(*node->get_group()) :
+        std::nullopt;
       transaction.replace_header(std::move(header));
+      if(group && group->m_component_instance &&
+          !group->m_component_instance->m_is_name_inherited) {
+        group->m_component_instance->m_is_name_inherited = true;
+        transaction.replace_payload(id, std::move(*group));
+      }
     }
   }
 }
@@ -1373,8 +1413,11 @@ void Rellu::add_component_commands(
     }
     auto instances = get_instances(document, targets);
     if(instances.size() != 1 ||
-        get_instance_role(document.get(instances.front()))->m_is_main ||
-        !has_overrides(document, instances.front())) {
+        get_instance_role(document.get(instances.front()))->m_is_main) {
+      return nullptr;
+    }
+    auto owner = find_sync_owner(document, instances.front());
+    if(owner.is_nil() || !has_overrides(document, owner)) {
       return nullptr;
     }
     return std::make_unique<ResetOverridesCommand>(std::move(instances));

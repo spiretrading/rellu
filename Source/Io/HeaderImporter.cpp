@@ -151,16 +151,26 @@ void Rellu::add_header_importer(XdImporter& importer) {
         }
       }
     }
+    auto is_named = false;
     if(auto name = json.get_string("name"_L1)) {
       header.m_name = to_std_string(*name);
+      is_named = !name->isEmpty();
     }
     header.m_is_visible = json.get_bool("visible"_L1, true);
     json.ignore({"visualBounds"_L1});
     if(auto style = json.get_object("style"_L1)) {
       import_style(*style, header);
     }
+    header.m_has_custom_name = !is_reference && is_named;
     if(auto ux = get_ux(json)) {
       import_ux(*ux, header);
+      if(auto key = ux->get_string("nameL10N"_L1); key && !key->isEmpty()) {
+        header.m_has_custom_name = false;
+      }
+      if(ux->get_bool("hasCustomName"_L1, false) ||
+          ux->get_bool("isCustomNameInherited"_L1, false)) {
+        header.m_has_custom_name = true;
+      }
     }
   });
 }

@@ -284,11 +284,17 @@ TEST_SUITE("PenTool") {
     auto id = setup.get_drawn();
     click(tools, Point(250, 150));
     REQUIRE(tools.key_press(KeyEvent(Qt::Key_Escape, Qt::NoModifier)));
+    auto& history = setup.m_editor.get_history();
+    auto count = history.get_undo_count();
     click(tools, Point(250, 150));
     REQUIRE(setup.get_pen().get_path(tools.get_context()) == id);
+    REQUIRE(history.get_undo_label() == "Extend Path");
+    REQUIRE(history.get_undo_count() == count + 1);
     click(tools, Point(250, 250));
+    REQUIRE(history.get_undo_label() == "Add Anchor Point");
     REQUIRE(tools.key_press(KeyEvent(Qt::Key_Return, Qt::NoModifier)));
     click(tools, Point(150, 150));
+    REQUIRE(history.get_undo_label() == "Extend Path");
     click(tools, Point(150, 250));
     REQUIRE(tools.key_press(KeyEvent(Qt::Key_Return, Qt::NoModifier)));
     auto contours = setup.get_contours(id);

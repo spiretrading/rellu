@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <utility>
+#include <variant>
 #include "Rellu/Editor/TextSelection.hpp"
 
 using namespace Rellu;
@@ -8,7 +9,8 @@ TextSelection::TextSelection(Document& document)
     : m_document(&document),
       m_anchor(0),
       m_caret(0),
-      m_last_style(get_default_text_style()) {
+      m_last_style(get_default_text_style()),
+      m_is_last_fill_enabled(true) {
   m_subscription = document.subscribe([this] (const ChangeSet& changes) {
     on_change(changes);
   });
@@ -70,6 +72,38 @@ const ParagraphStyle& TextSelection::get_last_paragraph_style() const {
 void TextSelection::set_last_style(TextStyle style, ParagraphStyle paragraph) {
   m_last_style = std::move(style);
   m_last_paragraph_style = std::move(paragraph);
+}
+
+bool TextSelection::is_last_fill_enabled() const {
+  return m_is_last_fill_enabled;
+}
+
+const std::optional<Stroke>& TextSelection::get_last_border() const {
+  return m_last_border;
+}
+
+void TextSelection::set_last_appearance(
+    bool is_fill_enabled, std::optional<Stroke> border) {
+  m_is_last_fill_enabled = is_fill_enabled;
+  m_last_border = std::move(border);
+}
+
+void TextSelection::remember_appearance(const Text& text) {
+  m_is_last_fill_enabled = !std::holds_alternative<NoFill>(text.m_style.m_fill);
+  if(auto& stroke = text.m_style.m_stroke) {
+    auto border = Stroke();
+    border.m_color = stroke->m_color;
+    border.m_width = stroke->m_width;
+    border.m_is_enabled = stroke->m_is_enabled;
+    m_last_border = std::move(border);
+  }
+}
+
+void TextSelection::remember(const Text& text) {
+  auto runs = get_runs(text);
+  set_last_style(runs.empty() ? text.m_base_style : runs.front().m_style,
+    text.m_paragraph_style);
+  remember_appearance(text);
 }
 
 void TextSelection::set(

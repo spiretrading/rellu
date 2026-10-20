@@ -76,6 +76,15 @@ namespace Rellu {
   LayoutGrid make_default_grid(
     const Artboard& artboard, const GridDefaults& defaults = GridDefaults());
 
+  /**
+   * Returns the grid Adobe XD saves for an artboard whose grid was never
+   * shown: the default grid for the artboard's width, square and hidden.
+   * @param artboard The artboard.
+   * @param defaults The grids made the default.
+   */
+  LayoutGrid make_initial_grid(
+    const Artboard& artboard, const GridDefaults& defaults = GridDefaults());
+
   /** Returns Adobe XD's own layout grids by artboard width. */
   std::vector<GridOverride> get_built_in_overrides();
 
@@ -89,6 +98,33 @@ namespace Rellu {
    * @param size The artboard's new size.
    */
   void fit_layout_grid(LayoutGrid& grid, Size size);
+
+  /**
+   * Fits an artboard's viewport, layout grid and guides to its frame as
+   * Adobe XD does after the artboard is resized.
+   * @param artboard The artboard.
+   */
+  void fit_to_frame(Artboard& artboard);
+
+  /** Lists the orientations of an artboard. */
+  enum class ArtboardOrientation : unsigned char {
+
+    /** Narrower than it is high. */
+    PORTRAIT,
+
+    /** Wider than it is high. */
+    LANDSCAPE,
+
+    /** As wide as it is high. */
+    SQUARE
+  };
+
+  /**
+   * Returns the orientation of an artboard by the part of it visible at
+   * once, its viewport when it scrolls.
+   * @param artboard The artboard.
+   */
+  ArtboardOrientation get_orientation(const Artboard& artboard);
 
   /**
    * Returns the grids made the default by Make Default: the grid itself,
@@ -190,6 +226,34 @@ namespace Rellu {
       std::vector<NodeId> m_artboards;
       std::optional<double> m_height;
       bool m_is_scrolling;
+  };
+
+  /**
+   * Turns artboards to portrait or landscape, labelled Resize, as Adobe
+   * XD's orientation buttons do: each artboard of the other orientation
+   * takes the height of its viewport as its width and its width as its
+   * height, about its top left corner, with a viewport as high as itself,
+   * without laying out its contents, which move to the artboards they then
+   * overlap. Square artboards are left unchanged.
+   */
+  class SetOrientationCommand : public Command {
+    public:
+
+      /**
+       * Constructs a SetOrientationCommand.
+       * @param artboards The artboards to change; other nodes are left
+       *        unchanged.
+       * @param orientation The orientation, PORTRAIT or LANDSCAPE.
+       */
+      SetOrientationCommand(std::vector<NodeId> artboards,
+        ArtboardOrientation orientation) noexcept;
+
+      std::string get_label() const override;
+      void apply(const Document& document, Transaction& transaction) override;
+
+    private:
+      std::vector<NodeId> m_artboards;
+      ArtboardOrientation m_orientation;
   };
 
   /**

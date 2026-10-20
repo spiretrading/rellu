@@ -21,6 +21,7 @@ namespace {
     auto transaction = Transaction(document);
     auto header = document.get(id).m_header;
     header.m_name = std::move(name);
+    header.m_has_custom_name = false;
     transaction.replace_header(header);
     transaction.commit();
   }

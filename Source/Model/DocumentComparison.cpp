@@ -66,6 +66,8 @@ namespace {
   void compare(const NodeHeader& left, const NodeHeader& right,
       const std::string& subject, Collector& collector) {
     collector.check(left.m_name == right.m_name, subject, "name");
+    collector.check(left.m_has_custom_name == right.m_has_custom_name,
+      subject, "custom name");
     collector.check(
       left.m_is_visible == right.m_is_visible, subject, "visibility");
     collector.check(left.m_is_locked == right.m_is_locked, subject, "lock");
@@ -141,6 +143,8 @@ namespace {
       left_instance.m_states == right_instance.m_states, instance, "states");
     collector.check(
       left_instance.m_is_main == right_instance.m_is_main, instance, "main");
+    collector.check(left_instance.m_is_name_inherited ==
+      right_instance.m_is_name_inherited, instance, "inherited name");
   }
 
   void compare(const Shape& left, const Shape& right,

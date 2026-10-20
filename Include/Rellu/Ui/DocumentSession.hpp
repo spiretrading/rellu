@@ -3,6 +3,7 @@
 #include <functional>
 #include <string>
 #include <QString>
+#include <QStringList>
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Io/XdGenerator.hpp"
 #include "Rellu/Model/Document.hpp"
@@ -51,7 +52,8 @@ namespace Rellu {
        * untouched unless the save completes, and on success makes the path
        * the one saved to and the document clean. Unless the file saved to is
        * the existing one at the document's path, the document is given a new
-       * id, as Adobe XD gives a copy. Throws XdError on failure.
+       * id and a new composite, as Adobe XD gives a copy. Throws XdError on
+       * failure.
        * @param path The path of the .xd file.
        */
       void save(const QString& path);
@@ -61,6 +63,7 @@ namespace Rellu {
       QString m_path;
       std::string m_id;
       std::string m_parent;
+      std::string m_composite;
       XdTextLayout m_layout;
       Editor m_editor;
 
@@ -93,6 +96,21 @@ namespace Rellu {
   bool resolve_unsaved_changes(const DocumentSession& session,
     const std::function<UnsavedChoice ()>& prompt,
     const std::function<bool ()>& save);
+
+  /**
+   * Opens the file the application is launched with, or makes a new,
+   * untitled document, as File &gt; New does, when launched without one.
+   * @param arguments The command line arguments, the first naming the
+   *        program.
+   * @param open The function opening a file, returning <code>true</code>
+   *        iff it was opened.
+   * @param make_new The function making a new document, returning
+   *        <code>true</code> iff it was made.
+   * @return <code>true</code> iff a document was opened or made.
+   */
+  bool open_launched_document(const QStringList& arguments,
+    const std::function<bool (const QString& path)>& open,
+    const std::function<bool ()>& make_new);
 
   /**
    * Returns the path a file is saved to, adding the .xd extension unless it

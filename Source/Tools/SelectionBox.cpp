@@ -11,15 +11,21 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto HANDLE_RADIUS = 4.0;
+  constexpr auto HANDLE_RADIUS = HandleLayout::HANDLE_RADIUS;
   constexpr auto SCROLL_HANDLE_LENGTH = 18.0;
   constexpr auto SCROLL_HANDLE_THICKNESS = 10.0;
   constexpr auto DISTANT_SCROLL_HANDLE_LENGTH = 14.0;
   constexpr auto DISTANT_SCROLL_HANDLE_THICKNESS = 8.0;
   constexpr auto DISTANT_ZOOM = 0.33;
   constexpr auto HANDLE_INSET = 0.5;
+  constexpr auto GRID_HANDLE_WIDTH = 8.0;
+  constexpr auto GRID_HANDLE_SHORTEST = 8.0;
+  constexpr auto GRID_HANDLE_LONGEST = 38.0;
   constexpr auto CORNERS = std::array<Handle, 4>({Handle::TOP_LEFT,
     Handle::TOP_RIGHT, Handle::BOTTOM_RIGHT, Handle::BOTTOM_LEFT});
+  constexpr auto STACKING = std::array<Handle, 8>({Handle::BOTTOM_RIGHT,
+    Handle::BOTTOM, Handle::BOTTOM_LEFT, Handle::RIGHT, Handle::LEFT,
+    Handle::TOP_RIGHT, Handle::TOP, Handle::TOP_LEFT});
 
   std::size_t to_index(Handle handle) {
     return static_cast<std::size_t>(handle);
@@ -70,28 +76,6 @@ namespace {
     }
   }
 
-  Rect get_scroll_handle_rect(Handle handle, Size size, double zoom) {
-    auto length = SCROLL_HANDLE_LENGTH;
-    auto thickness = SCROLL_HANDLE_THICKNESS;
-    if(zoom < DISTANT_ZOOM) {
-      length = DISTANT_SCROLL_HANDLE_LENGTH;
-      thickness = DISTANT_SCROLL_HANDLE_THICKNESS;
-    }
-    auto center = Point(size.m_width / 2, HANDLE_INSET);
-    if(handle == Handle::BOTTOM) {
-      center.m_y = size.m_height - HANDLE_INSET;
-    } else if(handle == Handle::RIGHT) {
-      center = Point(size.m_width - HANDLE_INSET, size.m_height / 2);
-    } else if(handle == Handle::LEFT) {
-      center = Point(HANDLE_INSET, size.m_height / 2);
-    }
-    if(handle == Handle::LEFT || handle == Handle::RIGHT) {
-      std::swap(length, thickness);
-    }
-    return Rect(center.m_x - length / 2, center.m_y - thickness / 2, length,
-      thickness);
-  }
-
   bool overlaps(const Rect& left, const Rect& right) {
     return left.m_x < right.m_x + right.m_width &&
       left.m_x + left.m_width > right.m_x &&
@@ -99,9 +83,10 @@ namespace {
       left.m_y + left.m_height > right.m_y;
   }
 
-  HandleLayout get_scroll_layout(
-      ScrollDirection direction, Size size, double zoom) {
+  HandleLayout get_scroll_layout(ScrollDirection direction, Size size,
+      double zoom, std::optional<Handle> dragged) {
     auto layout = HandleLayout();
+    layout.m_style = HandleStyle::SCROLL_GROUP;
     if(direction != ScrollDirection::HORIZONTAL) {
       layout.m_resizers[to_index(Handle::TOP)] = true;
       layout.m_resizers[to_index(Handle::BOTTOM)] = true;
@@ -112,6 +97,12 @@ namespace {
     }
     auto priority = std::array<Handle, 4>(
       {Handle::RIGHT, Handle::BOTTOM, Handle::LEFT, Handle::TOP});
+    if(dragged) {
+      if(auto i = std::find(priority.begin(), priority.end(), *dragged);
+          i != priority.end()) {
+        std::rotate(priority.begin(), i, i + 1);
+      }
+    }
     for(auto i = std::size_t(0); i != priority.size(); ++i) {
       if(!layout.is_resizer(priority[i])) {
         continue;
@@ -190,6 +181,62 @@ namespace {
     }
     return std::max(result, smallest);
   }
+
+  Point get_position(Handle handle, Size size) {
+    auto fraction = get_fraction(handle);
+    return Point(fraction.m_x * size.m_width, fraction.m_y * size.m_height);
+  }
+
+  double get_grid_handle_length(double side) {
+    return std::clamp(side / 3, GRID_HANDLE_SHORTEST, GRID_HANDLE_LONGEST);
+  }
+
+  bool is_in_ellipse(Point point, Point center, Size radii) {
+    if(!(radii.m_width > 0) || !(radii.m_height > 0)) {
+      return false;
+    }
+    auto x = (point.m_x - center.m_x) / radii.m_width;
+    auto y = (point.m_y - center.m_y) / radii.m_height;
+    return x * x + y * y <= 1;
+  }
+
+  bool is_on_resizer(const HandleLayout& layout, Handle handle, Size size,
+      double zoom, Point point) {
+    if(layout.m_style == HandleStyle::SCROLL_GROUP) {
+      return get_scroll_handle_rect(handle, size, zoom).contains(point);
+    }
+    return distance(get_position(handle, size), point) <=
+      HandleLayout::HANDLE_REACH;
+  }
+
+  bool is_on_rotator(
+      const HandleLayout& layout, Handle handle, Size size, Point point) {
+    auto fraction = get_fraction(handle);
+    auto offset = HandleLayout::ROTATION_OFFSET;
+    auto center = get_position(handle, size) +
+      Point(2 * fraction.m_x - 1, 2 * fraction.m_y - 1) * offset;
+    auto radius = HandleLayout::ROTATION_RADIUS;
+    auto radii = Size(radius, radius);
+    if(layout.m_style == HandleStyle::REPEAT_GRID) {
+      auto grid_handle = std::optional<Rect>();
+      if(handle == Handle::RIGHT) {
+        auto length = get_grid_handle_length(size.m_height);
+        radii.m_height = length / 2;
+        grid_handle = Rect(size.m_width - GRID_HANDLE_WIDTH / 2 -
+          HANDLE_INSET, (size.m_height - length) / 2, GRID_HANDLE_WIDTH,
+          length);
+      } else if(handle == Handle::BOTTOM) {
+        auto length = get_grid_handle_length(size.m_width);
+        radii.m_width = length / 2;
+        grid_handle = Rect((size.m_width - length) / 2, size.m_height -
+          GRID_HANDLE_WIDTH / 2 - HANDLE_INSET, length, GRID_HANDLE_WIDTH);
+      }
+      if(grid_handle && grid_handle->contains(point)) {
+        return false;
+      }
+    }
+    return is_in_ellipse(point, center, radii);
+  }
 }
 
 Point SelectionBox::get_point(Handle handle) const {
@@ -215,6 +262,22 @@ bool HandleLayout::is_resizer(Handle handle) const {
 
 bool HandleLayout::is_rotator(Handle handle) const {
   return m_rotators[to_index(handle)];
+}
+
+std::optional<HandleHit> HandleLayout::find(
+    Size size, double zoom, Point point) const {
+  for(auto handle : STACKING) {
+    if(is_resizer(handle) &&
+        is_on_resizer(*this, handle, size, zoom, point)) {
+      return HandleHit(HandleAction::RESIZE, handle);
+    }
+  }
+  for(auto handle : STACKING) {
+    if(is_rotator(handle) && is_on_rotator(*this, handle, size, point)) {
+      return HandleHit(HandleAction::ROTATE, handle);
+    }
+  }
+  return std::nullopt;
 }
 
 bool Rellu::is_corner(Handle handle) {
@@ -250,7 +313,8 @@ std::optional<SelectionBox> Rellu::get_selection_box(const Document& document,
 }
 
 HandleLayout Rellu::get_handle_layout(const Document& document,
-    const std::vector<NodeId>& nodes, Size size, double zoom) {
+    const std::vector<NodeId>& nodes, Size size, double zoom,
+    std::optional<Handle> dragged) {
   if(nodes.empty()) {
     return HandleLayout();
   }
@@ -264,7 +328,14 @@ HandleLayout Rellu::get_handle_layout(const Document& document,
     layout.m_rotators[to_index(Handle::BOTTOM)] = true;
     return layout;
   } else if(group && group->m_scroll_group) {
-    return get_scroll_layout(group->m_scroll_group->m_direction, size, zoom);
+    return get_scroll_layout(
+      group->m_scroll_group->m_direction, size, zoom, dragged);
+  } else if(group && group->m_repeat_grid) {
+    auto layout = HandleLayout();
+    layout.m_style = HandleStyle::REPEAT_GRID;
+    layout.m_rotators[to_index(Handle::RIGHT)] = true;
+    layout.m_rotators[to_index(Handle::BOTTOM)] = true;
+    return layout;
   }
   auto layout = HandleLayout();
   for(auto handle : HANDLES) {
@@ -298,12 +369,29 @@ HandleLayout Rellu::get_handle_layout(const Document& document,
       layout.m_resizers[to_index(handle)] = false;
     }
   }
-  for(auto handle : HANDLES) {
-    if(!is_corner(handle) && layout.is_resizer(handle)) {
-      layout.m_rotators[to_index(handle)] = false;
-    }
-  }
   return layout;
+}
+
+Rect Rellu::get_scroll_handle_rect(Handle handle, Size size, double zoom) {
+  auto length = SCROLL_HANDLE_LENGTH;
+  auto thickness = SCROLL_HANDLE_THICKNESS;
+  if(zoom < DISTANT_ZOOM) {
+    length = DISTANT_SCROLL_HANDLE_LENGTH;
+    thickness = DISTANT_SCROLL_HANDLE_THICKNESS;
+  }
+  auto center = Point(size.m_width / 2, HANDLE_INSET);
+  if(handle == Handle::BOTTOM) {
+    center.m_y = size.m_height - HANDLE_INSET;
+  } else if(handle == Handle::RIGHT) {
+    center = Point(size.m_width - HANDLE_INSET, size.m_height / 2);
+  } else if(handle == Handle::LEFT) {
+    center = Point(HANDLE_INSET, size.m_height / 2);
+  }
+  if(handle == Handle::LEFT || handle == Handle::RIGHT) {
+    std::swap(length, thickness);
+  }
+  return Rect(center.m_x - length / 2, center.m_y - thickness / 2, length,
+    thickness);
 }
 
 HandleLayout Rellu::get_locked_handle_layout(Size size) {

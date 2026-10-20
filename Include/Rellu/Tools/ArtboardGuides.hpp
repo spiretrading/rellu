@@ -28,8 +28,9 @@ namespace Rellu {
 
   /**
    * Creates, moves and deletes artboard guides with the pointer as Adobe XD
-   * does. Dragging from the left or top edge of an artboard creates a
-   * vertical or horizontal guide, and dragging a guide moves it unless
+   * does. Dragging from the band just outside the left or top edge of an
+   * artboard creates a vertical or horizontal guide, and dragging a guide
+   * moves it unless
    * guides are locked. The position is a whole number following the
    * pointer, snapping to the edges and centers of the artboard's content,
    * or to multiples of ten while Shift is held, Ctrl suspending snapping.
@@ -42,7 +43,7 @@ namespace Rellu {
     public:
 
       /**
-       * The width in logical units of the band along an artboard's edge
+       * The width in logical units of the band outside an artboard's edge
        * from which guides are created.
        */
       static constexpr auto CREATION_WIDTH = 11.0;

@@ -1,7 +1,9 @@
 #include <chrono>
 #include <string>
 #include <doctest/doctest.h>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/HeaderCommands.hpp"
+#include "Rellu/Commands/PathCommands.hpp"
 #include "Rellu/Commands/ResponsiveResize.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Fixture.hpp"
@@ -212,6 +214,133 @@ TEST_SUITE("ResponsiveResize") {
     REQUIRE(resized.m_layout_grid->m_default_width == 300);
     REQUIRE(resized.m_layout_grid->m_gutter == 10);
     REQUIRE(resized.m_layout_grid->m_margins == Margins(0, 37, 0, 37));
+  }
+
+  TEST_CASE("initial_grid") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 800, 600);
+    artboard.m_layout_grid = make_initial_grid(artboard);
+    auto drawn = transaction.append(NodeId(), make_header("Drawn"), artboard);
+    artboard.m_frame = Rect(1000, 0, 800, 600);
+    artboard.m_layout_grid = std::nullopt;
+    auto imported =
+      transaction.append(NodeId(), make_header("Imported"), artboard);
+    transaction.commit();
+    document.clear_history();
+    auto& initial = *document.get(drawn).get_artboard()->m_layout_grid;
+    REQUIRE(initial.m_type == GridType::SQUARE);
+    REQUIRE(!initial.m_is_visible);
+    REQUIRE(initial.m_default_width == 800);
+    REQUIRE(initial.m_column_count == 8);
+    REQUIRE(initial.m_gutter == 16);
+    REQUIRE(initial.m_margins == Margins(0, 80, 0, 80));
+    auto history = History(document);
+    require_undoable(history,
+      make_bounds_command(document, drawn, Rect(0, 0, 901, 600)));
+    auto& fitted = *document.get(drawn).get_artboard()->m_layout_grid;
+    REQUIRE(fitted.m_default_width == 901);
+    REQUIRE(fitted.m_column_count == 8);
+    REQUIRE(fitted.m_gutter == 16);
+    REQUIRE(fitted.m_margins == Margins(0, 78, 0, 78));
+    REQUIRE(!fitted.m_is_visible);
+    history.execute(make_bounds_command(
+      document, imported, Rect(0, 0, 901, 600)));
+    auto& created = document.get(imported).get_artboard()->m_layout_grid;
+    REQUIRE(created);
+    REQUIRE(created->m_default_width == 901);
+    REQUIRE(created->m_column_count == 12);
+    history.execute(std::make_unique<TranslateCommand>(
+      std::vector{drawn}, Point(10, 0)));
+    REQUIRE(document.get(drawn).get_artboard()->m_layout_grid->
+      m_margins == Margins(0, 78, 0, 78));
+  }
+
+  TEST_CASE("hidden_child") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto group = transaction.append(
+      NodeId(), make_header("Group", make_translation(99, 349)), Group());
+    auto shown =
+      add_rectangle(transaction, group, "Shown", Rect(0, 0, 100, 100));
+    auto header = make_header("Hidden", make_translation(200, 0));
+    header.m_is_visible = false;
+    auto hidden = transaction.append(
+      group, std::move(header), make_rectangle_shape(101, 100));
+    transaction.commit();
+    document.clear_history();
+    require_bounds(document, group, Rect(99, 349, 100, 100));
+    auto history = History(document);
+    require_undoable(history,
+      make_bounds_command(document, group, Rect(0, 0, 160, 100)));
+    require_bounds(document, shown, Rect(99, 349, 160, 100));
+    require_bounds(document, hidden, Rect(359, 349, 101, 100));
+  }
+
+  TEST_CASE("rotated_group") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = add_artboard(transaction, Rect(0, 0, 800, 600), true);
+    auto header = make_header("Group", Matrix(0.8660253882408142, 0.5, -0.5,
+      0.8660253882408142, 236.94590759277344, -86.29412841796875));
+    header.m_constraints = make_constraints(true, true, false, true, false,
+      true);
+    header.m_constraints.m_is_custom = true;
+    auto group = transaction.append(artboard, std::move(header), Group());
+    auto add_operand = [&] (std::string name, double x, double width,
+        Constraints constraints) {
+      auto header = make_header(std::move(name), make_translation(x, 349));
+      header.m_has_custom_name = false;
+      header.m_constraints = constraints;
+      header.m_constraints.m_is_custom = true;
+      return transaction.append(
+        group, std::move(header), make_rectangle_shape(width, 100));
+    };
+    auto first = add_operand("Rectangle 3", 99, 160,
+      make_constraints(true, false, true, true, true, false));
+    auto second = add_operand("Rectangle 4", 359, 101,
+      make_constraints(false, true, true, true, true, false));
+    transaction.commit();
+    document.clear_history();
+    auto history = History(document);
+    require_undoable(history,
+      make_bounds_command(document, artboard, Rect(0, 0, 901, 600)));
+    auto& transform = document.get(group).m_header.m_transform;
+    REQUIRE(transform.m_a == doctest::Approx(0.8660253882408142));
+    REQUIRE(transform.m_b == doctest::Approx(0.5));
+    REQUIRE(transform.m_tx == doctest::Approx(162.10826110839844));
+    REQUIRE(transform.m_ty == doctest::Approx(265.44873046875));
+    auto require_path = [&] (const NodeId& id, std::string name,
+        Point position, std::vector<Point> corners) {
+      auto& node = document.get(id);
+      REQUIRE(node.m_header.m_name == name);
+      REQUIRE(node.m_header.m_transform.m_tx ==
+        doctest::Approx(position.m_x));
+      REQUIRE(node.m_header.m_transform.m_ty ==
+        doctest::Approx(position.m_y));
+      auto& geometry = node.get_shape()->m_geometry;
+      REQUIRE(std::holds_alternative<PathShape>(geometry));
+      auto& segments =
+        std::get<PathShape>(geometry).m_path->get_segments();
+      REQUIRE(segments.size() >= corners.size());
+      for(auto i = std::size_t(0); i != corners.size(); ++i) {
+        REQUIRE(segments[i].m_points[0].m_x ==
+          doctest::Approx(corners[i].m_x));
+        REQUIRE(segments[i].m_points[0].m_y ==
+          doctest::Approx(corners[i].m_y));
+      }
+    };
+    require_path(first, "Path 1", Point(-12.916609764099121,
+      -24.64398956298828), {Point(0, 0),
+        Point(150.6092987060547, -24.80930137634277),
+        Point(141.2185974121094, 112.7138137817383),
+        Point(-9.39069938659668, 137.5231170654297)});
+    require_path(second, "Path 2", Point(354.7350158691406,
+      -32.85712432861328), {Point(0, 0),
+        Point(91.92059326171875, -16.59616661071777),
+        Point(82.8411865234375, 129.1400909423828),
+        Point(-9.079409599304199, 145.7362518310547)});
   }
 
   TEST_CASE("pixel_snapping") {
@@ -543,6 +672,43 @@ TEST_SUITE("ResponsiveResize") {
     history.execute(
       make_bounds_command(document, artboard, Rect(0, 0, 600, 300)));
     require_bounds(document, locked, Rect(60, 100, 280, 40));
+  }
+
+  TEST_CASE("boolean_operands") {
+    auto document = Document();
+    auto pinned = NodeId();
+    auto free = NodeId();
+    {
+      auto transaction = Transaction(document);
+      pinned = add_rectangle(
+        transaction, NodeId(), "Pinned", Rect(0, 0, 20, 20));
+      free = add_rectangle(transaction, NodeId(), "Free", Rect(80, 0, 20, 20));
+      transaction.commit();
+    }
+    auto history = History(document);
+    auto command = history.execute(std::make_unique<BooleanCommand>(
+      std::vector{pinned, free}, CompoundOperation::UNION));
+    auto compound = static_cast<const BooleanCommand*>(command)->get_compound();
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(pinned).m_header;
+      header.m_constraints = make_constraints(
+        true, false, true, false, true, true);
+      header.m_constraints.m_is_custom = true;
+      transaction.replace_header(std::move(header));
+      header = document.get(free).m_header;
+      header.m_constraints = make_constraints(
+        false, true, true, false, true, true);
+      transaction.replace_header(std::move(header));
+      transaction.commit();
+    }
+    require_undoable(history,
+      make_bounds_command(document, compound, Rect(0, 0, 200, 40)));
+    require_bounds(document, pinned, Rect(0, 0, 20, 20));
+    require_bounds(document, free, Rect(160, 0, 40, 40));
+    require_bounds(document, compound, Rect(0, 0, 200, 40));
+    REQUIRE(!document.get(free).m_header.m_constraints.m_right);
+    REQUIRE(document.get(pinned).m_header.m_constraints.m_left);
   }
 
   TEST_CASE("custom_flip") {

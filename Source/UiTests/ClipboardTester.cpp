@@ -30,6 +30,7 @@ namespace {
   void rename(Document& document, const NodeId& id, std::string name) {
     auto header = document.get(id).m_header;
     header.m_name = std::move(name);
+    header.m_has_custom_name = false;
     auto transaction = Transaction(document);
     transaction.replace_header(header);
     transaction.commit();

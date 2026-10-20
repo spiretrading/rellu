@@ -75,6 +75,37 @@ TEST_SUITE("GuideActions") {
     REQUIRE(!fixture.is_enabled("view.guides.hide"));
   }
 
+  TEST_CASE("undo") {
+    auto fixture = Fixture();
+    auto document = Document();
+    build_test_document(document);
+    auto editor = Editor(document);
+    auto& history = editor.get_history();
+    fixture.m_guide_actions->set_editor(&editor);
+    fixture.m_actions.get("view.guides.hide").trigger();
+    REQUIRE(history.get_undo_label() == "Hide All Guides");
+    fixture.m_actions.get("view.guides.lock").trigger();
+    REQUIRE(history.get_undo_label() == "Lock All Guides");
+    REQUIRE(history.get_undo_count() == 2);
+    REQUIRE(editor.undo());
+    REQUIRE(!fixture.m_published.m_is_locked);
+    REQUIRE(fixture.get_text("view.guides.lock") == "Lock All Guides");
+    REQUIRE(!fixture.m_published.m_is_visible);
+    REQUIRE(editor.undo());
+    REQUIRE(fixture.m_published.m_is_visible);
+    REQUIRE(fixture.get_text("view.guides.hide") == "Hide All Guides");
+    REQUIRE(editor.redo());
+    REQUIRE(!fixture.m_published.m_is_visible);
+    fixture.m_actions.get("view.guides.hide").trigger();
+    REQUIRE(history.get_undo_label() == "Show All Guides");
+    REQUIRE(!history.can_redo());
+    fixture.m_actions.get("view.guides.lock").trigger();
+    fixture.m_actions.get("view.guides.lock").trigger();
+    REQUIRE(history.get_undo_label() == "Unlock All Guides");
+    fixture.m_guide_actions.reset();
+    REQUIRE(editor.undo());
+  }
+
   TEST_CASE("clear") {
     auto fixture = Fixture();
     auto document = Document();

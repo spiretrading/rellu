@@ -147,6 +147,12 @@ namespace Rellu {
      */
     bool m_is_main = false;
 
+    /**
+     * Whether the instance's name is the main component's custom name, which
+     * the instance follows.
+     */
+    bool m_is_name_inherited = false;
+
     bool operator ==(const ComponentInstance&) const = default;
   };
 

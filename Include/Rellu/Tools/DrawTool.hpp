@@ -8,6 +8,8 @@
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
 #include "Rellu/Model/NodeHeader.hpp"
+#include "Rellu/Tools/LayoutHandles.hpp"
+#include "Rellu/Tools/SelectionHandles.hpp"
 #include "Rellu/Tools/Tool.hpp"
 
 namespace Rellu {
@@ -19,7 +21,10 @@ namespace Rellu {
    * which the tool may complete when the drag is released.
    * Both ends of the drag snap through the context's snap service.
    * Escape abandons a drag and otherwise returns to the select tool. The
-   * tool stays active once a node is drawn.
+   * tool stays active once a node is drawn. The selection is drawn with
+   * its handles through SelectionHandles, and a repeat grid's own handles
+   * through LayoutHandles, as under the select tool, except while a node
+   * is drawn. A press on one of these handles drags it instead of drawing.
    */
   class DrawTool : public Tool {
     public:
@@ -30,6 +35,7 @@ namespace Rellu {
       void press(ToolContext& context, const PointerEvent& event) override;
       void move(ToolContext& context, const PointerEvent& event) override;
       void release(ToolContext& context, const PointerEvent& event) override;
+      void leave(ToolContext& context) override;
       bool key_press(ToolContext& context, const KeyEvent& event) override;
       void cancel(ToolContext& context) override;
       bool is_busy() const override;
@@ -92,8 +98,12 @@ namespace Rellu {
       Point m_press;
       Point m_start;
       std::optional<NodeHeader> m_header;
+      ToolCursor m_cursor;
+      SelectionHandles m_handles;
+      LayoutHandles m_layout_handles;
 
       void update(ToolContext& context, const PointerEvent& event);
+      void update_hover(ToolContext& context, Point position);
       void finish(ToolContext& context);
   };
 

@@ -1,3 +1,4 @@
+#include <string>
 #include <vector>
 #include <doctest/doctest.h>
 #include <QMenu>
@@ -194,6 +195,48 @@ TEST_SUITE("XdMenus") {
     }
     actions.set_handler("file.new", [] {});
     REQUIRE(actions.get("file.new").isEnabled());
+  }
+
+  TEST_CASE("document_actions") {
+    auto fixture = Fixture();
+    auto& actions = fixture.m_actions;
+    for(auto tool : {"tool.select", "tool.rectangle", "tool.zoom"}) {
+      actions.add(ActionDefinition(tool, tool, QKeySequence(), "", "tools"));
+    }
+    actions.add(ActionDefinition(
+      "file.recent.0", "home.xd", QKeySequence(), "file.recent", "files"));
+    for(auto& name : actions.get_names()) {
+      actions.set_handler(name, [] {});
+    }
+    update_document_actions(actions, Workspace::DESIGN, false);
+    auto enabled = std::vector<std::string>();
+    for(auto& name : actions.get_names()) {
+      if(actions.get(name).isEnabled()) {
+        enabled.push_back(name);
+      }
+    }
+    REQUIRE(enabled == std::vector<std::string>({"file.new", "file.open",
+      "file.open_local", "file.close", "file.recent.clear",
+      "edit.preferences.language.german",
+      "edit.preferences.language.english", "edit.preferences.language.spanish",
+      "edit.preferences.language.french", "edit.preferences.language.italian",
+      "edit.preferences.language.japanese", "edit.preferences.language.korean",
+      "edit.preferences.language.portuguese",
+      "edit.preferences.language.russian", "edit.preferences.language.chinese",
+      "edit.preferences.productivity_tips", "edit.preferences.auto_link",
+      "help.learn", "help.tips", "help.guide", "help.whats_new",
+      "help.release_notes", "help.feedback", "help.about", "help.account",
+      "help.sign_out", "help.updates", "file.recent.0"}));
+    update_document_actions(actions, Workspace::DESIGN, true);
+    for(auto name : {"tool.select", "tool.rectangle", "tool.zoom",
+        "view.zoom_in", "view.zoom_fit", "view.layers", "window.preview"}) {
+      REQUIRE(actions.get(name).isEnabled());
+    }
+    REQUIRE(!actions.get("edit.undo").isEnabled());
+    update_document_actions(actions, Workspace::PROTOTYPE, true);
+    REQUIRE(actions.get("tool.select").isEnabled());
+    REQUIRE(!actions.get("tool.rectangle").isEnabled());
+    REQUIRE(actions.get("tool.zoom").isEnabled());
   }
 
   TEST_CASE("shortcut_text") {

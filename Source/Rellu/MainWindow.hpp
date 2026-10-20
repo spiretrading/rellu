@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <QKeyEvent>
 #include <QMainWindow>
 #include <QPainter>
 #include <QPointF>
@@ -26,6 +27,7 @@
 #include "Rellu/Ui/EditActions.hpp"
 #include "Rellu/Ui/GradientHandles.hpp"
 #include "Rellu/Ui/GuideActions.hpp"
+#include "Rellu/Ui/LastProperties.hpp"
 #include "Rellu/Ui/LayersPanel.hpp"
 #include "Rellu/Ui/PluginsPanel.hpp"
 #include "Rellu/Ui/PreviewWindow.hpp"
@@ -163,9 +165,11 @@ namespace Rellu {
       void check_language(Language language);
       void choose_language(Language language);
       void show_message(const QString& message);
-      void restore_text_properties();
-      void store_text_properties();
-      void change_text_properties_id();
+      void restore_properties();
+      LastProperties get_properties() const;
+      void apply_properties(const LastProperties& properties);
+      void store_properties();
+      void change_properties_id();
       void save_settings() const;
       void update_recent_files();
       void prompt_open();
@@ -175,6 +179,7 @@ namespace Rellu {
       void install(std::unique_ptr<Document> document, const QString& path);
       void detach();
       void update_title();
+      void update_document_state();
       void update_selection_actions();
       void reveal(const NodeId& id);
       void show_region(const Rect& region);
@@ -191,6 +196,7 @@ namespace Rellu {
       void paint_gradient_editor(QPainter& painter);
       bool handle_gradient_event(
         ColorPicker::CanvasEvent event, QPointF position);
+      bool handle_gradient_key(const QKeyEvent& event);
       void update_gradient_editor();
       std::vector<QPolygonF> get_highlight_outlines() const;
       void update_grid_actions();

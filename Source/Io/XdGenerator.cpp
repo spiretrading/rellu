@@ -790,51 +790,30 @@ namespace {
       });
   }
 
-  bool has_instance_name(std::string_view name, std::string_view prefix) {
-    constexpr auto SEPARATOR = std::string_view(" \xE2\x80\x93 ");
-    auto position = name.rfind(SEPARATOR);
-    return position != std::string_view::npos &&
-      has_default_name(name.substr(0, position), prefix) &&
-      has_number(name.substr(position), SEPARATOR);
-  }
-
   std::string_view get_shape_name_key(
       const Shape& shape, std::string_view name) {
     auto& geometry = shape.m_geometry;
     if(std::holds_alternative<RectangleShape>(geometry)) {
-      if(has_default_name(name, "Rectangle ")) {
-        return "SHAPE_RECTANGLE";
-      } else if(has_default_name(name, "Image ")) {
+      if(has_default_name(name, "Image ")) {
         return "SHAPE_IMAGE";
       }
+      return "SHAPE_RECTANGLE";
     } else if(std::holds_alternative<EllipseShape>(geometry)) {
-      if(has_default_name(name, "Ellipse ")) {
-        return "SHAPE_ELLIPSE";
-      }
+      return "SHAPE_ELLIPSE";
     } else if(std::holds_alternative<PolygonShape>(geometry)) {
-      if(has_default_name(name, "Polygon ")) {
-        return "SHAPE_POLYGON";
-      }
+      return "SHAPE_POLYGON";
     } else if(std::holds_alternative<LineShape>(geometry)) {
-      if(has_default_name(name, "Line ")) {
-        return "SHAPE_LINE";
-      }
+      return "SHAPE_LINE";
     } else if(std::holds_alternative<PathShape>(geometry)) {
-      if(has_default_name(name, "Path ")) {
-        return "SHAPE_PATH";
-      }
+      return "SHAPE_PATH";
     } else if(auto compound = std::get_if<CompoundShape>(&geometry)) {
-      if(compound->m_operation == CompoundOperation::UNION &&
-          has_default_name(name, "Union ")) {
+      if(compound->m_operation == CompoundOperation::UNION) {
         return "SHAPE_UNION";
-      } else if(compound->m_operation == CompoundOperation::SUBTRACT &&
-          has_default_name(name, "Subtraction ")) {
+      } else if(compound->m_operation == CompoundOperation::SUBTRACT) {
         return "SHAPE_SUBTRACT";
-      } else if(compound->m_operation == CompoundOperation::INTERSECT &&
-          has_default_name(name, "Intersection ")) {
+      } else if(compound->m_operation == CompoundOperation::INTERSECT) {
         return "SHAPE_INTERSECT";
-      } else if(compound->m_operation == CompoundOperation::EXCLUDE &&
-          has_default_name(name, "Exclusion ")) {
+      } else if(compound->m_operation == CompoundOperation::EXCLUDE) {
         return "SHAPE_EXCLUDE";
       }
     }
@@ -843,37 +822,29 @@ namespace {
 
   std::string_view get_name_key(const Node& node, bool is_component) {
     auto& name = node.m_header.m_name;
-    if(auto shape = node.get_shape()) {
+    if(name.empty()) {
+      return {};
+    } else if(auto shape = node.get_shape()) {
       return get_shape_name_key(*shape, name);
-    } else if(auto text = node.get_text()) {
-      if(!name.empty() && to_utf8(*text->m_content) == name) {
-        return "SHAPE_GROUP";
-      }
+    } else if(node.get_text()) {
+      return "SHAPE_GROUP";
     } else if(auto group = node.get_group()) {
       if(group->m_repeat_grid) {
-        if(has_default_name(name, "Repeat Grid ")) {
-          return "SHAPE_REPEAT_GRID";
-        }
+        return "SHAPE_REPEAT_GRID";
       } else if(group->m_scroll_group) {
-        if(has_default_name(name, "Scroll Group ")) {
-          return "SHAPE_SCROLLABLE_GROUP";
-        }
+        return "SHAPE_SCROLLABLE_GROUP";
       } else if(group->m_mask) {
-        if(has_default_name(name, "Mask Group ")) {
-          return "SHAPE_MASK";
-        } else if(has_default_name(name, "Group ")) {
+        if(has_default_name(name, "Group ")) {
           return "SHAPE_GROUP";
         }
+        return "SHAPE_MASK";
       } else if(is_component || group->m_component_instance) {
-        if(has_default_name(name, "Component ") ||
-            has_instance_name(name, "Component ")) {
-          return "SHAPE_COMPONENT";
-        } else if(has_default_name(name, "Symbol ")) {
+        if(has_default_name(name, "Symbol ")) {
           return "SHAPE_SYMBOL";
         }
-      } else if(has_default_name(name, "Group ")) {
-        return "SHAPE_GROUP";
+        return "SHAPE_COMPONENT";
       }
+      return "SHAPE_GROUP";
     }
     return {};
   }
@@ -1433,7 +1404,10 @@ XdValue XdGenerator::make_ux(const Node& node) const {
   auto ux = XdValue::make_object();
   auto& header = node.m_header;
   auto& id = node.get_id();
-  if(auto key = get_name_key(node, m_masters.contains(id)); !key.empty()) {
+  if(header.m_has_custom_name) {
+    ux.set("hasCustomName", true);
+  } else if(auto key = get_name_key(node, m_masters.contains(id));
+      !key.empty()) {
     ux.set("nameL10N", key);
   }
   add_constraints(header,
@@ -1487,7 +1461,6 @@ XdValue XdGenerator::make_ux(const Node& node) const {
     }
   } else if(auto state = m_states.find(id); state != m_states.end()) {
     auto& info = state->second;
-    ux.set("hasCustomName", true);
     ux.set("symbolId", to_id(info.m_component));
     ux.set("width", info.m_state->m_size.m_width);
     ux.set("height", info.m_state->m_size.m_height);
@@ -1525,6 +1498,9 @@ XdValue XdGenerator::make_ux(const Node& node) const {
       instance.m_overrides, id, make_root_recorder(instance.m_overrides));
     if(!overrides.get_members().empty()) {
       ux.set("symbolOverrides", std::move(overrides));
+    }
+    if(instance.m_is_name_inherited) {
+      ux.set("isCustomNameInherited", true);
     }
     if(!instance.m_states.empty()) {
       ux.set("states", make_placeholders(instance.m_states.size()));

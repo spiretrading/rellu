@@ -69,12 +69,25 @@ Every node shares a common header and carries one kind-specific payload:
 | `Text` | `type: text` | text content, styles, frame, stored layout |
 | `Reference` | `type: syncRef` | source node, optional transform, optional children |
 
-The common header holds: `id`, `name`, `is_visible`, `is_locked`, `transform`,
-`opacity`, `blend_mode`, `is_isolated` (XD `isolation: isolate`),
-`constraints` (responsive resize, below), `is_marked_for_export`,
-`is_fixed_position` (XD `meta.ux.fixed`, Fix Position When Scrolling) and
-`aspect_lock` (XD `meta.ux.aspectLock`, the size whose proportions a resize
-keeps while Lock Aspect is on).
+The common header holds: `id`, `name`, `has_custom_name`, `is_visible`,
+`is_locked`, `transform`, `opacity`, `blend_mode`, `is_isolated` (XD
+`isolation: isolate`), `constraints` (responsive resize, below),
+`is_marked_for_export`, `is_fixed_position` (XD `meta.ux.fixed`, Fix Position
+When Scrolling) and `aspect_lock` (XD `meta.ux.aspectLock`, the size whose
+proportions a resize keeps while Lock Aspect is on).
+
+`has_custom_name` is XD's `hasCustomName`, which every node carries: a name
+given explicitly (renaming, Outline Stroke, a new component state) rather
+than generated for the kind of node (Rectangle 3, Union 1, a text's content).
+XD writes `meta.ux.hasCustomName: true` for a custom name and otherwise the
+kind's `meta.ux.nameL10N` key (SHAPE_RECTANGLE, SHAPE_IMAGE, SHAPE_GROUP for
+text, ...), and reads a named node without `nameL10N` as custom
+(GroupExtensionSerialization.js `deserializeAGC`). Copies keep custom names
+and renumber generated ones (SceneNodeUtil.js `applyNamingRules`), a text's
+generated name follows its content, and a boolean group's generated name
+follows its operation. `ComponentInstance::m_is_name_inherited` is XD's
+`isCustomNameInherited`: the instance carries the main component's custom
+name, so Reset to Main State and Swap treat it as not renamed.
 
 ### Groups and their roles
 
@@ -226,23 +239,41 @@ children are laid out by them; with Responsive Resize off on an artboard, or
 Shift held, the artboard's children keep their artboard-relative positions
 (verified in XD: dragging the left or top handle moves them with the edge).
 
-Open questions, not yet verified in XD; Rellu's current choice in brackets:
+The operands of a boolean group, like the children of repeat grids, masks
+and scroll groups, never have constraints inferred: before a resize their
+Auto pins are cleared, so they scale with the group, while Manual pins are
+kept and laid out against the group's bounds as in a plain group
+(ConstraintsUtil.js `_isUnconstrainedContainer`/`_resetConstraints`,
+BooleanGroupRotationNodeResizer.js `rotateScale`). Making a boolean group
+clears the pins of everything it combines, Manual ones included, keeping
+the Manual mode (BooleanCommands.js `createBooleanGroup`).
 
-- After resizing an instance whose main was never resized, are its children
-  saved as `syncRef` or as full nodes marked Manual? [inferred constraints
-  are not written on instance contents, only on main components]
-- A group whose only Manual child pins its right edge with a fixed width:
-  dragging the group's right handle, does the content follow the new right
-  edge or stay anchored at the left? [laid out in the new frame]
-- Do hidden children count toward a group's frame when it is resized?
-  [frame from visible children; hidden children still laid out]
-- A rotated group stretched by a responsive artboard: how do its children
-  change? [scaled along the group's own axes]
-- Scroll groups: does resizing change only the viewport along the scrolling
-  axes, and are the bounds the viewport or the content? [viewport changes by
-  the change in content bounds]
-- Does resizing an artboard that never had a layout grid create one in the
-  saved file? [only an existing grid is adapted]
+Verified in XD 61:
+
+- Resizing an instance keeps its children as `syncRef` references: only a
+  moved child gets a transform, and nothing is marked Manual.
+- A Manual child pinned right with a fixed width ends at the group's new
+  right edge.
+- A group's frame is the bounds of its visible children; hidden children
+  are laid out against it like the others.
+- A scroll group's handles change only its viewport, and its bounds are the
+  viewport.
+- A rotated plain group whose parent stretches it unevenly keeps its
+  rotation: the stretch, expressed in the group's own axes, is a skew that
+  each child takes with its own constraints, which XD measures against the
+  bounding boxes of the group before and after the skew in its parent's
+  space (GroupRotationNodeResizer.js `rotateScale`). Rectangles, ellipses
+  and polygons without Lock Aspect that end up skewed become paths, named
+  Path N unless their names are custom, paths and lines take the skew in
+  their points, and the other children are transformed as before
+  (NodeResizers.js, SkewRotationNodeResizer.js, PathRotationNodeResizer.js,
+  LineRotationNodeResizer.js).
+- Every artboard XD creates has a layout grid, hidden and saved as
+  `gridStyle`: the default grid for its width. Resizing an artboard adapts
+  its grid to the new width (ArtboardUtil.js `updateArtboardAfterResize`,
+  GridStyle.js `updateArtboardSize`), and gives an artboard without one the
+  default grid for its new width, as XD's `_createGridStyle` does on first
+  use.
 
 ### Components
 
@@ -338,9 +369,23 @@ patch turning the JSON the writer generates from the model into the JSON
 read from the file: members the model does not represent, plus encoding
 details of modelled members guarded by a hash of the generated value so that
 they apply only while the modelled value is unchanged (an edit always wins).
-For the document it is the manifest, the entries the model does not use
-(previews, renditions, metadata, sharing, unknown entries), the archive
-order and the patches of the entries' roots.
+For the document it is the manifest's JSON text as read, the entries the
+model does not use (previews, renditions, metadata, sharing, unknown
+entries), the archive order and the patches of the entries' roots. The
+writer edits the manifest in place, keeping its member order and XD's
+compact formatting, so that a document saved without changes keeps the
+manifest XD wrote, apart from what XD itself changes on save: the `name`
+(the file's name followed by U+0001), a new `uxdesign#serializationId`, and
+`uxdesign#id`, `uxdesign#parentDocId` and `uxdesign#compositeID`
+(DocumentCommands.js `saveToComposite`, serialization.js `serializeToDCX`,
+SerializationUtil.js `serializeDocAndParentId`). Save As to another file
+makes a new DCX composite, as `saveLocalDocument` does with
+`dcx.createEmptyComposite`: a new manifest `id` and `uxdesign#compositeID`,
+new ids for every folder and component of the manifest (derived from the old
+ones and the composite, so later saves keep them), and the new composite id
+as the XMP `DocumentID` and `OriginalDocumentID` in META-INF/metadata.xml;
+the copy also gets a new `uxdesign#id` and keeps `uxdesign#parentDocId`,
+or takes its new id as its parent when there is none.
 
 ## What the importer does
 

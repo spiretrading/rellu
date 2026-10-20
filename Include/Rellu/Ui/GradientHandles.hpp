@@ -74,12 +74,49 @@ namespace Rellu {
       static constexpr auto SNAP_DISTANCE = 4.0;
 
       /**
+       * The distance in units of the node's local space, divided by the
+       * zoom, an arrow key nudges a stop.
+       */
+      static constexpr auto NUDGE = 1.0;
+
+      /**
+       * The distance in units of the node's local space, divided by the
+       * zoom, an arrow key nudges a stop while Shift is held.
+       */
+      static constexpr auto LARGE_NUDGE = 10.0;
+
+      /**
        * Tests whether a gradient fill has handles: an angular or linear one,
        * or a radial one centered on its focal point, in units of the
        * node's bounding box.
        * @param fill The fill.
        */
       static bool is_editable(const GradientFill& fill);
+
+      /**
+       * Handles a key pressed while the handles are shown. Tab and Shift+Tab
+       * select the next and the previous stop, wrapping around. Delete and
+       * Backspace remove the selected stop unless it lies at an end of the
+       * track, selecting the stop before it. The arrow keys, with no
+       * modifier but Shift, nudge the selected stop along the node's axes by
+       * NUDGE, or LARGE_NUDGE with Shift: a stop at an end of the track
+       * moves that end, a linear gradient's start or end point, a radial
+       * gradient's
+       * center or edge, or an angular gradient's rotation, its other stops
+       * keeping their places, and any other stop takes the offset of the
+       * point of the track nearest its nudged position, passing the stops
+       * it reaches.
+       * @param fill The fill.
+       * @param bounds The bounding box of the filled node in its local space.
+       * @param zoom The zoom of the view.
+       * @param stop The index of the selected stop.
+       * @param key The key pressed.
+       * @param modifiers The modifier keys held.
+       * @return The change made.
+       */
+      static GradientEdit press_key(const GradientFill& fill,
+        const Rect& bounds, double zoom, int stop, int key,
+        Qt::KeyboardModifiers modifiers);
 
       /** Constructs GradientHandles with no drag in progress. */
       GradientHandles();

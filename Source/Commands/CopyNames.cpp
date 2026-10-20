@@ -94,17 +94,8 @@ namespace {
   }
 
   bool has_custom_name(const Node& node) {
-    auto& name = node.m_header.m_name;
-    if(node.get_artboard() || node.get_reference()) {
-      return true;
-    } else if(name.empty()) {
-      return false;
-    } else if(auto text = node.get_text()) {
-      return name != make_text_name(*text->m_content);
-    }
-    auto kinds = get_kinds(node);
-    return std::none_of(kinds.begin(), kinds.end(),
-      [&] (const auto& kind) { return is_numbered_kind(name, kind); });
+    return node.get_artboard() || node.get_reference() ||
+      node.m_header.m_has_custom_name;
   }
 
   std::string make_name(const Document& document, const Node& node) {
@@ -146,14 +137,6 @@ namespace {
       std::to_string(highest + 1);
   }
 
-  bool has_instance_name(const std::string& name, const std::string& base) {
-    if(name.empty() || name == base) {
-      return true;
-    }
-    auto split = split_number(name);
-    return split && split->first == base;
-  }
-
   void rename(const Document& document, Transaction& transaction,
       const NodeId& id, std::string name) {
     auto& node = document.get(id);
@@ -169,8 +152,7 @@ namespace {
       const Node& node, const ComponentInstance& instance) {
     auto& components = document.get_resources().m_components;
     auto component = components.find(instance.m_component);
-    if(component == components.end() ||
-        !has_instance_name(node.m_header.m_name, component->second.m_name)) {
+    if(component == components.end() || node.m_header.m_has_custom_name) {
       return;
     }
     rename(document, transaction, node.get_id(),

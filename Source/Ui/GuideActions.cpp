@@ -72,7 +72,8 @@ namespace {
 GuideActions::GuideActions(ActionRegistry& actions)
     : m_actions(&actions),
       m_editor(nullptr),
-      m_workspace(Workspace::DESIGN) {
+      m_workspace(Workspace::DESIGN),
+      m_self(std::make_shared<GuideActions*>(this)) {
   m_actions->set_handler(COPY, [this] { copy(); });
   m_actions->set_handler(PASTE, [this] {
     if(auto clipboard = QGuiApplication::clipboard()) {
@@ -87,12 +88,16 @@ GuideActions::GuideActions(ActionRegistry& actions)
     }
   });
   m_actions->set_handler(HIDE, [this] {
-    m_settings.m_is_visible = !m_settings.m_is_visible;
-    publish();
+    auto settings = m_settings;
+    settings.m_is_visible = !settings.m_is_visible;
+    change(settings,
+      m_settings.m_is_visible ? "Hide All Guides" : "Show All Guides");
   });
   m_actions->set_handler(LOCK, [this] {
-    m_settings.m_is_locked = !m_settings.m_is_locked;
-    publish();
+    auto settings = m_settings;
+    settings.m_is_locked = !settings.m_is_locked;
+    change(settings,
+      m_settings.m_is_locked ? "Unlock All Guides" : "Lock All Guides");
   });
   m_actions->get(PASTE).setShortcutContext(Qt::WidgetShortcut);
   update();
@@ -209,6 +214,26 @@ void GuideActions::copy() {
   if(auto clipboard = QGuiApplication::clipboard()) {
     clipboard->setMimeData(make_guides_data(artboard.m_guides).release());
   }
+}
+
+void GuideActions::change(GuideSettings settings, std::string label) {
+  auto previous = m_settings;
+  m_settings = settings;
+  publish();
+  if(!m_editor) {
+    return;
+  }
+  auto self = std::weak_ptr<GuideActions*>(m_self);
+  auto apply = [self] (const GuideSettings& settings) {
+    if(auto actions = self.lock()) {
+      (*actions)->set_settings(settings);
+    }
+  };
+  m_editor->get_history().record(std::move(label), [=] {
+    apply(previous);
+  }, [=] {
+    apply(settings);
+  });
 }
 
 void GuideActions::publish() {

@@ -116,6 +116,7 @@ namespace {
   void copy_header(const NodeHeader& from, NodeHeader& to, ChangeMask mask) {
     if(is_set(mask, ChangeMask::NAME)) {
       to.m_name = from.m_name;
+      to.m_has_custom_name = from.m_has_custom_name;
     }
     if(is_set(mask, ChangeMask::VISIBILITY)) {
       to.m_is_visible = from.m_is_visible;
@@ -328,8 +329,16 @@ namespace {
 
   std::vector<Field> make_fields() {
     auto fields = std::vector<Field>();
-    fields.push_back(make_header_field(ChangeMask::NAME, "name",
-      [] (auto& header) -> auto& { return header.m_name; }));
+    fields.push_back(Field(ChangeMask::NAME, {"name"},
+      [] (const Node& node, const Node& source, Names& names) {
+        if(node.m_header.m_name != source.m_header.m_name) {
+          add_name(names, "name");
+        }
+      },
+      [] (Node& node, const Node& source, const Names&) {
+        node.m_header.m_name = source.m_header.m_name;
+        node.m_header.m_has_custom_name = source.m_header.m_has_custom_name;
+      }));
     fields.push_back(make_header_field(ChangeMask::VISIBILITY, "visible",
       [] (auto& header) -> auto& { return header.m_is_visible; }));
     fields.push_back(make_header_field(ChangeMask::LOCK, "locked",
@@ -1268,6 +1277,7 @@ namespace {
       dynamic_cast<const RenameComponentCommand*>(&command) ||
       dynamic_cast<const MakeEditableCommand*>(&command) ||
       dynamic_cast<const SetOpacityCommand*>(&command) ||
+      dynamic_cast<const SetBlendModeCommand*>(&command) ||
       dynamic_cast<const SetVisibilityCommand*>(&command) ||
       dynamic_cast<const SetLockCommand*>(&command) ||
       dynamic_cast<const RenameCommand*>(&command) ||
@@ -1409,6 +1419,7 @@ NodeId Rellu::insert_instance(const Document& document,
   if(group.m_stack) {
     remap_keys(group.m_stack->m_spacing, mapping);
   }
+  role.m_is_name_inherited = master->m_header.m_has_custom_name;
   group.m_component_instance = std::move(role);
   auto id = transaction.insert(
     parent, index, std::move(header), std::move(group));
@@ -1973,6 +1984,8 @@ namespace {
         if(auto node = m_document->find(master)) {
           auto header = node->m_header;
           header.m_name = name;
+          header.m_has_custom_name =
+            m_document->get(context.m_root).m_header.m_has_custom_name;
           m_transaction->replace_header(std::move(header));
         }
       }

@@ -373,10 +373,12 @@ void ArtboardGuides::draw(
     auto band = OverlayShape();
     band.m_fill = CREATION_COLOR;
     if(m_hover->m_orientation == Orientation::VERTICAL) {
-      band.m_center = Point(screen.m_x, screen.get_center().m_y);
+      band.m_center = Point(
+        screen.m_x - CREATION_WIDTH / 2, screen.get_center().m_y);
       band.m_size = Size(CREATION_WIDTH, screen.m_height);
     } else {
-      band.m_center = Point(screen.get_center().m_x, screen.m_y);
+      band.m_center = Point(
+        screen.get_center().m_x, screen.m_y - CREATION_WIDTH / 2);
       band.m_size = Size(screen.m_width, CREATION_WIDTH);
     }
     overlay.m_shapes.push_back(band);
@@ -570,12 +572,12 @@ std::optional<ArtboardGuides::Grip> ArtboardGuides::find(
         return Grip(*i, artboard->m_guides[*best].m_orientation, best);
       }
     }
-    if(is_across_y &&
-        std::abs(position.m_x - screen.m_x) <= CREATION_WIDTH / 2) {
+    if(is_across_y && position.m_x < screen.m_x &&
+        position.m_x >= screen.m_x - CREATION_WIDTH) {
       return Grip(*i, Orientation::VERTICAL, std::nullopt);
     }
-    if(is_across_x &&
-        std::abs(position.m_y - screen.m_y) <= CREATION_WIDTH / 2) {
+    if(is_across_x && position.m_y < screen.m_y &&
+        position.m_y >= screen.m_y - CREATION_WIDTH) {
       return Grip(*i, Orientation::HORIZONTAL, std::nullopt);
     }
   }

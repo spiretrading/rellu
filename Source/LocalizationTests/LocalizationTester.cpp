@@ -43,6 +43,14 @@ TEST_SUITE("Localization") {
       "Rechteck zeichnen");
     REQUIRE(localize("history", "Move Guide", Language::GERMAN) ==
       "Hilfslinie verschieben");
+    REQUIRE(localize("history", "Star Ratio", Language::GERMAN) ==
+      "Stern: Inkreis-/Umkreisverh\xC3\xA4ltnis");
+    REQUIRE(localize("history", "Corner Count", Language::GERMAN) ==
+      "Anzahl Ecken");
+    REQUIRE(localize("history", "Corner Radius", Language::GERMAN) ==
+      "Eckenradius");
+    REQUIRE(localize("history", "Extend Path", Language::GERMAN) ==
+      "Pfad erweitern");
     REQUIRE(localize("menu", "Show All Guides", Language::GERMAN) ==
       "Alle Hilfslinien einblenden");
     REQUIRE(localize("name", "Outline", Language::FRENCH) == "Contour");

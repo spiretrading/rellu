@@ -3,6 +3,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstring>
+#include <system_error>
 #include <QJsonArray>
 #include <QJsonObject>
 #include "Rellu/Io/XdValue.hpp"
@@ -110,6 +111,275 @@ namespace {
     }
     out.append(text.data() + start, text.size() - start);
     out += '"';
+  }
+
+  class Parser {
+    public:
+      explicit Parser(std::string_view text) noexcept;
+
+      std::optional<XdValue> parse();
+
+    private:
+      static constexpr auto MAXIMUM_DEPTH = 512;
+      std::string_view m_text;
+      std::size_t m_position;
+      int m_depth;
+
+      void skip_space();
+      bool consume(std::string_view token);
+      std::optional<XdValue> parse_value();
+      std::optional<std::string> parse_string();
+      std::optional<std::uint32_t> parse_hex();
+      std::optional<XdValue> parse_number();
+      std::optional<XdValue> parse_array();
+      std::optional<XdValue> parse_object();
+  };
+
+  void append_utf8(std::uint32_t code, std::string& out) {
+    if(code < 0x80) {
+      out += static_cast<char>(code);
+    } else if(code < 0x800) {
+      out += static_cast<char>(0xC0 | (code >> 6));
+      out += static_cast<char>(0x80 | (code & 0x3F));
+    } else if(code < 0x10000) {
+      out += static_cast<char>(0xE0 | (code >> 12));
+      out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+      out += static_cast<char>(0x80 | (code & 0x3F));
+    } else {
+      out += static_cast<char>(0xF0 | (code >> 18));
+      out += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+      out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+      out += static_cast<char>(0x80 | (code & 0x3F));
+    }
+  }
+
+  Parser::Parser(std::string_view text) noexcept
+    : m_text(text),
+      m_position(0),
+      m_depth(0) {}
+
+  std::optional<XdValue> Parser::parse() {
+    auto value = parse_value();
+    skip_space();
+    if(!value || m_position != m_text.size()) {
+      return std::nullopt;
+    }
+    return value;
+  }
+
+  void Parser::skip_space() {
+    while(m_position != m_text.size()) {
+      auto c = m_text[m_position];
+      if(c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+        return;
+      }
+      ++m_position;
+    }
+  }
+
+  bool Parser::consume(std::string_view token) {
+    if(m_text.substr(m_position, token.size()) != token) {
+      return false;
+    }
+    m_position += token.size();
+    return true;
+  }
+
+  std::optional<XdValue> Parser::parse_value() {
+    skip_space();
+    if(m_position == m_text.size()) {
+      return std::nullopt;
+    }
+    auto c = m_text[m_position];
+    if(c == '{') {
+      return parse_object();
+    } else if(c == '[') {
+      return parse_array();
+    } else if(c == '"') {
+      if(auto text = parse_string()) {
+        return XdValue(std::move(*text));
+      }
+      return std::nullopt;
+    } else if(consume("true")) {
+      return XdValue(true);
+    } else if(consume("false")) {
+      return XdValue(false);
+    } else if(consume("null")) {
+      return XdValue();
+    }
+    return parse_number();
+  }
+
+  std::optional<std::uint32_t> Parser::parse_hex() {
+    if(m_text.size() - m_position < 4) {
+      return std::nullopt;
+    }
+    auto code = std::uint32_t(0);
+    auto result = std::from_chars(m_text.data() + m_position,
+      m_text.data() + m_position + 4, code, 16);
+    if(result.ec != std::errc() ||
+        result.ptr != m_text.data() + m_position + 4) {
+      return std::nullopt;
+    }
+    m_position += 4;
+    return code;
+  }
+
+  std::optional<std::string> Parser::parse_string() {
+    ++m_position;
+    auto out = std::string();
+    while(m_position != m_text.size()) {
+      auto c = m_text[m_position];
+      if(c == '"') {
+        ++m_position;
+        return out;
+      } else if(static_cast<unsigned char>(c) < 0x20) {
+        return std::nullopt;
+      } else if(c != '\\') {
+        out += c;
+        ++m_position;
+        continue;
+      }
+      ++m_position;
+      if(m_position == m_text.size()) {
+        return std::nullopt;
+      }
+      auto escape = m_text[m_position];
+      ++m_position;
+      switch(escape) {
+        case '"':
+        case '\\':
+        case '/':
+          out += escape;
+          break;
+        case 'b':
+          out += '\b';
+          break;
+        case 'f':
+          out += '\f';
+          break;
+        case 'n':
+          out += '\n';
+          break;
+        case 'r':
+          out += '\r';
+          break;
+        case 't':
+          out += '\t';
+          break;
+        case 'u':
+          {
+            auto code = parse_hex();
+            if(!code) {
+              return std::nullopt;
+            }
+            if(*code >= 0xD800 && *code < 0xDC00 && consume("\\u")) {
+              auto low = parse_hex();
+              if(!low) {
+                return std::nullopt;
+              }
+              if(*low >= 0xDC00 && *low < 0xE000) {
+                append_utf8(
+                  0x10000 + ((*code - 0xD800) << 10) + (*low - 0xDC00), out);
+              } else {
+                append_utf8(*code, out);
+                append_utf8(*low, out);
+              }
+            } else {
+              append_utf8(*code, out);
+            }
+          }
+          break;
+        default:
+          return std::nullopt;
+      }
+    }
+    return std::nullopt;
+  }
+
+  std::optional<XdValue> Parser::parse_number() {
+    auto start = m_position;
+    if(m_position != m_text.size() && m_text[m_position] == '-') {
+      ++m_position;
+    }
+    while(m_position != m_text.size()) {
+      auto c = m_text[m_position];
+      if(!(c >= '0' && c <= '9') && c != '.' && c != 'e' && c != 'E' &&
+          c != '+' && c != '-') {
+        break;
+      }
+      ++m_position;
+    }
+    auto number = 0.0;
+    auto result = std::from_chars(
+      m_text.data() + start, m_text.data() + m_position, number);
+    if(start == m_position || result.ec != std::errc() ||
+        result.ptr != m_text.data() + m_position) {
+      return std::nullopt;
+    }
+    return XdValue(number);
+  }
+
+  std::optional<XdValue> Parser::parse_array() {
+    if(++m_depth > MAXIMUM_DEPTH) {
+      return std::nullopt;
+    }
+    ++m_position;
+    auto array = XdValue::make_array();
+    skip_space();
+    if(!consume("]")) {
+      while(true) {
+        auto element = parse_value();
+        if(!element) {
+          return std::nullopt;
+        }
+        array.append(std::move(*element));
+        skip_space();
+        if(consume("]")) {
+          break;
+        } else if(!consume(",")) {
+          return std::nullopt;
+        }
+      }
+    }
+    --m_depth;
+    return array;
+  }
+
+  std::optional<XdValue> Parser::parse_object() {
+    if(++m_depth > MAXIMUM_DEPTH) {
+      return std::nullopt;
+    }
+    ++m_position;
+    auto object = XdValue::make_object();
+    auto& members = object.get_members();
+    skip_space();
+    if(!consume("}")) {
+      while(true) {
+        skip_space();
+        if(m_position == m_text.size() || m_text[m_position] != '"') {
+          return std::nullopt;
+        }
+        auto key = parse_string();
+        skip_space();
+        if(!key || !consume(":")) {
+          return std::nullopt;
+        }
+        auto value = parse_value();
+        if(!value) {
+          return std::nullopt;
+        }
+        members.push_back(XdMember(std::move(*key), std::move(*value)));
+        skip_space();
+        if(consume("}")) {
+          break;
+        } else if(!consume(",")) {
+          return std::nullopt;
+        }
+      }
+    }
+    --m_depth;
+    return object;
   }
 }
 
@@ -286,6 +556,10 @@ QJsonValue Rellu::to_json_value(const XdValue& value) {
     default:
       return QJsonValue(QJsonValue::Null);
   }
+}
+
+std::optional<XdValue> Rellu::parse_xd_value(std::string_view text) {
+  return Parser(text).parse();
 }
 
 void Rellu::append_number(double value, std::string& out) {

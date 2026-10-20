@@ -1,3 +1,5 @@
+#include <numbers>
+#include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
@@ -44,6 +46,20 @@ namespace {
 
   const ShapeGeometry& get_geometry(const Node& node) {
     return node.get_shape()->m_geometry;
+  }
+
+  void hover(ToolManager& tools, Point position) {
+    tools.move(make_event(position, Qt::NoButton, Qt::NoButton));
+  }
+
+  std::vector<Point> get_handle_centers(const CanvasOverlay& overlay) {
+    auto centers = std::vector<Point>();
+    for(auto& shape : overlay.m_shapes) {
+      if(shape.m_radius > 0 && shape.m_fill == make_color(255, 255, 255)) {
+        centers.push_back(shape.m_center);
+      }
+    }
+    return centers;
   }
 }
 
@@ -144,7 +160,7 @@ TEST_SUITE("ShapeTool") {
       ShapeGeometry(EllipseShape(Point(30, 15), 30, 15)));
     REQUIRE(node.get_shape()->m_style == make_default_style());
     REQUIRE(editor.get_history().get_undo_label() == "Draw Ellipse");
-    drag(tools, Point(200, 200), Point(240, 210), Qt::ShiftModifier);
+    drag(tools, Point(300, 300), Point(340, 310), Qt::ShiftModifier);
     REQUIRE(get_geometry(get_drawn(editor)) ==
       ShapeGeometry(EllipseShape(Point(20, 20), 20, 20)));
     REQUIRE(get_drawn(editor).m_header.m_name == "Ellipse 2");
@@ -185,7 +201,7 @@ TEST_SUITE("ShapeTool") {
     drag(tools, Point(150, 150), Point(250, 170), Qt::ShiftModifier);
     REQUIRE(get_geometry(get_drawn(editor)) ==
       ShapeGeometry(LineShape(Point(0, 0), Point(100, 0))));
-    drag(tools, Point(150, 150), Point(210, 200), Qt::ShiftModifier);
+    drag(tools, Point(150, 250), Point(210, 300), Qt::ShiftModifier);
     REQUIRE(get_geometry(get_drawn(editor)) ==
       ShapeGeometry(LineShape(Point(0, 0), Point(55, 55))));
     drag(tools, Point(200, 200), Point(220, 190), Qt::AltModifier);
@@ -217,6 +233,88 @@ TEST_SUITE("ShapeTool") {
     REQUIRE(!tools.is_busy());
     REQUIRE(editor.get_history().get_undo_count() == 1);
     REQUIRE(!tools.draw().m_shapes.empty());
+  }
+
+  TEST_CASE("selection_handles") {
+    auto document = Document();
+    auto artboard = build_artboard(document);
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto snap = SnapService();
+    tools.get_context().set_snap_service(snap);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    tools.set_tool("rectangle");
+    auto& history = editor.get_history();
+    drag(tools, Point(200, 200), Point(300, 250));
+    auto rectangle = get_drawn(editor).get_id();
+    auto centers = get_handle_centers(tools.draw());
+    REQUIRE(centers.size() == 12);
+    REQUIRE(centers[4] == Point(300, 250));
+    REQUIRE(centers[8] == Point(214, 214));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
+    hover(tools, Point(250, 225));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::CROSSHAIR);
+    hover(tools, Point(250, 201));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
+    hover(tools, Point(250, 191));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
+    drag(tools, Point(300, 250), Point(340, 270));
+    REQUIRE(tools.get_tool_name() == "rectangle");
+    REQUIRE(editor.get_selection().get_nodes() == std::vector{rectangle});
+    REQUIRE(*get_world_bounds(document, rectangle) == Rect(200, 200, 140, 70));
+    REQUIRE(document.get(artboard).m_children.size() == 1);
+    REQUIRE(history.get_undo_label() == "Resize");
+    REQUIRE(history.get_undo_count() == 2);
+    drag(tools, Point(214, 214), Point(224, 224));
+    REQUIRE(std::get<RectangleShape>(get_geometry(get_drawn(editor))).m_radii ==
+      CornerRadii(10, 10, 10, 10));
+    REQUIRE(history.get_undo_label() == "Corner Radius");
+    drag(tools, Point(270, 191), Point(349, 235));
+    auto transform = get_world_transform(document, rectangle);
+    REQUIRE(std::atan2(transform.m_b, transform.m_a) ==
+      doctest::Approx(std::numbers::pi / 2));
+    REQUIRE(history.get_undo_label() == "Rotate");
+    REQUIRE(history.get_undo_count() == 4);
+    tools.press(make_event(Point(500, 300), Qt::LeftButton, Qt::LeftButton));
+    tools.move(make_event(Point(550, 350), Qt::NoButton, Qt::LeftButton));
+    REQUIRE(tools.draw().m_shapes.empty());
+    tools.release(make_event(Point(550, 350), Qt::LeftButton, Qt::NoButton));
+    REQUIRE(document.get(artboard).m_children.size() == 2);
+    REQUIRE(get_handle_centers(tools.draw()).size() == 12);
+    REQUIRE(tools.get_tool_name() == "rectangle");
+    tools.set_tool("ellipse");
+    drag(tools, Point(550, 350), Point(560, 380));
+    REQUIRE(document.get(artboard).m_children.size() == 2);
+    REQUIRE(*get_world_bounds(document, get_drawn(editor).get_id()) ==
+      Rect(500, 300, 60, 80));
+  }
+
+  TEST_CASE("line_handles") {
+    auto document = Document();
+    auto artboard = build_artboard(document);
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto snap = SnapService();
+    tools.get_context().set_snap_service(snap);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    tools.set_tool("line");
+    drag(tools, Point(250, 150), Point(150, 200));
+    auto line = get_drawn(editor).get_id();
+    auto overlay = tools.draw();
+    REQUIRE(overlay.m_shapes.size() == 2);
+    REQUIRE(get_handle_centers(overlay) ==
+      std::vector{Point(250, 150), Point(150, 200)});
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
+    hover(tools, Point(200, 175));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::CROSSHAIR);
+    drag(tools, Point(150, 200), Point(170, 230));
+    REQUIRE(document.get(artboard).m_children.size() == 1);
+    REQUIRE(get_geometry(document.get(line)) ==
+      ShapeGeometry(LineShape(Point(80, 0), Point(0, 80))));
+    REQUIRE(document.get(line).m_header.m_transform ==
+      make_translation(70, 50));
+    REQUIRE(editor.get_history().get_undo_label() == "Drag Handle");
+    REQUIRE(tools.get_tool_name() == "line");
   }
 
   TEST_CASE("escape") {

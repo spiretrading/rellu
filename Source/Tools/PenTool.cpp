@@ -122,6 +122,7 @@ void PenTool::press(ToolContext& context, const PointerEvent& event) {
         m_contour = index->m_contour;
         m_is_reversed =
           index->m_anchor == 0 && contour.m_anchors.size() > 1;
+        editor.get_history().record("Extend Path", nullptr, nullptr);
       }
       return;
     }

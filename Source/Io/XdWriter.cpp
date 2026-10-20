@@ -18,6 +18,7 @@
 #include "Rellu/Io/XdOpaque.hpp"
 #include "Rellu/Io/XdPackage.hpp"
 #include "Rellu/Io/XdPatch.hpp"
+#include "Rellu/Io/XdValues.hpp"
 #include "Rellu/Io/XdWriter.hpp"
 #include "Rellu/Model/CompoundResolution.hpp"
 #include "Parallel.hpp"
@@ -354,6 +355,8 @@ namespace {
         title += "&gt;";
       } else if(c == '&') {
         title += "&amp;";
+      } else if(static_cast<unsigned char>(c) < 0x20) {
+        title += ' ';
       } else {
         title += c;
       }
@@ -384,6 +387,41 @@ namespace {
       "<?xpacket end=\"w\"?>", stamp, id, title);
   }
 
+  std::string replace_attribute(
+      std::string xml, std::string_view name, std::string_view value) {
+    auto key = std::string(name) + "=\"";
+    auto start = xml.find(key);
+    if(start == std::string::npos) {
+      return xml;
+    }
+    start += key.size();
+    auto end = xml.find('"', start);
+    if(end == std::string::npos) {
+      return xml;
+    }
+    xml.replace(start, end - start, value);
+    return xml;
+  }
+
+  void renew_ids(XdValue& value, const QString& composite) {
+    if(value.is_array()) {
+      for(auto& element : value.get_elements()) {
+        renew_ids(element, composite);
+      }
+    } else if(value.is_object()) {
+      for(auto& member : value.get_members()) {
+        if(member.m_key == "id" &&
+            member.m_value.get_type() == XdValue::Type::STRING) {
+          auto id = member.m_value.to_string();
+          member.m_value = to_id(derive_node_id(QString::fromUtf8(id.data(),
+            static_cast<qsizetype>(id.size())), composite));
+        } else {
+          renew_ids(member.m_value, composite);
+        }
+      }
+    }
+  }
+
   class Writer {
     public:
       Writer(const Document& document, const XdWriteOptions& options);
@@ -396,6 +434,9 @@ namespace {
       const XdWriteOptions* m_options;
       XdGenerator m_generator;
       XdPackageData m_data;
+      XdValue m_manifest;
+      std::string m_composite;
+      bool m_is_new_composite;
       std::unordered_map<ImageId, std::string> m_image_names;
 
       void write_node(const Node& node, std::string& out) const;
@@ -413,9 +454,28 @@ namespace {
       : m_document(&document),
         m_options(&options),
         m_generator(document, options.m_layout),
-        m_data(decode_package_data(document.get_opaque().get_bytes())) {
+        m_data(decode_package_data(document.get_opaque().get_bytes())),
+        m_composite(options.m_composite),
+        m_is_new_composite(false) {
     for(auto& name : m_data.m_image_names) {
       m_image_names.emplace(name.first, name.second);
+    }
+    if(!m_data.m_manifest.empty()) {
+      if(auto manifest = parse_xd_value(m_data.m_manifest)) {
+        m_manifest = std::move(*manifest);
+      }
+    }
+    if(m_manifest.is_object()) {
+      auto recorded = m_manifest.find("id");
+      if(m_composite.empty()) {
+        if(recorded) {
+          m_composite = recorded->to_string();
+        }
+      } else {
+        m_is_new_composite = recorded && recorded->to_string() != m_composite;
+      }
+    } else if(m_composite.empty()) {
+      m_composite = new_id();
     }
   }
 
@@ -567,25 +627,41 @@ namespace {
     for(auto& entry : entries) {
       names.insert(entry.m_name);
     }
-    auto manifest = XdValue();
-    if(!m_data.m_manifest.empty()) {
-      auto view = std::string_view(m_data.m_manifest);
-      manifest = decode_value(view);
-    }
+    auto manifest = m_manifest;
     if(!manifest.is_object()) {
       manifest = XdValue::make_object();
-      auto id = new_id();
-      manifest.set("name", m_options->m_name);
+      manifest.set("name",
+        m_options->m_name.empty() ? std::string("Untitled") :
+          m_options->m_name);
       manifest.set("manifest-format-version", 6);
       manifest.set("uxdesign#applicationVersion", "57.1.12.2");
       manifest.set("type", "application/vnd.adobe.sparkler.project+dcx");
       manifest.set("state", "unmodified");
       manifest.set("components", XdValue::make_array());
       manifest.set("uxdesign#id", new_id());
-      manifest.set("id", id);
-      manifest.set("uxdesign#compositeID", id);
+      manifest.set("id", m_composite);
+      manifest.set("uxdesign#compositeID", m_composite);
       manifest.set("uxdesign#version", "2.33");
       manifest.set("children", XdValue::make_array());
+    } else {
+      if(m_is_new_composite) {
+        auto composite = QString::fromStdString(m_composite);
+        for(auto key : {"children", "components"}) {
+          if(auto value = manifest.find(key)) {
+            renew_ids(*value, composite);
+          }
+        }
+      }
+      if(!m_options->m_composite.empty()) {
+        manifest.set("id", m_composite);
+        manifest.set("uxdesign#compositeID", m_composite);
+      }
+      if(!m_options->m_name.empty()) {
+        manifest.set("name", m_options->m_name);
+      }
+    }
+    if(!m_options->m_serialization.empty()) {
+      manifest.set("uxdesign#serializationId", m_options->m_serialization);
     }
     if(!m_options->m_id.empty()) {
       manifest.set("uxdesign#id", m_options->m_id);
@@ -654,14 +730,20 @@ namespace {
         entry.set("name", node.m_header.m_name);
         entry.set("path", path);
       }
-      auto& bounds = entry.set("uxdesign#bounds", XdValue::make_object());
-      bounds.set("x", artboard.m_frame.m_x);
-      bounds.set("y", artboard.m_frame.m_y);
-      bounds.set("width", artboard.m_frame.m_width);
-      bounds.set("height", artboard.m_frame.m_height);
+      auto bounds = entry.find("uxdesign#bounds");
+      if(!bounds || !bounds->is_object()) {
+        bounds = &entry.set("uxdesign#bounds", XdValue::make_object());
+      }
+      bounds->set("x", artboard.m_frame.m_x);
+      bounds->set("y", artboard.m_frame.m_y);
+      bounds->set("width", artboard.m_frame.m_width);
+      bounds->set("height", artboard.m_frame.m_height);
       if(artboard.m_viewport_height) {
-        entry.set("uxdesign#viewport", XdValue::make_object()).set(
-          "height", *artboard.m_viewport_height);
+        auto viewport = entry.find("uxdesign#viewport");
+        if(!viewport || !viewport->is_object()) {
+          viewport = &entry.set("uxdesign#viewport", XdValue::make_object());
+        }
+        viewport->set("height", *artboard.m_viewport_height);
       } else {
         entry.erase("uxdesign#viewport");
       }
@@ -765,10 +847,16 @@ namespace {
       available.emplace("mimetype",
         Entry("mimetype", std::string(MIMETYPE)));
     }
-    if(m_data.m_manifest.empty() && !available.contains(std::string(
-        METADATA))) {
+    auto metadata = available.find(std::string(METADATA));
+    if(!m_manifest.is_object() && metadata == available.end()) {
       available.emplace(std::string(METADATA), Entry(std::string(METADATA),
-        make_metadata(new_id(), m_options->m_name)));
+        make_metadata(m_composite, m_options->m_name.empty() ?
+          std::string_view("Untitled") : m_options->m_name)));
+    } else if(m_is_new_composite && metadata != available.end()) {
+      for(auto name : {"xmpMM:DocumentID", "xmpMM:OriginalDocumentID"}) {
+        metadata->second.m_data = replace_attribute(
+          std::move(metadata->second.m_data), name, m_composite);
+      }
     }
     auto order = std::vector<std::string>();
     auto ordered = std::unordered_set<std::string>();

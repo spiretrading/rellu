@@ -164,7 +164,7 @@ namespace {
         generator.make_interactions(), XdStructure::get_none(),
         "interactions", &counts).m_patch;
     }
-    data.m_manifest = encode_json(QJsonValue(package.get_manifest()));
+    data.m_manifest = to_bytes(package.read(XdPackage::MANIFEST));
     generated_entries.insert(std::string(XdPackage::MANIFEST));
     generated_entries.insert(std::string(XdPackage::RESOURCES));
     generated_entries.insert(std::string(XdPackage::PASTEBOARD));

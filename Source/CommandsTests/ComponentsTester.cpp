@@ -204,6 +204,29 @@ TEST_SUITE("Components") {
     REQUIRE(document.get(reference).get_reference());
   }
 
+  TEST_CASE("blend_mode_instance_edit") {
+    auto document = Document();
+    auto nested = build_nested(document);
+    auto icon = document.get(nested.m_instance).m_children.back();
+    auto blend = std::make_unique<SetBlendModeCommand>(
+      std::vector{icon}, BlendMode::MULTIPLY);
+    auto address = blend.get();
+    auto command =
+      make_instance_edit(document, std::vector{icon}, std::move(blend));
+    REQUIRE(command.get() == address);
+    auto history = History(document);
+    REQUIRE(history.execute(std::move(command)));
+    REQUIRE(!document.get(icon).get_reference());
+    REQUIRE(document.get(icon).m_header.m_blend_mode == BlendMode::MULTIPLY);
+    auto& children = document.get(icon).m_children;
+    REQUIRE(!children.empty());
+    for(auto& child : children) {
+      REQUIRE(document.get(child).get_reference());
+    }
+    REQUIRE(get_instance_role(document.get(nested.m_instance))->m_overrides.
+      m_properties.at(icon) == std::vector<std::string>{"blendMode"});
+  }
+
   TEST_CASE("rendered_header") {
     auto document = Document();
     auto nested = build_nested(document);

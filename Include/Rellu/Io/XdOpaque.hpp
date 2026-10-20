@@ -71,7 +71,7 @@ namespace Rellu {
      */
     std::vector<std::pair<std::string, std::string>> m_parts;
 
-    /** The encoded manifest, empty if there is none. */
+    /** The JSON text of the manifest as read, empty if there is none. */
     std::string m_manifest;
 
     /** The patch of the root of the shared resources entry. */

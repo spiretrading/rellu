@@ -35,7 +35,7 @@ TEST_SUITE("CornerRadiusCommands") {
     auto history = History(document);
     require_undoable(history, std::make_unique<SetCornerRadiusCommand>(
       std::vector{scene.m_rectangle, polygon, scene.m_text}, 5));
-    REQUIRE(history.get_undo_label() == "Change Corner Radius");
+    REQUIRE(history.get_undo_label() == "Corner Radius");
     REQUIRE(get_radii(document, scene.m_rectangle) == CornerRadii(5, 5, 5, 5));
     REQUIRE(get_polygon_radius(document, polygon) == 5);
     REQUIRE(history.execute(std::make_unique<SetCornerRadiusCommand>(

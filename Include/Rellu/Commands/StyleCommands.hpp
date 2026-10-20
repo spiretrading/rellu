@@ -12,28 +12,42 @@ namespace Rellu {
 
   /**
    * Sets the fill of shapes and text, and the background of artboards,
-   * labelled Change Fill. A group's fill is set on the shapes and text
-   * within it. A solid fill also colors every character of a text node.
+   * labelled Change Fill unless given another label. A group's fill is set
+   * on the shapes and text within it. A solid fill also colors every
+   * character of a text node.
    */
   class SetFillCommand : public Command {
     public:
 
       /**
-       * Constructs a SetFillCommand.
+       * Constructs a SetFillCommand labelled Change Fill.
        * @param nodes The nodes to change.
        * @param fill The new fill.
        */
       SetFillCommand(std::vector<NodeId> nodes, Fill fill) noexcept;
 
+      /**
+       * Constructs a SetFillCommand.
+       * @param nodes The nodes to change.
+       * @param fill The new fill.
+       * @param label The label naming the operation.
+       */
+      SetFillCommand(
+        std::vector<NodeId> nodes, Fill fill, std::string label) noexcept;
+
       std::string get_label() const override;
       void apply(const Document& document, Transaction& transaction) override;
 
-      /** Takes the fill of a SetFillCommand changing the same nodes. */
+      /**
+       * Takes the fill of a SetFillCommand with the same label changing the
+       * same nodes.
+       */
       bool merge(const Command& command) override;
 
     private:
       std::vector<NodeId> m_nodes;
       Fill m_fill;
+      std::string m_label;
   };
 
   /** The stroke properties a SetStrokeCommand sets, absent ones kept. */

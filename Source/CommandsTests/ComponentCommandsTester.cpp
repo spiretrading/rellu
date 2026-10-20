@@ -382,7 +382,10 @@ TEST_SUITE("ComponentCommands") {
       std::vector{instance}));
     history.execute(
       std::make_unique<SetOpacityCommand>(std::vector{instance}, 0.5));
+    REQUIRE(get_role(document, instance).m_is_name_inherited);
     history.execute(std::make_unique<RenameCommand>(instance, "Renamed"));
+    REQUIRE(document.get(instance).m_header.m_has_custom_name);
+    REQUIRE(!get_role(document, instance).m_is_name_inherited);
     REQUIRE(!commands.make("object.reset_main_state", document,
       std::vector{instance}));
     auto master_rectangle =
@@ -399,10 +402,47 @@ TEST_SUITE("ComponentCommands") {
     REQUIRE(get_role(document, instance).m_overrides == Overrides());
     REQUIRE(document.get(instance).m_header.m_opacity == 0.5);
     REQUIRE(document.get(instance).m_header.m_name == "Button");
+    REQUIRE(document.get(instance).m_header.m_has_custom_name);
+    REQUIRE(get_role(document, instance).m_is_name_inherited);
     REQUIRE(document.get(copy).get_reference());
     REQUIRE(get_fill(document, copy) == make_color(255, 0, 0));
     REQUIRE(!commands.make("object.reset_main_state", document,
       std::vector{parts.m_group}));
+  }
+
+  TEST_CASE("reset_nested_in_main") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto commands = CommandRegistry();
+    add_component_commands(commands);
+    auto inner = make_component(history, parts.m_group);
+    auto nested = add_instance(history, inner, parts.m_artboard, 200, 20);
+    auto outer = nested;
+    make_component(history, outer);
+    auto owner = get_master_node(document, outer, nested);
+    REQUIRE(get_role(document, owner).m_component == inner);
+    auto override_opacity = [&] (const NodeId& id, bool is_overridden) {
+      auto transaction = Transaction(document);
+      auto group = *document.get(id).get_group();
+      auto& properties = group.m_component_instance->m_overrides.m_properties;
+      properties.clear();
+      if(is_overridden) {
+        properties.emplace(document.get(id).m_children.front(),
+          std::vector<std::string>{"opacity"});
+      }
+      transaction.replace_payload(id, group);
+      transaction.commit();
+    };
+    REQUIRE(!commands.make("object.reset_main_state", document,
+      std::vector{nested}));
+    override_opacity(nested, true);
+    REQUIRE(!commands.make("object.reset_main_state", document,
+      std::vector{nested}));
+    override_opacity(nested, false);
+    override_opacity(owner, true);
+    REQUIRE(commands.make("object.reset_main_state", document,
+      std::vector{nested}));
   }
 
   TEST_CASE("states") {
@@ -897,7 +937,14 @@ TEST_SUITE("ComponentCommands") {
     auto document = Document();
     auto parts = build_parts(document);
     auto history = History(document);
-    history.execute(std::make_unique<RenameCommand>(parts.m_group, "Group 2"));
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(parts.m_group).m_header;
+      header.m_name = "Group 2";
+      header.m_has_custom_name = false;
+      transaction.replace_header(std::move(header));
+      transaction.commit();
+    }
     auto component = make_component(history, parts.m_group);
     auto& main = document.get(parts.m_group);
     REQUIRE(main.m_header.m_name == "Component 1 \xE2\x80\x93 1");
@@ -924,8 +971,10 @@ TEST_SUITE("ComponentCommands") {
       "Button");
     auto duplicate = history.execute(
       std::make_unique<DuplicateCommand>(std::vector{parts.m_group}));
-    REQUIRE(document.get(duplicate->get_selection()->front()).m_header.
-      m_name == "Button \xE2\x80\x93 1");
+    auto& copy = document.get(duplicate->get_selection()->front());
+    REQUIRE(copy.m_header.m_name == "Button");
+    REQUIRE(copy.m_header.m_has_custom_name);
+    REQUIRE(get_role(document, copy.get_id()).m_is_name_inherited);
   }
 
   TEST_CASE("stack_item") {

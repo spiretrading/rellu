@@ -2,6 +2,7 @@
 #include <cmath>
 #include <exception>
 #include <memory>
+#include <numbers>
 #include <tuple>
 #include <utility>
 #include <QApplication>
@@ -18,7 +19,9 @@
 #include <QLinearGradient>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
+#include <QPolygonF>
 #include <QScreen>
 #include <QScrollArea>
 #include <QToolButton>
@@ -260,7 +263,8 @@ namespace {
         if(!thumbnail.isNull()) {
           drag->setPixmap(thumbnail);
         }
-        drag->exec(Qt::CopyAction);
+        drag->setDragCursor(make_swap_cursor(), SWAP_DROP_ACTION);
+        drag->exec(Qt::CopyAction | SWAP_DROP_ACTION, Qt::CopyAction);
       }
 
       void contextMenuEvent(QContextMenuEvent* event) override {
@@ -1208,6 +1212,10 @@ void AssetsPanel::edit_character_style(const CharacterStyleId& style) {
         m_editor->get_history().seal();
       }
     }, this);
+  editor->get_color_picker().set_model(m_picker->get_model());
+  editor->get_color_picker().set_model_handler([this] (ColorModel model) {
+    m_picker->apply_model(model);
+  });
   m_style_editor = editor;
   editor->adjustSize();
   auto position = mapToGlobal(QPoint(width() + 8, 0));
@@ -1832,6 +1840,43 @@ std::optional<ComponentId> Rellu::read_component_mime_data(
     return *id;
   }
   return std::nullopt;
+}
+
+QPixmap Rellu::make_swap_cursor() {
+  constexpr auto SIZE = 32;
+  auto pixmap = QPixmap(SIZE, SIZE);
+  pixmap.fill(Qt::transparent);
+  auto painter = QPainter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing);
+  auto arrow = QPolygonF({QPointF(1, 1), QPointF(1, 17), QPointF(5, 13.5),
+    QPointF(8, 20), QPointF(10.5, 19), QPointF(7.5, 12.5),
+    QPointF(12.5, 12.5)});
+  painter.setPen(QPen(Qt::white, 1.5, Qt::SolidLine, Qt::RoundCap,
+    Qt::RoundJoin));
+  painter.setBrush(Qt::black);
+  painter.drawPolygon(arrow);
+  auto bounds = QRectF(15.5, 16.5, 11, 11);
+  auto draw = [&] (const QColor& color, double width) {
+    painter.setPen(QPen(color, width, Qt::SolidLine, Qt::RoundCap,
+      Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    for(auto start : {20, 200}) {
+      auto arc = QPainterPath();
+      arc.arcMoveTo(bounds, start);
+      arc.arcTo(bounds, start, 140);
+      painter.drawPath(arc);
+      auto end = arc.pointAtPercent(1);
+      auto tangent = arc.angleAtPercent(1) * std::numbers::pi / 180;
+      auto back = QPointF(-std::cos(tangent), std::sin(tangent)) * 3;
+      auto side = QPointF(-back.y(), back.x());
+      painter.drawLine(end, end + back + side);
+      painter.drawLine(end, end + back - side);
+    }
+  };
+  draw(Qt::white, 3.5);
+  draw(Qt::black, 1.5);
+  painter.end();
+  return pixmap;
 }
 
 QString Rellu::get_swatch_label(const ColorSwatch& swatch) {

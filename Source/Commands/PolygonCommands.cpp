@@ -11,7 +11,7 @@ SetCornerCountCommand::SetCornerCountCommand(
     m_count(std::clamp(count, MINIMUM_CORNERS, MAXIMUM_CORNERS)) {}
 
 std::string SetCornerCountCommand::get_label() const {
-  return "Change Corner Count";
+  return "Corner Count";
 }
 
 void SetCornerCountCommand::apply(
@@ -53,7 +53,7 @@ SetStarRatioCommand::SetStarRatioCommand(
     m_ratio(std::clamp(ratio, MINIMUM_RATIO, MAXIMUM_RATIO)) {}
 
 std::string SetStarRatioCommand::get_label() const {
-  return "Change Star Ratio";
+  return "Star Ratio";
 }
 
 void SetStarRatioCommand::apply(

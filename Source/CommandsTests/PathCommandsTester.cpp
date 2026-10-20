@@ -1,3 +1,4 @@
+#include <cmath>
 #include <memory>
 #include <string>
 #include <variant>
@@ -7,8 +8,10 @@
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/History.hpp"
 #include "Rellu/Commands/PathCommands.hpp"
+#include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Geometry/BooleanOperation.hpp"
 #include "Rellu/Geometry/Path.hpp"
+#include "Rellu/Geometry/Polyline.hpp"
 #include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/Transaction.hpp"
@@ -224,6 +227,118 @@ TEST_SUITE("PathCommands") {
       m_height > 20);
   }
 
+  TEST_CASE("outline_stroke_curves") {
+    auto document = Document();
+    auto board = build_board(document);
+    {
+      auto ellipse = get_shape(document, board.m_ellipse);
+      ellipse.m_style.m_fill = SolidFill(make_color(255, 255, 255));
+      ellipse.m_style.m_stroke =
+        Stroke(make_color(0, 0, 0), 1, StrokeAlignment::INSIDE);
+      auto transaction = Transaction(document);
+      transaction.replace_payload(board.m_ellipse, ellipse);
+      transaction.commit();
+      document.clear_history();
+    }
+    auto history = History(document);
+    auto recorded = require_undoable(history, make_registry().make(
+      "object.path.outline_stroke", document, std::vector{board.m_ellipse}));
+    auto selection = *recorded->get_selection();
+    REQUIRE(selection.size() == 2);
+    auto& path = *std::get<PathShape>(
+      get_shape(document, selection[1]).m_geometry).m_path;
+    auto moves = 0;
+    auto cubics = 0;
+    for(auto& segment : path.get_segments()) {
+      moves += segment.m_type == SegmentType::MOVE;
+      cubics += segment.m_type == SegmentType::CUBIC;
+      REQUIRE(segment.m_type != SegmentType::LINE);
+    }
+    REQUIRE(moves == 2);
+    REQUIRE(cubics >= 8);
+    REQUIRE(cubics <= 80);
+    for(auto& polyline : flatten(path, 0.001)) {
+      for(auto& point : polyline.m_points) {
+        auto radius = distance(point, Point(10, 10));
+        REQUIRE((std::abs(radius - 10) < 0.03 || std::abs(radius - 9) < 0.03));
+      }
+    }
+  }
+
+  TEST_CASE("outline_stroke_text") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto set_text = [&] (bool is_filled) {
+      auto text = *document.get(board.m_text).get_text();
+      text.m_style.m_fill = is_filled ?
+        Fill(SolidFill(make_color(0, 0, 0))) : Fill(NoFill());
+      text.m_style.m_stroke = Stroke(make_color(255, 0, 0), 2);
+      auto transaction = Transaction(document);
+      transaction.replace_payload(board.m_text, text);
+      transaction.commit();
+      document.clear_history();
+    };
+    set_text(true);
+    REQUIRE(is_outline_strokable(document, board.m_text));
+    auto registry = CommandRegistry();
+    add_path_commands(registry, [] (const auto&) {
+      return make_rectangle(Rect(0, 0, 20, 10));
+    });
+    auto history = History(document);
+    auto recorded = require_undoable(history, registry.make(
+      "object.path.outline_stroke", document, std::vector{board.m_text}));
+    auto selection = *recorded->get_selection();
+    REQUIRE(selection.size() == 2);
+    REQUIRE(selection[0] == board.m_text);
+    REQUIRE(!document.get(board.m_text).get_text()->m_style.m_stroke->
+      m_is_enabled);
+    auto& outline = document.get(selection[1]);
+    REQUIRE(outline.m_header.m_name == "Text - Outline");
+    REQUIRE(outline.get_shape()->m_style.m_fill ==
+      Fill(SolidFill(make_color(255, 0, 0))));
+    REQUIRE(get_bounds(*std::get<PathShape>(
+      outline.get_shape()->m_geometry).m_path) == Rect(-1, -1, 22, 12));
+    REQUIRE(history.undo());
+    set_text(false);
+    auto replacement = History(document);
+    require_undoable(replacement, registry.make(
+      "object.path.outline_stroke", document, std::vector{board.m_text}));
+    auto& replaced = document.get(board.m_text);
+    REQUIRE(replaced.get_shape());
+    REQUIRE(replaced.m_header.m_name == "Text");
+    REQUIRE(replaced.m_parent == board.m_artboard);
+    REQUIRE(!make_registry().make("object.path.outline_stroke", document,
+      std::vector{board.m_top}));
+  }
+
+  TEST_CASE("outline_stroke_compound") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto registry = make_registry();
+    auto history = History(document);
+    auto command = history.execute(registry.make("object.path.add",
+      document, std::vector{board.m_bottom, board.m_top}));
+    auto id = static_cast<const BooleanCommand*>(command)->get_compound();
+    {
+      auto compound = get_shape(document, id);
+      compound.m_style.m_fill = NoFill();
+      compound.m_style.m_stroke = Stroke(make_color(0, 0, 0), 2);
+      auto transaction = Transaction(document);
+      transaction.replace_payload(id, compound);
+      transaction.commit();
+    }
+    REQUIRE(is_outline_strokable(document, id));
+    REQUIRE(!is_outline_strokable(document, board.m_bottom));
+    require_undoable(history, registry.make(
+      "object.path.outline_stroke", document, std::vector{id}));
+    REQUIRE(std::holds_alternative<PathShape>(get_shape(document, id).
+      m_geometry));
+    REQUIRE(document.get(id).m_children.empty());
+    REQUIRE(!document.find(board.m_bottom));
+    REQUIRE(get_bounds(*std::get<PathShape>(get_shape(document, id).
+      m_geometry).m_path) == Rect(9, 9, 62, 62));
+  }
+
   TEST_CASE("outline_stroke_name") {
     auto document = Document();
     auto board = build_board(document);
@@ -392,8 +507,40 @@ TEST_SUITE("PathCommands") {
     REQUIRE(!contains(*compound.m_path, Point(15, 15)));
     REQUIRE(document.get(id).m_children ==
       std::vector{board.m_bottom, board.m_top});
+    REQUIRE(document.get(id).m_header.m_name == "Intersection 1");
+    REQUIRE(!document.get(id).m_header.m_has_custom_name);
     REQUIRE(!history.execute(
       registry.make("object.path.intersect", document, std::vector{id})));
+    history.execute(std::make_unique<RenameCommand>(id, "Shape"));
+    history.execute(
+      registry.make("object.path.exclude", document, std::vector{id}));
+    REQUIRE(document.get(id).m_header.m_name == "Shape");
+  }
+
+  TEST_CASE("boolean_pins") {
+    auto document = Document();
+    auto board = build_board(document);
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(board.m_bottom).m_header;
+      header.m_constraints.m_is_custom = true;
+      header.m_constraints.m_left = true;
+      header.m_constraints.m_width = true;
+      transaction.replace_header(std::move(header));
+      header = document.get(board.m_top).m_header;
+      header.m_constraints.m_right = true;
+      transaction.replace_header(std::move(header));
+      transaction.commit();
+    }
+    auto registry = make_registry();
+    auto history = History(document);
+    history.execute(registry.make("object.path.add", document,
+      std::vector{board.m_top, board.m_bottom}));
+    auto& bottom = document.get(board.m_bottom).m_header.m_constraints;
+    REQUIRE(bottom.m_is_custom);
+    REQUIRE(!bottom.m_left);
+    REQUIRE(!bottom.m_width);
+    REQUIRE(!document.get(board.m_top).m_header.m_constraints.m_right);
   }
 
   TEST_CASE("nested") {

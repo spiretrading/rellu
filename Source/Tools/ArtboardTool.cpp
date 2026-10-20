@@ -3,6 +3,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/ArtboardPlacement.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
@@ -71,6 +72,8 @@ std::unique_ptr<Command> ArtboardTool::make_command(ToolContext& context,
   auto artboard = Artboard();
   artboard.m_frame = box;
   artboard.m_background = SolidFill(make_color(255, 255, 255));
+  artboard.m_layout_grid = make_initial_grid(
+    artboard, context.get_document().get_resources().m_grid_defaults);
   return std::make_unique<DrawArtboardCommand>(
     std::move(header), std::move(artboard), false);
 }

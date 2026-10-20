@@ -1,7 +1,10 @@
 #include <vector>
 #include <doctest/doctest.h>
 #include <QComboBox>
+#include <QCoreApplication>
+#include <QKeyEvent>
 #include <QLineEdit>
+#include <QMouseEvent>
 #include <QToolButton>
 #include "Rellu/Ui/ColorPicker.hpp"
 
@@ -50,6 +53,29 @@ TEST_SUITE("ColorPicker") {
     REQUIRE(get_field(picker, "Red").text() == "30");
     REQUIRE(get_field(picker, "Green").text() == "100");
     REQUIRE(get_field(picker, "Blue").text() == "100");
+  }
+
+  TEST_CASE("model") {
+    auto picker = ColorPicker();
+    auto models = std::vector<ColorModel>();
+    picker.set_model_handler([&] (auto model) {
+      models.push_back(model);
+    });
+    picker.set_model(ColorModel::RGB);
+    REQUIRE(models.empty());
+    auto box = static_cast<QComboBox*>(nullptr);
+    for(auto candidate : picker.findChildren<QComboBox*>()) {
+      if(candidate->accessibleName() == "Color Model") {
+        box = candidate;
+      }
+    }
+    REQUIRE(box);
+    REQUIRE(box->currentIndex() == 1);
+    Q_EMIT box->activated(2);
+    REQUIRE(picker.get_model() == ColorModel::HSB);
+    REQUIRE(models == std::vector{ColorModel::HSB});
+    picker.apply_model(ColorModel::HEX);
+    REQUIRE(models == std::vector{ColorModel::HSB, ColorModel::HEX});
   }
 
   TEST_CASE("gradient") {
@@ -147,5 +173,37 @@ TEST_SUITE("ColorPicker") {
     REQUIRE(added == Fill(SolidFill(make_color(1, 2, 3))));
     brand->click();
     REQUIRE(fill == Fill(SolidFill(make_color(9, 9, 9), swatch.m_id)));
+  }
+
+  TEST_CASE("key_handler") {
+    auto picker = ColorPicker();
+    auto keys = std::vector<int>();
+    picker.set_key_handler([&] (const auto& event) {
+      keys.push_back(event.key());
+      return event.key() != Qt::Key_A;
+    });
+    for(auto key : {Qt::Key_Tab, Qt::Key_Delete, Qt::Key_A}) {
+      auto event = QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier);
+      QCoreApplication::sendEvent(&picker, &event);
+      REQUIRE(event.isAccepted() == (key != Qt::Key_A));
+    }
+    REQUIRE(keys == std::vector<int>({Qt::Key_Tab, Qt::Key_Delete,
+      Qt::Key_A}));
+    auto& hex = get_field(picker, "Hex");
+    hex.setFocus();
+    REQUIRE(picker.focusWidget() == &hex);
+    auto tab = QKeyEvent(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QCoreApplication::sendEvent(&picker, &tab);
+    REQUIRE(keys.size() == 3);
+    auto presses = 0;
+    picker.set_canvas_handler([&] (auto event, auto) {
+      presses += event == ColorPicker::CanvasEvent::PRESS;
+      return true;
+    });
+    auto press = QMouseEvent(QEvent::MouseButtonPress, QPointF(-10, -10),
+      QPointF(-10, -10), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&picker, &press);
+    REQUIRE(presses == 1);
+    REQUIRE(!picker.focusWidget());
   }
 }

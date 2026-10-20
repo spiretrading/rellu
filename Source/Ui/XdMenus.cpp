@@ -1,4 +1,5 @@
 #include <array>
+#include <string_view>
 #include <QKeyCombination>
 #include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
@@ -287,6 +288,18 @@ namespace {
     Item(ACTION, "help.sign_out", "Sign Out...", "", "help", "account"),
     Item(ACTION, "help.updates", "Updates...", "", "help", "account")
   });
+
+  constexpr auto VIEW_ACTIONS = std::to_array<std::string_view>({
+    "view.zoom_in", "view.zoom_out", "view.zoom_actual", "view.zoom_double",
+    "view.zoom_fit", "view.libraries", "view.layers", "view.plugins",
+    "window.preview"});
+
+  bool is_document_free(std::string_view name) {
+    return name == "file.new" || name == "file.open" ||
+      name == "file.open_local" || name == "file.close" ||
+      name.starts_with("file.recent.") ||
+      name.starts_with("edit.preferences.") || name.starts_with("help.");
+  }
 }
 
 void Rellu::add_xd_menus(ActionRegistry& actions) {
@@ -302,6 +315,27 @@ void Rellu::add_xd_menus(ActionRegistry& actions) {
       item.m_type != ACTION));
     if(item.m_type == CHECKED) {
       action.setChecked(true);
+    }
+  }
+}
+
+void Rellu::update_document_actions(
+    ActionRegistry& actions, Workspace workspace, bool has_document) {
+  for(auto& name : actions.get_names()) {
+    if(name.starts_with("tool.")) {
+      actions.set_enabled(name, has_document &&
+        (workspace == Workspace::DESIGN || name == "tool.select" ||
+          name == "tool.zoom"));
+    } else if(!has_document && !is_document_free(name)) {
+      actions.set_enabled(name, false);
+    }
+  }
+  if(!has_document) {
+    return;
+  }
+  for(auto name : VIEW_ACTIONS) {
+    if(actions.find(name)) {
+      actions.set_enabled(name, true);
     }
   }
 }

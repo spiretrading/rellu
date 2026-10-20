@@ -101,6 +101,12 @@ namespace Rellu {
     /** The name shown in the layers panel. */
     std::string m_name;
 
+    /**
+     * Whether the name was given explicitly, as by renaming, rather than
+     * generated for the kind of node.
+     */
+    bool m_has_custom_name = false;
+
     /** Whether the node is drawn. */
     bool m_is_visible = true;
 
@@ -171,6 +177,7 @@ namespace Rellu {
 
   inline bool NodeHeader::operator ==(const NodeHeader& header) const {
     return m_id == header.m_id && m_name == header.m_name &&
+      m_has_custom_name == header.m_has_custom_name &&
       m_is_visible == header.m_is_visible &&
       m_is_locked == header.m_is_locked &&
       m_transform == header.m_transform &&

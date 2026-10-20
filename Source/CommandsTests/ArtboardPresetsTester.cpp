@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <doctest/doctest.h>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/ArtboardPresets.hpp"
 #include "Fixture.hpp"
 
@@ -70,7 +71,8 @@ TEST_SUITE("ArtboardPresets") {
     REQUIRE(artboard.m_viewport_height == 1080);
     REQUIRE(artboard.m_background ==
       Fill(SolidFill(make_color(255, 255, 255))));
-    REQUIRE(!artboard.m_layout_grid);
+    REQUIRE(artboard.m_layout_grid);
+    REQUIRE(*artboard.m_layout_grid == make_initial_grid(artboard));
     auto second = history.execute(std::make_unique<CreateArtboardCommand>(
       web, std::vector{first}, view));
     auto& next = document.get(second->get_selection()->front());

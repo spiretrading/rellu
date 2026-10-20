@@ -1,12 +1,15 @@
 #ifndef RELLU_COMMANDS_PATH_COMMANDS_HPP
 #define RELLU_COMMANDS_PATH_COMMANDS_HPP
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
 #include "Rellu/Commands/Command.hpp"
 #include "Rellu/Commands/CommandRegistry.hpp"
+#include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Model/ShapeGeometry.hpp"
 #include "Rellu/Model/Style.hpp"
+#include "Rellu/Model/Text.hpp"
 
 namespace Rellu {
 
@@ -67,6 +70,13 @@ namespace Rellu {
   };
 
   /**
+   * Returns the outline of a shape's geometry as a path of lines and
+   * curves, as Convert to Path stores it.
+   * @param geometry The geometry.
+   */
+  Path to_editable_path(const ShapeGeometry& geometry);
+
+  /**
    * Tests whether Convert to Path changes a node: a shape that is not
    * already a path.
    * @param document The document holding the node.
@@ -101,7 +111,8 @@ namespace Rellu {
    * the place of the topmost shape with the style of the bottom-most one,
    * holds the shapes as its operands, each keeping where it appears on the
    * canvas, and stores the result of combining them. It is named after the
-   * operation with the next number free, such as Union 1.
+   * operation with the next number free, such as Union 1, and its operands
+   * and their descendants lose their responsive resize pins.
    */
   class BooleanCommand : public Command {
     public:
@@ -129,6 +140,7 @@ namespace Rellu {
 
   /**
    * Changes the operation of compound shapes and recomputes their results,
+   * giving those without a custom name the operation's default name,
    * labelled after the operation.
    */
   class SetCompoundOperationCommand : public Command {
@@ -151,25 +163,34 @@ namespace Rellu {
   };
 
   /**
-   * Tests whether Outline Stroke changes a node: a shape other than a
-   * compound shape or its operand whose border is enabled, or a group or
-   * mask group holding such a node.
+   * The type of function returning the outlines of the glyphs of text as
+   * they are drawn, in the text's local space.
+   * @param text The text.
+   */
+  using TextOutliner = std::function<Path (const Text& text)>;
+
+  /**
+   * Tests whether Outline Stroke changes a node, as Adobe XD enables it: a
+   * shape, compound shape or text whose border is enabled, other than an
+   * operand of a compound shape, or a group or mask group holding such a
+   * node.
    * @param document The document holding the node.
    * @param id The node's id.
    */
   bool is_outline_strokable(const Document& document, const NodeId& id);
 
   /**
-   * Turns the borders of shapes into filled paths as Adobe XD's Outline
-   * Stroke does, labelled Outline Stroke, acting on the shapes within
-   * groups and mask groups. A shape without a fill, or a line, is replaced
-   * by a path of the same id and name filled with its border's color.
-   * Otherwise the path, named after the shape followed by - Outline, is
-   * placed above the shape, whose border is disabled, along with copies of
-   * its interactions, and the two are grouped under the shape's name,
-   * opacity and blend mode when the shape is translucent, blended or in a
-   * stack. The path keeps the shape's disabled border and its hidden
-   * shadows and blur, which are hidden on a shape kept too.
+   * Turns the borders of shapes, compound shapes and text into filled paths
+   * of curves as Adobe XD's Outline Stroke does, labelled Outline Stroke,
+   * acting on the nodes within groups and mask groups. A node without a
+   * fill, or a line, is replaced by a path of the same id and name filled
+   * with its border's color. Otherwise the path, named after the node
+   * followed by - Outline, is placed above the node, whose border is
+   * disabled, along with copies of its interactions, and the two are
+   * grouped under the node's name, opacity and blend mode when the node is
+   * translucent, blended or in a stack. The path keeps the node's disabled
+   * border and its hidden shadows and blur, which are hidden on a node kept
+   * too.
    */
   class OutlineStrokeCommand : public Command {
     public:
@@ -178,8 +199,11 @@ namespace Rellu {
        * Constructs an OutlineStrokeCommand.
        * @param nodes The nodes to outline, those that cannot be outlined
        *        staying selected.
+       * @param outliner The function outlining the glyphs of text, or none
+       *        to leave text as it is.
        */
-      explicit OutlineStrokeCommand(std::vector<NodeId> nodes) noexcept;
+      OutlineStrokeCommand(
+        std::vector<NodeId> nodes, TextOutliner outliner) noexcept;
 
       std::string get_label() const override;
       void apply(const Document& document, Transaction& transaction) override;
@@ -187,12 +211,12 @@ namespace Rellu {
 
     private:
       std::vector<NodeId> m_nodes;
+      TextOutliner m_outliner;
       std::vector<NodeId> m_selection;
 
       void outline(const Document& document, Transaction& transaction,
         const NodeId& id, std::vector<NodeId>& results);
   };
-
   /**
    * Adds the commands of Adobe XD's Object > Path menu acting on targets:
    * object.path.add, object.path.subtract, object.path.intersect and
@@ -200,8 +224,11 @@ namespace Rellu {
    * operation of a single compound shape, object.path.convert and
    * object.path.outline_stroke.
    * @param registry The registry to add to.
+   * @param outliner The function outlining the glyphs of text whose border
+   *        is outlined, or none to leave text as it is.
    */
-  void add_path_commands(CommandRegistry& registry);
+  void add_path_commands(
+    CommandRegistry& registry, TextOutliner outliner = TextOutliner());
 }
 
 #endif

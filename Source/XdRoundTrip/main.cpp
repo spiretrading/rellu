@@ -317,6 +317,9 @@ namespace {
           continue;
         }
         compare(left_json, right_json, get_root(name), differences);
+        if(name == "manifest" && left != right) {
+          ++differences["bytes manifest"];
+        }
       } else if(left != right) {
         ++differences["bytes " + name];
       }

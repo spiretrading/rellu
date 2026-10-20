@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 #include <QMimeData>
 #include "Rellu/Editor/Editor.hpp"
@@ -22,7 +23,8 @@ namespace Rellu {
    * showing guides if hidden, view.guides.clear removes the guides of those
    * artboards while guides are shown, view.guides.hide toggles between Hide
    * All Guides and Show All Guides and view.guides.lock between Lock All
-   * Guides and Unlock All Guides.
+   * Guides and Unlock All Guides, each toggle being an undoable step of the
+   * editor's history labelled as its menu item was.
    */
   class GuideActions {
     public:
@@ -89,6 +91,7 @@ namespace Rellu {
       GuideSettings m_settings;
       Workspace m_workspace;
       SettingsHandler m_settings_handler;
+      std::shared_ptr<GuideActions*> m_self;
       Subscription m_selection_subscription;
       Subscription m_history_subscription;
 
@@ -96,6 +99,7 @@ namespace Rellu {
       GuideActions& operator =(const GuideActions&) = delete;
       std::vector<NodeId> get_artboards() const;
       void copy();
+      void change(GuideSettings settings, std::string label);
       void publish();
   };
 

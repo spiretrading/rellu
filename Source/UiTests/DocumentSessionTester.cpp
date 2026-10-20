@@ -1,10 +1,12 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 #include <doctest/doctest.h>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QTemporaryDir>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
@@ -65,6 +67,46 @@ namespace {
   std::string read_manifest(const QString& path, const QString& key) {
     return XdPackage(to_path(path)).get_manifest().value(key).toString().
       toStdString();
+  }
+
+  std::string read_attribute(const std::string& xml, const std::string& name) {
+    auto key = name + "=\"";
+    auto start = xml.find(key);
+    if(start == std::string::npos) {
+      return std::string();
+    }
+    start += key.size();
+    return xml.substr(start, xml.find('"', start) - start);
+  }
+
+  std::string read_document_id(const QString& path) {
+    auto metadata = XdPackage(to_path(path)).read("META-INF/metadata.xml").
+      toStdString();
+    auto id = read_attribute(metadata, "xmpMM:DocumentID");
+    if(read_attribute(metadata, "xmpMM:OriginalDocumentID") != id) {
+      return std::string();
+    }
+    return id;
+  }
+
+  void collect_folder_ids(const QJsonArray& children,
+      std::unordered_set<std::string>& ids) {
+    for(auto child : children) {
+      auto object = child.toObject();
+      ids.insert(object.value("id").toString().toStdString());
+      collect_folder_ids(object.value("children").toArray(), ids);
+      for(auto component : object.value("components").toArray()) {
+        ids.insert(
+          component.toObject().value("id").toString().toStdString());
+      }
+    }
+  }
+
+  std::unordered_set<std::string> read_folder_ids(const QString& path) {
+    auto ids = std::unordered_set<std::string>();
+    collect_folder_ids(XdPackage(to_path(path)).get_manifest().value(
+      "children").toArray(), ids);
+    return ids;
   }
 
   void require_new_id(const std::string& id) {
@@ -152,6 +194,30 @@ TEST_SUITE("DocumentSession") {
     REQUIRE(reopened.get_canvas().empty());
   }
 
+  TEST_CASE("launched_document") {
+    auto document = Document();
+    auto session = std::unique_ptr<DocumentSession>();
+    auto opened = QStringList();
+    auto open = [&] (const QString& path) {
+      opened.push_back(path);
+      return false;
+    };
+    auto make_new = [&] {
+      session =
+        std::make_unique<DocumentSession>(document, QString(), XdTextLayout());
+      return true;
+    };
+    REQUIRE(open_launched_document(QStringList({"Rellu"}), open, make_new));
+    REQUIRE(session);
+    REQUIRE(session->get_name() == "Untitled");
+    REQUIRE(opened.isEmpty());
+    session.reset();
+    REQUIRE(!open_launched_document(
+      QStringList({"Rellu", "C:/designs/home.xd"}), open, make_new));
+    REQUIRE(opened == QStringList({"C:/designs/home.xd"}));
+    REQUIRE(!session);
+  }
+
   TEST_CASE("id") {
     auto directory = QTemporaryDir();
     REQUIRE(directory.isValid());
@@ -180,9 +246,12 @@ TEST_SUITE("DocumentSession") {
       build_test_document(built);
       write_xd(built, to_path(path));
     }
-    auto manifest = XdPackage(to_path(path)).get_manifest();
     auto original = read_manifest(path, "uxdesign#id");
+    auto composite = read_manifest(path, "id");
+    auto serialization = read_manifest(path, "uxdesign#serializationId");
     REQUIRE(read_manifest(path, "uxdesign#parentDocId").empty());
+    REQUIRE(read_manifest(path, "uxdesign#compositeID") == composite);
+    REQUIRE(read_document_id(path) == composite);
     auto document = Document();
     import_xd(to_path(path), document);
     auto session = DocumentSession(document, path,
@@ -190,7 +259,14 @@ TEST_SUITE("DocumentSession") {
     REQUIRE(session.get_id() == original);
     session.save(path);
     REQUIRE(session.get_id() == original);
-    REQUIRE(XdPackage(to_path(path)).get_manifest() == manifest);
+    auto manifest = XdPackage(to_path(path)).get_manifest();
+    REQUIRE(read_manifest(path, "id") == composite);
+    REQUIRE(read_manifest(path, "uxdesign#compositeID") == composite);
+    REQUIRE(read_manifest(path, "name") == "Design\x01");
+    require_new_id(read_manifest(path, "uxdesign#serializationId"));
+    REQUIRE(read_manifest(path, "uxdesign#serializationId") != serialization);
+    REQUIRE(read_document_id(path) == composite);
+    auto folders = read_folder_ids(path);
     auto copy = directory.filePath("Copy.xd");
     session.save(copy);
     auto id = session.get_id();
@@ -198,15 +274,30 @@ TEST_SUITE("DocumentSession") {
     REQUIRE(id != original);
     REQUIRE(read_manifest(copy, "uxdesign#id") == id);
     REQUIRE(read_manifest(copy, "uxdesign#parentDocId") == id);
+    REQUIRE(read_manifest(copy, "name") == "Copy\x01");
+    auto copy_composite = read_manifest(copy, "id");
+    REQUIRE(parse_node_id(copy_composite));
+    REQUIRE(copy_composite != composite);
+    REQUIRE(read_manifest(copy, "uxdesign#compositeID") == copy_composite);
+    REQUIRE(read_document_id(copy) == copy_composite);
+    auto copy_folders = read_folder_ids(copy);
+    REQUIRE(copy_folders.size() == folders.size());
+    for(auto& folder : copy_folders) {
+      REQUIRE(!folders.contains(folder));
+    }
     REQUIRE(XdPackage(to_path(path)).get_manifest() == manifest);
     session.save(copy);
     REQUIRE(session.get_id() == id);
+    REQUIRE(read_manifest(copy, "id") == copy_composite);
+    REQUIRE(read_document_id(copy) == copy_composite);
+    REQUIRE(read_folder_ids(copy) == copy_folders);
     auto other = directory.filePath("Other.xd");
     session.save(other);
     require_new_id(session.get_id());
     REQUIRE(session.get_id() != id);
     REQUIRE(read_manifest(other, "uxdesign#id") == session.get_id());
     REQUIRE(read_manifest(other, "uxdesign#parentDocId") == id);
+    REQUIRE(read_manifest(other, "id") != copy_composite);
   }
 
   TEST_CASE("failed_save") {

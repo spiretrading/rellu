@@ -242,6 +242,18 @@ TEST_SUITE("Shapes") {
     REQUIRE(is_near(get_bounds(make_polygon(5, bounds, 0, 40)), bounds));
   }
 
+  TEST_CASE("xd_star") {
+    auto vertices = make_polygon_vertices(5, Rect(0, 0, 200, 100), 50);
+    auto expected = std::vector{Point(100, 0), Point(125, 37.18847),
+      Point(200, 38.19660), Point(140.45085, 62.18847),
+      Point(161.80339, 100), Point(100, 77.63932), Point(38.19661, 100),
+      Point(59.54915, 62.18847), Point(0, 38.19661), Point(75, 37.18848)};
+    REQUIRE(vertices.size() == expected.size());
+    for(auto i = std::size_t(0); i != expected.size(); ++i) {
+      REQUIRE(distance(vertices[i], expected[i]) < 1e-4);
+    }
+  }
+
   TEST_CASE("xd_hexagon") {
     auto vertices = make_polygon_vertices(6, Rect(0, 0, 80, 80));
     REQUIRE(vertices.size() == 6);

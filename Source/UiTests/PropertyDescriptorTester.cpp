@@ -1,3 +1,4 @@
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -64,6 +65,43 @@ TEST_SUITE("PropertyDescriptor") {
     REQUIRE(get_text(properties, "fill.color") == "#FFFFFF");
     REQUIRE(get_text(properties, "grid.visible") == "No");
     REQUIRE(get_text(properties, "grid.type") == "Layout");
+  }
+
+  TEST_CASE("orientation") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto resize = [&] (Rect frame, std::optional<double> viewport) {
+      auto transaction = Transaction(document);
+      auto artboard = *document.get(ids.m_artboard).get_artboard();
+      artboard.m_frame = frame;
+      artboard.m_viewport_height = viewport;
+      transaction.replace_payload(ids.m_artboard, artboard);
+      transaction.commit();
+      return get_text(extract_properties(document, ids.m_artboard),
+        "transform.orientation");
+    };
+    REQUIRE(resize(Rect(0, 0, 375, 2000), 300) == "Landscape");
+    REQUIRE(resize(Rect(0, 0, 375, 2000), 812) == "Portrait");
+    REQUIRE(resize(Rect(0, 0, 400, 400), std::nullopt) == "Square");
+    REQUIRE(resize(Rect(0, 0, 500, 400), std::nullopt) == "Landscape");
+  }
+
+  TEST_CASE("common_transform") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto first = add_shape(
+      document, ids.m_artboard, RectangleShape(Rect(0, 0, 40, 30)));
+    auto second = add_shape(
+      document, ids.m_artboard, RectangleShape(Rect(100, 50, 40.001, 20)));
+    auto properties =
+      extract_common_properties(document, std::vector{first, second});
+    REQUIRE(get_text(properties, "transform.x") == "0");
+    REQUIRE(get_text(properties, "transform.y") == "0");
+    REQUIRE(!find_property(properties, "transform.x")->m_is_mixed);
+    REQUIRE(get_text(properties, "transform.width") == "40");
+    REQUIRE(!find_property(properties, "transform.width")->m_is_mixed);
+    REQUIRE(find_property(properties, "transform.height")->m_is_mixed);
+    REQUIRE(!find_property(properties, "transform.rotation")->m_is_mixed);
   }
 
   TEST_CASE("group") {

@@ -43,6 +43,22 @@ bool SetOpacityCommand::merge(const Command& command) {
   return true;
 }
 
+SetBlendModeCommand::SetBlendModeCommand(
+  std::vector<NodeId> nodes, BlendMode blend_mode) noexcept
+  : m_nodes(std::move(nodes)),
+    m_blend_mode(blend_mode) {}
+
+std::string SetBlendModeCommand::get_label() const {
+  return "Change Blend Mode";
+}
+
+void SetBlendModeCommand::apply(
+    const Document& document, Transaction& transaction) {
+  edit_headers(document, transaction, m_nodes, [&] (auto& header) {
+    header.m_blend_mode = m_blend_mode;
+  });
+}
+
 SetVisibilityCommand::SetVisibilityCommand(
   std::vector<NodeId> nodes, bool is_visible) noexcept
   : m_nodes(std::move(nodes)),
@@ -92,7 +108,18 @@ std::string RenameCommand::get_label() const {
 void RenameCommand::apply(const Document& document, Transaction& transaction) {
   edit_headers(document, transaction, std::vector{m_id}, [&] (auto& header) {
     header.m_name = m_name;
+    header.m_has_custom_name = true;
   });
+  auto node = document.find(m_id);
+  if(!node) {
+    return;
+  }
+  if(auto group = node->get_group(); group && group->m_component_instance &&
+      group->m_component_instance->m_is_name_inherited) {
+    auto payload = *group;
+    payload.m_component_instance->m_is_name_inherited = false;
+    transaction.replace_payload(m_id, std::move(payload));
+  }
 }
 
 bool RenameCommand::merge(const Command& command) {

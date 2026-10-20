@@ -2,6 +2,7 @@
 #include <QStringList>
 #include <QtPlugin>
 #include "Rellu/Text/FontLibrary.hpp"
+#include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/Theme.hpp"
 #include "MainWindow.hpp"
 
@@ -21,9 +22,12 @@ int main(int argc, char** argv) {
   apply_theme(application);
   auto window = MainWindow();
   window.show();
-  auto arguments = QApplication::arguments();
-  if(arguments.size() > 1) {
-    window.open(arguments[1]);
-  }
+  open_launched_document(QApplication::arguments(),
+    [&] (const QString& path) {
+      return window.open(path);
+    },
+    [&] {
+      return window.make_new();
+    });
   return application.exec();
 }

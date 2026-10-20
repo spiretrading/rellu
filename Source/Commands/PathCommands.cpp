@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <optional>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
@@ -8,7 +9,9 @@
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/PathCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
+#include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Geometry/BooleanOperation.hpp"
+#include "Rellu/Geometry/Polyline.hpp"
 #include "Rellu/Geometry/Stroke.hpp"
 #include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/CompoundResolution.hpp"
@@ -18,6 +21,28 @@ using namespace Rellu;
 namespace {
   constexpr auto TOLERANCE = 0.01;
   constexpr auto OUTLINE_TOLERANCE = 0.01;
+  constexpr auto FIT_TOLERANCE = 0.03;
+
+  void clear_pins(
+      const Document& document, Transaction& transaction, const NodeId& id) {
+    auto children = document.get(id).m_children;
+    for(auto& child : children) {
+      auto header = document.get(child).m_header;
+      auto& constraints = header.m_constraints;
+      if(constraints.m_left || constraints.m_right || constraints.m_top ||
+          constraints.m_bottom || constraints.m_width ||
+          constraints.m_height) {
+        constraints.m_left = false;
+        constraints.m_right = false;
+        constraints.m_top = false;
+        constraints.m_bottom = false;
+        constraints.m_width = false;
+        constraints.m_height = false;
+        transaction.replace_header(std::move(header));
+      }
+      clear_pins(document, transaction, child);
+    }
+  }
 
   bool is_tree_root(const Document& document, const NodeId& id) {
     return document.get(id).m_parent.is_nil() && !document.is_on_canvas(id);
@@ -112,6 +137,8 @@ namespace {
   std::string get_outline_name(const Node& node) {
     if(!node.m_header.m_name.empty()) {
       return node.m_header.m_name;
+    } else if(auto text = node.get_text()) {
+      return make_text_name(*text->m_content);
     }
     auto& geometry = node.get_shape()->m_geometry;
     if(std::holds_alternative<RectangleShape>(geometry)) {
@@ -126,15 +153,16 @@ namespace {
     return std::string(localize("name", "Path"));
   }
 
-  Shape make_outline(const Shape& shape) {
-    auto& stroke = *shape.m_style.m_stroke;
+  Shape make_outline(const Path& path, const Style& style) {
+    auto& stroke = *style.m_stroke;
     auto geometry = StrokeGeometry(stroke.m_width, stroke.m_alignment,
       stroke.m_cap, stroke.m_join, stroke.m_miter_limit, stroke.m_dashes, 0);
+    auto polygons = outline_stroke(path, geometry, OUTLINE_TOLERANCE);
     auto outline = Shape();
-    outline.m_geometry = PathShape(Shared(outline_stroke(
-      to_path(shape.m_geometry), geometry, OUTLINE_TOLERANCE)),
+    outline.m_geometry = PathShape(Shared(fit_curves(
+      flatten(polygons, OUTLINE_TOLERANCE), FIT_TOLERANCE)),
       FillRule::NON_ZERO);
-    outline.m_style = shape.m_style;
+    outline.m_style = style;
     outline.m_style.m_fill = SolidFill(stroke.m_color);
     outline.m_style.m_stroke->m_is_enabled = false;
     return outline;
@@ -148,15 +176,36 @@ namespace {
     }
   }
 
-  std::unique_ptr<Command> make_outline_stroke(
-      const Document& document, const std::vector<NodeId>& targets) {
-    auto nodes = get_operands(document, targets);
-    if(std::none_of(nodes.begin(), nodes.end(), [&] (const auto& id) {
-        return is_outline_strokable(document, id);
-      })) {
-      return nullptr;
+  CommandFactory make_outline_stroke(TextOutliner outliner) {
+    return [=] (const Document& document,
+        const std::vector<NodeId>& targets) -> std::unique_ptr<Command> {
+      auto nodes = get_operands(document, targets);
+      if(std::none_of(nodes.begin(), nodes.end(), [&] (const auto& id) {
+          return is_outline_strokable(document, id);
+        })) {
+        return nullptr;
+      }
+      return std::make_unique<OutlineStrokeCommand>(
+        std::move(nodes), outliner);
+    };
+  }
+
+  void replace_with_shape(const Document& document, Transaction& transaction,
+      const NodeId& id, NodeHeader header, Shape shape) {
+    auto& node = document.get(id);
+    auto parent = node.m_parent;
+    auto index = get_index(document, id);
+    auto interactions = std::vector<Interaction>();
+    for(auto& interaction : document.get_prototype().m_interactions) {
+      if(interaction.m_owner == id) {
+        interactions.push_back(interaction);
+      }
     }
-    return std::make_unique<OutlineStrokeCommand>(std::move(nodes));
+    transaction.remove(id);
+    transaction.insert(parent, index, std::move(header), std::move(shape));
+    for(auto& interaction : interactions) {
+      transaction.add_interaction(std::move(interaction));
+    }
   }
 
   std::unique_ptr<Command> make_convert(
@@ -247,6 +296,10 @@ bool SetPathCommand::merge(const Command& command) {
   return true;
 }
 
+Path Rellu::to_editable_path(const ShapeGeometry& geometry) {
+  return remove_arcs(to_path(geometry));
+}
+
 bool Rellu::is_convertible_to_path(const Document& document, const NodeId& id) {
   auto node = document.find(id);
   if(!node) {
@@ -272,8 +325,8 @@ void ConvertToPathCommand::apply(
     auto& node = document.get(id);
     auto shape = *node.get_shape();
     auto children = node.m_children;
-    shape.m_geometry = PathShape(
-      Shared(remove_arcs(to_path(shape.m_geometry))), FillRule::NON_ZERO);
+    shape.m_geometry =
+      PathShape(Shared(to_editable_path(shape.m_geometry)), FillRule::NON_ZERO);
     for(auto& child : children) {
       transaction.remove(child);
     }
@@ -321,6 +374,7 @@ void BooleanCommand::apply(
     document.get(nodes.front()).get_shape()->m_style);
   m_compound = transaction.insert(parent, index, std::move(header), shape);
   ReparentCommand(nodes, m_compound, 0).apply(document, transaction);
+  clear_pins(document, transaction, m_compound);
   std::get<CompoundShape>(shape.m_geometry).m_path =
     Shared(combine_children(document, m_compound, m_operation));
   transaction.replace_payload(m_compound, std::move(shape));
@@ -352,9 +406,18 @@ void SetCompoundOperationCommand::apply(
       continue;
     }
     auto shape = *node->get_shape();
+    auto is_renamed = !node->m_header.m_has_custom_name;
     shape.m_geometry = CompoundShape(m_operation,
       Shared(combine_children(document, id, m_operation)));
     transaction.replace_payload(id, std::move(shape));
+    if(is_renamed) {
+      auto header = document.get(id).m_header;
+      auto kind = get_name_prefix(m_operation);
+      kind.pop_back();
+      header.m_name =
+        make_node_name(document, std::string(localize("name", kind)) + ' ');
+      transaction.replace_header(std::move(header));
+    }
   }
 }
 
@@ -364,8 +427,9 @@ bool Rellu::is_outline_strokable(const Document& document, const NodeId& id) {
     return false;
   }
   if(auto shape = node->get_shape()) {
-    return !get_compound(*node) && shape->m_style.m_stroke &&
-      shape->m_style.m_stroke->m_is_enabled;
+    return shape->m_style.m_stroke && shape->m_style.m_stroke->m_is_enabled;
+  } else if(auto text = node->get_text()) {
+    return text->m_style.m_stroke && text->m_style.m_stroke->m_is_enabled;
   } else if(auto group = node->get_group(); group && is_outline_group(*group)) {
     return std::any_of(node->m_children.begin(), node->m_children.end(),
       [&] (const auto& child) {
@@ -375,8 +439,10 @@ bool Rellu::is_outline_strokable(const Document& document, const NodeId& id) {
   return false;
 }
 
-OutlineStrokeCommand::OutlineStrokeCommand(std::vector<NodeId> nodes) noexcept
-  : m_nodes(std::move(nodes)) {}
+OutlineStrokeCommand::OutlineStrokeCommand(
+  std::vector<NodeId> nodes, TextOutliner outliner) noexcept
+  : m_nodes(std::move(nodes)),
+    m_outliner(std::move(outliner)) {}
 
 std::string OutlineStrokeCommand::get_label() const {
   return "Outline Stroke";
@@ -410,17 +476,39 @@ void OutlineStrokeCommand::outline(const Document& document,
     results.push_back(id);
     return;
   }
-  auto shape = *node.get_shape();
+  auto text = std::optional<Text>();
+  auto shape = std::optional<Shape>();
+  if(auto payload = node.get_text()) {
+    if(!m_outliner) {
+      results.push_back(id);
+      return;
+    }
+    text = *payload;
+  } else {
+    shape = *node.get_shape();
+  }
+  auto& style = text ? text->m_style : shape->m_style;
+  auto outlined = make_outline(
+    text ? m_outliner(*text) : to_path(shape->m_geometry), style);
+  hide_effects(outlined.m_style);
   auto header = node.m_header;
   auto parent = node.m_parent;
-  auto outlined = make_outline(shape);
-  hide_effects(outlined.m_style);
-  auto is_filled = !std::holds_alternative<NoFill>(shape.m_style.m_fill) &&
-    !std::holds_alternative<LineShape>(shape.m_geometry);
+  auto is_filled = !std::holds_alternative<NoFill>(style.m_fill) &&
+    (text || !std::holds_alternative<LineShape>(shape->m_geometry));
   if(!is_filled) {
     header.m_name = get_outline_name(node);
-    transaction.replace_header(header);
-    transaction.replace_payload(id, std::move(outlined));
+    header.m_has_custom_name = true;
+    if(text) {
+      replace_with_shape(
+        document, transaction, id, std::move(header), std::move(outlined));
+    } else {
+      auto children = node.m_children;
+      for(auto& child : children) {
+        transaction.remove(child);
+      }
+      transaction.replace_header(header);
+      transaction.replace_payload(id, std::move(outlined));
+    }
     results.push_back(id);
     return;
   }
@@ -431,6 +519,7 @@ void OutlineStrokeCommand::outline(const Document& document,
   auto path = NodeHeader();
   path.m_name =
     get_outline_name(node) + " - " + std::string(localize("name", "Outline"));
+  path.m_has_custom_name = true;
   path.m_is_visible = header.m_is_visible;
   path.m_transform = header.m_transform;
   path.m_transform_3d = header.m_transform_3d;
@@ -452,9 +541,15 @@ void OutlineStrokeCommand::outline(const Document& document,
       transaction.add_interaction(std::move(duplicate));
     }
   }
-  shape.m_style.m_stroke->m_is_enabled = false;
-  hide_effects(shape.m_style);
-  transaction.replace_payload(id, std::move(shape));
+  if(text) {
+    text->m_style.m_stroke->m_is_enabled = false;
+    hide_effects(text->m_style);
+    transaction.replace_payload(id, std::move(*text));
+  } else {
+    shape->m_style.m_stroke->m_is_enabled = false;
+    hide_effects(shape->m_style);
+    transaction.replace_payload(id, std::move(*shape));
+  }
   if(!is_grouped) {
     results.push_back(id);
     results.push_back(copy);
@@ -474,7 +569,8 @@ void OutlineStrokeCommand::outline(const Document& document,
   results.push_back(group_id);
 }
 
-void Rellu::add_path_commands(CommandRegistry& registry) {
+void Rellu::add_path_commands(
+    CommandRegistry& registry, TextOutliner outliner) {
   registry.add(
     "object.path.add", make_boolean_factory(CompoundOperation::UNION));
   registry.add("object.path.subtract",
@@ -484,5 +580,6 @@ void Rellu::add_path_commands(CommandRegistry& registry) {
   registry.add("object.path.exclude",
     make_boolean_factory(CompoundOperation::EXCLUDE));
   registry.add("object.path.convert", make_convert);
-  registry.add("object.path.outline_stroke", make_outline_stroke);
+  registry.add("object.path.outline_stroke",
+    make_outline_stroke(std::move(outliner)));
 }

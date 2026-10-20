@@ -25,7 +25,7 @@ TEST_SUITE("PolygonCommands") {
     auto history = History(document);
     require_undoable(history, std::make_unique<SetCornerCountCommand>(
       std::vector{polygon, scene.m_rectangle}, 8));
-    REQUIRE(history.get_undo_label() == "Change Corner Count");
+    REQUIRE(history.get_undo_label() == "Corner Count");
     auto& edited = std::get<PolygonShape>(
       document.get(polygon).get_shape()->m_geometry);
     REQUIRE(edited.m_corner_count == 8);
@@ -55,7 +55,7 @@ TEST_SUITE("PolygonCommands") {
     auto history = History(document);
     require_undoable(history, std::make_unique<SetStarRatioCommand>(
       std::vector{polygon, scene.m_rectangle}, 47));
-    REQUIRE(history.get_undo_label() == "Change Star Ratio");
+    REQUIRE(history.get_undo_label() == "Star Ratio");
     auto& edited = std::get<PolygonShape>(
       document.get(polygon).get_shape()->m_geometry);
     REQUIRE(edited.m_star_ratio == 47);

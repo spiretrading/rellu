@@ -4,6 +4,8 @@
 #include <optional>
 #include <utility>
 #include <variant>
+#include <vector>
+#include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Commands/StackCommands.hpp"
 #include "Rellu/Ui/LayoutProperties.hpp"
@@ -120,24 +122,35 @@ namespace {
     wrapped.m_setter = [=] (const Document& document,
         const std::vector<NodeId>& nodes, const PropertyValue& value) ->
         std::unique_ptr<Command> {
-      if(nodes.size() == 1 && is_repeat_grid(document, nodes.front())) {
-        auto number = get_number(value);
-        if(!number) {
-          return nullptr;
+      auto commands = std::vector<std::unique_ptr<Command>>();
+      auto others = std::vector<NodeId>();
+      auto number = get_number(value);
+      for(auto& id : nodes) {
+        if(!is_repeat_grid(document, id)) {
+          others.push_back(id);
+        } else if(number) {
+          auto size = document.get(id).get_group()->m_repeat_grid->m_size;
+          if(is_width) {
+            size.m_width = *number;
+          } else {
+            size.m_height = *number;
+          }
+          commands.push_back(
+            std::make_unique<ResizeRepeatGridCommand>(id, size));
         }
-        auto size =
-          document.get(nodes.front()).get_group()->m_repeat_grid->m_size;
-        if(is_width) {
-          size.m_width = *number;
-        } else {
-          size.m_height = *number;
-        }
-        return std::make_unique<ResizeRepeatGridCommand>(nodes.front(), size);
       }
-      if(!setter) {
+      if(!others.empty() && setter) {
+        if(auto command = setter(document, others, value)) {
+          commands.push_back(std::move(command));
+        }
+      }
+      if(commands.empty()) {
         return nullptr;
+      } else if(commands.size() == 1) {
+        return std::move(commands.front());
       }
-      return setter(document, nodes, value);
+      return std::make_unique<CompositeCommand>(
+        "Resize", std::move(commands));
     };
     editors.add(path, std::move(wrapped));
   }

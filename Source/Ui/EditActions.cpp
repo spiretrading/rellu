@@ -26,6 +26,17 @@ namespace {
     return nullptr;
   }
 
+  void remember_text(Editor& editor) {
+    for(auto& id : editor.get_selection().get_nodes()) {
+      if(auto node = editor.get_document().find(id)) {
+        if(auto text = node->get_text()) {
+          editor.get_text_selection().remember(*text);
+          return;
+        }
+      }
+    }
+  }
+
   QString make_history_text(const QString& text, const std::string& label) {
     if(label.empty()) {
       return translate("menu", text);
@@ -66,7 +77,11 @@ EditActions::EditActions(
       set_action(name, [this] { duplicate(); });
     } else {
       set_action(name, [this, name] {
-        run([&] { m_editor->execute(*m_commands, name); });
+        run([&] {
+          if(is_available(name)) {
+            m_editor->execute(*m_commands, name);
+          }
+        });
       });
     }
     m_command_actions.push_back(name);
@@ -95,6 +110,7 @@ Editor* EditActions::get_editor() const {
 void EditActions::set_editor(Editor* editor) {
   m_selection_subscription.release();
   m_history_subscription.release();
+  m_text_selection_subscription.release();
   m_editor = editor;
   if(m_editor) {
     m_selection_subscription = m_editor->get_selection().subscribe([this] {
@@ -103,6 +119,15 @@ void EditActions::set_editor(Editor* editor) {
     m_history_subscription = m_editor->get_history().subscribe([this] {
       update();
     });
+    m_text_selection_subscription =
+      m_editor->get_text_selection().subscribe(
+        [this, is_editing = m_editor->get_text_selection().is_editing()]
+            () mutable {
+          if(m_editor->get_text_selection().is_editing() != is_editing) {
+            is_editing = !is_editing;
+            update();
+          }
+        });
   }
   update();
 }
@@ -171,7 +196,10 @@ void EditActions::update() {
   m_actions->set_enabled(
     "edit.deselect_all", !m_editor->get_selection().is_empty());
   for(auto& name : m_command_actions) {
-    auto command = m_commands->make(name, *document, nodes);
+    auto command = std::unique_ptr<Command>();
+    if(is_available(name)) {
+      command = m_commands->make(name, *document, nodes);
+    }
     m_actions->set_enabled(name, static_cast<bool>(command));
     if(command && (name == "object.toggle_lock" ||
         name == "object.toggle_visibility" || name == "object.ungroup")) {
@@ -203,11 +231,17 @@ void EditActions::run(auto operation) {
   update();
 }
 
+bool EditActions::is_available(const std::string& name) const {
+  return name != "object.reset_main_state" ||
+    !m_editor->get_text_selection().is_editing();
+}
+
 bool EditActions::copy_selection() {
   if(!m_clipboard.copy(m_editor->get_document(),
       m_editor->get_selection().get_nodes(), m_measurer)) {
     return false;
   }
+  remember_text(*m_editor);
   if(auto clipboard = QGuiApplication::clipboard()) {
     if(auto data = m_clipboard.make_mime_data()) {
       clipboard->setMimeData(data.release());
@@ -266,6 +300,7 @@ void EditActions::paste_appearance() {
     if(auto command = m_clipboard.make_paste_appearance_command(
         m_editor->get_selection().get_nodes())) {
       m_editor->execute(std::move(command));
+      remember_text(*m_editor);
     }
   });
 }

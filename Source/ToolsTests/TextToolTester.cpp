@@ -39,9 +39,11 @@ namespace {
     artboard.m_background = SolidFill(make_color(255, 255, 255));
     board.m_artboard =
       transaction.append(NodeId(), make_header("Board"), artboard);
-    board.m_text = transaction.append(board.m_artboard,
-      make_header(make_text_name(content), make_translation(50, 350)),
-      make_label(content));
+    auto header =
+      make_header(make_text_name(content), make_translation(50, 350));
+    header.m_has_custom_name = false;
+    board.m_text =
+      transaction.append(board.m_artboard, header, make_label(content));
     transaction.commit();
     document.clear_history();
     return board;
@@ -708,6 +710,9 @@ TEST_SUITE("TextTool") {
       auto transaction = Transaction(document);
       auto text = get_text(document, board.m_text);
       text.m_base_style = style;
+      text.m_style.m_fill = SolidFill(style.m_color);
+      text.m_style.m_stroke =
+        Stroke(make_color(0, 0, 255), 2, StrokeAlignment::OUTSIDE);
       text.m_paragraph_style.m_paragraph_spacing = 20;
       text.m_paragraph_style.m_alignment = TextAlignment::CENTER;
       transaction.replace_payload(board.m_text, text);
@@ -724,6 +729,7 @@ TEST_SUITE("TextTool") {
     expected.m_letter_spacing = style.m_letter_spacing;
     REQUIRE(text.m_base_style == expected);
     REQUIRE(text.m_style.m_fill == Fill(SolidFill(style.m_color)));
+    REQUIRE(text.m_style.m_stroke == Stroke(make_color(0, 0, 255), 2));
     REQUIRE(text.m_paragraph_style.m_paragraph_spacing == 20);
     REQUIRE(text.m_paragraph_style.m_alignment == TextAlignment::CENTER);
   }

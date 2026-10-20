@@ -65,4 +65,32 @@ TEST_SUITE("TextSelection") {
     REQUIRE(selection.get_last_style() == style);
     REQUIRE(selection.get_last_paragraph_style() == paragraph);
   }
+
+  TEST_CASE("remember") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto selection = TextSelection(document);
+    REQUIRE(selection.is_last_fill_enabled());
+    REQUIRE(!selection.get_last_border());
+    auto text = *document.get(scene.m_text).get_text();
+    text.m_base_style.m_font.m_size = 30;
+    text.m_runs.clear();
+    text.m_paragraph_style.m_paragraph_spacing = 8;
+    text.m_style.m_fill = disable_fill(SolidFill(Color(1, 0, 0, 1)));
+    text.m_style.m_stroke = Stroke(Color(0, 0, 1, 1), 4,
+      StrokeAlignment::INSIDE);
+    text.m_style.m_stroke->m_is_enabled = false;
+    selection.remember(text);
+    REQUIRE(selection.get_last_style() == text.m_base_style);
+    REQUIRE(selection.get_last_paragraph_style().m_paragraph_spacing == 8);
+    REQUIRE(!selection.is_last_fill_enabled());
+    auto border = Stroke(Color(0, 0, 1, 1), 4);
+    border.m_is_enabled = false;
+    REQUIRE(selection.get_last_border() == border);
+    text.m_style.m_fill = SolidFill(Color(1, 0, 0, 1));
+    text.m_style.m_stroke = std::nullopt;
+    selection.remember_appearance(text);
+    REQUIRE(selection.is_last_fill_enabled());
+    REQUIRE(selection.get_last_border() == border);
+  }
 }

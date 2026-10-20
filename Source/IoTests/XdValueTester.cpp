@@ -64,6 +64,33 @@ TEST_SUITE("XdValue") {
     REQUIRE(to_json_value(value).toObject() == json);
   }
 
+  TEST_CASE("parsing") {
+    auto text = std::string(R"({"z":1,"a":[true,null,-2.5e3],)"
+      R"("m":{"y":"\u0001\"\\\/\ud83d\ude00\u00e9","b":{}},"e":[]})");
+    auto value = parse_xd_value(text);
+    REQUIRE(value);
+    auto& members = value->get_members();
+    REQUIRE(members.size() == 4);
+    REQUIRE(members[0].m_key == "z");
+    REQUIRE(members[1].m_key == "a");
+    REQUIRE(members[2].m_key == "m");
+    REQUIRE(value->find("a")->get_elements()[2].to_number() == -2500);
+    REQUIRE(value->find("m")->find("y")->to_string() ==
+      "\x01\"\\/\xF0\x9F\x98\x80\xC3\xA9");
+    REQUIRE(to_json(*value) == R"({"z":1,"a":[true,null,-2500],)"
+      R"("m":{"y":"\u0001\"\\/)" "\xF0\x9F\x98\x80\xC3\xA9"
+      R"(","b":{}},"e":[]})");
+    auto spaced = parse_xd_value(" { \"k\" : [ 1 , 2 ] } ");
+    REQUIRE(spaced);
+    REQUIRE(to_json(*spaced) == R"({"k":[1,2]})");
+    REQUIRE(!parse_xd_value(""));
+    REQUIRE(!parse_xd_value("{\"a\":1,}"));
+    REQUIRE(!parse_xd_value("[1 2]"));
+    REQUIRE(!parse_xd_value("{\"a\":1} x"));
+    REQUIRE(!parse_xd_value("\"\\x\""));
+    REQUIRE(!parse_xd_value("\"\x01\""));
+  }
+
   TEST_CASE("hash") {
     auto left = XdValue::make_object();
     left.set("x", 1);

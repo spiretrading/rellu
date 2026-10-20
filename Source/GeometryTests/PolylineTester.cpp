@@ -1,3 +1,4 @@
+#include <cmath>
 #include <numbers>
 #include <vector>
 #include <doctest/doctest.h>
@@ -111,6 +112,49 @@ TEST_SUITE("Polyline") {
       auto curve = 100 * 2 * x * (1 - x);
       REQUIRE(curve - middle.m_y < tolerance);
       REQUIRE(curve - middle.m_y >= -1e-9);
+    }
+  }
+
+  TEST_CASE("fit_corners") {
+    auto square = Polyline({Point(0, 0), Point(5, 0), Point(10, 0),
+      Point(10, 10), Point(0, 10)}, true);
+    auto expected = Path();
+    expected.move_to(Point(0, 0));
+    expected.line_to(Point(10, 0));
+    expected.line_to(Point(10, 10));
+    expected.line_to(Point(0, 10));
+    expected.line_to(Point(0, 0));
+    expected.close();
+    REQUIRE(fit_curves(std::vector{square}, 0.01) == expected);
+  }
+
+  TEST_CASE("fit_circle") {
+    auto circle = Path();
+    circle.move_to(Point(50, 0));
+    for(auto i = 1; i <= 4; ++i) {
+      auto angle = i * std::numbers::pi / 2;
+      auto previous = (i - 1) * std::numbers::pi / 2;
+      auto start = Point(50 * std::cos(previous), 50 * std::sin(previous));
+      auto end = Point(50 * std::cos(angle), 50 * std::sin(angle));
+      auto start_tangent =
+        Point(-std::sin(previous), std::cos(previous)) * (50 * KAPPA);
+      auto end_tangent = Point(-std::sin(angle), std::cos(angle)) *
+        (50 * KAPPA);
+      circle.cubic_to(start + start_tangent, end - end_tangent, end);
+    }
+    circle.close();
+    auto fitted = fit_curves(flatten(circle, 0.01), 0.01);
+    auto cubics = 0;
+    for(auto& segment : fitted.get_segments()) {
+      REQUIRE(segment.m_type != SegmentType::LINE);
+      cubics += segment.m_type == SegmentType::CUBIC;
+    }
+    REQUIRE(cubics >= 4);
+    REQUIRE(cubics <= 16);
+    for(auto& polyline : flatten(fitted, 0.001)) {
+      for(auto& point : polyline.m_points) {
+        REQUIRE(std::abs(length(point) - 50) < 0.05);
+      }
     }
   }
 }

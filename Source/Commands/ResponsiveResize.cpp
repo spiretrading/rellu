@@ -7,9 +7,12 @@
 #include <variant>
 #include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
+#include "Rellu/Commands/CreationCommands.hpp"
+#include "Rellu/Commands/PathCommands.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Commands/ResponsiveResize.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
 
 using namespace Rellu;
@@ -26,6 +29,7 @@ namespace {
   constexpr auto FOURTH_EDGE_MARGIN = 0.33;
   constexpr auto CONTAINED_MARGIN = 0.2;
   constexpr auto PIXEL_TOLERANCE = 0.01;
+  constexpr auto SKEW_TOLERANCE = 0.001;
 
   struct Context {
     const Document* m_document;
@@ -84,6 +88,11 @@ namespace {
       return std::nullopt;
     }
     return Point(matrix.m_a, matrix.m_d);
+  }
+
+  bool is_skewed(const Matrix& matrix) {
+    return std::abs(matrix.m_a * matrix.m_c + matrix.m_b * matrix.m_d) >
+      SKEW_TOLERANCE;
   }
 
   bool is_translation(const Matrix& matrix) {
@@ -428,6 +437,27 @@ namespace {
     }
   }
 
+  bool has_custom_operand(
+      const Context& context, const NodeId& id, int depth) {
+    if(depth > MAXIMUM_DEPTH) {
+      return false;
+    }
+    auto& children = context.m_document->get(id).m_children;
+    return std::any_of(children.begin(), children.end(),
+      [&] (const auto& child) {
+        return get_constraints(context, child).m_is_custom ||
+          has_custom_operand(context, child, depth + 1);
+      });
+  }
+
+  bool is_laid_out_compound(const Context& context, const NodeId& id,
+      const std::optional<Point>& scale) {
+    auto& node = context.m_document->get(id);
+    return context.m_rule == ResizeRule::RESPONSIVE && is_compound(node) &&
+      !node.m_header.m_transform_3d && scale && scale->m_x > 0 &&
+      scale->m_y > 0 && has_custom_operand(context, id, 0);
+  }
+
   void record_node(Context& context, const NodeId& id, const Rect& bounds,
       const Rect& frame, int depth) {
     if(depth > MAXIMUM_DEPTH) {
@@ -674,10 +704,9 @@ namespace {
   }
 
   Rect arrange(const Context& context, const NodeId& id, const Rect& bounds,
-      const Rect& original, const Rect& final, bool is_symbol,
-      std::optional<Orientation> stack) {
+      const Rect& scaled, const Rect& original, const Rect& final,
+      bool is_symbol, std::optional<Orientation> stack) {
     auto& node = resolve(*context.m_document, id);
-    auto scaled = scale_bounds(bounds, original, final);
     auto constraints = get_constraints(context, id);
     auto group = node.get_group();
     auto has_constraint = (constraints.m_is_enabled && (constraints.m_left ||
@@ -715,6 +744,13 @@ namespace {
     target.m_width = std::max(target.m_width, MINIMUM_SIZE);
     target.m_height = std::max(target.m_height, MINIMUM_SIZE);
     return target;
+  }
+
+  Rect arrange(const Context& context, const NodeId& id, const Rect& bounds,
+      const Rect& original, const Rect& final, bool is_symbol,
+      std::optional<Orientation> stack) {
+    return arrange(context, id, bounds, scale_bounds(bounds, original, final),
+      original, final, is_symbol, stack);
   }
 
   bool is_snappable(const Node& node) {
@@ -779,6 +815,119 @@ namespace {
   void place(Context& context, const NodeId& id, const Matrix& relative,
     const Matrix& origin, int depth);
 
+  bool is_skewable_group(const Group& group) {
+    return !group.m_component_instance && !group.m_repeat_grid &&
+      !group.m_scroll_group && !group.m_mask && !group.m_stack &&
+      !group.m_padding;
+  }
+
+  void skew_group(
+    Context& context, const NodeId& id, const Matrix& local, int depth);
+
+  void skew_shape(Context& context, const NodeId& id, const Matrix& local,
+      bool is_converted) {
+    auto& document = *context.m_document;
+    auto& transaction = *context.m_transaction;
+    auto bounds = get_local(context, id);
+    if(!bounds) {
+      return;
+    }
+    auto& node = document.get(id);
+    auto shape = *node.get_shape();
+    auto header = node.m_header;
+    if(auto line = std::get_if<LineShape>(&shape.m_geometry)) {
+      auto start = local.map(line->m_start);
+      auto end = local.map(line->m_end);
+      auto corner =
+        Point(std::min(start.m_x, end.m_x), std::min(start.m_y, end.m_y));
+      shape.m_geometry = LineShape(start - corner, end - corner);
+      header.m_transform = header.m_transform *
+        make_translation(corner.m_x, corner.m_y);
+    } else {
+      auto corner = local.map(bounds->get_top_left());
+      auto mapping = make_translation(-corner.m_x, -corner.m_y) * local;
+      auto rule = FillRule::NON_ZERO;
+      if(auto path = std::get_if<PathShape>(&shape.m_geometry)) {
+        rule = path->m_fill_rule;
+      }
+      shape.m_geometry = PathShape(Shared(
+        transform(to_editable_path(shape.m_geometry), mapping)), rule);
+      header.m_transform = header.m_transform *
+        make_translation(corner.m_x, corner.m_y);
+      if(is_converted && !header.m_has_custom_name) {
+        header.m_name = make_node_name(
+          document, std::string(localize("name", "Path")) + ' ');
+      }
+    }
+    transaction.replace_payload(id, std::move(shape));
+    transaction.replace_header(std::move(header));
+  }
+
+  void skew_child(Context& context, const NodeId& id, const Matrix& parent,
+      const Rect& original, const Rect& final, int depth) {
+    auto& document = *context.m_document;
+    auto& node = document.get(id);
+    auto transform = get_transform(document, id);
+    auto inverse = invert(transform);
+    auto local_bounds = get_local(context, id);
+    if(!inverse || !local_bounds || node.get_reference()) {
+      return;
+    }
+    auto bounds = transform.map(*local_bounds);
+    auto scaled = parent.map(bounds);
+    auto target =
+      arrange(context, id, bounds, scaled, original, final, false, {});
+    auto mapping = make_rect_mapping(scaled, target) * parent;
+    auto local = *inverse * mapping * transform;
+    if(!node.m_header.m_transform_3d) {
+      if(auto group = node.get_group(); group && is_skewable_group(*group)) {
+        skew_group(context, id, local, depth + 1);
+        return;
+      } else if(auto shape = node.get_shape()) {
+        auto& geometry = shape->m_geometry;
+        if(std::holds_alternative<PathShape>(geometry) ||
+            std::holds_alternative<LineShape>(geometry)) {
+          skew_shape(context, id, local, false);
+          return;
+        } else if(is_skewed(local) && !node.m_header.m_aspect_lock &&
+            (std::holds_alternative<RectangleShape>(geometry) ||
+              std::holds_alternative<EllipseShape>(geometry) ||
+              std::holds_alternative<PolygonShape>(geometry))) {
+          skew_shape(context, id, local, true);
+          return;
+        }
+      }
+    }
+    auto world = get_parent_transform(document, id);
+    if(auto inverse_world = invert(world)) {
+      transform_node(document, *context.m_transaction, id,
+        world * mapping * *inverse_world, *context.m_measurer);
+    }
+  }
+
+  void skew_group(
+      Context& context, const NodeId& id, const Matrix& local, int depth) {
+    if(depth > MAXIMUM_DEPTH) {
+      return;
+    }
+    auto& document = *context.m_document;
+    auto bounds = get_local(context, id);
+    if(!bounds) {
+      return;
+    }
+    auto transform = get_transform(document, id);
+    auto corner = local.map(bounds->get_top_left());
+    auto shifted = make_translation(-corner.m_x, -corner.m_y) * local;
+    auto original = transform.map(*bounds);
+    auto final = shifted.map(original);
+    set_transform(document, *context.m_transaction, id,
+      transform * make_translation(corner.m_x, corner.m_y));
+    auto children = document.get(id).m_children;
+    for(auto& child : children) {
+      skew_child(context, child, shifted, original, final, depth);
+    }
+  }
+
   void layout_children(Context& context, const NodeId& id,
       const Rect& original, const Rect& final, const Matrix& origin,
       int depth) {
@@ -835,18 +984,12 @@ namespace {
     if(payload.m_frame == frame) {
       return;
     }
-    if(payload.m_viewport_height &&
-        *payload.m_viewport_height > payload.m_frame.m_height) {
-      payload.m_viewport_height = payload.m_frame.m_height;
+    fit_to_frame(payload);
+    if(!payload.m_layout_grid &&
+        payload.m_frame.get_size() != frame.get_size()) {
+      payload.m_layout_grid = make_initial_grid(
+        payload, context.m_document->get_resources().m_grid_defaults);
     }
-    if(payload.m_layout_grid) {
-      fit_layout_grid(*payload.m_layout_grid, payload.m_frame.get_size());
-    }
-    std::erase_if(payload.m_guides, [&] (const auto& guide) {
-      auto extent = guide.m_orientation == Orientation::HORIZONTAL ?
-        payload.m_frame.m_height : payload.m_frame.m_width;
-      return guide.m_position < 1 || guide.m_position >= extent;
-    });
     auto is_responsive = context.m_rule == ResizeRule::RESPONSIVE &&
       node.m_header.m_constraints.m_is_enabled;
     auto size = payload.m_frame.get_size();
@@ -876,15 +1019,18 @@ namespace {
     }
     auto final = Rect(bounds->m_x, bounds->m_y, target.m_width,
       target.m_height);
-    auto group = *document.get(id).get_group();
-    if(group.m_mask) {
-      auto matrix = make_rect_mapping(*bounds, final);
-      for(auto& shape : group.m_mask->m_shapes) {
-        shape.m_transform = matrix * shape.m_transform;
+    auto padding = Margins();
+    if(auto payload = document.get(id).get_group()) {
+      auto group = *payload;
+      if(group.m_mask) {
+        auto matrix = make_rect_mapping(*bounds, final);
+        for(auto& shape : group.m_mask->m_shapes) {
+          shape.m_transform = matrix * shape.m_transform;
+        }
+        context.m_transaction->replace_payload(id, group);
       }
-      context.m_transaction->replace_payload(id, group);
+      padding = get_padding(group);
     }
-    auto padding = get_padding(group);
     layout_children(context, id, shrink(*bounds, padding),
       shrink(final, padding), group_origin, depth);
   }
@@ -974,8 +1120,21 @@ namespace {
     auto transform = get_transform(document, id);
     auto inverse = invert(transform);
     auto group = node.get_group();
+    if(!group && inverse) {
+      auto local = *inverse * relative * transform;
+      if(is_laid_out_compound(context, id, get_axis_scale(local))) {
+        resize_group(context, id, local, origin, depth);
+        return;
+      }
+    }
     if(group && inverse && !node.m_header.m_transform_3d) {
       auto local = *inverse * relative * transform;
+      if(context.m_rule == ResizeRule::RESPONSIVE &&
+          is_skewable_group(*group) && !get_axis_scale(local) &&
+          is_skewed(local) && local.get_determinant() > 0) {
+        skew_group(context, id, local, depth);
+        return;
+      }
       if(auto scale = get_axis_scale(local);
           scale && scale->m_x > 0 && scale->m_y > 0) {
         if(group->m_repeat_grid) {
@@ -1050,8 +1209,13 @@ namespace {
     auto& node = document.get(id);
     auto group = node.get_group();
     if(!scale || !group || node.m_header.m_transform_3d) {
+      auto is_laid_out = !group && is_laid_out_compound(context, id, scale);
       if(context.m_rule != ResizeRule::PROPORTIONAL && is_compound(node)) {
         reset_descendants(context, id, 0);
+      }
+      if(is_laid_out) {
+        place(context, id, relative, parent, 0);
+        return;
       }
       transform_node(
         document, transaction, id, mapping, *context.m_measurer);

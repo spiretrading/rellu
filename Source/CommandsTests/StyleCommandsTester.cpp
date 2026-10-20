@@ -40,6 +40,18 @@ TEST_SUITE("StyleCommands") {
     REQUIRE(history.get_undo_count() == 1);
     REQUIRE(document.get(scene.m_rectangle).get_shape()->m_style.m_fill ==
       Fill(SolidFill(make_color(4, 5, 6))));
+    REQUIRE(history.merge(std::make_unique<SetFillCommand>(
+      nodes, SolidFill(make_color(7, 8, 9)), "Nudge Left")));
+    REQUIRE(history.merge(std::make_unique<SetFillCommand>(
+      nodes, SolidFill(make_color(10, 11, 12)), "Nudge Left")));
+    REQUIRE(history.get_undo_count() == 2);
+    REQUIRE(history.get_undo_label() == "Nudge Left");
+    REQUIRE(history.merge(std::make_unique<SetFillCommand>(
+      nodes, SolidFill(make_color(13, 14, 15)))));
+    REQUIRE(history.get_undo_count() == 3);
+    history.undo();
+    REQUIRE(document.get(scene.m_rectangle).get_shape()->m_style.m_fill ==
+      Fill(SolidFill(make_color(10, 11, 12))));
   }
 
   TEST_CASE("stroke") {

@@ -251,6 +251,65 @@ TEST_SUITE("History") {
       make_translation(111, 60));
   }
 
+  TEST_CASE("recorded_steps") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto history = History(document);
+    auto setting = 0;
+    auto get_x = [&] {
+      return get_world_transform(document, scene.m_rectangle).m_tx;
+    };
+    history.execute(make_move(scene.m_rectangle, Point(1, 0)));
+    history.mark_clean();
+    setting = 1;
+    history.record("Hide All Guides", [&] {
+      setting = 0;
+    }, [&] {
+      setting = 1;
+    });
+    REQUIRE(history.get_undo_label() == "Hide All Guides");
+    REQUIRE(history.get_undo_count() == 2);
+    REQUIRE(history.is_dirty());
+    history.merge(make_move(scene.m_rectangle, Point(1, 0)));
+    REQUIRE(history.get_undo_count() == 3);
+    REQUIRE(get_x() == 112);
+    REQUIRE(history.undo());
+    REQUIRE(get_x() == 111);
+    REQUIRE(setting == 1);
+    REQUIRE(history.undo());
+    REQUIRE(setting == 0);
+    REQUIRE(get_x() == 111);
+    REQUIRE(!history.is_dirty());
+    REQUIRE(history.undo());
+    REQUIRE(get_x() == 110);
+    REQUIRE(history.redo());
+    REQUIRE(history.redo());
+    REQUIRE(setting == 1);
+    REQUIRE(history.get_undo_label() == "Hide All Guides");
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(scene.m_loose).m_header;
+      header.m_name = "External";
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    REQUIRE(history.get_undo_count() == 3);
+    REQUIRE(history.undo());
+    REQUIRE(document.get(scene.m_loose).m_header.m_name == "Loose");
+    REQUIRE(history.undo());
+    REQUIRE(setting == 0);
+    history.record("Lock All Guides", nullptr, nullptr);
+    REQUIRE(!history.can_redo());
+    REQUIRE(history.undo());
+    REQUIRE(history.undo());
+    REQUIRE(get_x() == 110);
+    history.clear();
+    history.execute(make_move(scene.m_rectangle, Point(1, 0)));
+    REQUIRE(history.get_undo_count() == 1);
+    REQUIRE(history.undo());
+    REQUIRE(get_x() == 110);
+  }
+
   TEST_CASE("execution_in_observer") {
     auto document = Document();
     auto scene = build_scene(document);

@@ -8,6 +8,7 @@
 #include <QKeySequence>
 #include <QWidget>
 #include "Rellu/Commands/CommandRegistry.hpp"
+#include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Ui/EditActions.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "TestDocument.hpp"
@@ -184,5 +185,46 @@ TEST_SUITE("EditActions") {
     REQUIRE(copy.m_header.m_name == "Home \xE2\x80\x93 1");
     REQUIRE(copy.get_artboard()->m_frame == Rect(545, 50, 375, 812));
     REQUIRE(revealed == copy.get_artboard()->m_frame);
+  }
+
+  TEST_CASE("reset_main_state") {
+    auto window = QWidget();
+    auto actions = ActionRegistry(window);
+    add_xd_menus(actions);
+    auto commands = CommandRegistry();
+    add_standard_commands(commands);
+    add_component_commands(commands);
+    auto edit_actions = EditActions(actions, commands);
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    edit_actions.set_editor(&editor);
+    editor.get_selection().select(ids.m_instance);
+    REQUIRE(actions.get("object.reset_main_state").isEnabled());
+    editor.get_text_selection().set(ids.m_label, 0, 0);
+    REQUIRE(!actions.get("object.reset_main_state").isEnabled());
+    editor.get_text_selection().clear();
+    REQUIRE(actions.get("object.reset_main_state").isEnabled());
+  }
+
+  TEST_CASE("text_properties") {
+    auto fixture = Fixture();
+    auto document = Document();
+    auto ids = build_test_document(document);
+    {
+      auto transaction = Transaction(document);
+      auto text = *document.get(ids.m_label).get_text();
+      text.m_style.m_stroke = Stroke(make_color(0, 128, 0), 3);
+      transaction.replace_payload(ids.m_label, text);
+      transaction.commit();
+    }
+    auto editor = Editor(document);
+    fixture.m_edit_actions->set_editor(&editor);
+    editor.get_selection().select(
+      std::vector<NodeId>({ids.m_ellipse, ids.m_label}));
+    REQUIRE(fixture.m_actions.trigger("edit.copy"));
+    auto& selection = editor.get_text_selection();
+    REQUIRE(selection.get_last_border() == Stroke(make_color(0, 128, 0), 3));
+    REQUIRE(selection.get_last_style().m_font.m_family == "Roboto");
   }
 }

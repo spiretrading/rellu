@@ -171,7 +171,10 @@ namespace Rellu {
        */
       void set_font_families(std::function<QStringList ()> families);
 
-      /** Returns the color picker editing color swatches. */
+      /**
+       * Returns the color picker editing color swatches, whose color model
+       * the picker of a character style shares.
+       */
       ColorPicker& get_color_picker();
 
       /**
@@ -457,6 +460,19 @@ namespace Rellu {
    *         none.
    */
   std::optional<ComponentId> read_component_mime_data(const QMimeData& data);
+
+  /**
+   * The drop action of a component dragged out of the Document Assets panel
+   * over an instance it replaces, shown with the swap pointer.
+   */
+  inline constexpr auto SWAP_DROP_ACTION = Qt::LinkAction;
+
+  /**
+   * Returns the pointer Adobe XD shows while a component dragged out of the
+   * Document Assets panel is over an instance it replaces: an arrow with
+   * two arrows turning about each other, its tip at the top left corner.
+   */
+  QPixmap make_swap_cursor();
 
   /**
    * Returns the label XD lists a color swatch under: its name, or the hex

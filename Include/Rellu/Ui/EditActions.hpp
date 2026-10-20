@@ -21,7 +21,8 @@ namespace Rellu {
    * applied to the selection of an editor: the clipboard, history and
    * selection actions, and every action named after a command of a
    * CommandRegistry. An action backed by a command is enabled only while
-   * the command applies to the selection.
+   * the command applies to the selection, Reset to Main State only while no
+   * text is edited in place, as in Adobe XD.
    */
   class EditActions {
     public:
@@ -139,6 +140,7 @@ namespace Rellu {
       QMetaObject::Connection m_clipboard_connection;
       Subscription m_selection_subscription;
       Subscription m_history_subscription;
+      Subscription m_text_selection_subscription;
       std::vector<std::string> m_names;
       std::vector<std::string> m_command_actions;
 
@@ -147,6 +149,7 @@ namespace Rellu {
       void set_action(
         const std::string& name, std::function<void ()> handler);
       void run(auto operation);
+      bool is_available(const std::string& name) const;
       bool copy_selection();
       void cut();
       void copy();

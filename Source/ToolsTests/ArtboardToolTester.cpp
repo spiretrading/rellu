@@ -70,6 +70,35 @@ TEST_SUITE("ArtboardTool") {
     REQUIRE(square.m_header.m_name == "Artboard \xE2\x80\x93 2");
   }
 
+  TEST_CASE("handles") {
+    auto document = Document();
+    build_artboard(document);
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    tools.set_tool("artboard");
+    drag(tools, Point(500, 100), Point(800, 400));
+    auto drawn = editor.get_selection().get_primary();
+    auto overlay = tools.draw();
+    auto handles = std::size_t(0);
+    for(auto& shape : overlay.m_shapes) {
+      if(shape.m_radius > 0) {
+        ++handles;
+      }
+    }
+    REQUIRE(handles == 8);
+    tools.move(make_event(Point(805, 250), Qt::NoButton, Qt::NoButton));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
+    tools.move(make_event(Point(809, 250), Qt::NoButton, Qt::NoButton));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::CROSSHAIR);
+    drag(tools, Point(800, 250), Point(850, 250));
+    REQUIRE(document.get(drawn).get_artboard()->m_frame ==
+      Rect(500, 100, 350, 300));
+    REQUIRE(document.get_canvas().size() == 2);
+    REQUIRE(editor.get_history().get_undo_label() == "Resize");
+    REQUIRE(tools.get_tool_name() == "artboard");
+  }
+
   TEST_CASE("click") {
     auto document = Document();
     auto existing = build_artboard(document);

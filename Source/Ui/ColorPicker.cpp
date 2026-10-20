@@ -552,7 +552,7 @@ ColorPicker::ColorPicker(QWidget* parent)
   m_model_box->setFixedWidth(54);
   QObject::connect(m_model_box, &QComboBox::activated, this,
     [this] (int index) {
-      set_model(static_cast<ColorModel>(index));
+      apply_model(static_cast<ColorModel>(index));
     });
   values_layout->addWidget(m_model_box);
   m_hex->setObjectName("number_field");
@@ -705,6 +705,17 @@ void ColorPicker::set_model(ColorModel model) {
   update_fields();
 }
 
+void ColorPicker::apply_model(ColorModel model) {
+  set_model(model);
+  if(m_model_handler) {
+    m_model_handler(model);
+  }
+}
+
+void ColorPicker::set_model_handler(ModelHandler handler) {
+  m_model_handler = std::move(handler);
+}
+
 void ColorPicker::set_swatches(std::vector<ColorSwatch> swatches) {
   m_swatches = std::move(swatches);
   rebuild_swatches();
@@ -753,12 +764,28 @@ void ColorPicker::set_canvas_handler(CanvasHandler handler) {
   m_canvas_handler = std::move(handler);
 }
 
+void ColorPicker::set_key_handler(KeyHandler handler) {
+  m_key_handler = std::move(handler);
+}
+
+bool ColorPicker::event(QEvent* event) {
+  if(event->type() == QEvent::KeyPress &&
+      handle_key(*static_cast<QKeyEvent*>(event))) {
+    return true;
+  }
+  return QFrame::event(event);
+}
+
 void ColorPicker::mousePressEvent(QMouseEvent* event) {
-  if(!rect().contains(event->position().toPoint()) && m_canvas_handler &&
-      m_canvas_handler(CanvasEvent::PRESS, event->globalPosition())) {
-    m_is_canvas_dragging = true;
-    event->accept();
-    return;
+  if(!rect().contains(event->position().toPoint()) && m_canvas_handler) {
+    if(auto focus = focusWidget(); focus && focus != this) {
+      focus->clearFocus();
+    }
+    if(m_canvas_handler(CanvasEvent::PRESS, event->globalPosition())) {
+      m_is_canvas_dragging = true;
+      event->accept();
+      return;
+    }
   }
   QFrame::mousePressEvent(event);
 }
@@ -795,6 +822,18 @@ void ColorPicker::keyPressEvent(QKeyEvent* event) {
     return;
   }
   QFrame::keyPressEvent(event);
+}
+
+bool ColorPicker::handle_key(QKeyEvent& event) {
+  if(!m_key_handler) {
+    return false;
+  }
+  auto focus = focusWidget();
+  if((focus && focus != this) || !m_key_handler(event)) {
+    return false;
+  }
+  event.accept();
+  return true;
 }
 
 void ColorPicker::load_color() {

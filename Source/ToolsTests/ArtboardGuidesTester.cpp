@@ -68,27 +68,42 @@ namespace {
 TEST_SUITE("ArtboardGuides") {
   TEST_CASE("create") {
     auto setup = Setup();
-    drag(setup.m_tools, Point(101, 300), Point(230.4, 300));
+    drag(setup.m_tools, Point(99, 300), Point(230.4, 300));
     REQUIRE(setup.get_guides().size() == 1);
     auto& guide = setup.get_guides().front();
     REQUIRE(guide.m_orientation == Orientation::VERTICAL);
     REQUIRE(guide.m_position == 130);
     REQUIRE(!guide.m_id.empty());
     REQUIRE(setup.get_label() == "Add Guide");
-    drag(setup.m_tools, Point(300, 101), Point(300, 180));
+    drag(setup.m_tools, Point(300, 99), Point(300, 180));
     REQUIRE(setup.get_guides().size() == 2);
     REQUIRE(setup.get_guides().front().m_orientation ==
       Orientation::HORIZONTAL);
     REQUIRE(setup.get_guides().front().m_position == 80);
     auto count = setup.m_editor.get_history().get_undo_count();
-    drag(setup.m_tools, Point(101, 300), Point(60, 300));
+    drag(setup.m_tools, Point(99, 300), Point(60, 300));
     REQUIRE(setup.get_guides().size() == 2);
     REQUIRE(setup.m_editor.get_history().get_undo_count() == count);
   }
 
+  TEST_CASE("creation_band") {
+    auto setup = Setup();
+    for(auto x : {100.0, 101.0, 88.5}) {
+      drag(setup.m_tools, Point(x, 300), Point(230, 300));
+      REQUIRE(setup.get_guides().empty());
+      setup.m_editor.get_selection().clear();
+    }
+    drag(setup.m_tools, Point(89, 300), Point(230, 300));
+    REQUIRE(setup.get_guides().size() == 1);
+    drag(setup.m_tools, Point(300, 99.5), Point(300, 180));
+    REQUIRE(setup.get_guides().size() == 2);
+    drag(setup.m_tools, Point(300, 100), Point(300, 250));
+    REQUIRE(setup.get_guides().size() == 2);
+  }
+
   TEST_CASE("move") {
     auto setup = Setup();
-    drag(setup.m_tools, Point(101, 300), Point(230, 300));
+    drag(setup.m_tools, Point(99, 300), Point(230, 300));
     auto id = setup.get_guides().front().m_id;
     drag(setup.m_tools, Point(231, 300), Point(300.2, 300));
     REQUIRE(setup.get_guides().front().m_position == 200);
@@ -106,8 +121,8 @@ TEST_SUITE("ArtboardGuides") {
 
   TEST_CASE("delete") {
     auto setup = Setup();
-    drag(setup.m_tools, Point(101, 300), Point(230, 300));
-    drag(setup.m_tools, Point(101, 300), Point(300, 300));
+    drag(setup.m_tools, Point(99, 300), Point(230, 300));
+    drag(setup.m_tools, Point(99, 300), Point(300, 300));
     REQUIRE(setup.get_guides().size() == 2);
     drag(setup.m_tools, Point(300, 300), Point(230, 300));
     REQUIRE(setup.get_guides().size() == 1);
@@ -119,17 +134,17 @@ TEST_SUITE("ArtboardGuides") {
 
   TEST_CASE("settings") {
     auto setup = Setup();
-    drag(setup.m_tools, Point(101, 300), Point(230, 300));
+    drag(setup.m_tools, Point(99, 300), Point(230, 300));
     auto& context = setup.m_tools.get_context();
     REQUIRE(count_guides(setup.m_tools.draw()) == 1);
     context.set_guide_settings(GuideSettings(true, true));
     drag(setup.m_tools, Point(230, 300), Point(300, 300));
     REQUIRE(setup.get_guides().front().m_position == 130);
-    drag(setup.m_tools, Point(101, 300), Point(300, 300));
+    drag(setup.m_tools, Point(99, 300), Point(300, 300));
     REQUIRE(setup.get_guides().size() == 2);
     context.set_guide_settings(GuideSettings(false, false));
     REQUIRE(count_guides(setup.m_tools.draw()) == 0);
-    drag(setup.m_tools, Point(101, 300), Point(350, 300));
+    drag(setup.m_tools, Point(99, 300), Point(350, 300));
     REQUIRE(setup.get_guides().size() == 2);
   }
 }

@@ -93,6 +93,43 @@ namespace Rellu {
       void set_last_style(TextStyle style, ParagraphStyle paragraph);
 
       /**
+       * Returns whether the fill of the text edited or styled most recently
+       * is enabled, as that of new text is.
+       */
+      bool is_last_fill_enabled() const;
+
+      /**
+       * Returns the border new text takes, the color, width and enabled
+       * state of the last border of text edited or styled, or none before
+       * any.
+       */
+      const std::optional<Stroke>& get_last_border() const;
+
+      /**
+       * Records the fill and border new text takes.
+       * @param is_fill_enabled Whether the fill is enabled.
+       * @param border The border, or none.
+       */
+      void set_last_appearance(
+        bool is_fill_enabled, std::optional<Stroke> border);
+
+      /**
+       * Records the fill and border of text edited or styled as those new
+       * text takes, as Adobe XD does, text without a border keeping the
+       * border recorded.
+       * @param text The text.
+       */
+      void remember_appearance(const Text& text);
+
+      /**
+       * Records the styles, fill and border of text, its styles being those
+       * of its first character, as Adobe XD does when text is styled or
+       * copied.
+       * @param text The text.
+       */
+      void remember(const Text& text);
+
+      /**
        * Edits a text node, selecting the range between two indices, clamped
        * to its content.
        * @param node The text node, or nil to end editing.
@@ -121,6 +158,8 @@ namespace Rellu {
       std::optional<std::string> m_pending_hyperlink;
       TextStyle m_last_style;
       ParagraphStyle m_last_paragraph_style;
+      bool m_is_last_fill_enabled;
+      std::optional<Stroke> m_last_border;
       Signal m_signal;
       Subscription m_subscription;
 

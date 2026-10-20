@@ -184,6 +184,45 @@ TEST_SUITE("HeaderCommands") {
         rectangle.m_width, rectangle.m_height));
   }
 
+  TEST_CASE("flip_text") {
+    auto document = Document();
+    auto text = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto payload = make_text(u"Flip");
+      payload.m_frame = PositionedFrame();
+      text = transaction.append(
+        NodeId(), make_header("Flip", make_translation(100, 100)), payload);
+      transaction.commit();
+    }
+    auto registry = CommandRegistry();
+    add_header_commands(registry, estimate_text_bounds);
+    auto bounds = *get_world_bounds(document, text);
+    auto history = History(document);
+    require_undoable(history, registry.make(
+      "object.transform.flip_vertically", document, std::vector{text}));
+    REQUIRE(document.get(text).get_text()->m_is_flipped_vertically);
+    require_near(document.get(text).m_header.m_transform,
+      make_translation(100, 100));
+    require_near(*get_world_bounds(document, text), bounds);
+    history.undo();
+    auto local = estimate_text_bounds(*document.get(text).get_text());
+    require_undoable(history, registry.make(
+      "object.transform.flip_horizontally", document, std::vector{text}));
+    REQUIRE(document.get(text).get_text()->m_is_flipped_vertically);
+    auto& transform = document.get(text).m_header.m_transform;
+    REQUIRE(transform.m_a == doctest::Approx(-1));
+    REQUIRE(transform.m_d == doctest::Approx(-1));
+    REQUIRE(transform.m_tx ==
+      doctest::Approx(100 + 2 * local.m_x + local.m_width));
+    REQUIRE(transform.m_ty ==
+      doctest::Approx(100 + 2 * local.m_y + local.m_height));
+    require_near(*get_world_bounds(document, text), bounds);
+    require_undoable(history, registry.make(
+      "object.transform.flip_vertically", document, std::vector{text}));
+    REQUIRE(!document.get(text).get_text()->m_is_flipped_vertically);
+  }
+
   TEST_CASE("flip_mixed") {
     auto document = Document();
     auto scene = build_scene(document);

@@ -39,12 +39,16 @@ namespace {
       if(!node) {
         return NodeId();
       }
-      if(get_instance_role(*node)) {
+      auto group = node->get_group();
+      if(node->m_header.m_is_locked || !node->m_header.m_is_visible ||
+          group && group->m_repeat_grid) {
+        target = NodeId();
+      } else if(get_instance_role(*node)) {
         target = current;
       }
       current = node->m_parent;
     }
-    if(target.is_nil() ||
+    if(current != container || target.is_nil() ||
         get_instance_role(document.get(target))->m_component == component) {
       return NodeId();
     }
@@ -72,10 +76,12 @@ bool ComponentDrop::eventFilter(QObject* watched, QEvent* event) {
     auto component = drag->mimeData() ?
       read_component_mime_data(*drag->mimeData()) : std::nullopt;
     if(component) {
-      m_editor->get_context().set_hover(find_swap_target(
-        *m_view, *m_editor, *component, drag->position()));
+      auto target = find_swap_target(
+        *m_view, *m_editor, *component, drag->position());
+      m_editor->get_context().set_hover(target);
       m_view->update();
-      drag->acceptProposedAction();
+      drag->setDropAction(target.is_nil() ? Qt::CopyAction : SWAP_DROP_ACTION);
+      drag->accept();
       return true;
     }
   } else if(event->type() == QEvent::DragLeave) {
@@ -123,7 +129,8 @@ bool ComponentDrop::eventFilter(QObject* watched, QEvent* event) {
             point->m_y - origin.m_y - center.m_y)));
       }
     } catch(const std::exception&) {}
-    drop->acceptProposedAction();
+    drop->setDropAction(target.is_nil() ? Qt::CopyAction : SWAP_DROP_ACTION);
+    drop->accept();
     m_view->setFocus();
     return true;
   }

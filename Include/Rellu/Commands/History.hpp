@@ -19,7 +19,8 @@ namespace Rellu {
 
   /**
    * The labelled undo and redo history of a document. Each step is one
-   * command, or one transaction committed on the document by other means.
+   * command, one transaction committed on the document by other means, or
+   * a change recorded outside of the document.
    * A command's step also holds the changes it causes in components, as
    * refresh_components makes them, the recomputed results of the compound
    * shapes whose operands it changed, as refresh_compounds makes them, and
@@ -86,6 +87,16 @@ namespace Rellu {
        *         records the change.
        */
       const Command* merge(std::unique_ptr<Command> command);
+
+      /**
+       * Records a change made outside of the document, such as to a
+       * setting, as a new step.
+       * @param label The label of the step.
+       * @param revert The function undoing the change, or empty for none.
+       * @param reapply The function redoing the change, or empty for none.
+       */
+      void record(std::string label, std::function<void ()> revert,
+        std::function<void ()> reapply);
 
       /** Closes the most recent step to merging. */
       void seal();
@@ -157,12 +168,16 @@ namespace Rellu {
         std::string m_label;
         std::unique_ptr<Command> m_command;
         std::any m_annotation;
+        bool m_is_external = false;
+        std::function<void ()> m_revert;
+        std::function<void ()> m_reapply;
       };
       Document* m_document;
       std::vector<Step> m_undo;
       std::vector<Step> m_redo;
       std::optional<std::size_t> m_clean;
       std::size_t m_base;
+      std::size_t m_external;
       bool m_is_open;
       bool m_is_applying;
       bool m_is_recording;
@@ -175,6 +190,7 @@ namespace Rellu {
 
       History(const History&) = delete;
       History& operator =(const History&) = delete;
+      std::size_t get_depth() const;
       void push(Step step);
       void synchronize();
       void refresh();

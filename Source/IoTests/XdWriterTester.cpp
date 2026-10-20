@@ -254,8 +254,9 @@ namespace {
     built.m_master = transaction.insert_root(make_header("Button"), Group());
     auto master_shape = transaction.append(built.m_master,
       make_header("Background"), make_rectangle_shape(80, 30));
-    built.m_state_tree =
-      transaction.insert_root(make_header("Hover"), Group());
+    auto state_header = make_header("Hover");
+    state_header.m_has_custom_name = true;
+    built.m_state_tree = transaction.insert_root(state_header, Group());
     transaction.append(built.m_state_tree, make_header("Background"),
       make_rectangle_shape(80, 30));
     auto state = generate_node_id();
@@ -952,7 +953,11 @@ TEST_SUITE("XdWriter") {
     auto transaction = Transaction(document);
     auto rectangle = transaction.append(NodeId(),
       make_header("Rectangle 3"), make_rectangle_shape(5, 5));
+    auto custom_header = make_header("Logo");
+    custom_header.m_has_custom_name = true;
     auto custom = transaction.append(
+      NodeId(), custom_header, make_rectangle_shape(5, 5));
+    auto unnumbered = transaction.append(
       NodeId(), make_header("Logo"), make_rectangle_shape(5, 5));
     auto localized = transaction.append(
       NodeId(), make_header("Rechteck 4"), make_rectangle_shape(5, 5));
@@ -967,8 +972,10 @@ TEST_SUITE("XdWriter") {
       group, make_header("Path 1"), make_rectangle_shape(5, 5));
     auto text = transaction.append(
       NodeId(), make_header("Hello"), make_text_payload(u"Hello"));
+    auto renamed_header = make_header("Title");
+    renamed_header.m_has_custom_name = true;
     auto renamed = transaction.append(
-      NodeId(), make_header("Title"), make_text_payload(u"Hello"));
+      NodeId(), renamed_header, make_text_payload(u"Hello"));
     auto grid = Group();
     grid.m_repeat_grid = RepeatGrid(Size(50, 50), 10, 10, 2, 3, Size(110, 170));
     auto grid_id =
@@ -1008,31 +1015,41 @@ TEST_SUITE("XdWriter") {
     component.m_master = master;
     component.m_size = Size(5, 5);
     auto component_id = transaction.add_component(component);
-    auto add_instance = [&] (std::string name) {
+    auto add_instance = [&] (std::string name, bool is_custom) {
       auto instance = Group();
       instance.m_component_instance =
         ComponentInstance(component_id, StateId(), Size(5, 5));
-      return transaction.append(
-        NodeId(), make_header(std::move(name)), instance);
+      instance.m_component_instance->m_is_name_inherited = is_custom;
+      auto header = make_header(std::move(name));
+      header.m_has_custom_name = is_custom;
+      return transaction.append(NodeId(), std::move(header), instance);
     };
-    auto numbered = add_instance("Component 1 \xE2\x80\x93 2");
-    auto plain = add_instance("Component 1");
-    auto symbol = add_instance("Symbol 3");
-    auto card = add_instance("Card \xE2\x80\x93 2");
+    auto numbered = add_instance("Component 1 \xE2\x80\x93 2", false);
+    auto plain = add_instance("Component 1", false);
+    auto symbol = add_instance("Symbol 3", false);
+    auto card = add_instance("Card \xE2\x80\x93 2", true);
     transaction.commit();
     auto package = XdPackage(write_xd(document));
     auto get_key = [&] (const NodeId& id) {
       return get_ux(find_written(package, id)).value("nameL10N"_L1).
         toString().toStdString();
     };
+    auto is_custom = [&] (const NodeId& id) {
+      return get_ux(find_written(package, id)).value(
+        "hasCustomName"_L1).toBool();
+    };
     REQUIRE(get_key(rectangle) == "SHAPE_RECTANGLE");
+    REQUIRE(!is_custom(rectangle));
     REQUIRE(get_key(custom).empty());
+    REQUIRE(is_custom(custom));
+    REQUIRE(get_key(unnumbered) == "SHAPE_RECTANGLE");
     REQUIRE(get_key(localized) == "SHAPE_RECTANGLE");
     REQUIRE(get_key(localized_group) == "SHAPE_GROUP");
     REQUIRE(get_key(ellipse_id) == "SHAPE_ELLIPSE");
     REQUIRE(get_key(group) == "SHAPE_GROUP");
     REQUIRE(get_key(text) == "SHAPE_GROUP");
     REQUIRE(get_key(renamed).empty());
+    REQUIRE(is_custom(renamed));
     REQUIRE(get_key(grid_id) == "SHAPE_REPEAT_GRID");
     REQUIRE(get_key(intersection) == "SHAPE_INTERSECT");
     REQUIRE(get_key(exclusion) == "SHAPE_EXCLUDE");
@@ -1044,5 +1061,10 @@ TEST_SUITE("XdWriter") {
     REQUIRE(get_key(plain) == "SHAPE_COMPONENT");
     REQUIRE(get_key(symbol) == "SHAPE_SYMBOL");
     REQUIRE(get_key(card).empty());
+    REQUIRE(is_custom(card));
+    REQUIRE(get_ux(find_written(package, card)).value(
+      "isCustomNameInherited"_L1).toBool());
+    REQUIRE(!get_ux(find_written(package, plain)).contains(
+      "isCustomNameInherited"_L1));
   }
 }

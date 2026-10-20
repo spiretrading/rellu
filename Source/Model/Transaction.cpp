@@ -106,7 +106,8 @@ namespace {
 
   ChangeMask diff(const NodeHeader& previous, const NodeHeader& current) {
     auto mask = ChangeMask::NONE;
-    if(previous.m_name != current.m_name) {
+    if(previous.m_name != current.m_name ||
+        previous.m_has_custom_name != current.m_has_custom_name) {
       mask |= ChangeMask::NAME;
     }
     if(previous.m_is_visible != current.m_is_visible) {

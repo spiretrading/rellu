@@ -46,7 +46,7 @@ SetCornerRadiusCommand::SetCornerRadiusCommand(
 }
 
 std::string SetCornerRadiusCommand::get_label() const {
-  return "Change Corner Radius";
+  return "Corner Radius";
 }
 
 void SetCornerRadiusCommand::apply(

@@ -87,8 +87,10 @@ namespace Rellu {
 
   /**
    * Describes the properties several nodes share, a value that differs
-   * among them being marked mixed. The transform section of several nodes
-   * describes the frame of them all.
+   * among them being marked mixed. The position in the transform section
+   * of several nodes is that of the frame of them all, while the width,
+   * height and rotation are each node's, marked mixed when they differ to
+   * two decimals.
    * @param document The document containing the nodes.
    * @param nodes The nodes' ids.
    * @param measurer The function measuring text.

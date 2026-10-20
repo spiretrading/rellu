@@ -1,5 +1,10 @@
+#include <algorithm>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 #include <doctest/doctest.h>
+#include <QByteArray>
 #include <QJsonArray>
 #include "Rellu/Io/XdValues.hpp"
 #include "Rellu/Io/XdWriter.hpp"
@@ -75,6 +80,86 @@ namespace {
       QByteArray("\x89PNG\r\n\x1A\n", 8));
     package.m_entries.emplace_back("plugins/data.bin", QByteArray("raw"));
     return package;
+  }
+
+  const auto MANIFEST = std::string_view(R"({"state":"unmodified",)"
+    R"("manifest-format-version":6,"name":"Design\u0001","children":[)"
+    R"({"path":"artwork","name":"artwork",)"
+    R"("id":"00000000-0000-0000-0000-000000000101","children":[)"
+    R"({"path":"pasteboard","name":"pasteboard",)"
+    R"("id":"00000000-0000-0000-0000-000000000102","children":[)"
+    R"({"path":"graphics","name":"graphics",)"
+    R"("id":"00000000-0000-0000-0000-000000000103","components":[)"
+    R"({"path":"graphicContent.agc","name":"","state":"unmodified",)"
+    R"("id":"00000000-0000-0000-0000-000000000104",)"
+    R"("type":"application/vnd.adobe.agc.graphicsTree+json",)"
+    R"("rel":"primary"}]}]}]},{"path":"resources","name":"resources",)"
+    R"("id":"00000000-0000-0000-0000-000000000105","children":[)"
+    R"({"path":"graphics","name":"graphics",)"
+    R"("id":"00000000-0000-0000-0000-000000000106","components":[)"
+    R"({"path":"graphicContent.agc","name":"","state":"unmodified",)"
+    R"("id":"00000000-0000-0000-0000-000000000107",)"
+    R"("type":"application/vnd.adobe.agc.graphicsTree+json",)"
+    R"("rel":"primary"}]}]}],)"
+    R"("uxdesign#parentDocId":"00000000-0000-0000-0000-000000000108",)"
+    R"("id":"00000000-0000-0000-0000-000000000109",)"
+    R"("uxdesign#compositeID":"00000000-0000-0000-0000-000000000109",)"
+    R"("uxdesign#version":"2.33",)"
+    R"("uxdesign#id":"00000000-0000-0000-0000-00000000010a","components":[)"
+    R"({"path":"META-INF/metadata.xml","name":"xmp-metadata",)"
+    R"("state":"unmodified","id":"00000000-0000-0000-0000-00000000010b",)"
+    R"("type":"application/rdf+xml","rel":"metadata"}],)"
+    R"("type":"application/vnd.adobe.sparkler.project+dcx",)"
+    R"("uxdesign#serializationId":"00000000-0000-0000-0000-00000000010c",)"
+    R"("uxdesign#applicationVersion":"61.0.12.1","scale":0.5})");
+
+  const auto METADATA = std::string_view(
+    R"(<rdf:Description xmpMM:DocumentID=")"
+    R"(00000000-0000-0000-0000-000000000109" xmpMM:OriginalDocumentID=")"
+    R"(00000000-0000-0000-0000-000000000109" xmpMM:InstanceID=")"
+    R"(00000000-0000-0000-0000-00000000010d"/>)");
+
+  QByteArray make_manifest_package() {
+    auto package = XdTestPackage();
+    package.m_pasteboard = parse_json_array(R"([
+      {"type": "shape", "id": "00000000-0000-0000-0000-00000000000a",
+       "name": "Kept", "meta": {"ux": {"hasCustomName": true}},
+       "shape": {"type": "rect", "x": 0, "y": 0, "width": 10,
+         "height": 10}}])");
+    auto built = XdPackage(package.build());
+    auto entries = std::vector<std::pair<std::string, QByteArray>>();
+    for(auto& name : built.get_entries()) {
+      if(name == XdPackage::MANIFEST) {
+        entries.emplace_back(name, QByteArray(MANIFEST.data(),
+          static_cast<qsizetype>(MANIFEST.size())));
+      } else {
+        entries.emplace_back(name, built.read(name));
+      }
+    }
+    entries.emplace_back("META-INF/metadata.xml", QByteArray(METADATA.data(),
+      static_cast<qsizetype>(METADATA.size())));
+    return make_archive(entries);
+  }
+
+  std::vector<std::string> collect_ids(const QJsonValue& value) {
+    auto ids = std::vector<std::string>();
+    if(value.isArray()) {
+      for(auto element : value.toArray()) {
+        auto nested = collect_ids(element);
+        ids.insert(ids.end(), nested.begin(), nested.end());
+      }
+    } else if(value.isObject()) {
+      auto object = value.toObject();
+      for(auto i = object.constBegin(); i != object.constEnd(); ++i) {
+        if(i.key() == "id"_L1) {
+          ids.push_back(i.value().toString().toStdString());
+        } else {
+          auto nested = collect_ids(i.value());
+          ids.insert(ids.end(), nested.begin(), nested.end());
+        }
+      }
+    }
+    return ids;
   }
 
   NodeId to_id(const char* text) {
@@ -185,6 +270,65 @@ TEST_SUITE("XdPreservation") {
     REQUIRE(compound.size() == 2);
     REQUIRE(compound.at(0).toObject().value("type"_L1) == "text"_L1);
     REQUIRE(compound.at(1).toObject().value("type"_L1) == "shape"_L1);
+  }
+
+  TEST_CASE("manifest") {
+    auto document = Document();
+    import_package(make_manifest_package(), document);
+    auto written = write_xd(document);
+    REQUIRE(XdPackage(written).read(XdPackage::MANIFEST).toStdString() ==
+      MANIFEST);
+    REQUIRE(XdPackage(written).read("META-INF/metadata.xml").toStdString() ==
+      METADATA);
+    auto reimported = Document();
+    import_package(written, reimported);
+    REQUIRE(XdPackage(write_xd(reimported)).read(
+      XdPackage::MANIFEST).toStdString() == MANIFEST);
+  }
+
+  TEST_CASE("new_composite") {
+    auto document = Document();
+    import_package(make_manifest_package(), document);
+    auto options = XdWriteOptions();
+    options.m_composite = "00000000-0000-0000-0000-0000000001ff";
+    options.m_name = "Copy\x01";
+    options.m_serialization = "00000000-0000-0000-0000-0000000001fe";
+    auto written = XdPackage(write_xd(document, options));
+    auto manifest = written.get_manifest();
+    REQUIRE(manifest.value("id"_L1) ==
+      "00000000-0000-0000-0000-0000000001ff"_L1);
+    REQUIRE(manifest.value("uxdesign#compositeID"_L1) ==
+      "00000000-0000-0000-0000-0000000001ff"_L1);
+    REQUIRE(manifest.value("name"_L1) == "Copy\x01"_L1);
+    REQUIRE(manifest.value("uxdesign#serializationId"_L1) ==
+      "00000000-0000-0000-0000-0000000001fe"_L1);
+    REQUIRE(manifest.value("uxdesign#id"_L1) ==
+      "00000000-0000-0000-0000-00000000010a"_L1);
+    REQUIRE(manifest.value("uxdesign#parentDocId"_L1) ==
+      "00000000-0000-0000-0000-000000000108"_L1);
+    auto original = collect_ids(parse_json(MANIFEST).value("children"_L1));
+    auto ids = collect_ids(manifest.value("children"_L1));
+    REQUIRE(ids.size() == original.size());
+    for(auto& id : ids) {
+      REQUIRE(parse_node_id(id));
+      REQUIRE(std::find(original.begin(), original.end(), id) ==
+        original.end());
+    }
+    auto text = written.read(XdPackage::MANIFEST).toStdString();
+    REQUIRE(text.starts_with(R"({"state":"unmodified",)"
+      R"("manifest-format-version":6,"name":"Copy\u0001","children":[)"));
+    REQUIRE(text.ends_with(R"("uxdesign#applicationVersion":"61.0.12.1",)"
+      R"("scale":0.5})"));
+    REQUIRE(written.read("META-INF/metadata.xml").toStdString() ==
+      R"(<rdf:Description xmpMM:DocumentID=")"
+      R"(00000000-0000-0000-0000-0000000001ff" xmpMM:OriginalDocumentID=")"
+      R"(00000000-0000-0000-0000-0000000001ff" xmpMM:InstanceID=")"
+      R"(00000000-0000-0000-0000-00000000010d"/>)");
+    REQUIRE(XdPackage(write_xd(document, options)).read(
+      XdPackage::MANIFEST).toStdString() == text);
+    options.m_composite = "00000000-0000-0000-0000-000000000109";
+    REQUIRE(collect_ids(XdPackage(write_xd(document, options)).get_manifest().
+      value("children"_L1)) == original);
   }
 
   TEST_CASE("unchanged_round_trip") {

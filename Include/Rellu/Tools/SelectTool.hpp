@@ -1,22 +1,16 @@
 #ifndef RELLU_TOOLS_SELECT_TOOL_HPP
 #define RELLU_TOOLS_SELECT_TOOL_HPP
-#include <array>
-#include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <vector>
-#include <QImage>
-#include "Rellu/Commands/ResponsiveResize.hpp"
-#include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
-#include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Tools/ArtboardGuides.hpp"
 #include "Rellu/Tools/LayoutHandles.hpp"
 #include "Rellu/Tools/SelectionBox.hpp"
+#include "Rellu/Tools/SelectionHandles.hpp"
 #include "Rellu/Tools/Tool.hpp"
 
 namespace Rellu {
@@ -27,43 +21,32 @@ namespace Rellu {
    * edit context, a double click enters a group, hands the text clicked
    * to the tool named text for editing or hands the shape clicked to the
    * tool named path_edit, as Enter does for a single selected shape, Ctrl
-   * selects the deepest node, Shift toggles, a drag with Alt held moves a
+   * selects the deepest node, Shift adds a node, or removes a selected one
+   * when released without a drag, a drag with Alt held moves a
    * copy of the selection, and a drag over empty canvas
-   * draws a marquee. The pointer hovering an unlocked node outlines it, a
-   * shape by its own outline and anything else by its box. The selection's
-   * box resizes by the handles get_handle_layout shows, flipping what it
-   * holds when dragged past the opposite side, and rotates from just
-   * outside those it lets rotate. Arrow
+   * draws a marquee. A press on a node that is selected, or whose part under
+   * the pointer is, keeps the selection, so a drag moves all of it. While
+   * several nodes including an artboard are selected, a press inside that
+   * artboard also keeps the selection, and when only artboards are
+   * selected, a release without a drag then selects the node clicked. The
+   * selection lists nodes in the order they were
+   * clicked or reached by the marquee. The pointer hovering an unlocked
+   * node outlines it, a shape by its own outline and anything else by its
+   * box. The selection
+   * is drawn and edited through SelectionHandles. Arrow
    * keys nudge the selection, except stack items along their stack's
    * direction. Locked nodes are selected by a click or a marquee but not
-   * moved: their box is grey, with small grey handles that do nothing and a
-   * lock badge at its top left corner. The part of a node lying outside its
+   * moved. The part of a node lying outside its
    * artboard is clicked or hovered only while it, or another node of its
    * artboard, is selected, or while it is a child of the container entered.
-   * Text in a fixed size frame shows the frame's bottom edge dashed.
-   * A single selected rectangle also shows a corner radius
-   * handle inside each corner, which rounds every corner alike, or only
-   * its own corner while Alt is held. A repeat grid or stack selected
-   * alone is also edited through LayoutHandles, a repeat grid without the
-   * resize handles, and a double click enters both a repeat grid and the
-   * cell clicked. Stack items dragged make room for each other until
-   * dropped. Artboard guides are created, moved and deleted through
-   * ArtboardGuides. Each drag is one undoable step.
+   * A repeat grid or stack selected
+   * alone is also edited through LayoutHandles, and a double click enters
+   * both a repeat grid and the cell clicked. Stack items dragged make room
+   * for each other until dropped. Artboard guides are created, moved and
+   * deleted through ArtboardGuides. Each drag is one undoable step.
    */
   class SelectTool : public Tool {
     public:
-
-      /** The radius in logical units of a resize handle. */
-      static constexpr auto HANDLE_RADIUS = 4.0;
-
-      /** The distance in logical units within which a handle is hit. */
-      static constexpr auto HANDLE_REACH = 6.0;
-
-      /**
-       * The distance in logical units outside a corner within which a drag
-       * rotates.
-       */
-      static constexpr auto ROTATION_REACH = 20.0;
 
       /** The distance in logical units a press moves before it drags. */
       static constexpr auto DRAG_THRESHOLD = 3.0;
@@ -71,35 +54,11 @@ namespace Rellu {
       /** The distance in logical units within which an outline is hit. */
       static constexpr auto HIT_TOLERANCE = 3.0;
 
-      /** The angle in radians rotations snap to while Shift is held. */
-      static constexpr auto ROTATION_STEP = 0.2617993877991494;
-
       /** The distance in document units a nudge moves. */
       static constexpr auto NUDGE = 1.0;
 
       /** The distance in document units a nudge with Shift moves. */
       static constexpr auto LARGE_NUDGE = 10.0;
-
-      /** The radius in logical units of a corner radius handle. */
-      static constexpr auto RADIUS_HANDLE_RADIUS = 4.0;
-
-      /** The radius in logical units of a handle of a locked node. */
-      static constexpr auto LOCKED_HANDLE_RADIUS = 2.5;
-
-      /** The width and height in logical units of the lock badge. */
-      static constexpr auto LOCK_BADGE_SIZE = 12.0;
-
-      /**
-       * The smallest distance in logical units between a corner radius
-       * handle and the sides meeting at its corner.
-       */
-      static constexpr auto RADIUS_HANDLE_INSET = 14.0;
-
-      /**
-       * The length in logical units both sides of a rectangle must reach
-       * for its corner radius handles to show.
-       */
-      static constexpr auto RADIUS_HANDLE_SIDE = 40.0;
 
       /** Constructs a SelectTool. */
       SelectTool();
@@ -124,28 +83,9 @@ namespace Rellu {
         PENDING,
         MARQUEE,
         MOVE,
-        RESIZE,
-        ROTATE,
-        RADIUS,
+        HANDLE,
         LAYOUT,
         GUIDE
-      };
-      enum class Target : unsigned char {
-        NONE,
-        HANDLE,
-        ROTATION
-      };
-      struct Grab {
-        Target m_target;
-        Handle m_handle;
-      };
-      struct RadiusHandles {
-        NodeId m_id;
-        Rect m_rect;
-        Matrix m_transform;
-        CornerRadii m_radii;
-        double m_limit;
-        std::array<Point, 4> m_points;
       };
       struct CachedBox {
         NodeId m_id;
@@ -157,71 +97,34 @@ namespace Rellu {
       Point m_press;
       Point m_press_document;
       NodeId m_clicked;
-      bool m_is_reselecting;
+      NodeId m_removed;
       bool m_is_marquee_pending;
       std::vector<NodeId> m_nodes;
       SelectionBox m_box;
-      Handle m_handle;
-      Point m_grab_offset;
       Point m_delta;
-      Rect m_resized;
-      ResizeRule m_rule;
-      double m_angle;
-      double m_raw_angle;
       bool m_is_applied;
       bool m_is_copied;
       NodeId m_scope;
       std::vector<NodeId> m_base;
       Rect m_marquee;
       int m_nudge_key;
-      std::optional<RadiusHandles> m_radius_handles;
-      std::size_t m_corner;
-      double m_radius;
-      double m_inset;
       ToolCursor m_cursor;
+      SelectionHandles m_handles;
       LayoutHandles m_layout_handles;
       ArtboardGuides m_guides;
-      mutable std::optional<std::uint64_t> m_revision;
-      mutable std::vector<NodeId> m_cached_nodes;
-      mutable std::optional<SelectionBox> m_cached_box;
-      mutable std::vector<SelectionBox> m_cached_outlines;
       mutable CachedBox m_hover_box;
       mutable CachedBox m_container_box;
-      mutable double m_badge_scale;
-      mutable std::shared_ptr<const QImage> m_badge;
 
-      void update_cache(const ToolContext& context) const;
-      std::optional<SelectionBox> get_box(const ToolContext& context) const;
       const std::optional<SelectionBox>& get_box(const ToolContext& context,
         const NodeId& id, CachedBox& cache) const;
-      std::vector<NodeId> get_movable(const ToolContext& context) const;
-      bool is_locked_selection(const ToolContext& context) const;
-      bool is_rotatable(const ToolContext& context) const;
-      std::optional<Grab> find_grab(
-        const ToolContext& context, Point position) const;
-      HandleLayout get_layout(
-        const ToolContext& context, const SelectionBox& box) const;
-      std::optional<RadiusHandles> get_radius_handles(
-        const ToolContext& context) const;
-      std::optional<std::size_t> find_radius_handle(
-        const ToolContext& context, Point position) const;
-      double get_inset(const ToolContext& context, Point position) const;
       NodeId resolve_target(ToolContext& context, const NodeId& hit,
         Qt::KeyboardModifiers modifiers, bool is_entering) const;
       void begin_drag(ToolContext& context, const PointerEvent& event);
       void copy(ToolContext& context);
       void update_move(ToolContext& context, const PointerEvent& event);
-      void update_resize(ToolContext& context, const PointerEvent& event);
-      void update_rotate(ToolContext& context, const PointerEvent& event);
-      void update_radius(ToolContext& context, const PointerEvent& event);
       void update_marquee(ToolContext& context, const PointerEvent& event);
       void update_hover(ToolContext& context, const PointerEvent& event);
       void finish(ToolContext& context);
-      std::optional<SelectionBox> get_gesture_box() const;
-      void draw_box(const ToolContext& context, const SelectionBox& box,
-        CanvasOverlay& overlay, bool has_handles, bool is_frame) const;
-      void draw_locked(const ToolContext& context, const SelectionBox& box,
-        CanvasOverlay& overlay) const;
       void draw_hover(const ToolContext& context, const NodeId& hover,
         CanvasOverlay& overlay) const;
   };

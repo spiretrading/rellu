@@ -17,8 +17,22 @@ namespace Rellu {
      */
     XdTextLayout m_layout;
 
-    /** The document name recorded in a document without a manifest. */
-    std::string m_name = "Untitled";
+    /**
+     * The name the manifest records for the document, or empty to keep the
+     * recorded one, Untitled for a document without a manifest.
+     */
+    std::string m_name;
+
+    /**
+     * The id of the composite holding the document, or empty to keep the
+     * recorded one. A composite other than the recorded one is a new
+     * composite, as Adobe XD makes for a copy, whose folders and components
+     * get new ids.
+     */
+    std::string m_composite;
+
+    /** The id of the serialization, or empty to keep the recorded one. */
+    std::string m_serialization;
 
     /**
      * The id Adobe XD gives the document, or empty to keep the recorded

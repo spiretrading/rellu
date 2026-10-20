@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include "Rellu/Commands/Command.hpp"
+#include "Rellu/Geometry/BlendMode.hpp"
 
 namespace Rellu {
 
@@ -26,6 +27,26 @@ namespace Rellu {
     private:
       std::vector<NodeId> m_nodes;
       double m_opacity;
+  };
+
+  /** Sets the blend mode of nodes, labelled Change Blend Mode. */
+  class SetBlendModeCommand : public Command {
+    public:
+
+      /**
+       * Constructs a SetBlendModeCommand.
+       * @param nodes The nodes to change.
+       * @param blend_mode The blend mode.
+       */
+      SetBlendModeCommand(
+        std::vector<NodeId> nodes, BlendMode blend_mode) noexcept;
+
+      std::string get_label() const override;
+      void apply(const Document& document, Transaction& transaction) override;
+
+    private:
+      std::vector<NodeId> m_nodes;
+      BlendMode m_blend_mode;
   };
 
   /** Shows or hides nodes, labelled Show or Hide. */
@@ -67,7 +88,7 @@ namespace Rellu {
       bool m_is_locked;
   };
 
-  /** Renames a node, labelled Rename. */
+  /** Gives a node a custom name, labelled Rename. */
   class RenameCommand : public Command {
     public:
 

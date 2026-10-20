@@ -2,6 +2,8 @@
 #include <memory>
 #include <vector>
 #include <doctest/doctest.h>
+#include <QColor>
+#include <QImage>
 #include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Ui/AssetsPanel.hpp"
 #include "TestDocument.hpp"
@@ -307,5 +309,13 @@ TEST_SUITE("AssetsPanel") {
     auto other = QMimeData();
     other.setText("text");
     REQUIRE(!read_component_mime_data(other));
+  }
+
+  TEST_CASE("swap_cursor") {
+    auto cursor = make_swap_cursor().toImage();
+    REQUIRE(cursor.size() == QSize(32, 32));
+    REQUIRE(cursor.pixelColor(2, 6) == QColor(Qt::black));
+    REQUIRE(cursor.pixelColor(31, 0).alpha() == 0);
+    REQUIRE(cursor.pixelColor(21, 17).alpha() > 0);
   }
 }

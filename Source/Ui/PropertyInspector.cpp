@@ -1719,6 +1719,23 @@ namespace {
     return sections;
   }
 
+  bool is_text_appearance(const std::string& path) {
+    return path == "fill" || path == "fill.enabled" || path == "fill.color" ||
+      path == "stroke.enabled" || path == "stroke.color" ||
+      path == "stroke.width";
+  }
+
+  void remember_text(Editor& editor, const std::vector<NodeId>& nodes) {
+    for(auto& id : nodes) {
+      if(auto node = editor.get_document().find(id)) {
+        if(auto text = node->get_text()) {
+          editor.get_text_selection().remember(*text);
+          return;
+        }
+      }
+    }
+  }
+
   QWidget* make_static_combo(const QString& label, const QString& value) {
     auto widget = new QWidget();
     auto layout = new QVBoxLayout(widget);
@@ -2200,6 +2217,9 @@ void PropertyInspector::apply(
     try {
       m_editor->merge(std::move(command));
     } catch(const std::exception&) {}
+    if(is_text_appearance(path)) {
+      remember_text(*m_editor, m_nodes);
+    }
   }
   if(!m_is_rebuild_pending) {
     update_fields();

@@ -42,6 +42,7 @@ History::History(Document& document)
     : m_document(&document),
       m_clean(0),
       m_base(document.get_undo_count()),
+      m_external(0),
       m_is_open(false),
       m_is_applying(false),
       m_is_recording(false),
@@ -66,7 +67,7 @@ void History::set_text_measurer(TextMeasurer measurer) {
 void History::hold_layout(std::vector<NodeId> nodes) {
   synchronize();
   m_layout.m_floating = std::move(nodes);
-  m_hold = m_base + m_undo.size();
+  m_hold = get_depth();
 }
 
 void History::release_layout() {
@@ -75,8 +76,8 @@ void History::release_layout() {
     return;
   }
   synchronize();
-  if(m_base + m_undo.size() <= m_hold ||
-      m_document->get_undo_count() != m_base + m_undo.size()) {
+  if(get_depth() <= m_hold ||
+      m_document->get_undo_count() != get_depth()) {
     return;
   }
   auto changes = ChangeSet();
@@ -94,7 +95,7 @@ void History::release_layout() {
     }
     m_changes = ChangeSet();
   }
-  if(m_document->get_undo_count() < m_base + m_undo.size()) {
+  if(m_document->get_undo_count() < get_depth()) {
     m_undo.pop_back();
     m_is_open = false;
   }
@@ -116,7 +117,7 @@ const Command* History::execute(std::unique_ptr<Command> command) {
     return nullptr;
   }
   refresh();
-  if(m_document->get_undo_count() <= m_base + m_undo.size()) {
+  if(m_document->get_undo_count() <= get_depth()) {
     synchronize();
     return nullptr;
   }
@@ -149,7 +150,7 @@ const Command* History::merge(std::unique_ptr<Command> command) {
   }();
   if(is_recorded) {
     refresh();
-    is_recorded = m_document->get_undo_count() == m_base + m_undo.size();
+    is_recorded = m_document->get_undo_count() == get_depth();
   } else {
     m_changes = ChangeSet();
   }
@@ -168,6 +169,19 @@ const Command* History::merge(std::unique_ptr<Command> command) {
   m_signal();
   synchronize();
   return result;
+}
+
+void History::record(std::string label, std::function<void ()> revert,
+    std::function<void ()> reapply) {
+  synchronize();
+  auto step = Step(std::move(label), nullptr, std::any());
+  step.m_is_external = true;
+  step.m_revert = std::move(revert);
+  step.m_reapply = std::move(reapply);
+  push(std::move(step));
+  ++m_external;
+  m_is_open = false;
+  m_signal();
 }
 
 void History::seal() {
@@ -223,7 +237,12 @@ bool History::undo() {
   if(m_undo.empty()) {
     return false;
   }
-  {
+  if(m_undo.back().m_is_external) {
+    --m_external;
+    if(m_undo.back().m_revert) {
+      m_undo.back().m_revert();
+    }
+  } else {
     auto guard = Guard(m_is_applying);
     m_document->undo();
   }
@@ -239,7 +258,12 @@ bool History::redo() {
   if(m_redo.empty()) {
     return false;
   }
-  {
+  if(m_redo.back().m_is_external) {
+    ++m_external;
+    if(m_redo.back().m_reapply) {
+      m_redo.back().m_reapply();
+    }
+  } else {
     auto guard = Guard(m_is_applying);
     m_document->redo();
   }
@@ -266,6 +290,7 @@ void History::clear() {
   auto is_clean = !is_dirty();
   m_document->clear_history();
   m_base = 0;
+  m_external = 0;
   m_undo.clear();
   m_redo.clear();
   if(is_clean) {
@@ -281,6 +306,10 @@ Subscription History::subscribe(std::function<void ()> observer) {
   return m_signal.subscribe(std::move(observer));
 }
 
+std::size_t History::get_depth() const {
+  return m_base + m_undo.size() - m_external;
+}
+
 void History::push(Step step) {
   if(m_clean && *m_clean > m_undo.size()) {
     m_clean = std::nullopt;
@@ -291,10 +320,10 @@ void History::push(Step step) {
 
 void History::synchronize() {
   auto count = m_document->get_undo_count();
-  if(m_base + m_undo.size() >= count) {
+  if(get_depth() >= count) {
     return;
   }
-  while(m_base + m_undo.size() < count) {
+  while(get_depth() < count) {
     push(Step(std::string(), nullptr, std::any()));
   }
   m_is_open = false;

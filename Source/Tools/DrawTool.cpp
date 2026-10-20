@@ -10,9 +10,6 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto SELECTION_COLOR = make_color(38, 128, 235);
-  constexpr auto LINE_WIDTH = 1.0;
-
   double get_sign(double value) {
     if(value < 0) {
       return -1;
@@ -78,7 +75,8 @@ DrawTool::DrawTool(std::string prefix)
     m_is_held(false),
     m_prefix(std::move(prefix)),
     m_press(0, 0),
-    m_start(0, 0) {}
+    m_start(0, 0),
+    m_cursor(CursorKind::CROSSHAIR) {}
 
 void DrawTool::press(ToolContext& context, const PointerEvent& event) {
   if(event.m_button != Qt::LeftButton) {
@@ -86,6 +84,18 @@ void DrawTool::press(ToolContext& context, const PointerEvent& event) {
   }
   if(m_is_pressed) {
     finish(context);
+  }
+  if(m_layout_handles.is_active()) {
+    m_layout_handles.release(context);
+  }
+  if(m_handles.is_active()) {
+    m_handles.release(context);
+  }
+  update_hover(context, event.m_position);
+  if(m_handles.press(context, event) ||
+      (!m_layout_handles.get_grid(context).is_nil() &&
+        m_layout_handles.press(context, event))) {
+    return;
   }
   m_is_pressed = true;
   m_is_applied = false;
@@ -99,7 +109,20 @@ void DrawTool::press(ToolContext& context, const PointerEvent& event) {
 }
 
 void DrawTool::move(ToolContext& context, const PointerEvent& event) {
+  if(m_layout_handles.is_active() || m_handles.is_active()) {
+    if(!event.m_buttons.testFlag(Qt::LeftButton)) {
+      m_layout_handles.release(context);
+      m_handles.release(context);
+      update_hover(context, event.m_position);
+    } else if(m_layout_handles.is_active()) {
+      m_layout_handles.move(context, event);
+    } else {
+      m_handles.move(context, event);
+    }
+    return;
+  }
   if(!m_is_pressed) {
+    update_hover(context, event.m_position);
     return;
   }
   if(!event.m_buttons.testFlag(Qt::LeftButton)) {
@@ -110,7 +133,15 @@ void DrawTool::move(ToolContext& context, const PointerEvent& event) {
 }
 
 void DrawTool::release(ToolContext& context, const PointerEvent& event) {
-  if(event.m_button != Qt::LeftButton || !m_is_pressed) {
+  if(event.m_button != Qt::LeftButton) {
+    return;
+  }
+  if(m_layout_handles.is_active() || m_handles.is_active()) {
+    m_layout_handles.release(context);
+    m_handles.release(context);
+    update_hover(context, event.m_position);
+    return;
+  } else if(!m_is_pressed) {
     return;
   }
   update(context, event);
@@ -120,13 +151,20 @@ void DrawTool::release(ToolContext& context, const PointerEvent& event) {
     complete(context, m_header->m_id);
   }
   finish(context);
+  update_hover(context, event.m_position);
+}
+
+void DrawTool::leave(ToolContext& context) {
+  if(!is_busy()) {
+    m_cursor = ToolCursor(CursorKind::CROSSHAIR);
+  }
 }
 
 bool DrawTool::key_press(ToolContext& context, const KeyEvent& event) {
   if(event.m_key != Qt::Key_Escape) {
     return false;
   }
-  if(m_is_pressed) {
+  if(is_busy()) {
     cancel(context);
   } else {
     context.request_tool("select");
@@ -135,6 +173,8 @@ bool DrawTool::key_press(ToolContext& context, const KeyEvent& event) {
 }
 
 void DrawTool::cancel(ToolContext& context) {
+  m_layout_handles.cancel(context);
+  m_handles.cancel(context);
   if(m_is_applied) {
     context.get_editor().undo();
   }
@@ -143,35 +183,24 @@ void DrawTool::cancel(ToolContext& context) {
 }
 
 bool DrawTool::is_busy() const {
-  return m_is_pressed;
+  return m_is_pressed || m_handles.is_active() || m_layout_handles.is_active();
 }
 
 ToolCursor DrawTool::get_cursor() const {
-  return ToolCursor(CursorKind::CROSSHAIR);
+  if(m_handles.is_active()) {
+    return m_handles.get_cursor();
+  }
+  return m_cursor;
 }
 
 void DrawTool::draw(const ToolContext& context, CanvasOverlay& overlay) const {
-  auto& document = context.get_document();
-  auto nodes = context.get_editor().get_selection().get_nodes();
-  std::erase_if(nodes, [&] (const auto& id) {
-    auto node = document.find(id);
-    return !node || node->get_artboard();
-  });
-  auto box = get_selection_box(document, nodes, context.get_text_measurer());
-  if(!box) {
+  if(m_is_pressed) {
     return;
   }
-  auto corners = box->get_corners();
-  for(auto i = std::size_t(0); i != corners.size(); ++i) {
-    auto start = context.to_view(corners[i]);
-    auto end = context.to_view(corners[(i + 1) % corners.size()]);
-    auto length = distance(start, end);
-    if(length == 0) {
-      continue;
-    }
-    auto extension = (end - start) * (LINE_WIDTH / 2 / length);
-    overlay.m_shapes.push_back(make_overlay_line(
-      start - extension, end + extension, LINE_WIDTH, SELECTION_COLOR));
+  m_handles.draw(context, overlay, true);
+  if(!m_handles.is_transforming() && (m_layout_handles.is_active() ||
+      !m_layout_handles.get_grid(context).is_nil())) {
+    m_layout_handles.draw(context, overlay);
   }
 }
 
@@ -203,6 +232,19 @@ void DrawTool::update(ToolContext& context, const PointerEvent& event) {
   }
   if(context.get_editor().merge(std::move(command))) {
     m_is_applied = true;
+  }
+}
+
+void DrawTool::update_hover(ToolContext& context, Point position) {
+  m_cursor = ToolCursor(CursorKind::CROSSHAIR);
+  auto layout = std::optional<ToolCursor>();
+  if(!m_layout_handles.get_grid(context).is_nil()) {
+    layout = m_layout_handles.hover(context, position);
+  }
+  if(auto cursor = m_handles.hover(context, position)) {
+    m_cursor = *cursor;
+  } else if(layout) {
+    m_cursor = *layout;
   }
 }
 

@@ -4,6 +4,7 @@
 #include <vector>
 #include <QComboBox>
 #include <QFrame>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QPointF>
 #include <QRect>
@@ -55,6 +56,12 @@ namespace Rellu {
       /** The type of function called when the picker closes. */
       using CloseHandler = std::function<void ()>;
 
+      /**
+       * The type of function called as the user changes the color model.
+       * @param model The color model.
+       */
+      using ModelHandler = std::function<void (ColorModel model)>;
+
       /** Lists the events of a press outside the picker. */
       enum class CanvasEvent : unsigned char {
 
@@ -79,6 +86,15 @@ namespace Rellu {
        */
       using CanvasHandler =
         std::function<bool (CanvasEvent event, QPointF position)>;
+
+      /**
+       * The type of function handling a key pressed while the picker is
+       * open and none of its fields has focus, such as on a gradient's
+       * handles on the canvas.
+       * @param event The key event.
+       * @return <code>true</code> iff the key is handled.
+       */
+      using KeyHandler = std::function<bool (const QKeyEvent& event)>;
 
       /**
        * Constructs a ColorPicker editing a black solid fill.
@@ -125,6 +141,13 @@ namespace Rellu {
        */
       void set_canvas_handler(CanvasHandler handler);
 
+      /**
+       * Sets the function handling keys pressed while none of the picker's
+       * fields has focus, as after a press outside the picker.
+       * @param handler The function.
+       */
+      void set_key_handler(KeyHandler handler);
+
       /** Returns whether gradient fills are offered. */
       bool is_gradient_enabled() const;
 
@@ -152,6 +175,18 @@ namespace Rellu {
        * @param model The color model.
        */
       void set_model(ColorModel model);
+
+      /**
+       * Changes the color model as the user would, reporting the change.
+       * @param model The color model.
+       */
+      void apply_model(ColorModel model);
+
+      /**
+       * Sets the function called as the user changes the color model.
+       * @param handler The function.
+       */
+      void set_model_handler(ModelHandler handler);
 
       /**
        * Sets the document's swatches listed after the add button.
@@ -186,6 +221,7 @@ namespace Rellu {
       void popup(const QRect& anchor);
 
     protected:
+      bool event(QEvent* event) override;
       void hideEvent(QHideEvent* event) override;
       void mousePressEvent(QMouseEvent* event) override;
       void mouseMoveEvent(QMouseEvent* event) override;
@@ -211,7 +247,9 @@ namespace Rellu {
       ChangeHandler m_change_handler;
       AddHandler m_add_handler;
       CloseHandler m_close_handler;
+      ModelHandler m_model_handler;
       CanvasHandler m_canvas_handler;
+      KeyHandler m_key_handler;
       QComboBox* m_type;
       GradientBar* m_bar;
       SaturationSquare* m_square;
@@ -234,6 +272,7 @@ namespace Rellu {
       void report();
       void commit_fields();
       void pick_from_screen();
+      bool handle_key(QKeyEvent& event);
   };
 
   /**

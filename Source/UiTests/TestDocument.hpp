@@ -46,12 +46,13 @@ namespace Rellu::Tests {
 
   /**
    * Makes a header with a fresh id.
-   * @param name The node's name.
+   * @param name The node's name, a custom one unless empty.
    */
   inline NodeHeader make_header(std::string name) {
     auto header = NodeHeader();
     header.m_id = generate_node_id();
     header.m_name = std::move(name);
+    header.m_has_custom_name = !header.m_name.empty();
     return header;
   }
 
@@ -117,8 +118,10 @@ namespace Rellu::Tests {
     auto instance = Group();
     instance.m_component_instance =
       ComponentInstance(ids.m_component, StateId(), Size(80, 30));
+    auto instance_header = make_header("Button");
+    instance_header.m_has_custom_name = false;
     ids.m_instance =
-      transaction.append(ids.m_artboard, make_header("Button"), instance);
+      transaction.append(ids.m_artboard, instance_header, instance);
     ids.m_reference = transaction.append(ids.m_instance, make_header(""),
       Reference(ids.m_master_shape));
     ids.m_loose = transaction.append(

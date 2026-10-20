@@ -34,9 +34,11 @@
 #include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Commands/ComponentCommands.hpp"
+#include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/HeaderCommands.hpp"
 #include "Rellu/Commands/PathCommands.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
+#include "Rellu/Commands/StyleCommands.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Io/XdImporters.hpp"
@@ -44,7 +46,7 @@
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Ui/ComponentPropertyEditors.hpp"
 #include "Rellu/Ui/ContextMenus.hpp"
-#include "Rellu/Ui/LastTextProperties.hpp"
+#include "Rellu/Ui/LastProperties.hpp"
 #include "Rellu/Ui/LayoutProperties.hpp"
 #include "Rellu/Ui/PropertyEditors.hpp"
 #include "Rellu/Ui/TextMeasurement.hpp"
@@ -72,10 +74,23 @@ namespace {
   const auto DEFAULT_PANEL = QString("layers");
   const auto LANGUAGE_PREFIX = std::string("edit.preferences.language.");
   const auto LANGUAGE_KEY = QString("preferences/language");
-  const auto LAST_TEXT_PROPERTIES_KEY = QString("last_text_properties");
+  const auto LAST_PROPERTIES_KEY = QString("last_text_properties");
 
   std::string get_recent_name(int index) {
     return "file.recent." + std::to_string(index);
+  }
+
+  std::string get_nudge_label(int key) {
+    if(key == Qt::Key_Left) {
+      return "Nudge Left";
+    } else if(key == Qt::Key_Right) {
+      return "Nudge Right";
+    } else if(key == Qt::Key_Up) {
+      return "Nudge Up";
+    } else if(key == Qt::Key_Down) {
+      return "Nudge Down";
+    }
+    return std::string();
   }
 
   std::string get_panel_action(const std::string& panel) {
@@ -255,7 +270,8 @@ MainWindow::MainWindow(QWidget* parent)
       m_gradient_overlay(nullptr) {
   add_standard_commands(m_commands, m_measurer);
   add_align_commands(m_commands, m_measurer);
-  add_path_commands(m_commands);
+  add_path_commands(
+    m_commands, make_text_outliner(get_default_font_library()));
   add_repeat_grid_commands(m_commands, m_measurer);
   add_component_commands(m_commands, m_measurer);
   add_header_commands(m_commands, m_measurer);
@@ -278,6 +294,15 @@ MainWindow::MainWindow(QWidget* parent)
     [this] (auto event, auto position) {
       return handle_gradient_event(event, position);
     });
+  m_inspector->get_color_picker().set_key_handler([this] (const auto& event) {
+    return handle_gradient_key(event);
+  });
+  m_inspector->get_color_picker().set_model_handler([this] (auto model) {
+    m_assets->get_color_picker().set_model(model);
+  });
+  m_assets->get_color_picker().set_model_handler([this] (auto model) {
+    m_inspector->get_color_picker().set_model(model);
+  });
   m_inspector->set_measurer(m_measurer);
   auto editors = make_standard_property_editors(m_measurer);
   add_text_property_editors(editors, get_default_font_library(), m_measurer,
@@ -329,6 +354,7 @@ MainWindow::MainWindow(QWidget* parent)
   update_title();
   update_selection_actions();
   update_zoom();
+  update_document_state();
 }
 
 MainWindow::~MainWindow() {
@@ -440,7 +466,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     event->ignore();
     return;
   }
-  store_text_properties();
+  store_properties();
   save_settings();
   QMainWindow::closeEvent(event);
 }
@@ -646,6 +672,42 @@ bool MainWindow::handle_gradient_event(
   }
   m_gradient_overlay->update();
   return edit.m_is_handled;
+}
+
+bool MainWindow::handle_gradient_key(const QKeyEvent& event) {
+  auto target = find_gradient_target();
+  if(!target) {
+    return false;
+  }
+  auto& picker = m_inspector->get_color_picker();
+  auto edit = GradientHandles::press_key(target->m_fill,
+    target->m_frame.m_bounds, get_zoom(), picker.get_stop(), event.key(),
+    event.modifiers());
+  if(!edit.m_is_handled) {
+    return false;
+  }
+  auto& editor = m_session->get_editor();
+  if(auto label = get_nudge_label(event.key()); !label.empty()) {
+    if(edit.m_fill) {
+      editor.merge(std::make_unique<SetFillCommand>(
+        m_inspector->get_nodes(), Fill(*edit.m_fill), std::move(label)));
+      picker.set_fill(*edit.m_fill);
+    }
+  } else if(edit.m_fill) {
+    auto commands = std::vector<std::unique_ptr<Command>>();
+    commands.push_back(std::make_unique<SetFillCommand>(
+      m_inspector->get_nodes(), Fill(*edit.m_fill)));
+    editor.get_history().seal();
+    editor.execute(
+      std::make_unique<CompositeCommand>("Delete", std::move(commands)));
+    editor.get_history().seal();
+    picker.set_fill(*edit.m_fill);
+  }
+  if(edit.m_stop) {
+    picker.set_stop(*edit.m_stop);
+  }
+  m_gradient_overlay->update();
+  return true;
 }
 
 void MainWindow::update_gradient_editor() {
@@ -1044,11 +1106,7 @@ void MainWindow::set_workspace(Workspace workspace) {
       tools && tools->get_tool_name() == "prototype") {
     select_tool("select");
   }
-  for(auto& tool : m_toolbar->get_tools()) {
-    m_actions.set_enabled("tool." + tool.m_name,
-      workspace == Workspace::DESIGN || tool.m_name == "select" ||
-      tool.m_name == "zoom");
-  }
+  update_document_actions(m_actions, workspace, static_cast<bool>(m_session));
   m_inspector->set_workspace(workspace);
   m_edit_actions->set_workspace(workspace);
   m_guide_actions->set_workspace(workspace);
@@ -1133,41 +1191,57 @@ void MainWindow::show_message(const QString& message) {
     m_view->height() - MESSAGE_MARGIN)), message, m_view);
 }
 
-void MainWindow::restore_text_properties() {
+void MainWindow::restore_properties() {
+  m_inspector->get_color_picker().set_model(ColorModel::HEX);
+  m_assets->get_color_picker().set_model(ColorModel::HEX);
   if(!m_session || m_session->get_id().empty()) {
     return;
   }
   auto settings = QSettings();
-  if(auto properties = find_last_text_properties(
-      settings.value(LAST_TEXT_PROPERTIES_KEY).toByteArray(),
+  if(auto properties = find_last_properties(
+      settings.value(LAST_PROPERTIES_KEY).toByteArray(),
       m_session->get_id())) {
-    m_session->get_editor().get_text_selection().set_last_style(
-      properties->m_style, properties->m_paragraph);
+    apply_properties(*properties);
   }
 }
 
-void MainWindow::store_text_properties() {
+LastProperties MainWindow::get_properties() const {
+  auto& selection = m_session->get_editor().get_text_selection();
+  auto properties = LastProperties();
+  properties.m_text = LastTextProperties(selection.get_last_style(),
+    selection.get_last_paragraph_style(), selection.is_last_fill_enabled(),
+    selection.get_last_border());
+  properties.m_color_model = m_inspector->get_color_picker().get_model();
+  return properties;
+}
+
+void MainWindow::apply_properties(const LastProperties& properties) {
+  auto& selection = m_session->get_editor().get_text_selection();
+  if(auto& text = properties.m_text) {
+    selection.set_last_style(text->m_style, text->m_paragraph);
+    selection.set_last_appearance(text->m_is_fill_enabled, text->m_border);
+  }
+  m_inspector->get_color_picker().set_model(properties.m_color_model);
+  m_assets->get_color_picker().set_model(properties.m_color_model);
+}
+
+void MainWindow::store_properties() {
   if(!m_session || m_session->get_id().empty()) {
     return;
   }
-  auto& selection = m_session->get_editor().get_text_selection();
-  auto properties = LastTextProperties(
-    selection.get_last_style(), selection.get_last_paragraph_style());
   auto settings = QSettings();
-  settings.setValue(LAST_TEXT_PROPERTIES_KEY, record_last_text_properties(
-    settings.value(LAST_TEXT_PROPERTIES_KEY).toByteArray(),
-    m_session->get_id(), properties, QDateTime::currentDateTimeUtc()));
+  settings.setValue(LAST_PROPERTIES_KEY, record_last_properties(
+    settings.value(LAST_PROPERTIES_KEY).toByteArray(), m_session->get_id(),
+    get_properties(), QDateTime::currentDateTimeUtc()));
 }
 
-void MainWindow::change_text_properties_id() {
-  auto& selection = m_session->get_editor().get_text_selection();
-  auto properties = LastTextProperties(
-    selection.get_last_style(), selection.get_last_paragraph_style());
+void MainWindow::change_properties_id() {
+  auto properties = get_properties();
   auto settings = QSettings();
-  settings.setValue(LAST_TEXT_PROPERTIES_KEY, change_last_text_properties_id(
-    settings.value(LAST_TEXT_PROPERTIES_KEY).toByteArray(),
-    m_session->get_id(), properties, QDateTime::currentDateTimeUtc()));
-  selection.set_last_style(properties.m_style, properties.m_paragraph);
+  settings.setValue(LAST_PROPERTIES_KEY, change_last_properties_id(
+    settings.value(LAST_PROPERTIES_KEY).toByteArray(), m_session->get_id(),
+    properties, QDateTime::currentDateTimeUtc()));
+  apply_properties(properties);
 }
 
 void MainWindow::save_settings() const {
@@ -1233,9 +1307,9 @@ bool MainWindow::save_to(const QString& path) {
   save_settings();
   update_title();
   if(m_session->get_id() == id) {
-    store_text_properties();
+    store_properties();
   } else {
-    change_text_properties_id();
+    change_properties_id();
   }
   return true;
 }
@@ -1280,7 +1354,7 @@ void MainWindow::install(
   m_view->set_editor(&session->get_editor());
   m_view->set_document(std::move(document));
   m_session = std::move(session);
-  restore_text_properties();
+  restore_properties();
   auto& editor = m_session->get_editor();
   editor.get_history().set_text_measurer(m_measurer);
   m_layers->set_editor(&editor);
@@ -1313,11 +1387,12 @@ void MainWindow::install(
   update_tool();
   update_selection_actions();
   update_zoom();
+  update_document_state();
   m_view->setFocus();
 }
 
 void MainWindow::detach() {
-  store_text_properties();
+  store_properties();
   set_highlights({});
   m_tool_subscription.release();
   m_history_subscription.release();
@@ -1368,6 +1443,15 @@ void MainWindow::update_title() {
     m_session->is_dirty() && !m_session->get_path().isEmpty());
   m_actions.set_enabled("file.save_as_local", has_session);
   m_actions.set_enabled("window.document", has_session);
+}
+
+void MainWindow::update_document_state() {
+  auto has_session = static_cast<bool>(m_session);
+  for(auto widget : std::to_array<QWidget*>({m_app_bar, m_toolbar,
+      m_left_panel, m_view, m_inspector_frame})) {
+    widget->setEnabled(has_session);
+  }
+  update_document_actions(m_actions, m_app_bar->get_workspace(), has_session);
 }
 
 void MainWindow::update_selection_actions() {

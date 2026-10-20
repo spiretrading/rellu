@@ -12,8 +12,10 @@ namespace {
     Handle::TOP_RIGHT, Handle::BOTTOM_RIGHT, Handle::BOTTOM_LEFT});
 
   HandleLayout make_layout(const std::vector<Handle>& resizers,
-      const std::vector<Handle>& rotators) {
+      const std::vector<Handle>& rotators,
+      HandleStyle style = HandleStyle::BOX) {
     auto layout = HandleLayout();
+    layout.m_style = style;
     for(auto handle : resizers) {
       layout.m_resizers[static_cast<std::size_t>(handle)] = true;
     }
@@ -136,29 +138,26 @@ TEST_SUITE("SelectionBox") {
     transaction.commit();
     auto size = Size(100, 100);
     REQUIRE(get_handle_layout(document, std::vector{row}, size, 1) ==
-      make_layout({Handle::TOP, Handle::BOTTOM}, {Handle::TOP_LEFT,
-        Handle::TOP_RIGHT, Handle::RIGHT, Handle::BOTTOM_RIGHT,
-        Handle::BOTTOM_LEFT, Handle::LEFT}));
+      make_layout({Handle::TOP, Handle::BOTTOM}, EVERY));
     REQUIRE(get_handle_layout(document, std::vector{column}, size, 1) ==
-      make_layout({Handle::RIGHT, Handle::LEFT}, {Handle::TOP_LEFT,
-        Handle::TOP, Handle::TOP_RIGHT, Handle::BOTTOM_RIGHT, Handle::BOTTOM,
-        Handle::BOTTOM_LEFT}));
+      make_layout({Handle::RIGHT, Handle::LEFT}, EVERY));
     REQUIRE(get_handle_layout(document, std::vector{first}, size, 1) ==
-      make_layout(EVERY, CORNERS));
+      make_layout(EVERY, EVERY));
     REQUIRE(get_handle_layout(document, std::vector{cell}, size, 1) ==
-      make_layout(EVERY, CORNERS));
+      make_layout(EVERY, EVERY));
     REQUIRE(get_handle_layout(document, std::vector{first, column}, size,
       1) == make_layout({Handle::TOP, Handle::BOTTOM}, {}));
     REQUIRE(get_handle_layout(document, std::vector{cell, loose}, size, 1) ==
       make_layout({Handle::RIGHT, Handle::LEFT}, {}));
     REQUIRE(get_handle_layout(document, std::vector{loose, first}, size,
-      1) == make_layout(EVERY, CORNERS));
+      1) == make_layout(EVERY, EVERY));
     REQUIRE(get_handle_layout(document, std::vector{row, loose}, size, 1) ==
-      make_layout(EVERY, CORNERS));
+      make_layout(EVERY, EVERY));
     REQUIRE(get_handle_layout(document, std::vector{padding}, size, 1) ==
-      make_layout(EVERY, CORNERS));
+      make_layout(EVERY, EVERY));
+    auto crowded = std::vector({Handle::TOP, Handle::RIGHT, Handle::LEFT});
     REQUIRE(get_handle_layout(document, std::vector{row}, Size(100, 5), 1) ==
-      make_layout({Handle::TOP, Handle::RIGHT, Handle::LEFT}, {}));
+      make_layout(crowded, crowded));
   }
 
   TEST_CASE("text_handles") {
@@ -179,11 +178,11 @@ TEST_SUITE("SelectionBox") {
       bottom);
     REQUIRE(get_handle_layout(document, std::vector{automatic}, size, 1) ==
       make_layout({Handle::TOP, Handle::RIGHT, Handle::BOTTOM, Handle::LEFT},
-        CORNERS));
+        EVERY));
     REQUIRE(get_handle_layout(document, std::vector{area}, size, 1) ==
-      make_layout(EVERY, CORNERS));
+      make_layout(EVERY, EVERY));
     REQUIRE(get_handle_layout(document, std::vector{point, automatic}, size,
-      1) == make_layout(EVERY, CORNERS));
+      1) == make_layout(EVERY, EVERY));
   }
 
   TEST_CASE("scroll_group_handles") {
@@ -197,19 +196,89 @@ TEST_SUITE("SelectionBox") {
       make_scroll_group(ScrollDirection::PANNING));
     transaction.commit();
     auto size = Size(100, 100);
+    auto scroll = HandleStyle::SCROLL_GROUP;
     REQUIRE(get_handle_layout(document, std::vector{vertical}, size, 1) ==
-      make_layout({Handle::TOP, Handle::BOTTOM}, {}));
+      make_layout({Handle::TOP, Handle::BOTTOM}, {}, scroll));
     REQUIRE(get_handle_layout(document, std::vector{horizontal}, size, 1) ==
-      make_layout({Handle::RIGHT, Handle::LEFT}, {}));
+      make_layout({Handle::RIGHT, Handle::LEFT}, {}, scroll));
     REQUIRE(get_handle_layout(document, std::vector{panning}, size, 1) ==
       make_layout({Handle::TOP, Handle::RIGHT, Handle::BOTTOM, Handle::LEFT},
-        {}));
+        {}, scroll));
     REQUIRE(get_handle_layout(document, std::vector{panning}, Size(20, 20),
-      1) == make_layout({Handle::RIGHT, Handle::LEFT}, {}));
+      1) == make_layout({Handle::RIGHT, Handle::LEFT}, {}, scroll));
+    REQUIRE(get_handle_layout(document, std::vector{panning}, Size(20, 20),
+      1, Handle::BOTTOM) ==
+        make_layout({Handle::TOP, Handle::BOTTOM}, {}, scroll));
+    REQUIRE(get_handle_layout(document, std::vector{panning}, Size(20, 20),
+      1, Handle::LEFT) ==
+        make_layout({Handle::RIGHT, Handle::LEFT}, {}, scroll));
     REQUIRE(get_handle_layout(document, std::vector{vertical}, Size(100, 9),
-      1) == make_layout({Handle::BOTTOM}, {}));
+      1) == make_layout({Handle::BOTTOM}, {}, scroll));
     REQUIRE(get_handle_layout(document, std::vector{vertical}, Size(100, 9),
-      0.25) == make_layout({Handle::TOP, Handle::BOTTOM}, {}));
+      1, Handle::TOP) == make_layout({Handle::TOP}, {}, scroll));
+    REQUIRE(get_handle_layout(document, std::vector{vertical}, Size(100, 9),
+      0.25) == make_layout({Handle::TOP, Handle::BOTTOM}, {}, scroll));
+    REQUIRE(get_scroll_handle_rect(Handle::TOP, size, 1) ==
+      Rect(41, -4.5, 18, 10));
+    REQUIRE(get_scroll_handle_rect(Handle::RIGHT, size, 1) ==
+      Rect(94.5, 41, 10, 18));
+    REQUIRE(get_scroll_handle_rect(Handle::BOTTOM, size, 0.25) ==
+      Rect(43, 95.5, 14, 8));
+  }
+
+  TEST_CASE("repeat_grid_handles") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto group = Group();
+    group.m_repeat_grid =
+      RepeatGrid(Size(40, 40), 20, 20, 2, 1, Size(100, 40));
+    auto grid = transaction.append(NodeId(), make_header("Grid"), group);
+    transaction.commit();
+    auto layout =
+      get_handle_layout(document, std::vector{grid}, Size(300, 60), 1);
+    REQUIRE(layout == make_layout({}, {Handle::RIGHT, Handle::BOTTOM},
+      HandleStyle::REPEAT_GRID));
+    auto size = Size(300, 60);
+    REQUIRE(layout.find(size, 1, Point(309, 30)) ==
+      HandleHit(HandleAction::ROTATE, Handle::RIGHT));
+    REQUIRE(layout.find(size, 1, Point(305, 39)) ==
+      HandleHit(HandleAction::ROTATE, Handle::RIGHT));
+    REQUIRE(!layout.find(size, 1, Point(302.5, 41)));
+    REQUIRE(!layout.find(size, 1, Point(300, 30)));
+    REQUIRE(layout.find(size, 1, Point(165, 65)) ==
+      HandleHit(HandleAction::ROTATE, Handle::BOTTOM));
+    REQUIRE(!layout.find(size, 1, Point(171, 62.5)));
+    REQUIRE(!layout.find(size, 1, Point(150, 60)));
+    REQUIRE(!layout.find(size, 1, Point(302.5, -2.5)));
+  }
+
+  TEST_CASE("find_handle") {
+    auto layout = make_layout(EVERY, EVERY);
+    auto size = Size(100, 50);
+    REQUIRE(layout.find(size, 1, Point(104, 54)) ==
+      HandleHit(HandleAction::RESIZE, Handle::BOTTOM_RIGHT));
+    REQUIRE(layout.find(size, 1, Point(105, 55)) ==
+      HandleHit(HandleAction::ROTATE, Handle::BOTTOM_RIGHT));
+    REQUIRE(!layout.find(size, 1, Point(108, 58)));
+    REQUIRE(layout.find(size, 1, Point(50, -5)) ==
+      HandleHit(HandleAction::RESIZE, Handle::TOP));
+    REQUIRE(layout.find(size, 1, Point(50, -9)) ==
+      HandleHit(HandleAction::ROTATE, Handle::TOP));
+    REQUIRE(!layout.find(size, 1, Point(50, -10)));
+    REQUIRE(layout.find(size, 1, Point(-9, 25)) ==
+      HandleHit(HandleAction::ROTATE, Handle::LEFT));
+    REQUIRE(!layout.find(size, 1, Point(50, 25)));
+    REQUIRE(!layout.find(size, 1, Point(80, -5)));
+    auto hidden = make_layout({}, EVERY);
+    REQUIRE(hidden.find(size, 1, Point(50, 3)) ==
+      HandleHit(HandleAction::ROTATE, Handle::TOP));
+    REQUIRE(!make_layout(EVERY, {}).find(size, 1, Point(50, -9)));
+    auto scroll =
+      make_layout({Handle::TOP, Handle::BOTTOM}, {}, HandleStyle::SCROLL_GROUP);
+    REQUIRE(scroll.find(size, 1, Point(58, 0)) ==
+      HandleHit(HandleAction::RESIZE, Handle::TOP));
+    REQUIRE(!scroll.find(size, 1, Point(60, 0)));
+    REQUIRE(!scroll.find(size, 0.25, Point(58, 0)));
   }
 
   TEST_CASE("crowded_handles") {
@@ -223,18 +292,22 @@ TEST_SUITE("SelectionBox") {
       transaction.append(NodeId(), make_header("Artboard"), board);
     transaction.commit();
     auto nodes = std::vector{rectangle};
+    auto wide = std::vector({Handle::TOP, Handle::RIGHT, Handle::LEFT});
     REQUIRE(get_handle_layout(document, nodes, Size(10, 5), 1) ==
-      make_layout({Handle::TOP, Handle::RIGHT, Handle::LEFT}, {}));
+      make_layout(wide, wide));
+    auto tall = std::vector({Handle::TOP, Handle::BOTTOM, Handle::LEFT});
     REQUIRE(get_handle_layout(document, nodes, Size(5, 10), 1) ==
-      make_layout({Handle::TOP, Handle::BOTTOM, Handle::LEFT}, {}));
+      make_layout(tall, tall));
     REQUIRE(get_handle_layout(document, nodes, Size(5, 5), 1) ==
       make_layout({Handle::BOTTOM_RIGHT}, {Handle::BOTTOM_RIGHT}));
+    auto flat = std::vector({Handle::TOP_LEFT, Handle::TOP, Handle::TOP_RIGHT,
+      Handle::BOTTOM_RIGHT, Handle::BOTTOM, Handle::BOTTOM_LEFT});
     REQUIRE(get_handle_layout(document, nodes, Size(100, 12), 1) ==
-      make_layout({Handle::TOP_LEFT, Handle::TOP, Handle::TOP_RIGHT,
-        Handle::BOTTOM_RIGHT, Handle::BOTTOM, Handle::BOTTOM_LEFT}, CORNERS));
+      make_layout(flat, flat));
+    auto narrow = std::vector({Handle::TOP_LEFT, Handle::TOP_RIGHT,
+      Handle::RIGHT, Handle::BOTTOM_RIGHT, Handle::BOTTOM_LEFT, Handle::LEFT});
     REQUIRE(get_handle_layout(document, nodes, Size(12, 100), 1) ==
-      make_layout({Handle::TOP_LEFT, Handle::TOP_RIGHT, Handle::RIGHT,
-        Handle::BOTTOM_RIGHT, Handle::BOTTOM_LEFT, Handle::LEFT}, CORNERS));
+      make_layout(narrow, narrow));
     REQUIRE(get_handle_layout(document, std::vector{artboard},
       Size(100, 100), 1) == make_layout(EVERY, {}));
     REQUIRE(get_handle_layout(document, std::vector{artboard}, Size(5, 5),

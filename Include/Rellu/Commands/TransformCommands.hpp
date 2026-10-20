@@ -62,10 +62,11 @@ namespace Rellu {
    * node's own axes, and fitting the font sizes of point text to the bounds
    * it is mapped to. A mapping that mirrors along those axes, as a resize
    * past the opposite side or a flip does, mirrors the geometry and fills
-   * of shapes and the contents of plain and mask groups, mirrors the
-   * transform of text, which Adobe XD shows as a rotation of 180 degrees,
-   * and only moves other nodes, such as component instances, whose
-   * contents are left as they are, as Adobe XD does.
+   * of shapes and the contents of plain and mask groups, toggles whether
+   * text is flipped vertically within its bounds, turning its transform by
+   * 180 degrees for a horizontal mirror as Adobe XD records it, and only
+   * moves other nodes, such as component instances, whose contents are
+   * left as they are, as Adobe XD does.
    * @param document The document holding the node.
    * @param transaction The open transaction on the <i>document</i>.
    * @param id The node's id.

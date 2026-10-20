@@ -67,7 +67,7 @@ namespace Rellu::Tests {
 
   /**
    * Makes a header with a fresh id.
-   * @param name The node's name.
+   * @param name The node's name, a custom one unless empty.
    * @param transform The node's transform.
    */
   inline NodeHeader make_header(
@@ -75,6 +75,7 @@ namespace Rellu::Tests {
     auto header = NodeHeader();
     header.m_id = generate_node_id();
     header.m_name = std::move(name);
+    header.m_has_custom_name = !header.m_name.empty();
     header.m_transform = transform;
     return header;
   }
@@ -163,8 +164,10 @@ namespace Rellu::Tests {
       ComponentInstance(scene.m_component, StateId(), Size(80, 30));
     instance.m_component_instance->m_states.push_back(
       ComponentState(generate_node_id(), "Hover", scene.m_state_tree));
-    scene.m_instance = transaction.append(scene.m_artboard,
-      make_header("Button", make_translation(300, 200)), instance);
+    auto instance_header = make_header("Button", make_translation(300, 200));
+    instance_header.m_has_custom_name = false;
+    scene.m_instance =
+      transaction.append(scene.m_artboard, instance_header, instance);
     scene.m_reference = transaction.append(scene.m_instance,
       make_header("Background"), Reference(scene.m_background));
     auto synced = *document.get(scene.m_instance).get_group();

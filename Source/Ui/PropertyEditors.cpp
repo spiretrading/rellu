@@ -26,32 +26,6 @@ namespace {
   constexpr auto MAXIMUM_BRIGHTNESS = 50.0;
   constexpr auto MAXIMUM_COLUMNS = 100.0;
 
-  class SetBlendModeCommand : public Command {
-    public:
-      SetBlendModeCommand(
-          std::vector<NodeId> nodes, BlendMode blend_mode) noexcept
-        : m_nodes(std::move(nodes)),
-          m_blend_mode(blend_mode) {}
-
-      std::string get_label() const override {
-        return "Change Blend Mode";
-      }
-
-      void apply(
-          const Document& document, Transaction& transaction) override {
-        for(auto& id : m_nodes) {
-          edit_rendered_header(document, transaction, id,
-            [&] (const auto&, auto& header) {
-              header.m_blend_mode = m_blend_mode;
-            });
-        }
-      }
-
-    private:
-      std::vector<NodeId> m_nodes;
-      BlendMode m_blend_mode;
-  };
-
   std::optional<double> get_number(const PropertyValue& value) {
     if(auto number = std::get_if<double>(&value); number &&
         std::isfinite(*number)) {
@@ -104,59 +78,64 @@ namespace {
     };
   }
 
+  std::unique_ptr<Command> combine(
+      std::string label, std::vector<std::unique_ptr<Command>> commands) {
+    if(commands.empty()) {
+      return nullptr;
+    } else if(commands.size() == 1) {
+      return std::move(commands.front());
+    }
+    return std::make_unique<CompositeCommand>(
+      std::move(label), std::move(commands));
+  }
+
+  std::unique_ptr<Command> make_size_command(const Document& document,
+      const NodeId& id, bool is_width, double size,
+      const TextMeasurer& measurer) {
+    auto lock = document.get(id).m_header.m_aspect_lock;
+    if(lock && !(lock->m_width > 0 && lock->m_height > 0)) {
+      lock = std::nullopt;
+    }
+    auto resize = [&] (Rect bounds) {
+      if(is_width) {
+        bounds.m_width = size;
+        if(lock) {
+          bounds.m_height = size * lock->m_height / lock->m_width;
+        }
+      } else {
+        bounds.m_height = size;
+        if(lock) {
+          bounds.m_width = size * lock->m_width / lock->m_height;
+        }
+      }
+      return bounds;
+    };
+    if(auto artboard = document.get(id).get_artboard()) {
+      return make_resize_command(std::vector{id}, artboard->m_frame,
+        resize(artboard->m_frame), measurer);
+    }
+    auto local = get_local_bounds(document, id, BoundsType::GEOMETRY, measurer);
+    if(!local) {
+      return nullptr;
+    }
+    return make_bounds_command(document, id, resize(*local), measurer);
+  }
+
   PropertySetter make_size_setter(bool is_width, TextMeasurer measurer) {
     return [=] (const Document& document, const std::vector<NodeId>& nodes,
         const PropertyValue& value) -> std::unique_ptr<Command> {
       auto number = get_number(value);
-      auto targets = get_movable(document, nodes);
-      if(!number || !(*number > 0) || targets.empty()) {
+      if(!number || !(*number > 0)) {
         return nullptr;
       }
-      auto lock = std::optional<Size>();
-      if(targets.size() == 1) {
-        lock = document.get(targets.front()).m_header.m_aspect_lock;
-        if(lock && !(lock->m_width > 0 && lock->m_height > 0)) {
-          lock = std::nullopt;
+      auto commands = std::vector<std::unique_ptr<Command>>();
+      for(auto& id : get_movable(document, nodes)) {
+        if(auto command =
+            make_size_command(document, id, is_width, *number, measurer)) {
+          commands.push_back(std::move(command));
         }
       }
-      auto resize = [&] (Rect bounds) {
-        if(is_width) {
-          bounds.m_width = *number;
-          if(lock) {
-            bounds.m_height = *number * lock->m_height / lock->m_width;
-          }
-        } else {
-          bounds.m_height = *number;
-          if(lock) {
-            bounds.m_width = *number * lock->m_width / lock->m_height;
-          }
-        }
-        return bounds;
-      };
-      if(targets.size() == 1) {
-        auto& id = targets.front();
-        if(auto artboard = document.get(id).get_artboard()) {
-          return make_resize_command(targets, artboard->m_frame,
-            resize(artboard->m_frame), measurer);
-        }
-        auto local =
-          get_local_bounds(document, id, BoundsType::GEOMETRY, measurer);
-        auto world = get_world_transform(document, id);
-        auto inverse = invert(world);
-        if(!local || !inverse) {
-          return nullptr;
-        }
-        return std::make_unique<TransformCommand>(std::move(targets),
-          world * make_rect_mapping(*local, resize(*local)) * *inverse,
-          "Resize", TransformMode::RESIZE, ResizeRule::RESPONSIVE, measurer);
-      }
-      auto bounds =
-        get_world_bounds(document, targets, BoundsType::GEOMETRY, measurer);
-      if(!bounds) {
-        return nullptr;
-      }
-      return make_resize_command(
-        std::move(targets), *bounds, resize(*bounds), measurer);
+      return combine("Resize", std::move(commands));
     };
   }
 
@@ -168,30 +147,41 @@ namespace {
       if(!number || targets.empty() || has_artboard(document, targets)) {
         return nullptr;
       }
-      auto rotation = get_rotation(document, targets.front());
-      if(std::any_of(targets.begin(), targets.end(), [&] (const auto& id) {
-          return get_rotation(document, id) != rotation;
-        })) {
-        rotation = 0;
-      }
-      auto center = Point(0, 0);
-      if(targets.size() == 1) {
-        auto local = get_local_bounds(
-          document, targets.front(), BoundsType::GEOMETRY, measurer);
+      auto commands = std::vector<std::unique_ptr<Command>>();
+      for(auto& id : targets) {
+        auto local =
+          get_local_bounds(document, id, BoundsType::GEOMETRY, measurer);
         if(!local) {
-          return nullptr;
+          continue;
         }
-        center = get_world_transform(document, targets.front()).map(
+        auto center = get_world_transform(document, id).map(
           local->get_center());
-      } else if(auto bounds = get_world_bounds(
-          document, targets, BoundsType::GEOMETRY, measurer)) {
-        center = bounds->get_center();
-      } else {
-        return nullptr;
+        commands.push_back(make_rotate_command(std::vector{id},
+          (*number - get_rotation(document, id)) * std::numbers::pi / 180,
+          center));
       }
-      return make_rotate_command(std::move(targets),
-        (*number - rotation) * std::numbers::pi / 180, center);
+      return combine("Rotate", std::move(commands));
     };
+  }
+
+  std::unique_ptr<Command> set_orientation(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto choice = std::get_if<Choice>(&value);
+    if(!choice || choice->m_index < 0 || choice->m_index >
+        static_cast<int>(ArtboardOrientation::LANDSCAPE)) {
+      return nullptr;
+    }
+    auto artboards = std::vector<NodeId>();
+    for(auto& id : nodes) {
+      if(auto node = document.find(id); node && node->get_artboard()) {
+        artboards.push_back(id);
+      }
+    }
+    if(artboards.empty()) {
+      return nullptr;
+    }
+    return std::make_unique<SetOrientationCommand>(std::move(artboards),
+      static_cast<ArtboardOrientation>(choice->m_index));
   }
 
   const Fill* find_fill(const Node& node) {
@@ -746,6 +736,7 @@ PropertyEditors Rellu::make_standard_property_editors(TextMeasurer measurer) {
     make_size_setter(false, measurer), 0.0, std::nullopt));
   editors.add("transform.rotation", make_number_editor(
     make_rotation_setter(measurer), std::nullopt, std::nullopt));
+  editors.add("transform.orientation", make_editor(set_orientation));
   auto opacity = make_number_editor(set_opacity, 0.0, 1.0);
   opacity.m_scale = 100;
   opacity.m_suffix = "%";

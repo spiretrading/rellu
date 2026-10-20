@@ -27,8 +27,8 @@ namespace Rellu {
 
   /**
    * Sets the corner radii of rectangles and the corner radius of polygons,
-   * labelled Change Corner Radius. Radii are at least zero, and nodes of
-   * other kinds are left unchanged.
+   * labelled Corner Radius. Radii are at least zero, and nodes of other
+   * kinds are left unchanged.
    */
   class SetCornerRadiusCommand : public Command {
     public:

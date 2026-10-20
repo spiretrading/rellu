@@ -5,6 +5,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
@@ -403,6 +404,7 @@ namespace {
       Matrix composed, const TextMeasurer& measurer) {
     auto scale = get_axis_scale(local);
     auto base = transform;
+    auto is_text_mirrored = false;
     if(scale && (scale->m_x < 0 || scale->m_y < 0)) {
       if(auto bounds = get_local_bounds(
           document, id, BoundsType::GEOMETRY, measurer)) {
@@ -411,6 +413,7 @@ namespace {
         if(node.get_text()) {
           auto reflection =
             make_reflection(center, scale->m_x < 0, scale->m_y < 0);
+          is_text_mirrored = (scale->m_x < 0) != (scale->m_y < 0);
           base = transform * reflection;
           local = reflection * local;
           scale = get_axis_scale(local);
@@ -440,6 +443,14 @@ namespace {
       fit_point_text(document, transaction, id, base, local, measurer);
     } else if(composed != transform) {
       set_transform(document, transaction, id, composed);
+    }
+    if(is_text_mirrored) {
+      auto payload = *document.get(id).get_text();
+      auto flip = make_reflection(measurer(payload).get_center(), false, true);
+      set_transform(
+        document, transaction, id, get_transform(document, id) * flip);
+      payload.m_is_flipped_vertically = !payload.m_is_flipped_vertically;
+      transaction.replace_payload(id, std::move(payload));
     }
   }
 
@@ -472,6 +483,14 @@ namespace {
     auto children = node.m_children;
     auto offset = Point(frame.m_x - payload.m_frame.m_x,
       frame.m_y - payload.m_frame.m_y);
+    if(payload.m_frame.get_size() != frame.get_size()) {
+      if(payload.m_layout_grid) {
+        fit_layout_grid(*payload.m_layout_grid, payload.m_frame.get_size());
+      } else {
+        payload.m_layout_grid = make_initial_grid(
+          payload, document.get_resources().m_grid_defaults);
+      }
+    }
     transaction.replace_payload(id, std::move(payload));
     if(!is_unit(*scale)) {
       for(auto& child : children) {
