@@ -51,6 +51,22 @@ namespace Rellu {
   QByteArray record_last_text_properties(const QByteArray& store,
     std::string_view document, const LastTextProperties& properties,
     const QDateTime& time);
+
+  /**
+   * Carries the text properties last used in a document over to the new id
+   * Adobe XD gives the document, keeping those recorded under its previous
+   * id.
+   * @param store The store, JSON encoded, empty if there is none.
+   * @param document The new id of the document.
+   * @param properties The properties last used in the document, replaced by
+   *        those the store has for the new id if it has any.
+   * @param time The time of the recording.
+   * @return The store with the properties recorded under the new id, JSON
+   *         encoded.
+   */
+  QByteArray change_last_text_properties_id(const QByteArray& store,
+    std::string_view document, LastTextProperties& properties,
+    const QDateTime& time);
 }
 
 #endif

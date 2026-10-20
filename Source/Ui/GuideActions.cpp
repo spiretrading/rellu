@@ -8,6 +8,7 @@
 #include <QUuid>
 #include "Rellu/Commands/GuideCommands.hpp"
 #include "Rellu/Ui/GuideActions.hpp"
+#include "Rellu/Ui/Translation.hpp"
 
 using namespace Rellu;
 
@@ -158,10 +159,10 @@ bool GuideActions::paste(const QMimeData& data, bool is_applied) {
 }
 
 void GuideActions::update() {
-  m_actions->get(HIDE).setText(m_settings.m_is_visible ?
-    "Hide All Guides" : "Show All Guides");
-  m_actions->get(LOCK).setText(m_settings.m_is_locked ?
-    "Unlock All Guides" : "Lock All Guides");
+  m_actions->get(HIDE).setText(translate("menu",
+    m_settings.m_is_visible ? "Hide All Guides" : "Show All Guides"));
+  m_actions->get(LOCK).setText(translate("menu",
+    m_settings.m_is_locked ? "Unlock All Guides" : "Lock All Guides"));
   auto is_design = m_editor && m_workspace == Workspace::DESIGN;
   m_actions->set_enabled(HIDE, is_design);
   m_actions->set_enabled(LOCK, is_design);

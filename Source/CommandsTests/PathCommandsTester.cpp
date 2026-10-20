@@ -10,6 +10,7 @@
 #include "Rellu/Geometry/BooleanOperation.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Geometry/Shapes.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/Transaction.hpp"
 #include "Fixture.hpp"
 
@@ -221,6 +222,27 @@ TEST_SUITE("PathCommands") {
       Fill(SolidFill(make_color(0, 0, 255))));
     REQUIRE(get_bounds(*std::get<PathShape>(line_shape.m_geometry).m_path).
       m_height > 20);
+  }
+
+  TEST_CASE("outline_stroke_name") {
+    auto document = Document();
+    auto board = build_board(document);
+    {
+      auto header = document.get(board.m_bottom).m_header;
+      header.m_name.clear();
+      auto transaction = Transaction(document);
+      transaction.replace_header(header);
+      transaction.commit();
+      document.clear_history();
+    }
+    set_language(Language::GERMAN);
+    auto history = History(document);
+    auto recorded = require_undoable(history, make_registry().make(
+      "object.path.outline_stroke", document, std::vector{board.m_bottom}));
+    set_language(Language::ENGLISH);
+    auto selection = *recorded->get_selection();
+    REQUIRE(selection.size() == 2);
+    REQUIRE(document.get(selection[1]).m_header.m_name == "Rechteck - Kontur");
   }
 
   TEST_CASE("outline_stroke_group") {

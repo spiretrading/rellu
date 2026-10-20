@@ -9,6 +9,7 @@
 #include <utility>
 #include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
+#include "Rellu/Commands/Layouts.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
@@ -150,17 +151,12 @@ namespace {
     if(!group) {
       return std::pair(false, false);
     }
-    auto is_width_fixed = false;
-    auto is_height_fixed = false;
-    if(auto& scroll = group->m_scroll_group) {
-      is_width_fixed = scroll->m_direction == ScrollDirection::VERTICAL;
-      is_height_fixed = scroll->m_direction == ScrollDirection::HORIZONTAL;
+    auto& scroll = group->m_scroll_group;
+    if(!scroll) {
+      return std::pair(false, false);
     }
-    if(auto& stack = group->m_stack) {
-      is_width_fixed |= stack->m_orientation == Orientation::HORIZONTAL;
-      is_height_fixed |= stack->m_orientation == Orientation::VERTICAL;
-    }
-    return std::pair(is_width_fixed, is_height_fixed);
+    return std::pair(scroll->m_direction == ScrollDirection::VERTICAL,
+      scroll->m_direction == ScrollDirection::HORIZONTAL);
   }
 
   PropertyDescriptor make_boolean(const Node& node) {
@@ -712,59 +708,85 @@ namespace {
       return false;
     });
   }
+
+  void limit_size(
+      std::vector<PropertyDescriptor>& sections, const StackLimits& limits) {
+    auto transform = std::find_if(sections.begin(), sections.end(),
+      [] (const auto& section) {
+        return section.m_path == "transform";
+      });
+    if(transform == sections.end()) {
+      return;
+    }
+    for(auto& property : transform->m_children) {
+      if(property.m_path == "transform.width") {
+        property.m_is_read_only |= limits.m_is_width_fixed;
+      } else if(property.m_path == "transform.height") {
+        property.m_is_read_only |= limits.m_is_height_fixed;
+      }
+    }
+  }
+
+  std::vector<PropertyDescriptor> extract_node_properties(
+      const Document& document, const NodeId& id,
+      const TextMeasurer& measurer, const TextSelection* selection) {
+    auto sections = std::vector<PropertyDescriptor>();
+    auto node = document.find(id);
+    if(!node) {
+      return sections;
+    }
+    auto placement = get_placement(document, *node);
+    auto& displayed = placement ? *placement->m_node : *node;
+    auto artboard = displayed.get_artboard();
+    auto shape = displayed.get_shape();
+    auto text = displayed.get_text();
+    auto group = displayed.get_group();
+    sections.push_back(make_property("align", "Align"));
+    sections.push_back(make_boolean(displayed));
+    sections.push_back(make_component(document, displayed));
+    if(placement) {
+      sections.push_back(
+        make_transform(document, *node, displayed, *placement, measurer));
+    }
+    sections.push_back(make_layout(*node, displayed));
+    if(text) {
+      if(selection && (!selection->is_editing() ||
+          selection->get_node() != id)) {
+        selection = nullptr;
+      }
+      sections.push_back(make_text(*text, measurer, selection));
+    }
+    sections.push_back(make_appearance(displayed));
+    if(shape) {
+      if(auto geometry = make_geometry(*shape)) {
+        sections.push_back(std::move(*geometry));
+      }
+      if(!is_line(displayed)) {
+        sections.push_back(make_fill(shape->m_style.m_fill));
+      }
+      sections.push_back(make_stroke(shape->m_style.m_stroke, displayed));
+      sections.push_back(make_effects(shape->m_style.m_effects, displayed));
+    } else if(text) {
+      sections.push_back(make_fill(text->m_style.m_fill));
+      sections.push_back(make_stroke(text->m_style.m_stroke, displayed));
+      sections.push_back(make_effects(text->m_style.m_effects, displayed));
+    } else if(artboard) {
+      sections.push_back(make_fill(artboard->m_background));
+      sections.push_back(make_grid(*artboard));
+      return sections;
+    } else if(group) {
+      add_group_style(document, displayed, sections);
+    }
+    sections.push_back(make_export(displayed));
+    return sections;
+  }
 }
 
 std::vector<PropertyDescriptor> Rellu::extract_properties(
     const Document& document, const NodeId& id, const TextMeasurer& measurer,
     const TextSelection* selection) {
-  auto sections = std::vector<PropertyDescriptor>();
-  auto node = document.find(id);
-  if(!node) {
-    return sections;
-  }
-  auto placement = get_placement(document, *node);
-  auto& displayed = placement ? *placement->m_node : *node;
-  auto artboard = displayed.get_artboard();
-  auto shape = displayed.get_shape();
-  auto text = displayed.get_text();
-  auto group = displayed.get_group();
-  sections.push_back(make_property("align", "Align"));
-  sections.push_back(make_boolean(displayed));
-  sections.push_back(make_component(document, displayed));
-  if(placement) {
-    sections.push_back(
-      make_transform(document, *node, displayed, *placement, measurer));
-  }
-  sections.push_back(make_layout(*node, displayed));
-  if(text) {
-    if(selection && (!selection->is_editing() ||
-        selection->get_node() != id)) {
-      selection = nullptr;
-    }
-    sections.push_back(make_text(*text, measurer, selection));
-  }
-  sections.push_back(make_appearance(displayed));
-  if(shape) {
-    if(auto geometry = make_geometry(*shape)) {
-      sections.push_back(std::move(*geometry));
-    }
-    if(!is_line(displayed)) {
-      sections.push_back(make_fill(shape->m_style.m_fill));
-    }
-    sections.push_back(make_stroke(shape->m_style.m_stroke, displayed));
-    sections.push_back(make_effects(shape->m_style.m_effects, displayed));
-  } else if(text) {
-    sections.push_back(make_fill(text->m_style.m_fill));
-    sections.push_back(make_stroke(text->m_style.m_stroke, displayed));
-    sections.push_back(make_effects(text->m_style.m_effects, displayed));
-  } else if(artboard) {
-    sections.push_back(make_fill(artboard->m_background));
-    sections.push_back(make_grid(*artboard));
-    return sections;
-  } else if(group) {
-    add_group_style(document, displayed, sections);
-  }
-  sections.push_back(make_export(displayed));
+  auto sections = extract_node_properties(document, id, measurer, selection);
+  limit_size(sections, get_stack_limits(document, std::vector{id}));
   return sections;
 }
 
@@ -773,15 +795,14 @@ std::vector<PropertyDescriptor> Rellu::extract_common_properties(
     const TextMeasurer& measurer, const TextSelection* selection) {
   if(nodes.empty()) {
     return {};
+  } else if(nodes.size() == 1) {
+    return extract_properties(document, nodes.front(), measurer, selection);
   }
   auto sections =
-    extract_properties(document, nodes.front(), measurer, selection);
-  if(nodes.size() == 1) {
-    return sections;
-  }
+    extract_node_properties(document, nodes.front(), measurer, selection);
   for(auto i = std::size_t(1); i != nodes.size(); ++i) {
     intersect_properties(sections,
-      extract_properties(document, nodes[i], measurer, selection));
+      extract_node_properties(document, nodes[i], measurer, selection));
   }
   auto transform = std::find_if(sections.begin(), sections.end(),
     [] (const auto& section) {
@@ -790,6 +811,7 @@ std::vector<PropertyDescriptor> Rellu::extract_common_properties(
   if(transform != sections.end()) {
     set_frame(*transform, get_frame(document, nodes, measurer));
   }
+  limit_size(sections, get_stack_limits(document, nodes));
   return sections;
 }
 

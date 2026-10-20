@@ -139,3 +139,13 @@ QByteArray Rellu::record_last_text_properties(const QByteArray& store,
   root.insert("versions", versions);
   return QJsonDocument(root).toJson(QJsonDocument::Compact);
 }
+
+QByteArray Rellu::change_last_text_properties_id(const QByteArray& store,
+    std::string_view document, LastTextProperties& properties,
+    const QDateTime& time) {
+  if(auto recorded = find_last_text_properties(store, document)) {
+    properties = *recorded;
+    return store;
+  }
+  return record_last_text_properties(store, document, properties, time);
+}

@@ -1060,6 +1060,33 @@ NodeId Rellu::copy_into(const Document& document, Transaction& transaction,
   return copy;
 }
 
+StackLimits Rellu::get_stack_limits(
+    const Document& document, const std::vector<NodeId>& nodes) {
+  auto limits = StackLimits();
+  auto node = nodes.empty() ? nullptr : document.find(nodes.front());
+  if(!node) {
+    return limits;
+  }
+  if(nodes.size() != 1) {
+    node = node->m_parent.is_nil() ? nullptr : document.find(node->m_parent);
+  }
+  if(node && node->get_reference()) {
+    auto resolution =
+      resolve_reference(document.get_nodes(), node->get_id());
+    node = resolution ? document.find(resolution->m_source) : nullptr;
+  }
+  auto group = node ? node->get_group() : nullptr;
+  if(!group || !group->m_stack) {
+    return limits;
+  }
+  limits.m_is_width_fixed =
+    group->m_stack->m_orientation == Orientation::HORIZONTAL;
+  limits.m_is_height_fixed =
+    group->m_stack->m_orientation == Orientation::VERTICAL;
+  limits.m_is_rotation_fixed = nodes.size() != 1;
+  return limits;
+}
+
 std::vector<NodeId> Rellu::get_stack_items(
     const Document& document, const NodeId& id) {
   auto& node = document.get(id);

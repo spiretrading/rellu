@@ -6,6 +6,7 @@
 #include <QScreen>
 #include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Ui/AssetMoveDialog.hpp"
+#include "Rellu/Ui/Translation.hpp"
 #include "Icons.hpp"
 
 using namespace Rellu;
@@ -25,11 +26,11 @@ namespace {
 
   QString get_section_name(const std::string& section) {
     if(section == COLOR_SECTION) {
-      return "Colors";
+      return translate("assets", "Colors");
     } else if(section == CHARACTER_STYLE_SECTION) {
-      return "Character Styles";
+      return translate("assets", "Character Styles");
     }
-    return "Components";
+    return translate("assets", "Components");
   }
 
   const AssetGroup* find_group(
@@ -71,7 +72,7 @@ AssetMoveDialog::AssetMoveDialog(
   close->setObjectName("asset_move_close");
   close->setAutoRaise(true);
   close->setText("X");
-  close->setAccessibleName("Close");
+  close->setAccessibleName(translate("assets", "Close"));
   QObject::connect(close, &QToolButton::clicked, this, [this] {
     this->close();
   });
@@ -82,7 +83,7 @@ AssetMoveDialog::AssetMoveDialog(
   m_back->setAutoRaise(true);
   m_back->setIcon(get_icon(Glyph::CHEVRON_LEFT));
   m_back->setIconSize(QSize(ICON_SIZE, ICON_SIZE));
-  m_back->setAccessibleName("Back");
+  m_back->setAccessibleName(translate("assets", "Back"));
   QObject::connect(m_back, &QToolButton::clicked, this, [this] {
     go_back();
   });
@@ -97,7 +98,7 @@ AssetMoveDialog::AssetMoveDialog(
   m_rows_layout->setSpacing(0);
   layout->addWidget(m_rows);
   m_name = new QLineEdit();
-  m_name->setPlaceholderText("Group name");
+  m_name->setPlaceholderText(translate("assets", "Group name"));
   QObject::connect(m_name, &QLineEdit::textChanged, this, [this] {
     refresh();
   });
@@ -111,14 +112,14 @@ AssetMoveDialog::AssetMoveDialog(
   m_add->setAutoRaise(true);
   m_add->setIcon(get_icon(Glyph::PLUS));
   m_add->setIconSize(QSize(ICON_SIZE, ICON_SIZE));
-  m_add->setToolTip("Add group");
-  m_add->setAccessibleName("Add group");
+  m_add->setToolTip(translate("assets", "Add group"));
+  m_add->setAccessibleName(translate("assets", "Add group"));
   QObject::connect(m_add, &QToolButton::clicked, this, [this] {
     start_creating();
   });
   footer->addWidget(m_add);
   footer->addStretch(1);
-  m_cancel = new QPushButton("Cancel");
+  m_cancel = new QPushButton(translate("assets", "Cancel"));
   QObject::connect(m_cancel, &QPushButton::clicked, this, [this] {
     cancel_creating();
   });
@@ -135,9 +136,9 @@ AssetMoveDialog::AssetMoveDialog(
 
 QString AssetMoveDialog::get_title() const {
   if(m_is_creating) {
-    return "Create new group";
+    return translate("assets", "Create new group");
   }
-  return "Move to";
+  return translate("assets", "Move to");
 }
 
 const std::string& AssetMoveDialog::get_group() const {
@@ -146,7 +147,7 @@ const std::string& AssetMoveDialog::get_group() const {
 
 QString AssetMoveDialog::get_location() const {
   if(m_group.empty()) {
-    return LIBRARY_NAME;
+    return translate("assets", LIBRARY_NAME);
   }
   if(auto group =
       find_group(m_editor->get_document().get_resources(), m_group)) {
@@ -224,11 +225,12 @@ void AssetMoveDialog::start_creating() {
     names.push_back(entry.m_name);
   }
   std::sort(names.begin(), names.end());
-  auto make_name = [] (int number) {
+  auto make_name = [name = translate("assets", NEW_GROUP_NAME)] (
+      int number) {
     if(number == 0) {
-      return NEW_GROUP_NAME;
+      return name;
     }
-    return NEW_GROUP_NAME + NUMBER_SEPARATOR + QString::number(number);
+    return name + NUMBER_SEPARATOR + QString::number(number);
   };
   auto number = 0;
   for(auto& name : names) {
@@ -322,11 +324,11 @@ std::string AssetMoveDialog::get_parent(const std::string& group) const {
 QString AssetMoveDialog::get_name_error() const {
   auto name = m_name->text().trimmed();
   if(name.contains('/') || name.contains('\\')) {
-    return SLASH_ERROR;
+    return translate("assets", SLASH_ERROR);
   }
   for(auto& entry : get_entries()) {
     if(entry.m_name.compare(name, Qt::CaseInsensitive) == 0) {
-      return DUPLICATE_ERROR;
+      return translate("assets", DUPLICATE_ERROR);
     }
   }
   return QString();
@@ -346,7 +348,7 @@ void AssetMoveDialog::refresh() {
   if(!m_is_creating) {
     auto entries = get_entries();
     if(entries.empty()) {
-      auto message = new QLabel(EMPTY_MESSAGE);
+      auto message = new QLabel(translate("assets", EMPTY_MESSAGE));
       message->setObjectName("asset_move_empty");
       message->setWordWrap(true);
       m_rows_layout->addWidget(message);
@@ -376,6 +378,6 @@ void AssetMoveDialog::refresh() {
   m_add->setVisible(!m_is_creating);
   m_add->setEnabled(!m_group.empty());
   m_cancel->setVisible(m_is_creating);
-  m_submit->setText(m_is_creating ? "Create" : "Move");
+  m_submit->setText(translate("assets", m_is_creating ? "Create" : "Move"));
   m_submit->setEnabled(can_submit());
 }

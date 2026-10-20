@@ -14,6 +14,7 @@
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Geometry/Polyline.hpp"
+#include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Model/ShapeGeometry.hpp"
 #include "Rellu/Tools/PathPoints.hpp"
 #include "Rellu/Tools/SelectTool.hpp"
@@ -270,15 +271,19 @@ namespace {
     }
   }
 
-  bool is_handle_shown(Handle handle, const std::array<Point, 4>& corners) {
-    if(is_corner(handle)) {
-      return true;
+  Size get_size(const std::array<Point, 4>& corners) {
+    return Size(
+      distance(corners[0], corners[1]), distance(corners[1], corners[2]));
+  }
+
+  bool is_point_text(const Document& document, const NodeId& id) {
+    auto node = document.find(id);
+    if(node && node->get_reference()) {
+      auto resolution = resolve_reference(document.get_nodes(), id);
+      node = resolution ? document.find(resolution->m_source) : nullptr;
     }
-    auto minimum = 4 * SelectTool::HANDLE_REACH;
-    if(handle == Handle::TOP || handle == Handle::BOTTOM) {
-      return distance(corners[0], corners[1]) >= minimum;
-    }
-    return distance(corners[1], corners[2]) >= minimum;
+    auto text = node ? node->get_text() : nullptr;
+    return text && std::holds_alternative<PositionedFrame>(text->m_frame);
   }
 
   Point get_view_point(
@@ -978,10 +983,11 @@ std::optional<SelectTool::Grab> SelectTool::find_grab(
     return std::nullopt;
   }
   auto corners = to_view(context.get_view(), box->get_corners());
+  auto layout = get_layout(context, *box);
   auto find_handle = [&] (bool is_corner_wanted) -> std::optional<Grab> {
     for(auto handle : HANDLES) {
       if(is_corner(handle) != is_corner_wanted ||
-          !is_handle_shown(handle, corners)) {
+          !layout.is_resizer(handle)) {
         continue;
       }
       if(distance(get_view_point(context, *box, handle), position) <=
@@ -997,16 +1003,28 @@ std::optional<SelectTool::Grab> SelectTool::find_grab(
   if(auto grab = find_handle(false)) {
     return grab;
   }
-  if(!is_rotatable(context) || is_inside(corners, position)) {
+  if(!is_rotatable(context)) {
     return std::nullopt;
   }
+  auto is_within = is_inside(corners, position);
   for(auto handle : HANDLES) {
-    if(is_corner(handle) && distance(get_view_point(context, *box, handle),
-        position) <= ROTATION_REACH) {
+    if(!layout.is_rotator(handle)) {
+      continue;
+    }
+    auto reach = distance(get_view_point(context, *box, handle), position);
+    if((!layout.is_resizer(handle) && reach <= HANDLE_REACH) ||
+        (!is_within && reach <= ROTATION_REACH)) {
       return Grab(Target::ROTATION, handle);
     }
   }
   return std::nullopt;
+}
+
+HandleLayout SelectTool::get_layout(
+    const ToolContext& context, const SelectionBox& box) const {
+  return get_handle_layout(context.get_document(), get_movable(context),
+    get_size(to_view(context.get_view(), box.get_corners())),
+    context.get_zoom());
 }
 
 std::optional<SelectTool::RadiusHandles> SelectTool::get_radius_handles(
@@ -1215,6 +1233,9 @@ void SelectTool::update_resize(
   if(is_responsive(document, m_nodes)) {
     is_proportional = (is_shift_held && is_corner(m_handle)) || is_locked;
   }
+  if(m_nodes.size() == 1 && is_point_text(document, m_nodes.front())) {
+    is_proportional = true;
+  }
   auto rule = ResizeRule::RESPONSIVE;
   if(is_shift_held && !std::all_of(m_nodes.begin(), m_nodes.end(),
       [&] (const auto& id) {
@@ -1395,8 +1416,9 @@ void SelectTool::draw_box(const ToolContext& context, const SelectionBox& box,
   if(!has_handles) {
     return;
   }
+  auto layout = get_layout(context, box);
   for(auto handle : HANDLES) {
-    if(!is_handle_shown(handle, corners)) {
+    if(!layout.is_resizer(handle)) {
       continue;
     }
     auto shape = OverlayShape();
@@ -1414,8 +1436,9 @@ void SelectTool::draw_locked(const ToolContext& context,
     const SelectionBox& box, CanvasOverlay& overlay) const {
   auto corners = to_view(context.get_view(), box.get_corners());
   add_outline(overlay, corners, LOCKED_COLOR);
+  auto layout = get_locked_handle_layout(get_size(corners));
   for(auto handle : HANDLES) {
-    if(!is_handle_shown(handle, corners)) {
+    if(!layout.is_resizer(handle)) {
       continue;
     }
     auto shape = OverlayShape();

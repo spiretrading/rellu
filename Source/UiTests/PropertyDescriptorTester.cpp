@@ -360,4 +360,36 @@ TEST_SUITE("PropertyDescriptor") {
     REQUIRE(!find_property(artboard, "layout.responsive.mode"));
     REQUIRE(to_text(Fill(GradientFill())) == "Gradient");
   }
+
+  TEST_CASE("stack_size") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto transaction = Transaction(document);
+    auto group = Group();
+    group.m_stack = Stack(Orientation::HORIZONTAL);
+    auto row = transaction.append(ids.m_artboard, make_header("Row"), group);
+    auto first =
+      transaction.append(row, make_header("First"), make_text(u"First"));
+    auto last =
+      transaction.append(row, make_header("Last"), make_text(u"Last"));
+    group.m_stack = Stack(Orientation::VERTICAL);
+    auto column =
+      transaction.append(ids.m_artboard, make_header("Column"), group);
+    transaction.append(column, make_header("Cell"), make_text(u"Cell"));
+    transaction.commit();
+    auto properties = extract_properties(document, row);
+    REQUIRE(is_read_only(properties, "transform.width"));
+    REQUIRE(!is_read_only(properties, "transform.height"));
+    properties = extract_common_properties(document, std::vector{column});
+    REQUIRE(!is_read_only(properties, "transform.width"));
+    REQUIRE(is_read_only(properties, "transform.height"));
+    properties = extract_properties(document, first);
+    REQUIRE(!is_read_only(properties, "transform.width"));
+    properties = extract_common_properties(document, std::vector{first, last});
+    REQUIRE(is_read_only(properties, "transform.width"));
+    REQUIRE(!is_read_only(properties, "transform.height"));
+    properties = extract_common_properties(document, std::vector{row, column});
+    REQUIRE(!is_read_only(properties, "transform.width"));
+    REQUIRE(!is_read_only(properties, "transform.height"));
+  }
 }

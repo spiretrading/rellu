@@ -744,7 +744,7 @@ TEST_SUITE("SelectTool") {
     require_sizes(overlay);
     tools.set_view(make_scale(0.1, 0.1), 1, Size(100, 80));
     overlay = tools.draw();
-    REQUIRE(get_handle_centers(overlay).size() == 4);
+    REQUIRE(get_handle_centers(overlay).size() == 3);
     tools.set_view(Matrix(), 1, Size(1000, 800));
     hover(tools, Point(160, 160));
     overlay = tools.draw();
@@ -873,5 +873,109 @@ TEST_SUITE("SelectTool") {
     require_near(
       get_bounds(document, board.m_second), Rect(260, 150, 40, 40));
     REQUIRE(history.get_undo_count() == 1);
+  }
+
+  TEST_CASE("stack_handles") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto group = Group();
+    group.m_stack = Stack(Orientation::HORIZONTAL);
+    auto row = transaction.append(
+      NodeId(), make_header("Row", make_translation(100, 100)), group);
+    auto last = add_rectangle(transaction, row, Rect(40, 0, 50, 60));
+    auto first = add_rectangle(transaction, row, Rect(0, 0, 40, 60));
+    group.m_stack = Stack(Orientation::VERTICAL);
+    auto column = transaction.append(
+      NodeId(), make_header("Column", make_translation(300, 100)), group);
+    add_rectangle(transaction, column, Rect(0, 50, 60, 40));
+    add_rectangle(transaction, column, Rect(0, 0, 60, 40));
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto& history = editor.get_history();
+    editor.get_selection().select(row);
+    auto centers = get_handle_centers(tools.draw());
+    REQUIRE(centers.size() == 2);
+    require_near(centers[0], Point(145, 100));
+    require_near(centers[1], Point(145, 160));
+    hover(tools, Point(145, 161));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
+    for(auto point : {Point(190, 130), Point(100, 130), Point(101, 101),
+        Point(189, 159)}) {
+      hover(tools, point);
+      REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
+    }
+    drag(tools, Point(190, 130), Point(145, 200));
+    REQUIRE(history.get_undo_label() == "Rotate");
+    require_near(*get_local_bounds(document, row), Rect(0, 0, 90, 60));
+    REQUIRE(editor.undo());
+    drag(tools, Point(145, 160), Point(145, 180));
+    REQUIRE(history.get_undo_label() == "Resize");
+    REQUIRE(get_bounds(document, row).m_width == doctest::Approx(90));
+    REQUIRE(editor.undo());
+    editor.get_selection().select(column);
+    centers = get_handle_centers(tools.draw());
+    REQUIRE(centers.size() == 2);
+    require_near(centers[0], Point(360, 145));
+    require_near(centers[1], Point(300, 145));
+    hover(tools, Point(330, 100));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
+    editor.get_selection().select(std::vector{first, last});
+    centers = get_handle_centers(tools.draw());
+    REQUIRE(centers.size() == 2);
+    require_near(centers[0], Point(145, 100));
+    require_near(centers[1], Point(145, 160));
+    for(auto point : {Point(190, 130), Point(101, 101), Point(95, 95)}) {
+      hover(tools, point);
+      REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
+    }
+    drag(tools, Point(95, 95), Point(80, 80));
+    REQUIRE(get_bounds(document, row) == Rect(100, 100, 90, 60));
+    REQUIRE(history.get_undo_count() == 0);
+  }
+
+  TEST_CASE("text_handles") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto payload = make_text(u"Label");
+    payload.m_frame = PositionedFrame();
+    auto point = transaction.append(
+      NodeId(), make_header("Point", make_translation(100, 100)), payload);
+    payload.m_frame = AutoHeightFrame(100);
+    auto automatic = transaction.append(
+      NodeId(), make_header("Auto", make_translation(300, 100)), payload);
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    editor.get_selection().select(point);
+    auto bounds = get_bounds(document, point);
+    auto bottom = Point(bounds.get_center().m_x, bounds.get_bottom());
+    auto centers = get_handle_centers(tools.draw());
+    REQUIRE(centers.size() == 1);
+    require_near(centers[0], bottom);
+    hover(tools, bounds.get_bottom_right());
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
+    hover(tools, bottom + Point(0, 10));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
+    hover(tools, bounds.get_top_left() - Point(5, 5));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
+    drag(tools, bottom, bottom + Point(0, bounds.m_height));
+    auto resized = get_bounds(document, point);
+    REQUIRE(resized.m_width > 1.5 * bounds.m_width);
+    REQUIRE(resized.m_height > 1.5 * bounds.m_height);
+    REQUIRE(document.get(point).get_text()->m_base_style.m_font.m_size >
+      payload.m_base_style.m_font.m_size);
+    editor.get_selection().select(automatic);
+    bounds = get_bounds(document, automatic);
+    centers = get_handle_centers(tools.draw());
+    REQUIRE(centers.size() == 4);
+    hover(tools, bounds.get_top_left());
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
+    hover(tools, Point(bounds.get_right(), bounds.get_center().m_y));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
   }
 }

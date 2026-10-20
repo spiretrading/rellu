@@ -7,6 +7,7 @@
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
+#include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/NodeId.hpp"
 
@@ -73,6 +74,33 @@ namespace Rellu {
     bool operator ==(const SelectionBox&) const = default;
   };
 
+  /** The handles Adobe XD shows on a selection box. */
+  struct HandleLayout {
+
+    /** Whether each handle, in the order of HANDLES, is shown to resize. */
+    std::array<bool, 8> m_resizers = {};
+
+    /**
+     * Whether dragging from each handle, in the order of HANDLES, rotates
+     * where no resize handle is shown there, and from just outside it.
+     */
+    std::array<bool, 8> m_rotators = {};
+
+    /**
+     * Returns <code>true</code> iff a handle is shown to resize.
+     * @param handle The handle.
+     */
+    bool is_resizer(Handle handle) const;
+
+    /**
+     * Returns <code>true</code> iff dragging from a handle rotates.
+     * @param handle The handle.
+     */
+    bool is_rotator(Handle handle) const;
+
+    bool operator ==(const HandleLayout&) const = default;
+  };
+
   /** Returns <code>true</code> iff a handle lies at a corner. */
   bool is_corner(Handle handle);
 
@@ -93,6 +121,23 @@ namespace Rellu {
   std::optional<SelectionBox> get_selection_box(const Document& document,
     const std::vector<NodeId>& nodes,
     const TextMeasurer& measurer = estimate_text_bounds);
+
+  /**
+   * Returns the handles Adobe XD shows on the box of a selection.
+   * @param document The document holding the nodes.
+   * @param nodes The nodes selected that are not locked, in the order
+   *        selected.
+   * @param size The width and height of the box in logical units.
+   * @param zoom The number of logical units per document unit.
+   */
+  HandleLayout get_handle_layout(const Document& document,
+    const std::vector<NodeId>& nodes, Size size, double zoom);
+
+  /**
+   * Returns the handles Adobe XD shows on the box of a locked selection.
+   * @param size The width and height of the box in logical units.
+   */
+  HandleLayout get_locked_handle_layout(Size size);
 
   /**
    * Computes the rect a box's rect is resized to by dragging a handle.

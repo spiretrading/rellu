@@ -587,6 +587,12 @@ namespace {
       manifest.set("uxdesign#version", "2.33");
       manifest.set("children", XdValue::make_array());
     }
+    if(!m_options->m_id.empty()) {
+      manifest.set("uxdesign#id", m_options->m_id);
+    }
+    if(!m_options->m_parent.empty()) {
+      manifest.set("uxdesign#parentDocId", m_options->m_parent);
+    }
     auto& components = manifest.find("components") ?
       *manifest.find("components") :
       manifest.set("components", XdValue::make_array());

@@ -49,7 +49,9 @@ namespace Rellu {
       /**
        * Saves the document as an Adobe XD file, leaving any existing file
        * untouched unless the save completes, and on success makes the path
-       * the one saved to and the document clean. Throws XdError on failure.
+       * the one saved to and the document clean. Unless the file saved to is
+       * the existing one at the document's path, the document is given a new
+       * id, as Adobe XD gives a copy. Throws XdError on failure.
        * @param path The path of the .xd file.
        */
       void save(const QString& path);
@@ -58,6 +60,7 @@ namespace Rellu {
       Document* m_document;
       QString m_path;
       std::string m_id;
+      std::string m_parent;
       XdTextLayout m_layout;
       Editor m_editor;
 

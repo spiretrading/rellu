@@ -1159,6 +1159,17 @@ void MainWindow::store_text_properties() {
     m_session->get_id(), properties, QDateTime::currentDateTimeUtc()));
 }
 
+void MainWindow::change_text_properties_id() {
+  auto& selection = m_session->get_editor().get_text_selection();
+  auto properties = LastTextProperties(
+    selection.get_last_style(), selection.get_last_paragraph_style());
+  auto settings = QSettings();
+  settings.setValue(LAST_TEXT_PROPERTIES_KEY, change_last_text_properties_id(
+    settings.value(LAST_TEXT_PROPERTIES_KEY).toByteArray(),
+    m_session->get_id(), properties, QDateTime::currentDateTimeUtc()));
+  selection.set_last_style(properties.m_style, properties.m_paragraph);
+}
+
 void MainWindow::save_settings() const {
   auto settings = QSettings();
   settings.setValue("recent_files", m_recent_files.get_paths());
@@ -1207,6 +1218,7 @@ void MainWindow::prompt_open() {
 
 bool MainWindow::save_to(const QString& path) {
   QApplication::setOverrideCursor(Qt::WaitCursor);
+  auto id = m_session->get_id();
   try {
     m_session->save(path);
   } catch(const std::exception& error) {
@@ -1220,7 +1232,11 @@ bool MainWindow::save_to(const QString& path) {
   update_recent_files();
   save_settings();
   update_title();
-  store_text_properties();
+  if(m_session->get_id() == id) {
+    store_text_properties();
+  } else {
+    change_text_properties_id();
+  }
   return true;
 }
 

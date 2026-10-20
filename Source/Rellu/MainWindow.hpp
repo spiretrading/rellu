@@ -165,6 +165,7 @@ namespace Rellu {
       void show_message(const QString& message);
       void restore_text_properties();
       void store_text_properties();
+      void change_text_properties_id();
       void save_settings() const;
       void update_recent_files();
       void prompt_open();

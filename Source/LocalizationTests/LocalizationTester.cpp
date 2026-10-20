@@ -37,6 +37,17 @@ TEST_SUITE("Localization") {
     REQUIRE(localize("name", "Rectangle", Language::FRENCH) == "Rectangle");
     REQUIRE(localize("name", "Rectangle", Language::ITALIAN) == "Rettangolo");
     REQUIRE(localize("menu", "Undo %1", Language::SPANISH) == "Deshacer %1");
+    REQUIRE(localize("history", "Outline Stroke", Language::GERMAN) ==
+      "Konturlinie");
+    REQUIRE(localize("history", "Draw Rectangle", Language::GERMAN) ==
+      "Rechteck zeichnen");
+    REQUIRE(localize("history", "Move Guide", Language::GERMAN) ==
+      "Hilfslinie verschieben");
+    REQUIRE(localize("menu", "Show All Guides", Language::GERMAN) ==
+      "Alle Hilfslinien einblenden");
+    REQUIRE(localize("name", "Outline", Language::FRENCH) == "Contour");
+    REQUIRE(localize("assets", "Move to", Language::GERMAN) ==
+      "Verschieben in");
     REQUIRE(localize("message",
       "You must restart Rellu to apply the language change.",
       Language::SPANISH) ==

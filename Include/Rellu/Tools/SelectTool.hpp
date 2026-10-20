@@ -31,8 +31,9 @@ namespace Rellu {
    * copy of the selection, and a drag over empty canvas
    * draws a marquee. The pointer hovering an unlocked node outlines it, a
    * shape by its own outline and anything else by its box. The selection's
-   * box resizes by its handles, flipping what it holds when dragged past
-   * the opposite side, and rotates from just outside its corners. Arrow
+   * box resizes by the handles get_handle_layout shows, flipping what it
+   * holds when dragged past the opposite side, and rotates from just
+   * outside those it lets rotate. Arrow
    * keys nudge the selection, except stack items along their stack's
    * direction. Locked nodes are selected by a click or a marquee but not
    * moved: their box is grey, with small grey handles that do nothing and a
@@ -198,6 +199,8 @@ namespace Rellu {
       bool is_rotatable(const ToolContext& context) const;
       std::optional<Grab> find_grab(
         const ToolContext& context, Point position) const;
+      HandleLayout get_layout(
+        const ToolContext& context, const SelectionBox& box) const;
       std::optional<RadiusHandles> get_radius_handles(
         const ToolContext& context) const;
       std::optional<std::size_t> find_radius_handle(

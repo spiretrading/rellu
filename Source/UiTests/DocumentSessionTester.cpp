@@ -13,8 +13,10 @@
 #include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Io/XdOpaque.hpp"
+#include "Rellu/Io/XdPackage.hpp"
 #include "Rellu/Io/XdWriter.hpp"
 #include "Rellu/Model/DocumentComparison.hpp"
+#include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/TextMeasurement.hpp"
@@ -58,6 +60,18 @@ namespace {
   void make_dirty(DocumentSession& session, const NodeId& id) {
     session.get_editor().execute(std::make_unique<SetOpacityCommand>(
       std::vector<NodeId>({id}), 0.5));
+  }
+
+  std::string read_manifest(const QString& path, const QString& key) {
+    return XdPackage(to_path(path)).get_manifest().value(key).toString().
+      toStdString();
+  }
+
+  void require_new_id(const std::string& id) {
+    auto parsed = parse_node_id(id);
+    REQUIRE(parsed);
+    REQUIRE(to_string(*parsed) == id);
+    REQUIRE(id[14] == '4');
   }
 
   void require_round_trip(const Document& document, const QString& path) {
@@ -148,13 +162,51 @@ TEST_SUITE("DocumentSession") {
     auto path = directory.filePath("Design.xd");
     session.save(path);
     auto id = session.get_id();
-    REQUIRE(!id.empty());
-    auto reopened = Document();
-    import_xd(to_path(path), reopened);
-    auto opened = DocumentSession(reopened, path, XdTextLayout());
-    REQUIRE(opened.get_id() == id);
-    opened.save(directory.filePath("Copy.xd"));
-    REQUIRE(opened.get_id() == id);
+    require_new_id(id);
+    REQUIRE(read_manifest(path, "uxdesign#id") == id);
+    REQUIRE(read_manifest(path, "uxdesign#parentDocId") == id);
+    session.save(path);
+    REQUIRE(session.get_id() == id);
+    REQUIRE(read_manifest(path, "uxdesign#id") == id);
+    REQUIRE(read_manifest(path, "uxdesign#parentDocId") == id);
+  }
+
+  TEST_CASE("save_as_id") {
+    auto directory = QTemporaryDir();
+    REQUIRE(directory.isValid());
+    auto path = directory.filePath("Design.xd");
+    {
+      auto built = Document();
+      build_test_document(built);
+      write_xd(built, to_path(path));
+    }
+    auto manifest = XdPackage(to_path(path)).get_manifest();
+    auto original = read_manifest(path, "uxdesign#id");
+    REQUIRE(read_manifest(path, "uxdesign#parentDocId").empty());
+    auto document = Document();
+    import_xd(to_path(path), document);
+    auto session = DocumentSession(document, path,
+      make_xd_text_layout(get_default_font_library()));
+    REQUIRE(session.get_id() == original);
+    session.save(path);
+    REQUIRE(session.get_id() == original);
+    REQUIRE(XdPackage(to_path(path)).get_manifest() == manifest);
+    auto copy = directory.filePath("Copy.xd");
+    session.save(copy);
+    auto id = session.get_id();
+    require_new_id(id);
+    REQUIRE(id != original);
+    REQUIRE(read_manifest(copy, "uxdesign#id") == id);
+    REQUIRE(read_manifest(copy, "uxdesign#parentDocId") == id);
+    REQUIRE(XdPackage(to_path(path)).get_manifest() == manifest);
+    session.save(copy);
+    REQUIRE(session.get_id() == id);
+    auto other = directory.filePath("Other.xd");
+    session.save(other);
+    require_new_id(session.get_id());
+    REQUIRE(session.get_id() != id);
+    REQUIRE(read_manifest(other, "uxdesign#id") == session.get_id());
+    REQUIRE(read_manifest(other, "uxdesign#parentDocId") == id);
   }
 
   TEST_CASE("failed_save") {

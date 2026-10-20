@@ -42,6 +42,25 @@ TEST_SUITE("LastTextProperties") {
     REQUIRE(find_last_text_properties(store, "document") == automatic);
   }
 
+  TEST_CASE("id_change") {
+    auto properties = make_properties();
+    auto store = record_last_text_properties(
+      QByteArray(), "original", properties, make_time(0));
+    auto current = properties;
+    current.m_style.m_font.m_size = 36;
+    store = change_last_text_properties_id(
+      store, "copy", current, make_time(1));
+    REQUIRE(current.m_style.m_font.m_size == 36);
+    REQUIRE(find_last_text_properties(store, "copy") == current);
+    REQUIRE(find_last_text_properties(store, "original") == properties);
+    auto other = properties;
+    other.m_paragraph.m_alignment = TextAlignment::RIGHT;
+    auto changed = change_last_text_properties_id(
+      store, "original", other, make_time(2));
+    REQUIRE(changed == store);
+    REQUIRE(other == properties);
+  }
+
   TEST_CASE("pruning") {
     auto properties = make_properties();
     auto store = QByteArray();

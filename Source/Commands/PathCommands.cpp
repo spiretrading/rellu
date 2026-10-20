@@ -18,7 +18,6 @@ using namespace Rellu;
 namespace {
   constexpr auto TOLERANCE = 0.01;
   constexpr auto OUTLINE_TOLERANCE = 0.01;
-  const auto OUTLINE_SUFFIX = std::string(" - Outline");
 
   bool is_tree_root(const Document& document, const NodeId& id) {
     return document.get(id).m_parent.is_nil() && !document.is_on_canvas(id);
@@ -116,15 +115,15 @@ namespace {
     }
     auto& geometry = node.get_shape()->m_geometry;
     if(std::holds_alternative<RectangleShape>(geometry)) {
-      return "Rectangle";
+      return std::string(localize("name", "Rectangle"));
     } else if(std::holds_alternative<EllipseShape>(geometry)) {
-      return "Ellipse";
+      return std::string(localize("name", "Ellipse"));
     } else if(std::holds_alternative<PolygonShape>(geometry)) {
-      return "Polygon";
+      return std::string(localize("name", "Polygon"));
     } else if(std::holds_alternative<LineShape>(geometry)) {
-      return "Line";
+      return std::string(localize("name", "Line"));
     }
-    return "Path";
+    return std::string(localize("name", "Path"));
   }
 
   Shape make_outline(const Shape& shape) {
@@ -430,7 +429,8 @@ void OutlineStrokeCommand::outline(const Document& document,
     header.m_blend_mode != BlendMode::NORMAL ||
     (container && container->get_group() && container->get_group()->m_stack);
   auto path = NodeHeader();
-  path.m_name = get_outline_name(node) + OUTLINE_SUFFIX;
+  path.m_name =
+    get_outline_name(node) + " - " + std::string(localize("name", "Outline"));
   path.m_is_visible = header.m_is_visible;
   path.m_transform = header.m_transform;
   path.m_transform_3d = header.m_transform_3d;

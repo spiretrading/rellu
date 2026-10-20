@@ -1,43 +1,29 @@
-#include <exception>
 #include <filesystem>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <QFileInfo>
 #include "Rellu/Io/XdOpaque.hpp"
-#include "Rellu/Io/XdPackage.hpp"
 #include "Rellu/Io/XdPatch.hpp"
 #include "Rellu/Io/XdWriter.hpp"
+#include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/Translation.hpp"
 
 using namespace Rellu;
 
 namespace {
-  const auto ID_KEY = std::string_view("uxdesign#id");
-
-  std::string read_id(const Document& document) {
+  std::string read_manifest(const Document& document, std::string_view key) {
     auto data = decode_package_data(document.get_opaque().get_bytes());
     auto encoding = std::string_view(data.m_manifest);
     if(encoding.empty()) {
       return std::string();
     }
     auto manifest = decode_value(encoding);
-    if(auto id = manifest.find(ID_KEY)) {
-      return std::string(id->to_string());
+    if(auto value = manifest.find(key)) {
+      return std::string(value->to_string());
     }
     return std::string();
-  }
-
-  std::string read_id(const QString& path) {
-    try {
-      auto package = XdPackage(std::filesystem::path(path.toStdU16String()));
-      return package.get_manifest().value(QString::fromUtf8(
-        ID_KEY.data(), static_cast<qsizetype>(ID_KEY.size()))).toString().
-          toStdString();
-    } catch(const std::exception&) {
-      return std::string();
-    }
   }
 }
 
@@ -45,7 +31,8 @@ DocumentSession::DocumentSession(
   Document& document, QString path, XdTextLayout layout)
   : m_document(&document),
     m_path(std::move(path)),
-    m_id(read_id(document)),
+    m_id(read_manifest(document, "uxdesign#id")),
+    m_parent(read_manifest(document, "uxdesign#parentDocId")),
     m_layout(std::move(layout)),
     m_editor(document) {
   m_editor.get_history().set_compound_filter([] (const Node& compound) {
@@ -85,9 +72,20 @@ void DocumentSession::save(const QString& path) {
   auto options = XdWriteOptions();
   options.m_layout = m_layout;
   options.m_name = QFileInfo(path).completeBaseName().toStdString();
+  options.m_id = m_id;
+  options.m_parent = m_parent;
+  if(m_path.isEmpty() || path != m_path || !QFileInfo::exists(path)) {
+    options.m_id = to_string(generate_node_id());
+    if(options.m_parent.empty()) {
+      options.m_parent = options.m_id;
+    }
+  } else if(options.m_id.empty()) {
+    options.m_id = to_string(generate_node_id());
+  }
   write_xd(*m_document, std::filesystem::path(path.toStdU16String()), options);
   m_path = path;
-  m_id = read_id(path);
+  m_id = std::move(options.m_id);
+  m_parent = std::move(options.m_parent);
   m_editor.get_history().mark_clean();
 }
 

@@ -23,6 +23,29 @@ namespace Rellu {
     std::vector<NodeId> m_floating;
   };
 
+  /** The ways stacks keep Adobe XD from transforming a selection. */
+  struct StackLimits {
+
+    /** Whether the width is kept. */
+    bool m_is_width_fixed = false;
+
+    /** Whether the height is kept. */
+    bool m_is_height_fixed = false;
+
+    /** Whether rotating on the canvas is disabled. */
+    bool m_is_rotation_fixed = false;
+
+    bool operator ==(const StackLimits&) const = default;
+  };
+
+  /**
+   * Returns how stacks limit transforming a selection as Adobe XD does.
+   * @param document The document holding the nodes.
+   * @param nodes The nodes selected, in the order selected.
+   */
+  StackLimits get_stack_limits(
+    const Document& document, const std::vector<NodeId>& nodes);
+
   /**
    * Returns the number of cells of a repeat grid along an axis: those
    * starting within the grid's size, and at least one.

@@ -19,6 +19,18 @@ namespace Rellu {
 
     /** The document name recorded in a document without a manifest. */
     std::string m_name = "Untitled";
+
+    /**
+     * The id Adobe XD gives the document, or empty to keep the recorded
+     * one.
+     */
+    std::string m_id;
+
+    /**
+     * The id of the document the document derives from, or empty to keep
+     * the recorded one.
+     */
+    std::string m_parent;
   };
 
   /**
