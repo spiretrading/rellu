@@ -255,6 +255,22 @@ TEST_SUITE("HitTester") {
     REQUIRE(tester.query(NodeId(), Rect(-10, -10, 20, 20), true).empty());
   }
 
+  TEST_CASE("query_groups") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = add_artboard(transaction, Rect(0, 0, 500, 500));
+    auto group = transaction.append(artboard, make_header("Group"), Group());
+    add_rectangle(transaction, group, Rect(10, 10, 20, 20));
+    add_rectangle(transaction, group, Rect(10, 50, 20, 20));
+    transaction.commit();
+    auto tester = HitTester(document);
+    REQUIRE(tester.query(artboard, Rect(15, 35, 10, 10)).empty());
+    REQUIRE(tester.query(artboard, Rect(15, 25, 10, 10)) ==
+      std::vector{group});
+    REQUIRE(tester.query(artboard, Rect(0, 0, 100, 100), true) ==
+      std::vector{group});
+  }
+
   TEST_CASE("changes") {
     auto document = Document();
     auto transaction = Transaction(document);

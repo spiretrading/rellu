@@ -25,6 +25,10 @@ namespace Rellu {
    * An operation that fails validation throws std::invalid_argument and
    * leaves the document unchanged; an operation on a transaction that is no
    * longer open throws std::logic_error.
+   *
+   * A header inserted or replaced without a 3D transform has its rotation
+   * fit to its transform with fit_rotation, as Adobe XD keeps a node's
+   * rotation when its transform is set.
    */
   class Transaction {
     public:
@@ -232,6 +236,13 @@ namespace Rellu {
        * @return <code>true</code> iff a revision holding the changes remains.
        */
       bool amend();
+
+      /**
+       * Commits the changes without recording them for undo, publishing
+       * them to the document's observers if there are any.
+       * @return <code>true</code> iff there were changes to publish.
+       */
+      bool commit_unrecorded();
 
     private:
       Document* m_document;

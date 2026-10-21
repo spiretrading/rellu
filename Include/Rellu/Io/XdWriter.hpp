@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <QByteArray>
+#include <QDateTime>
 #include "Rellu/Io/XdGenerator.hpp"
 #include "Rellu/Model/Document.hpp"
 
@@ -45,6 +46,22 @@ namespace Rellu {
      * the recorded one.
      */
     std::string m_parent;
+
+    /**
+     * The time of the save, in the time zone it is recorded in, or null for
+     * a write that is not a save, which records no save in the XMP metadata
+     * and keeps the recorded versions.
+     */
+    QDateTime m_time;
+
+    /** The id of the instance a save makes. */
+    std::string m_instance;
+
+    /**
+     * The XMP metadata of the file a save replaces, or empty for a save to a
+     * new file.
+     */
+    std::string m_metadata;
   };
 
   /**

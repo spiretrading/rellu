@@ -1,9 +1,9 @@
 #include <cmath>
-#include <numbers>
 #include <string>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
 #include "Rellu/Localization/Localization.hpp"
+#include "Rellu/Tools/SelectionBox.hpp"
 #include "Rellu/Tools/ShapeTool.hpp"
 
 using namespace Rellu;
@@ -32,37 +32,46 @@ namespace {
     return "Draw Line";
   }
 
-  double get_sign(double value) {
-    if(value < 0) {
-      return -1;
+  CursorKind get_crosshair(ShapeKind kind) {
+    if(kind == ShapeKind::RECTANGLE) {
+      return CursorKind::RECTANGLE;
+    } else if(kind == ShapeKind::ELLIPSE) {
+      return CursorKind::ELLIPSE;
+    } else if(kind == ShapeKind::POLYGON) {
+      return CursorKind::POLYGON;
     }
-    return 1;
+    return CursorKind::LINE;
   }
 
-  Point round_point(Point point) {
+  bool is_half_pixel_aligned(const Style& style) {
+    auto& stroke = style.m_stroke;
+    return stroke && stroke->m_is_enabled &&
+      stroke->m_alignment == StrokeAlignment::CENTER &&
+      !(stroke->m_color == Color(0, 0, 0, 0));
+  }
+
+  Point snap_to_pixels(Point point, bool is_half_pixel) {
+    if(is_half_pixel) {
+      return Point(std::floor(point.m_x) + 0.5, std::floor(point.m_y) + 0.5);
+    }
     return Point(std::round(point.m_x), std::round(point.m_y));
-  }
-
-  Point constrain_angle(Point delta) {
-    auto step = std::numbers::pi / 4;
-    auto index = std::round(std::atan2(delta.m_y, delta.m_x) / step);
-    auto direction = Point(std::cos(index * step), std::sin(index * step));
-    auto projection = dot(delta, direction);
-    if(static_cast<long long>(std::abs(index)) % 2 == 0) {
-      return round_point(direction * projection);
-    }
-    auto side = std::round(projection / std::numbers::sqrt2);
-    return Point(get_sign(direction.m_x) * side,
-      get_sign(direction.m_y) * side);
   }
 }
 
 ShapeTool::ShapeTool(ShapeKind kind)
-  : DrawTool(get_prefix(kind)),
+  : DrawTool(get_prefix(kind), get_crosshair(kind)),
     m_kind(kind) {}
 
 ShapeKind ShapeTool::get_kind() const {
   return m_kind;
+}
+
+Point ShapeTool::snap_end(
+    ToolContext& context, Point end, Qt::KeyboardModifiers modifiers) {
+  if(m_kind == ShapeKind::LINE) {
+    return end;
+  }
+  return DrawTool::snap_end(context, end, modifiers);
 }
 
 std::unique_ptr<Command> ShapeTool::make_command(ToolContext& context,
@@ -77,23 +86,33 @@ std::unique_ptr<Command> ShapeTool::make_command(ToolContext& context,
   auto shape = Shape();
   auto origin = Point(0, 0);
   if(m_kind == ShapeKind::LINE) {
-    auto center = round_point(start);
-    auto delta = round_point(end) - center;
-    if(modifiers.testFlag(Qt::ShiftModifier)) {
-      delta = constrain_angle(delta);
-    }
-    if(delta == Point(0, 0)) {
-      return nullptr;
+    auto is_constrained = modifiers.testFlag(Qt::ShiftModifier);
+    auto is_mirrored = modifiers.testFlag(Qt::AltModifier);
+    shape.m_style = make_default_line_style();
+    auto is_half_pixel = !context.get_snap_service().is_grid_snapped() &&
+      is_half_pixel_aligned(shape.m_style);
+    auto center = snap_to_pixels(start, is_half_pixel);
+    auto delta = end - center;
+    if(is_constrained) {
+      delta = constrain_drag(delta);
     }
     auto first = center;
-    if(modifiers.testFlag(Qt::AltModifier)) {
+    if(is_mirrored) {
       first = center - delta;
     }
-    auto last = center + delta;
+    auto ends = context.get_snap_service().snap_line(
+      first, center + delta, is_constrained, is_mirrored, modifiers);
+    first = ends.m_start;
+    if(is_mirrored) {
+      first = snap_to_pixels(first, is_half_pixel);
+    }
+    auto last = snap_to_pixels(ends.m_end, is_half_pixel);
+    if(first == last) {
+      return nullptr;
+    }
     origin = Point(std::min(first.m_x, last.m_x),
       std::min(first.m_y, last.m_y));
     shape.m_geometry = LineShape(first - origin, last - origin);
-    shape.m_style = make_default_line_style();
   } else {
     auto box = make_drawn_box(start, end, modifiers);
     if(!(box.m_width > 0) || !(box.m_height > 0)) {

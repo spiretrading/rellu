@@ -6,6 +6,7 @@
 #include <variant>
 #include <vector>
 #include "Rellu/Commands/CompositeCommand.hpp"
+#include "Rellu/Commands/Layouts.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Commands/StackCommands.hpp"
 #include "Rellu/Ui/LayoutProperties.hpp"
@@ -14,6 +15,7 @@ using namespace Rellu;
 
 namespace {
   const auto ORIENTATIONS = QStringList({"Horizontal", "Vertical"});
+  constexpr auto MAXIMUM_SPACING = 10000.0;
 
   PropertyDescriptor& add(PropertyDescriptor& parent, const std::string& name,
       QString label, PropertyValue value = PropertyValue()) {
@@ -30,6 +32,71 @@ namespace {
       return static_cast<double>(*integer);
     }
     return std::nullopt;
+  }
+
+  struct ItemSpacing {
+    NodeId m_stack;
+    std::vector<NodeId> m_before;
+    std::vector<NodeId> m_after;
+  };
+
+  std::optional<ItemSpacing> get_item_spacing(const Document& document,
+      const std::vector<NodeId>& nodes, const TextMeasurer& measurer) {
+    if(nodes.empty()) {
+      return std::nullopt;
+    }
+    auto node = document.find(nodes.front());
+    auto parent = node && !node->m_parent.is_nil() ?
+      document.find(node->m_parent) : nullptr;
+    auto group = parent ? parent->get_group() : nullptr;
+    if(!group || !group->m_stack) {
+      return std::nullopt;
+    }
+    auto items = get_stack_items(document, parent->get_id());
+    std::erase_if(items, [&] (const auto& item) {
+      return !document.get(item).m_header.m_is_visible ||
+        !get_local_bounds(document, item, BoundsType::GEOMETRY, measurer);
+    });
+    auto is_selected = [&] (const NodeId& id) {
+      return std::find(nodes.begin(), nodes.end(), id) != nodes.end();
+    };
+    if(items.size() < 2 ||
+        std::none_of(items.begin(), items.end(), is_selected)) {
+      return std::nullopt;
+    }
+    auto spacing = ItemSpacing(parent->get_id(), {}, {});
+    for(auto i = std::size_t(1); i < items.size(); ++i) {
+      if(is_selected(items[i])) {
+        spacing.m_before.push_back(items[i - 1]);
+      }
+      if(is_selected(items[i - 1])) {
+        spacing.m_after.push_back(items[i - 1]);
+      }
+    }
+    return spacing;
+  }
+
+  PropertySetter make_item_spacing_setter(
+      bool is_before, TextMeasurer measurer) {
+    return [=] (const Document& document, const std::vector<NodeId>& nodes,
+        const PropertyValue& value) -> std::unique_ptr<Command> {
+      auto number = get_number(value);
+      auto spacing = get_item_spacing(document, nodes, measurer);
+      if(!number || !spacing) {
+        return nullptr;
+      }
+      auto& items = is_before ? spacing->m_before : spacing->m_after;
+      if(items.empty()) {
+        return nullptr;
+      }
+      auto commands = std::vector<std::unique_ptr<Command>>();
+      for(auto& item : items) {
+        commands.push_back(std::make_unique<SetStackSpacingCommand>(
+          spacing->m_stack, item, *number, measurer));
+      }
+      return std::make_unique<CompositeCommand>(is_before ?
+        "Spacing Before Value" : "Spacing After Value", std::move(commands));
+    };
   }
 
   void add_padding(PropertyDescriptor& section, const Margins* padding) {
@@ -179,8 +246,38 @@ void Rellu::add_layout_properties(
   add_stack(section, group->m_stack ? &*group->m_stack : nullptr);
 }
 
+void Rellu::add_item_spacing_properties(const Document& document,
+    const std::vector<NodeId>& nodes, const TextMeasurer& measurer,
+    PropertyDescriptor& section) {
+  auto spacing = get_item_spacing(document, nodes, measurer);
+  if(!spacing) {
+    return;
+  }
+  auto& stack = document.get(spacing->m_stack);
+  auto& layout = *stack.get_group()->m_stack;
+  auto add_spacing = [&] (const char* name, const char* label,
+      const std::vector<NodeId>& items) {
+    if(items.empty()) {
+      return;
+    }
+    auto value = get_stack_margin(document, layout, items.front());
+    auto& property = add(section, name, label, value);
+    property.m_is_mixed = std::any_of(items.begin(), items.end(),
+      [&] (const auto& item) {
+        return get_stack_margin(document, layout, item) != value;
+      });
+    property.m_is_read_only = stack.m_header.m_is_locked;
+  };
+  add_spacing("spacing_before", "Spacing Before Value", spacing->m_before);
+  add_spacing("spacing_after", "Spacing After Value", spacing->m_after);
+}
+
 void Rellu::add_layout_property_editors(
     PropertyEditors& editors, TextMeasurer measurer) {
+  editors.add("layout.spacing_before", PropertyEditor(
+    make_item_spacing_setter(true, measurer), 0.0, MAXIMUM_SPACING));
+  editors.add("layout.spacing_after", PropertyEditor(
+    make_item_spacing_setter(false, measurer), 0.0, MAXIMUM_SPACING));
   editors.add("layout.padding", PropertyEditor([=] (const Document& document,
       const std::vector<NodeId>& nodes, const PropertyValue& value) ->
       std::unique_ptr<Command> {
@@ -230,8 +327,11 @@ void Rellu::add_layout_property_editors(
       if(!number) {
         return nullptr;
       }
-      return std::make_unique<SetStackSpacingCommand>(
-        nodes, *number, measurer);
+      auto commands = std::vector<std::unique_ptr<Command>>();
+      commands.push_back(
+        std::make_unique<SetStackSpacingCommand>(nodes, *number, measurer));
+      return std::make_unique<CompositeCommand>(
+        "All Spacings Value", std::move(commands));
     }));
   editors.add("layout.repeat_grid.column_spacing", PropertyEditor(
     make_grid_spacing_setter(Orientation::HORIZONTAL)));

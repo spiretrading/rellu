@@ -8,6 +8,7 @@
 #include <QFont>
 #include <QPersistentModelIndex>
 #include <QTreeView>
+#include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Ui/LayersModel.hpp"
 #include "TestDocument.hpp"
 
@@ -19,10 +20,9 @@ namespace {
     return model.data(index, Qt::DisplayRole).toString();
   }
 
-  void require_matches(LayersModel& model, const Document& document,
+  void require_rows(LayersModel& model, const Document& document,
       const QModelIndex& parent, std::vector<NodeId> children) {
     std::reverse(children.begin(), children.end());
-    REQUIRE(model.rowCount(parent) == static_cast<int>(children.size()));
     for(auto row = 0; row != static_cast<int>(children.size()); ++row) {
       auto index = model.index(row, LayersModel::NAME, parent);
       REQUIRE(index.isValid());
@@ -33,12 +33,38 @@ namespace {
         index.internalPointer());
       auto& node = document.get(children[row]);
       REQUIRE(model.hasChildren(index) == !node.m_children.empty());
-      require_matches(model, document, index, node.m_children);
+      REQUIRE(model.rowCount(index) ==
+        static_cast<int>(node.m_children.size()));
+      require_rows(model, document, index, node.m_children);
     }
   }
 
   void require_matches(LayersModel& model, const Document& document) {
-    require_matches(model, document, QModelIndex(), document.get_canvas());
+    auto artboards = std::vector<NodeId>();
+    auto others = std::vector<NodeId>();
+    for(auto& id : document.get_canvas()) {
+      if(document.get(id).get_artboard()) {
+        artboards.push_back(id);
+      } else {
+        others.push_back(id);
+      }
+    }
+    if(artboards.empty() || others.empty()) {
+      REQUIRE(model.rowCount() ==
+        static_cast<int>(document.get_canvas().size()));
+      require_rows(model, document, QModelIndex(), document.get_canvas());
+      return;
+    }
+    auto row = static_cast<int>(artboards.size());
+    REQUIRE(model.rowCount() == row + 1);
+    auto pasteboard = model.index(row, LayersModel::NAME);
+    REQUIRE(model.get_id(pasteboard) == LayersModel::PASTEBOARD);
+    REQUIRE(model.parent(pasteboard) == QModelIndex());
+    REQUIRE(model.find(LayersModel::PASTEBOARD) == pasteboard);
+    REQUIRE(model.hasChildren(pasteboard));
+    REQUIRE(model.rowCount(pasteboard) == static_cast<int>(others.size()));
+    require_rows(model, document, QModelIndex(), artboards);
+    require_rows(model, document, pasteboard, others);
   }
 
   double get_milliseconds(std::chrono::steady_clock::time_point start) {
@@ -88,9 +114,12 @@ TEST_SUITE("LayersModel") {
     REQUIRE(model.get_document() == &document);
     REQUIRE(model.columnCount() == LayersModel::COLUMN_COUNT);
     require_matches(model, document);
-    auto home = model.index(1, LayersModel::NAME);
+    auto home = model.index(0, LayersModel::NAME);
     REQUIRE(get_name(model, home) == "Home");
-    REQUIRE(get_name(model, model.index(0, LayersModel::NAME)) == "Loose");
+    auto pasteboard = model.index(1, LayersModel::NAME);
+    REQUIRE(get_name(model, pasteboard) == "Pasteboard");
+    REQUIRE(get_name(model, model.index(0, LayersModel::NAME, pasteboard)) ==
+      "Loose");
     REQUIRE(model.rowCount(home) == 3);
     REQUIRE(model.rowCount(model.index(0, LayersModel::LOCK)) == 0);
     REQUIRE(!model.index(3, LayersModel::NAME, home).isValid());
@@ -129,6 +158,27 @@ TEST_SUITE("LayersModel") {
       QFont>().italic());
     REQUIRE(model.headerData(LayersModel::NAME, Qt::Horizontal,
       Qt::DisplayRole).toString() == "Name");
+  }
+
+  TEST_CASE("component_group_names") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto model = LayersModel();
+    model.set_document(&document);
+    auto index = QPersistentModelIndex(model.find(ids.m_instance));
+    REQUIRE(get_name(model, index) == "Button");
+    auto recorder = Recorder(model);
+    {
+      auto transaction = Transaction(document);
+      file_asset(document, transaction, ids.m_master, {"Forms", "Inputs"});
+      transaction.commit();
+    }
+    REQUIRE(get_name(model, index) == "Forms / Inputs / Button");
+    REQUIRE(model.data(index, Qt::EditRole).toString() ==
+      "Forms / Inputs / Button");
+    REQUIRE(std::find(recorder.m_events.begin(), recorder.m_events.end(),
+      "data Forms / Inputs / Button") != recorder.m_events.end());
+    REQUIRE(get_name(model, model.find(ids.m_card)) == "Card");
   }
 
   TEST_CASE("find") {
@@ -196,11 +246,13 @@ TEST_SUITE("LayersModel") {
         NodeId(), 0, make_header("First"), make_rectangle_shape(1, 1));
       transaction.commit();
     }
-    REQUIRE(recorder.m_events == std::vector<std::string>({"insert canvas 2 2",
-      "insert Card 0 0", "insert Card 3 3", "data Card"}));
-    REQUIRE(home.row() == 1);
+    REQUIRE(recorder.m_events == std::vector<std::string>({
+      "insert Pasteboard 1 1", "insert Card 0 0", "insert Card 3 3",
+      "data Card"}));
+    REQUIRE(home.row() == 0);
     REQUIRE(label.row() == 1);
-    REQUIRE(get_name(model, model.index(2, LayersModel::NAME)) == "First");
+    REQUIRE(get_name(model, model.index(1, LayersModel::NAME,
+      model.find(LayersModel::PASTEBOARD))) == "First");
     require_matches(model, document);
   }
 
@@ -220,7 +272,7 @@ TEST_SUITE("LayersModel") {
       transaction.commit();
     }
     REQUIRE(recorder.m_events == std::vector<std::string>({
-      "remove canvas 0 0", "remove Home 2 2", "data Home"}));
+      "remove canvas 1 1", "remove Home 2 2", "data Home"}));
     REQUIRE(!label.isValid());
     REQUIRE(instance.row() == 0);
     require_matches(model, document);
@@ -453,6 +505,64 @@ TEST_SUITE("LayersModel") {
     REQUIRE(find_time < 100);
     REQUIRE(rename_time < 100);
     view.hide();
+  }
+
+  TEST_CASE("pasteboard_row") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto second = NodeId();
+    {
+      auto transaction = Transaction(document);
+      second = transaction.append(
+        NodeId(), make_header("Second"), make_rectangle_shape(1, 1));
+      transaction.commit();
+    }
+    auto model = LayersModel();
+    model.set_document(&document);
+    auto pasteboard = model.find(LayersModel::PASTEBOARD);
+    REQUIRE(pasteboard.row() == 1);
+    REQUIRE(get_name(model, pasteboard) == "Pasteboard");
+    REQUIRE(model.data(pasteboard, LayersModel::ID_ROLE).isNull());
+    REQUIRE(model.find(ids.m_loose).parent() == pasteboard);
+    REQUIRE(model.find(second).row() == 0);
+    auto moves = std::vector<std::pair<NodeId, std::size_t>>();
+    model.set_move_handler([&] (const auto& nodes, const auto& parent,
+        auto index) {
+      moves.emplace_back(parent, index);
+      return true;
+    });
+    auto data = std::unique_ptr<QMimeData>(
+      model.mimeData({model.find(ids.m_ellipse)}));
+    REQUIRE(model.canDropMimeData(data.get(), Qt::MoveAction, 0, 0,
+      pasteboard));
+    REQUIRE(model.dropMimeData(data.get(), Qt::MoveAction, 0, 0, pasteboard));
+    REQUIRE(model.dropMimeData(data.get(), Qt::MoveAction, 2, 0, pasteboard));
+    REQUIRE(model.dropMimeData(
+      data.get(), Qt::MoveAction, 1, 0, QModelIndex()));
+    REQUIRE(moves == std::vector<std::pair<NodeId, std::size_t>>({
+      std::pair(NodeId(), 3), std::pair(NodeId(), 1),
+      std::pair(NodeId(), 0)}));
+    auto artboard = std::unique_ptr<QMimeData>(
+      model.mimeData({model.find(ids.m_artboard)}));
+    REQUIRE(!model.canDropMimeData(
+      artboard.get(), Qt::MoveAction, 0, 0, pasteboard));
+    REQUIRE(model.canDropMimeData(
+      artboard.get(), Qt::MoveAction, 0, 0, QModelIndex()));
+    {
+      auto transaction = Transaction(document);
+      transaction.remove(ids.m_loose);
+      transaction.remove(second);
+      transaction.commit();
+    }
+    REQUIRE(!model.find(LayersModel::PASTEBOARD).isValid());
+    require_matches(model, document);
+    {
+      auto transaction = Transaction(document);
+      transaction.append(
+        NodeId(), make_header("Third"), make_rectangle_shape(1, 1));
+      transaction.commit();
+    }
+    require_matches(model, document);
   }
 
   TEST_CASE("drag_and_drop") {

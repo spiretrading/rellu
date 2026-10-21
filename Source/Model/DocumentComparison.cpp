@@ -73,6 +73,8 @@ namespace {
     collector.check(left.m_is_locked == right.m_is_locked, subject, "lock");
     collector.check(
       left.m_transform == right.m_transform, subject, "transform");
+    collector.check(
+      is_same(left.m_rotation, right.m_rotation), subject, "rotation");
     collector.check(left.m_transform_3d == right.m_transform_3d, subject,
       "3D transform");
     collector.check(
@@ -217,6 +219,8 @@ namespace {
       "default state");
     collector.check(left.m_size == right.m_size, subject, "size");
     collector.check(left.m_link == right.m_link, subject, "link");
+    collector.check(
+      left.m_placements == right.m_placements, subject, "asset placements");
   }
 
   void compare(const ImageResource& left, const ImageResource& right,

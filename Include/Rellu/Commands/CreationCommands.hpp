@@ -25,7 +25,8 @@ namespace Rellu {
 
   /**
    * Names a new node as Adobe XD does: a prefix followed by one more than
-   * the largest number following that prefix in the name of any node.
+   * the largest number following that prefix in the name of any node named
+   * by default other than a text.
    * @param document The document the node is added to.
    * @param prefix The prefix, such as "Rectangle ".
    */

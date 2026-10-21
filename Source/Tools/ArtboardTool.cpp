@@ -53,7 +53,8 @@ namespace {
 }
 
 ArtboardTool::ArtboardTool()
-  : DrawTool(std::string(localize("name", "Artboard")) + " \xE2\x80\x93 ") {}
+  : DrawTool(std::string(localize("name", "Artboard")) + " \xE2\x80\x93 ",
+      CursorKind::ARTBOARD) {}
 
 std::unique_ptr<Command> ArtboardTool::make_command(ToolContext& context,
     NodeHeader header, Point start, Point end,

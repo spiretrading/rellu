@@ -27,6 +27,18 @@ namespace Rellu {
     BOTH
   };
 
+  /** The ends of a line in document space. */
+  struct LineEnds {
+
+    /** The start. */
+    Point m_start = Point(0, 0);
+
+    /** The end. */
+    Point m_end = Point(0, 0);
+
+    bool operator ==(const LineEnds&) const = default;
+  };
+
   /**
    * Adjusts what tools drag so that it lines up with the rest of the
    * document, as smart guides do, and shows the distances between nodes.
@@ -67,6 +79,30 @@ namespace Rellu {
       virtual Point snap_point(
         Point point, SnapAxes axes, Qt::KeyboardModifiers modifiers);
 
+      /**
+       * Adjusts the ends of a line being drawn or reshaped, as Adobe XD
+       * snaps them: the end snaps, or the start instead when the line is
+       * mirrored about its center and the start lies nearer what it snaps
+       * to, sliding along the line when its angle is kept, and a mirrored
+       * line's other end moves the opposite way.
+       * @param start The end that stays put unless the line is mirrored, in
+       *        document space.
+       * @param end The end dragged, in document space.
+       * @param is_angle_kept Whether the line keeps its angle.
+       * @param is_mirrored Whether the ends move about the line's center.
+       * @param modifiers The modifier keys held.
+       * @return The ends to use.
+       */
+      virtual LineEnds snap_line(Point start, Point end, bool is_angle_kept,
+        bool is_mirrored, Qt::KeyboardModifiers modifiers);
+
+      /**
+       * Returns <code>true</code> iff the point snap_point adjusted most
+       * recently snapped to an artboard's layout or square grid along
+       * either axis.
+       */
+      virtual bool is_grid_snapped() const;
+
       /** Ends the gesture begun most recently. */
       virtual void end();
 
@@ -101,6 +137,15 @@ namespace Rellu {
   inline Point SnapService::snap_point(
       Point point, SnapAxes axes, Qt::KeyboardModifiers modifiers) {
     return point;
+  }
+
+  inline LineEnds SnapService::snap_line(Point start, Point end,
+      bool is_angle_kept, bool is_mirrored, Qt::KeyboardModifiers modifiers) {
+    return LineEnds(start, end);
+  }
+
+  inline bool SnapService::is_grid_snapped() const {
+    return false;
   }
 
   inline void SnapService::end() {}

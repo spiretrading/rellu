@@ -2,7 +2,11 @@
 #include <string>
 #include <vector>
 #include <doctest/doctest.h>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QWidget>
+#include "Rellu/Commands/CommandRegistry.hpp"
+#include "Rellu/Ui/EditActions.hpp"
 #include "Rellu/Ui/GuideActions.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "TestDocument.hpp"
@@ -84,8 +88,10 @@ TEST_SUITE("GuideActions") {
     fixture.m_guide_actions->set_editor(&editor);
     fixture.m_actions.get("view.guides.hide").trigger();
     REQUIRE(history.get_undo_label() == "Hide All Guides");
+    REQUIRE(history.is_dirty());
     fixture.m_actions.get("view.guides.lock").trigger();
     REQUIRE(history.get_undo_label() == "Lock All Guides");
+    REQUIRE(history.is_dirty());
     REQUIRE(history.get_undo_count() == 2);
     REQUIRE(editor.undo());
     REQUIRE(!fixture.m_published.m_is_locked);
@@ -94,6 +100,7 @@ TEST_SUITE("GuideActions") {
     REQUIRE(editor.undo());
     REQUIRE(fixture.m_published.m_is_visible);
     REQUIRE(fixture.get_text("view.guides.hide") == "Hide All Guides");
+    REQUIRE(!history.is_dirty());
     REQUIRE(editor.redo());
     REQUIRE(!fixture.m_published.m_is_visible);
     fixture.m_actions.get("view.guides.hide").trigger();
@@ -104,6 +111,32 @@ TEST_SUITE("GuideActions") {
     REQUIRE(history.get_undo_label() == "Unlock All Guides");
     fixture.m_guide_actions.reset();
     REQUIRE(editor.undo());
+  }
+
+  TEST_CASE("edit_menu") {
+    auto fixture = Fixture();
+    auto document = Document();
+    build_test_document(document);
+    auto editor = Editor(document);
+    auto commands = CommandRegistry();
+    add_standard_commands(commands);
+    auto edit_actions = EditActions(fixture.m_actions, commands);
+    edit_actions.set_editor(&editor);
+    fixture.m_guide_actions->set_editor(&editor);
+    auto& actions = fixture.m_actions;
+    REQUIRE(actions.trigger("view.guides.hide"));
+    REQUIRE(fixture.get_text("edit.undo") == "Undo Hide All Guides");
+    REQUIRE(actions.trigger("view.guides.lock"));
+    REQUIRE(fixture.get_text("edit.undo") == "Undo Lock All Guides");
+    REQUIRE(actions.trigger("edit.undo"));
+    REQUIRE(fixture.get_text("edit.redo") == "Redo Lock All Guides");
+    REQUIRE(!fixture.m_published.m_is_locked);
+    REQUIRE(actions.trigger("edit.redo"));
+    REQUIRE(fixture.m_published.m_is_locked);
+    REQUIRE(actions.trigger("view.guides.hide"));
+    REQUIRE(fixture.get_text("edit.undo") == "Undo Show All Guides");
+    REQUIRE(actions.trigger("view.guides.lock"));
+    REQUIRE(fixture.get_text("edit.undo") == "Undo Unlock All Guides");
   }
 
   TEST_CASE("clear") {
@@ -143,7 +176,55 @@ TEST_SUITE("GuideActions") {
     auto& guide = get_guides(document, ids.m_artboard).front();
     REQUIRE(guide.m_position == 25);
     REQUIRE(guide.m_id != "a");
-    REQUIRE(editor.get_history().get_undo_label() == "Paste Guides");
+    auto& history = editor.get_history();
+    REQUIRE(history.get_undo_label() == "Paste Guides");
+    REQUIRE(history.get_undo_count() == 2);
     REQUIRE(fixture.m_guide_actions->get_settings().m_is_visible);
+    REQUIRE(fixture.m_published.m_is_visible);
+    REQUIRE(fixture.get_text("view.guides.hide") == "Hide All Guides");
+    REQUIRE(editor.undo());
+    REQUIRE(get_guides(document, ids.m_artboard).empty());
+    REQUIRE(!fixture.m_published.m_is_visible);
+    REQUIRE(fixture.get_text("view.guides.hide") == "Show All Guides");
+    REQUIRE(history.get_undo_label() == "Hide All Guides");
+    REQUIRE(editor.redo());
+    REQUIRE(get_guides(document, ids.m_artboard).size() == 1);
+    REQUIRE(fixture.m_published.m_is_visible);
+    fixture.m_actions.get("view.guides.hide").trigger();
+    REQUIRE(fixture.m_guide_actions->paste(*data, true));
+    REQUIRE(get_guides(document, ids.m_artboard).size() == 1);
+    REQUIRE(fixture.m_published.m_is_visible);
+    REQUIRE(history.get_undo_label() == "Paste Guides");
+    REQUIRE(history.get_undo_count() == 4);
+    REQUIRE(history.is_dirty());
+    REQUIRE(editor.undo());
+    REQUIRE(!fixture.m_published.m_is_visible);
+    REQUIRE(get_guides(document, ids.m_artboard).size() == 1);
+  }
+
+  TEST_CASE("store") {
+    REQUIRE(record_guide_settings(QByteArray(), "first", GuideSettings(),
+      1000).isEmpty());
+    auto hidden = GuideSettings(false, false);
+    auto store = record_guide_settings(QByteArray(), "first", hidden, 1000);
+    auto entry = QJsonDocument::fromJson(store).object().value("first").
+      toObject();
+    REQUIRE(entry.value("data").toString() ==
+      "{\"enabled\":true,\"visible\":false}");
+    REQUIRE(entry.value("time").toString() == "1000");
+    REQUIRE(find_guide_settings(store, "first") == hidden);
+    REQUIRE(!find_guide_settings(store, "unknown"));
+    auto locked = GuideSettings(true, true);
+    store = record_guide_settings(store, "second", locked, 2000);
+    REQUIRE(QJsonDocument::fromJson(store).object().value("second").
+      toObject().value("data").toString() ==
+        "{\"enabled\":false,\"visible\":true}");
+    REQUIRE(find_guide_settings(store, "second") == locked);
+    store = record_guide_settings(store, "copy", hidden, 3000);
+    REQUIRE(find_guide_settings(store, "first") == hidden);
+    REQUIRE(find_guide_settings(store, "copy") == hidden);
+    store = record_guide_settings(store, "first", GuideSettings(), 4000);
+    REQUIRE(!find_guide_settings(store, "first"));
+    REQUIRE(find_guide_settings(store, "copy") == hidden);
   }
 }

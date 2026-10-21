@@ -1,5 +1,6 @@
 #ifndef RELLU_UI_ASSETS_PANEL_HPP
 #define RELLU_UI_ASSETS_PANEL_HPP
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -53,20 +54,43 @@ namespace Rellu {
   using ComponentThumbnailer = std::function<
     QImage (const Document& document, const ComponentId& component, int size)>;
 
+  /** The answer to a confirmation the Document Assets panel asks for. */
+  struct AssetConfirmation {
+
+    /** Whether the action confirmed goes ahead. */
+    bool m_is_accepted = false;
+
+    /** Whether the confirmation is no longer to be asked for. */
+    bool m_is_dismissed = false;
+  };
+
+  /**
+   * Asks for a confirmation with Adobe XD's confirm dialog.
+   * @param title The dialog's title.
+   * @param message The message.
+   * @param ok The text of the button going ahead.
+   * @param cancel The text of the button cancelling.
+   * @param dismissal The label of the check box no longer asking, or empty
+   *        for none.
+   */
+  using AssetConfirmationHandler = std::function<AssetConfirmation (
+    const QString& title, const QString& message, const QString& ok,
+    const QString& cancel, const QString& dismissal)>;
+
   /** The MIME type of a component dragged out of the Document Assets panel. */
   inline const auto COMPONENT_MIME_TYPE =
     QString("application/x-rellu-component");
 
   /**
    * The Document Assets panel, listing a document's colors, character styles
-   * and components, kept up to date as the document changes, colors and
-   * character styles in their groups in Adobe XD's order. With an editor,
+   * and components, kept up to date as the document changes, each in their
+   * groups in Adobe XD's order. With an editor,
    * colors and character styles are added from the selection, applied to it
    * by a click (a color to the border with Alt), selected with Ctrl or
    * Shift, renamed by a double-click, edited, grouped, highlighted on the
    * canvas and deleted, and components can be dragged onto the canvas,
-   * renamed, swapped for the selected instances and their main components
-   * edited.
+   * renamed, grouped, moved to groups, deleted, swapped for the selected
+   * instances and their main components edited.
    */
   class AssetsPanel : public QWidget {
     public:
@@ -131,7 +155,63 @@ namespace Rellu {
       void render_thumbnails();
 
       /**
-       * Makes the menu of a component: Edit Main Component and Rename.
+       * Returns the image dragged with a component: its row, thumbnail and
+       * name, on the background of a selected row.
+       * @param component The component.
+       * @return The image, its thumbnail if it has no row.
+       */
+      QPixmap make_drag_pixmap(const ComponentId& component);
+
+      /**
+       * Sets the function asking for confirmations, without which the
+       * actions go ahead unasked.
+       * @param handler The function.
+       */
+      void set_confirmation_handler(AssetConfirmationHandler handler);
+
+      /**
+       * Returns whether deleting a group with its contents asks for a
+       * confirmation first, as it does until the confirmation is dismissed.
+       */
+      bool is_group_deletion_confirmed() const;
+
+      /**
+       * Sets whether deleting a group with its contents asks for a
+       * confirmation first.
+       * @param is_confirmed Whether the confirmation is asked for.
+       */
+      void set_group_deletion_confirmed(bool is_confirmed);
+
+      /**
+       * Sets the number of assets above which deleting them at once asks
+       * for Adobe XD's Permanently delete confirmation, 2000 by default.
+       * @param limit The number of assets.
+       */
+      void set_removal_limit(std::size_t limit);
+
+      /**
+       * Deletes a group of assets with its contents, as the group's Delete
+       * does: Adobe XD's Permanently delete confirmation is asked for first
+       * when the group holds more assets than the removal limit, and
+       * otherwise its Delete group and contents confirmation unless
+       * dismissed.
+       * @param group The group's id.
+       * @return <code>true</code> iff the group was deleted.
+       */
+      bool delete_group(const std::string& group);
+
+      /**
+       * Deletes components, as their Delete does, their instances becoming
+       * groups, the selection following them, after Adobe XD's Permanently
+       * delete confirmation when they are more than the removal limit.
+       * @param components The components.
+       * @return <code>true</code> iff a component was deleted.
+       */
+      bool delete_components(const std::vector<ComponentId>& components);
+
+      /**
+       * Makes the menu of a component: Edit Main Component | New group from
+       * element | Move to... | Rename, Delete.
        * @param component The component.
        * @param parent The menu's parent.
        * @return The menu.
@@ -219,16 +299,20 @@ namespace Rellu {
       bool highlight_instances(const NodeId& asset);
 
       /**
-       * Places colors or character styles in a new group named New group,
-       * as New group from element and New group from selection do.
-       * @param assets The ids of the assets, all of one section.
+       * Places colors, character styles or components in a new group named
+       * New group, as New group from element and New group from selection
+       * do.
+       * @param assets The ids of the assets, a component's being its
+       *        master's, all of one section.
        * @return The id of the group made, or empty if none was.
        */
       std::string group_assets(const std::vector<NodeId>& assets);
 
       /**
-       * Moves colors or character styles to a group of their section.
-       * @param assets The ids of the assets, all of one section.
+       * Moves colors, character styles or components to a group of their
+       * section.
+       * @param assets The ids of the assets, a component's being its
+       *        master's, all of one section.
        * @param group The id of the group, or of the section.
        * @return <code>true</code> iff an asset moved.
        */
@@ -244,7 +328,8 @@ namespace Rellu {
       bool rename_group(const std::string& group, const QString& name);
 
       /**
-       * Deletes colors and character styles.
+       * Deletes colors and character styles, after Adobe XD's Permanently
+       * delete confirmation when they are more than the removal limit.
        * @param assets The ids of the assets.
        * @return <code>true</code> iff an asset was deleted.
        */
@@ -410,6 +495,9 @@ namespace Rellu {
       std::function<QStringList (const QString&)> m_font_styles;
       std::function<void (const std::vector<NodeId>&)> m_highlight_handler;
       std::function<void (const QString&)> m_message_handler;
+      AssetConfirmationHandler m_confirmation_handler;
+      bool m_is_group_deletion_confirmed;
+      std::size_t m_removal_limit;
       ColorPicker* m_picker;
       SwatchId m_edited_swatch;
       QPointer<StyleEditor> m_style_editor;
@@ -444,6 +532,7 @@ namespace Rellu {
       void update_selection();
       void highlight(const NodeId& id);
       bool run(std::unique_ptr<Command> command, bool is_merged = false);
+      bool confirm_removal(std::size_t count);
       void invalidate_thumbnails(const ChangeSet& changes);
   };
 
@@ -473,6 +562,30 @@ namespace Rellu {
    * two arrows turning about each other, its tip at the top left corner.
    */
   QPixmap make_swap_cursor();
+
+  /**
+   * Returns the standard arrow pointer Adobe XD shows while a component
+   * dragged out of the Document Assets panel is over anything but an
+   * instance it replaces, its tip at the top left corner.
+   */
+  QPixmap make_arrow_cursor();
+
+  /**
+   * Returns the pointer shown while a component dragged out of the Document
+   * Assets panel is dropped with an action: the swap pointer for
+   * SWAP_DROP_ACTION, otherwise the arrow.
+   * @param action The drop action.
+   */
+  QPixmap make_drag_cursor(Qt::DropAction action);
+
+  /**
+   * Returns the drop action of a component dragged out of the Document
+   * Assets panel.
+   * @param target The instance the component replaces where it is, or nil.
+   * @return SWAP_DROP_ACTION over an instance replaced, otherwise
+   *         Qt::CopyAction.
+   */
+  Qt::DropAction get_component_drop_action(const NodeId& target);
 
   /**
    * Returns the label XD lists a color swatch under: its name, or the hex

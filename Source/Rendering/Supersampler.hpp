@@ -24,6 +24,19 @@ namespace Rellu {
     SUPERSAMPLED
   };
 
+  /** Lists the ways Adobe XD's renderer is asked to draw a path. */
+  enum class PathDrawing : unsigned char {
+
+    /** As a rectangle when the path is one. */
+    RECTANGLE,
+
+    /** As a path. */
+    PATH,
+
+    /** As a clip. */
+    CLIP
+  };
+
   /**
    * Rasterizes paths into 8-bit coverage the way Adobe XD's renderer does
    * for paths it doesn't cover analytically: curves are stepped into lines
@@ -49,13 +62,15 @@ namespace Rellu {
 
       /**
        * Returns how XD's renderer antialiases a path: an axis aligned
-       * rectangle exactly, a path estimated to cross each row of pixels often
+       * rectangle exactly when it is drawn as a rectangle or as a path small
+       * and wide enough, a path estimated to cross each row of pixels often
        * for its size by supersampling, and any other path analytically.
        * @param path The path.
        * @param matrix The transform from the path's coordinates to pixels.
+       * @param drawing How XD's renderer is asked to draw the path.
        */
       static Antialiasing get_antialiasing(
-        const Path& path, const Matrix& matrix);
+        const Path& path, const Matrix& matrix, PathDrawing drawing);
 
       /**
        * Returns how XD's renderer antialiases an outline in pixels.

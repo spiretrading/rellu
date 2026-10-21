@@ -31,21 +31,6 @@ namespace Rellu {
     bool operator ==(const ImageResource&) const = default;
   };
 
-  /** The place of an asset among the members of a group of assets. */
-  struct AssetPlacement {
-
-    /**
-     * The id of the group, or of the section holding the asset outside
-     * any group, such as groupColors.
-     */
-    std::string m_group;
-
-    /** The key ordering the asset among the group's members. */
-    std::string m_order;
-
-    bool operator ==(const AssetPlacement&) const = default;
-  };
-
   /** A named group of assets in the document's library. */
   struct AssetGroup {
 

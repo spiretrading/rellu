@@ -1,3 +1,6 @@
+#include <tuple>
+#include <utility>
+#include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Tools/LayoutHandles.hpp"
@@ -74,6 +77,104 @@ TEST_SUITE("LayoutHandles") {
     REQUIRE(handles.get_grid(tools.get_context()).is_nil());
   }
 
+  TEST_CASE("grid_handles") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    editor.get_selection().select(board.m_grid);
+    auto handles = LayoutHandles();
+    auto& context = tools.get_context();
+    auto get_handles = [&] {
+      auto overlay = CanvasOverlay();
+      handles.draw(context, overlay);
+      auto shapes = std::vector<OverlayShape>();
+      for(auto& shape : overlay.m_shapes) {
+        if(shape.m_radius == LayoutHandles::HANDLE_RADIUS) {
+          shapes.push_back(shape);
+        }
+      }
+      return shapes;
+    };
+    auto shapes = get_handles();
+    REQUIRE(shapes.size() == 2);
+    REQUIRE(shapes[0].m_center.m_x == doctest::Approx(199.5));
+    REQUIRE(shapes[0].m_size.m_width == doctest::Approx(9));
+    REQUIRE(shapes[0].m_size.m_height == doctest::Approx(40.0 / 3 + 1));
+    REQUIRE(shapes[1].m_center.m_y == doctest::Approx(139.5));
+    REQUIRE(shapes[1].m_size.m_width == doctest::Approx(100.0 / 3 + 1));
+    REQUIRE(shapes[0].m_fill == make_color(255, 255, 255));
+    REQUIRE(shapes[0].m_stroke == make_color(30, 203, 64));
+    REQUIRE(handles.hover(context, Point(203.5, 127)));
+    REQUIRE(handles.hover(context, Point(195.5, 113)));
+    REQUIRE(!handles.hover(context, Point(204.5, 120)));
+    REQUIRE(!handles.hover(context, Point(194.5, 120)));
+    REQUIRE(!handles.hover(context, Point(200, 127.5)));
+    REQUIRE(handles.hover(context, Point(200, 120)));
+    REQUIRE(get_handles()[0].m_fill == make_color(30, 203, 64));
+    tools.set_view(make_scale(2, 2), 2, Size(2000, 1600));
+    shapes = get_handles();
+    REQUIRE(shapes[0].m_size.m_width == doctest::Approx(9));
+    REQUIRE(shapes[0].m_size.m_height == doctest::Approx(80.0 / 3 + 1));
+    REQUIRE(shapes[1].m_size.m_width == doctest::Approx(39));
+  }
+
+  TEST_CASE("grid_gaps") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto group = Group();
+    group.m_repeat_grid =
+      RepeatGrid(Size(40, 40), 2, 20, 3, 1, Size(124, 40));
+    auto grid = transaction.append(
+      NodeId(), make_header("Grid", make_translation(100, 100)), group);
+    for(auto i = 0; i != 3; ++i) {
+      auto cell = transaction.append(
+        grid, make_header("", make_translation(i * 42.0, 0)), Group());
+      transaction.append(
+        cell, make_header("Rectangle"), make_rectangle_shape(40, 40));
+    }
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    editor.get_selection().select(grid);
+    auto handles = LayoutHandles();
+    auto& context = tools.get_context();
+    auto draw = [&] {
+      auto overlay = CanvasOverlay();
+      handles.draw(context, overlay);
+      auto fills = std::vector<Point>();
+      auto sides = std::vector<Point>();
+      for(auto& shape : overlay.m_shapes) {
+        if(shape.m_fill == make_color(255, 74, 225, 0.4)) {
+          fills.push_back(shape.m_center);
+        } else if(shape.m_fill == make_color(255, 74, 225)) {
+          sides.push_back(shape.m_center);
+        }
+      }
+      return std::pair(fills, sides);
+    };
+    REQUIRE(draw().first.empty());
+    REQUIRE(!handles.hover(context, Point(138.5, 120)));
+    REQUIRE(handles.hover(context, Point(143, 120)));
+    REQUIRE(handles.hover(context, Point(141.5, 120)));
+    auto [fills, sides] = draw();
+    REQUIRE(fills == std::vector{Point(141, 120)});
+    REQUIRE(sides == std::vector{Point(139.5, 120), Point(142.5, 120)});
+    REQUIRE(handles.press(context, PointerEvent(Point(141, 120),
+      Qt::LeftButton, Qt::LeftButton, Qt::KeyboardModifiers())));
+    std::tie(fills, sides) = draw();
+    REQUIRE(fills == std::vector{Point(141, 120), Point(183, 120)});
+    REQUIRE(sides.size() == 2);
+    auto overlay = CanvasOverlay();
+    handles.draw(context, overlay);
+    REQUIRE(overlay.m_images.size() == 2);
+    REQUIRE(overlay.m_images[0].m_position.m_y < 100);
+    handles.cancel(context);
+  }
+
   TEST_CASE("columns") {
     auto document = Document();
     auto board = build_board(document);
@@ -148,28 +249,113 @@ TEST_SUITE("LayoutHandles") {
     auto stack = transaction.append(
       NodeId(), make_header("Stack", make_translation(100, 100)), group);
     auto last = transaction.append(stack,
-      make_header("Last", make_translation(0, 50)),
+      make_header("Last", make_translation(0, 80)),
+      make_rectangle_shape(100, 20));
+    auto middle = transaction.append(stack,
+      make_header("Middle", make_translation(0, 50)),
       make_rectangle_shape(100, 20));
     auto first = transaction.append(
       stack, make_header("First"), make_rectangle_shape(100, 40));
     auto payload = *document.get(stack).get_group();
     payload.m_stack->m_spacing.emplace(first, 10);
+    payload.m_stack->m_spacing.emplace(middle, 10);
     transaction.replace_payload(stack, payload);
     transaction.commit();
     document.clear_history();
     auto editor = Editor(document);
     auto tools = ToolManager(editor);
     tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto& context = tools.get_context();
+    auto get_spacing = [&] (const NodeId& item) {
+      return document.get(stack).get_group()->m_stack->m_spacing.at(item);
+    };
     editor.get_selection().select(stack);
     auto handles = LayoutHandles();
-    REQUIRE(handles.get_stack(tools.get_context()) == stack);
-    REQUIRE(handles.get_grid(tools.get_context()).is_nil());
-    REQUIRE(handles.hover(tools.get_context(), Point(150, 145)));
-    REQUIRE(!handles.hover(tools.get_context(), Point(150, 120)));
+    REQUIRE(handles.get_stacks(context).empty());
+    REQUIRE(!handles.hover(context, Point(150, 145)));
+    REQUIRE(handles.key_press(KeyEvent(Qt::Key_S, Qt::NoModifier)));
+    REQUIRE(!handles.key_press(KeyEvent(Qt::Key_S, Qt::NoModifier, true)));
+    REQUIRE(handles.get_stacks(context) == std::vector{stack});
+    auto cursor = handles.hover(context, Point(150, 145));
+    REQUIRE(cursor);
+    REQUIRE(cursor->m_kind == CursorKind::RESIZE);
+    REQUIRE(!handles.hover(context, Point(150, 120)));
+    REQUIRE(handles.hover(context, Point(150, 145)));
+    auto overlay = CanvasOverlay();
+    handles.draw(context, overlay);
+    auto fills = std::size_t(0);
+    auto sides = std::size_t(0);
+    for(auto& shape : overlay.m_shapes) {
+      if(shape.m_fill == make_color(255, 74, 225, 0.4)) {
+        ++fills;
+      } else if(shape.m_fill == make_color(255, 74, 225)) {
+        ++sides;
+      }
+    }
+    REQUIRE(fills == 1);
+    REQUIRE(sides == 2);
+    REQUIRE(overlay.m_images.size() == 1);
+    REQUIRE(!handles.key_release(KeyEvent(Qt::Key_S, Qt::NoModifier, true)));
+    REQUIRE(handles.key_release(KeyEvent(Qt::Key_S, Qt::NoModifier)));
+    REQUIRE(!handles.hover(context, Point(150, 145)));
+    drag(tools, Point(150, 145), Point(160, 146));
+    REQUIRE(get_spacing(first) == 10);
+    REQUIRE(get_transform(document, stack) == make_translation(100, 100));
+    REQUIRE(editor.get_selection().is_empty());
+    REQUIRE(editor.get_history().get_undo_count() == 0);
+    editor.get_selection().select(stack);
+    tools.key_press(KeyEvent(Qt::Key_QuoteLeft, Qt::NoModifier));
     drag(tools, Point(150, 145), Point(150, 155));
-    REQUIRE(get_transform(document, last) == make_translation(0, 60));
-    REQUIRE(document.get(stack).get_group()->m_stack->m_spacing.at(first) ==
-      20);
+    REQUIRE(get_transform(document, middle) == make_translation(0, 60));
+    REQUIRE(get_spacing(first) == 20);
+    REQUIRE(get_spacing(middle) == 10);
+    REQUIRE(editor.get_history().get_undo_label() == "Stack Spacing");
     REQUIRE(editor.get_history().get_undo_count() == 1);
+    tools.press(PointerEvent(Point(150, 185), Qt::LeftButton, Qt::LeftButton,
+      Qt::ShiftModifier));
+    tools.move(PointerEvent(Point(150, 190), Qt::NoButton, Qt::LeftButton,
+      Qt::ShiftModifier));
+    REQUIRE(get_spacing(first) == 15);
+    REQUIRE(get_spacing(middle) == 15);
+    tools.move(PointerEvent(Point(150, 190), Qt::NoButton, Qt::LeftButton,
+      Qt::NoModifier));
+    REQUIRE(get_spacing(first) == 20);
+    REQUIRE(get_spacing(middle) == 15);
+    tools.release(PointerEvent(Point(150, 190), Qt::LeftButton, Qt::NoButton,
+      Qt::NoModifier));
+    REQUIRE(editor.get_history().get_undo_count() == 2);
+    REQUIRE(editor.get_history().get_undo_label() == "Stack Spacing");
+    tools.key_release(KeyEvent(Qt::Key_QuoteLeft, Qt::NoModifier));
+    REQUIRE(editor.get_context().enter(stack));
+    editor.get_selection().select(first);
+    REQUIRE(handles.get_stacks(context) == std::vector{stack});
+    REQUIRE(handles.hover(context, Point(150, 145)));
+    REQUIRE(!handles.hover(context, Point(150, 145), {}, true));
+    REQUIRE(handles.hover(context, Point(150, 145)));
+    overlay = CanvasOverlay();
+    handles.draw(context, overlay);
+    fills = 0;
+    sides = 0;
+    for(auto& shape : overlay.m_shapes) {
+      if(shape.m_fill == make_color(255, 74, 225, 0.2)) {
+        ++fills;
+      } else if(shape.m_fill == make_color(255, 74, 225)) {
+        ++sides;
+      }
+    }
+    REQUIRE(fills == 1);
+    REQUIRE(sides == 0);
+    REQUIRE(overlay.m_images.size() == 1);
+    tools.press(PointerEvent(Point(150, 145), Qt::LeftButton, Qt::LeftButton,
+      Qt::NoModifier));
+    tools.move(PointerEvent(Point(150, 150), Qt::NoButton, Qt::LeftButton,
+      Qt::NoModifier));
+    REQUIRE(get_spacing(first) == 25);
+    REQUIRE(editor.get_selection().get_nodes() == std::vector{first});
+    tools.release(PointerEvent(Point(150, 150), Qt::LeftButton, Qt::NoButton,
+      Qt::NoModifier));
+    REQUIRE(editor.get_selection().get_nodes() == std::vector{first});
+    REQUIRE(editor.get_context().get_container() == stack);
+    REQUIRE(editor.get_history().get_undo_label() == "Stack Spacing");
   }
 }

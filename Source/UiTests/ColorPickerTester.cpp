@@ -182,18 +182,22 @@ TEST_SUITE("ColorPicker") {
       keys.push_back(event.key());
       return event.key() != Qt::Key_A;
     });
-    for(auto key : {Qt::Key_Tab, Qt::Key_Delete, Qt::Key_A}) {
+    for(auto key : {Qt::Key_Left, Qt::Key_Delete, Qt::Key_A}) {
       auto event = QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier);
       QCoreApplication::sendEvent(&picker, &event);
       REQUIRE(event.isAccepted() == (key != Qt::Key_A));
     }
-    REQUIRE(keys == std::vector<int>({Qt::Key_Tab, Qt::Key_Delete,
+    REQUIRE(keys == std::vector<int>({Qt::Key_Left, Qt::Key_Delete,
       Qt::Key_A}));
+    auto tab = QKeyEvent(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QCoreApplication::sendEvent(&picker, &tab);
+    REQUIRE(keys.size() == 3);
     auto& hex = get_field(picker, "Hex");
     hex.setFocus();
     REQUIRE(picker.focusWidget() == &hex);
-    auto tab = QKeyEvent(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
-    QCoreApplication::sendEvent(&picker, &tab);
+    auto removal =
+      QKeyEvent(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    QCoreApplication::sendEvent(&picker, &removal);
     REQUIRE(keys.size() == 3);
     auto presses = 0;
     picker.set_canvas_handler([&] (auto event, auto) {
@@ -205,5 +209,29 @@ TEST_SUITE("ColorPicker") {
     QCoreApplication::sendEvent(&picker, &press);
     REQUIRE(presses == 1);
     REQUIRE(!picker.focusWidget());
+  }
+
+  TEST_CASE("canvas_press") {
+    auto picker = ColorPicker();
+    auto is_handle = true;
+    picker.set_canvas_handler([&] (auto, auto) {
+      return is_handle;
+    });
+    picker.show();
+    auto press = [&] {
+      auto event = QMouseEvent(QEvent::MouseButtonPress, QPointF(-10, -10),
+        picker.mapToGlobal(QPointF(-10, -10)), Qt::LeftButton,
+        Qt::LeftButton, Qt::NoModifier);
+      QCoreApplication::sendEvent(&picker, &event);
+      auto release = QMouseEvent(QEvent::MouseButtonRelease,
+        QPointF(-10, -10), picker.mapToGlobal(QPointF(-10, -10)),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+      QCoreApplication::sendEvent(&picker, &release);
+    };
+    press();
+    REQUIRE(picker.isVisible());
+    is_handle = false;
+    press();
+    REQUIRE(!picker.isVisible());
   }
 }

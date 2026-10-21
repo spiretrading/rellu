@@ -68,6 +68,19 @@ namespace Rellu {
   void set_last_used_preset(const ArtboardPreset& preset);
 
   /**
+   * Inserts an artboard of a preset's size as Adobe XD makes one from a
+   * preset: white, named after the preset, scrolling vertically within a
+   * viewport of its own height, with the grid of a new artboard.
+   * @param document The document inserted into.
+   * @param transaction The transaction on the document.
+   * @param preset The preset.
+   * @param position The position of the artboard's top left corner.
+   * @return The artboard inserted.
+   */
+  NodeId insert_preset_artboard(const Document& document,
+    Transaction& transaction, const ArtboardPreset& preset, Point position);
+
+  /**
    * Inserts an artboard of a preset's size where Adobe XD places new
    * artboards, labelled Create Artboard: white, named after the preset and
    * scrolling vertically within a viewport of its own height.

@@ -16,7 +16,8 @@ namespace Rellu {
 
   /**
    * Adobe XD's Move to dialog of the document's assets, choosing the group
-   * that colors or character styles move to. It lists the groups within
+   * that colors, character styles or components move to. It lists the
+   * groups within
    * the group shown, starting at the section of the assets moved, a back
    * arrow leading up to the sections of Document Assets, where only that
    * section can be chosen. Choosing a group shows it, Move moves the assets
@@ -43,8 +44,8 @@ namespace Rellu {
        * Constructs an AssetMoveDialog.
        * @param editor The editor of the document holding the assets, which
        *        must outlive the dialog.
-       * @param assets The colors or character styles to move, of one
-       *        section.
+       * @param assets The colors, character styles or components' masters
+       *        to move, of one section.
        * @param parent The parent widget.
        */
       AssetMoveDialog(Editor& editor, std::vector<NodeId> assets,

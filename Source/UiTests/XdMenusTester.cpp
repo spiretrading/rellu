@@ -252,4 +252,31 @@ TEST_SUITE("XdMenus") {
     REQUIRE(to_xd_shortcut_text(QKeySequence("Ctrl++")) == "Ctrl++");
     REQUIRE(to_xd_shortcut_text(QKeySequence()).isEmpty());
   }
+
+  TEST_CASE("localized_shortcut_text") {
+    auto german = [] (const char* shortcut) {
+      return to_xd_shortcut_text(QKeySequence(shortcut), Language::GERMAN);
+    };
+    REQUIRE(german("Ctrl+N") == "Strg+N");
+    REQUIRE(german("Ctrl+Shift+O") == "Umschalt+Strg+O");
+    REQUIRE(german("Alt+F4") == "Alt+F4");
+    REQUIRE(german("Ctrl+Alt+Shift+S") == "Umschalt+Strg+Alt+S");
+    REQUIRE(german("Del") == "Entf");
+    REQUIRE(german("Ctrl+Return") == "Strg+Eingabe");
+    REQUIRE(german("Shift+Ctrl+Left") == "Umschalt+Strg+Pfeil links");
+    auto japanese = [] (const char* shortcut) {
+      return to_xd_shortcut_text(QKeySequence(shortcut), Language::JAPANESE);
+    };
+    REQUIRE(japanese("Ctrl+Z") == "Ctrl+Z");
+    REQUIRE(japanese("Ctrl+Shift+Z") == "Shift+Ctrl+Z");
+    REQUIRE(japanese("Del") == "Delete");
+    REQUIRE(to_xd_shortcut_text(QKeySequence("Del"), Language::FRENCH) ==
+      "Suppr");
+    REQUIRE(to_xd_shortcut_text(QKeySequence("Ctrl+Shift+Z"),
+      Language::SPANISH) == QString::fromUtf8("May\xC3\xBAs+Ctrl+Z"));
+    set_language(Language::GERMAN);
+    auto text = to_xd_shortcut_text(QKeySequence("Ctrl+S"));
+    set_language(Language::ENGLISH);
+    REQUIRE(text == "Strg+S");
+  }
 }

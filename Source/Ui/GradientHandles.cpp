@@ -421,21 +421,12 @@ GradientEdit GradientHandles::press_key(const GradientFill& fill,
   }
   auto count = static_cast<int>(fill.m_stops.size());
   auto selected = std::clamp(stop, 0, count - 1);
-  if(key == Qt::Key_Tab || key == Qt::Key_Backtab) {
-    auto step = key == Qt::Key_Backtab ||
-      modifiers.testFlag(Qt::ShiftModifier) ? -1 : 1;
-    edit.m_is_handled = true;
-    edit.m_stop = (selected + step + count) % count;
-    return edit;
-  } else if((key == Qt::Key_Left || key == Qt::Key_Right ||
+  if((key == Qt::Key_Left || key == Qt::Key_Right ||
       key == Qt::Key_Up || key == Qt::Key_Down) &&
       !(modifiers & (Qt::ControlModifier | Qt::AltModifier |
         Qt::MetaModifier))) {
     auto distance = modifiers.testFlag(Qt::ShiftModifier) ? LARGE_NUDGE :
       NUDGE;
-    if(zoom > 0) {
-      distance /= zoom;
-    }
     auto delta = Point(0, 0);
     if(key == Qt::Key_Left) {
       delta.m_x = -distance;
@@ -446,7 +437,7 @@ GradientEdit GradientHandles::press_key(const GradientFill& fill,
     } else {
       delta.m_y = distance;
     }
-    return nudge_stop(fill, bounds, selected, delta);
+    return nudge(fill, bounds, zoom, selected, delta);
   } else if(key != Qt::Key_Delete && key != Qt::Key_Backspace) {
     return edit;
   }
@@ -462,6 +453,18 @@ GradientEdit GradientHandles::press_key(const GradientFill& fill,
   edit.m_fill = std::move(removed);
   edit.m_stop = selected - 1;
   return edit;
+}
+
+GradientEdit GradientHandles::nudge(const GradientFill& fill,
+    const Rect& bounds, double zoom, int stop, Point delta) {
+  if(!is_editable(fill)) {
+    return GradientEdit();
+  }
+  if(zoom > 0) {
+    delta = delta / zoom;
+  }
+  auto count = static_cast<int>(fill.m_stops.size());
+  return nudge_stop(fill, bounds, std::clamp(stop, 0, count - 1), delta);
 }
 
 GradientHandles::GradientHandles()

@@ -33,7 +33,8 @@ namespace Rellu {
 
     /**
      * Whether the prototype workspace is shown, where pasting copies every
-     * interaction rather than only those within component instances.
+     * interaction rather than only those within component instances and
+     * leaves artboards lacking a grid without one.
      */
     bool m_is_prototyping = false;
   };
@@ -111,7 +112,8 @@ namespace Rellu {
        * every id referring within the copied set replaced by its copy's,
        * along with the images and components the document lacks, placed and
        * named as Adobe XD pastes. Copies of a main component become
-       * instances.
+       * instances, and copies of artboards lacking a grid get the grid of
+       * make_initial_grid for the document's grid defaults.
        * @param target Where to paste.
        * @return The command, or <code>nullptr</code> if nothing is held.
        */

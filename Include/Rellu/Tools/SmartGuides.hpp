@@ -151,6 +151,9 @@ namespace Rellu {
         Qt::KeyboardModifiers modifiers) override;
       Point snap_point(Point point, SnapAxes axes,
         Qt::KeyboardModifiers modifiers) override;
+      LineEnds snap_line(Point start, Point end, bool is_angle_kept,
+        bool is_mirrored, Qt::KeyboardModifiers modifiers) override;
+      bool is_grid_snapped() const override;
       void end() override;
       void measure(
         const std::optional<Rect>& selection, const Rect& target) override;
@@ -164,6 +167,7 @@ namespace Rellu {
       struct Target {
         Rect m_bounds;
         bool m_is_shown;
+        bool m_is_grid;
       };
       struct SquareGrid {
         Rect m_frame;
@@ -178,6 +182,7 @@ namespace Rellu {
       const ToolContext* m_context;
       bool m_is_active;
       bool m_is_collected;
+      bool m_is_grid_snapped;
       NodeId m_container;
       std::vector<NodeId> m_nodes;
       std::vector<Target> m_targets;
@@ -202,7 +207,7 @@ namespace Rellu {
       SmartGuides& operator =(const SmartGuides&) = delete;
       void collect();
       void add_target(const Rect& bounds, bool is_shown, bool is_object);
-      void add_line(bool is_x, double value);
+      void add_line(bool is_x, double value, bool is_grid);
       void add_artboard(const NodeId& id);
       void clear_guides();
       void index(bool is_x);
@@ -213,6 +218,9 @@ namespace Rellu {
         const std::vector<double>& values, double threshold) const;
       std::optional<double> find_spacing(
         bool is_x, const Rect& rect, double threshold) const;
+      bool is_on_grid(bool is_x, double value) const;
+      std::optional<Point> find_line_offset(
+        Point point, Point anchor, bool is_angle_kept) const;
       void add_lines(bool is_x, const Rect& rect,
         const std::vector<double>& values);
       void add_spacing(bool is_x, const Rect& rect);
@@ -223,6 +231,16 @@ namespace Rellu {
       void draw_distance(const Matrix& view, const GuideDistance& distance,
         double scale, CanvasOverlay& overlay) const;
   };
+
+  /**
+   * Draws the label Adobe XD shows beside a distance: the text in magenta
+   * centered in an image SmartGuides::LABEL_HEIGHT high, with
+   * SmartGuides::LABEL_PADDING on either side.
+   * @param text The text.
+   * @param scale The number of pixels per logical unit.
+   */
+  std::shared_ptr<const QImage> make_distance_label(
+    const std::string& text, double scale);
 
   /**
    * Formats a distance as smart guides label it, rounded to one decimal

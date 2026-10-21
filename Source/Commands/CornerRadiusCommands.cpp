@@ -39,14 +39,26 @@ SetCornerRadiusCommand::SetCornerRadiusCommand(
     m_radii({clamp_radius(radii.m_top_left), clamp_radius(radii.m_top_right),
       clamp_radius(radii.m_bottom_right), clamp_radius(radii.m_bottom_left)}) {}
 
-SetCornerRadiusCommand::SetCornerRadiusCommand(
-    std::vector<NodeId> nodes, Corner corner, double radius) noexcept
+SetCornerRadiusCommand::SetCornerRadiusCommand(std::vector<NodeId> nodes,
+    Corner corner, double radius, bool is_field) noexcept
     : m_nodes(std::move(nodes)) {
   m_radii[static_cast<std::size_t>(corner)] = clamp_radius(radius);
+  if(is_field) {
+    m_field = corner;
+  }
 }
 
 std::string SetCornerRadiusCommand::get_label() const {
-  return "Corner Radius";
+  if(!m_field) {
+    return "Corner Radius";
+  } else if(*m_field == Corner::TOP_LEFT) {
+    return "Corner Radius Top Left";
+  } else if(*m_field == Corner::TOP_RIGHT) {
+    return "Corner Radius Top Right";
+  } else if(*m_field == Corner::BOTTOM_RIGHT) {
+    return "Corner Radius Bottom Right";
+  }
+  return "Corner Radius Bottom Left";
 }
 
 void SetCornerRadiusCommand::apply(
@@ -81,7 +93,7 @@ void SetCornerRadiusCommand::apply(
 
 bool SetCornerRadiusCommand::merge(const Command& command) {
   auto radius = dynamic_cast<const SetCornerRadiusCommand*>(&command);
-  if(!radius || radius->m_nodes != m_nodes) {
+  if(!radius || radius->m_nodes != m_nodes || radius->m_field != m_field) {
     return false;
   }
   for(auto i = std::size_t(0); i != m_radii.size(); ++i) {

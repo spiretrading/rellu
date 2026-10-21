@@ -1,58 +1,18 @@
 #include <exception>
-#include <memory>
 #include <optional>
-#include <vector>
+#include <utility>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
-#include "Rellu/Commands/Bounds.hpp"
-#include "Rellu/Commands/ComponentCommands.hpp"
-#include "Rellu/Commands/Components.hpp"
+#include "Rellu/Tools/ComponentDrops.hpp"
 #include "Rellu/Ui/AssetsPanel.hpp"
 #include "ComponentDrop.hpp"
 
 using namespace Rellu;
 
 namespace {
-  std::optional<Point> to_document(DocumentView& view, QPointF position) {
-    auto inverse = invert(view.get_renderer().get_view());
-    if(!inverse) {
-      return std::nullopt;
-    }
-    return inverse->map(Point(position.x(), position.y()));
-  }
-
-  NodeId find_swap_target(DocumentView& view, Editor& editor,
-      const ComponentId& component, QPointF position) {
-    auto tools = view.get_tools();
-    auto point = to_document(view, position);
-    if(!tools || !point) {
-      return NodeId();
-    }
-    auto& document = editor.get_document();
-    auto& container = editor.get_context().get_container();
-    auto target = NodeId();
-    auto current = tools->get_hit_tester().hit(*point, 0);
-    for(auto depth = 0; depth != 256 && !current.is_nil() &&
-        current != container; ++depth) {
-      auto node = document.find(current);
-      if(!node) {
-        return NodeId();
-      }
-      auto group = node->get_group();
-      if(node->m_header.m_is_locked || !node->m_header.m_is_visible ||
-          group && group->m_repeat_grid) {
-        target = NodeId();
-      } else if(get_instance_role(*node)) {
-        target = current;
-      }
-      current = node->m_parent;
-    }
-    if(current != container || target.is_nil() ||
-        get_instance_role(document.get(target))->m_component == component) {
-      return NodeId();
-    }
-    return target;
+  Point to_point(QPointF position) {
+    return Point(position.x(), position.y());
   }
 }
 
@@ -68,7 +28,8 @@ void ComponentDrop::set_editor(Editor* editor) {
 }
 
 bool ComponentDrop::eventFilter(QObject* watched, QEvent* event) {
-  if(watched != m_view || !m_editor) {
+  auto tools = m_view->get_tools();
+  if(watched != m_view || !m_editor || !tools) {
     return QObject::eventFilter(watched, event);
   }
   if(event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove) {
@@ -77,15 +38,17 @@ bool ComponentDrop::eventFilter(QObject* watched, QEvent* event) {
       read_component_mime_data(*drag->mimeData()) : std::nullopt;
     if(component) {
       auto target = find_swap_target(
-        *m_view, *m_editor, *component, drag->position());
+        tools->get_context(), *component, to_point(drag->position()));
       m_editor->get_context().set_hover(target);
+      tools->set_drop_target(target);
       m_view->update();
-      drag->setDropAction(target.is_nil() ? Qt::CopyAction : SWAP_DROP_ACTION);
+      drag->setDropAction(get_component_drop_action(target));
       drag->accept();
       return true;
     }
   } else if(event->type() == QEvent::DragLeave) {
     m_editor->get_context().set_hover(NodeId());
+    tools->set_drop_target(NodeId());
     m_view->update();
   } else if(event->type() == QEvent::Drop) {
     auto drop = static_cast<QDropEvent*>(event);
@@ -95,41 +58,16 @@ bool ComponentDrop::eventFilter(QObject* watched, QEvent* event) {
       return QObject::eventFilter(watched, event);
     }
     m_editor->get_context().set_hover(NodeId());
-    auto& document = m_editor->get_document();
-    auto& components = document.get_resources().m_components;
-    auto entry = components.find(*component);
-    auto point = to_document(*m_view, drop->position());
-    if(entry == components.end() || !point) {
-      return true;
-    }
-    auto target =
-      find_swap_target(*m_view, *m_editor, *component, drop->position());
+    tools->set_drop_target(NodeId());
+    auto position = to_point(drop->position());
+    auto target = find_swap_target(tools->get_context(), *component, position);
     try {
-      if(!target.is_nil()) {
-        m_editor->execute(std::make_unique<SwapComponentCommand>(
-          std::vector{target}, *component));
-      } else {
-        auto parent = NodeId();
-        auto origin = Point(0, 0);
-        auto& canvas = document.get_canvas();
-        for(auto i = canvas.rbegin(); i != canvas.rend(); ++i) {
-          if(auto artboard = document.get(*i).get_artboard();
-              artboard && artboard->m_frame.contains(*point)) {
-            parent = *i;
-            origin = artboard->m_frame.get_top_left();
-            break;
-          }
-        }
-        auto center = Point(0, 0);
-        if(auto bounds = get_local_bounds(document, entry->second.m_master)) {
-          center = bounds->get_center();
-        }
-        m_editor->execute(std::make_unique<InsertInstanceCommand>(*component,
-          parent, make_translation(point->m_x - origin.m_x - center.m_x,
-            point->m_y - origin.m_y - center.m_y)));
+      if(auto command = make_component_drop(
+          tools->get_context(), *component, position, drop->modifiers())) {
+        m_editor->execute(std::move(command));
       }
     } catch(const std::exception&) {}
-    drop->setDropAction(target.is_nil() ? Qt::CopyAction : SWAP_DROP_ACTION);
+    drop->setDropAction(get_component_drop_action(target));
     drop->accept();
     m_view->setFocus();
     return true;

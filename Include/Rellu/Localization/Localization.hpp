@@ -2,6 +2,7 @@
 #define RELLU_LOCALIZATION_LOCALIZATION_HPP
 #include <array>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace Rellu {
@@ -109,6 +110,20 @@ namespace Rellu {
    *         <code>text</code>.
    */
   std::string_view localize(std::string_view text);
+
+  /**
+   * Returns the name Adobe XD gives in a language to a layer read with a
+   * nameL10N key, the key's default name followed by the number its name
+   * ends with.
+   * @param name The layer's name, in UTF-8.
+   * @param key XD's nameL10N key of the layer's kind, such as
+   *        <code>SHAPE_RECTANGLE</code>.
+   * @param language The language.
+   * @return The name in UTF-8, <code>name</code> itself if XD has no string
+   *         for <code>key</code>.
+   */
+  std::string localize_default_name(
+    std::string_view name, std::string_view key, Language language);
 }
 
 #endif

@@ -1,3 +1,6 @@
+#include <stdexcept>
+#include <string>
+#include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
@@ -114,6 +117,66 @@ TEST_SUITE("AssetCommands") {
     REQUIRE(resources.m_asset_groups.empty());
     REQUIRE(find_section(resources, blue).empty());
     REQUIRE(find_section(resources, red) == COLOR_SECTION);
+  }
+
+  TEST_CASE("component_groups") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto& resources = document.get_resources();
+    REQUIRE(find_section(resources, scene.m_master) == COMPONENT_SECTION);
+    auto file = [&] (const std::vector<std::string>& path) {
+      auto transaction = Transaction(document);
+      file_asset(document, transaction, scene.m_master, path);
+      transaction.commit();
+    };
+    file({"Forms", "Inputs"});
+    REQUIRE(resources.m_asset_groups.size() == 2);
+    REQUIRE(get_group_path(resources, scene.m_master) ==
+      std::vector<std::string>({"Forms", "Inputs"}));
+    auto inputs = find_asset_group(resources, scene.m_master);
+    auto& placements =
+      resources.m_components.at(scene.m_component).m_placements;
+    REQUIRE(placements == std::vector{AssetPlacement(inputs, "h")});
+    REQUIRE(list_assets(resources, inputs) ==
+      std::vector{AssetEntry(std::string(), scene.m_master)});
+    auto forms = list_assets(resources, COMPONENT_SECTION).front().m_group;
+    REQUIRE(list_assets(resources, forms) ==
+      std::vector{AssetEntry(inputs, NodeId())});
+    file({"Forms"});
+    REQUIRE(resources.m_asset_groups.size() == 1);
+    REQUIRE(resources.m_asset_groups.front().m_id == forms);
+    REQUIRE(resources.m_asset_groups.front().m_children.empty());
+    REQUIRE(resources.m_asset_groups.front().m_elements ==
+      std::vector{to_string(scene.m_master)});
+    file({});
+    REQUIRE(resources.m_asset_groups.empty());
+    REQUIRE(find_asset_group(resources, scene.m_master) == COMPONENT_SECTION);
+    auto history = History(document);
+    auto group = std::make_unique<GroupAssetsCommand>(
+      std::vector{scene.m_master});
+    auto id = group->get_group();
+    require_undoable(history, std::move(group));
+    REQUIRE(get_group_path(resources, scene.m_master) ==
+      std::vector<std::string>({"New group"}));
+    require_undoable(history, std::make_unique<MoveAssetsCommand>(
+      std::vector{scene.m_master}, COMPONENT_SECTION));
+    REQUIRE(get_group_path(resources, scene.m_master).empty());
+    REQUIRE(history.execute(std::make_unique<MoveAssetsCommand>(
+      std::vector{scene.m_master}, id)));
+    auto deletion = require_undoable(history,
+      std::make_unique<RemoveAssetGroupCommand>(
+        id, std::vector{scene.m_instance}));
+    REQUIRE(history.get_undo_label() == "Delete Asset Group");
+    REQUIRE(resources.m_asset_groups.empty());
+    REQUIRE(resources.m_components.empty());
+    REQUIRE(!document.find(scene.m_master));
+    REQUIRE(!document.find(scene.m_instance));
+    auto replacement = deletion->get_selection()->front();
+    auto& instance = document.get(replacement);
+    REQUIRE(instance.m_parent == scene.m_artboard);
+    REQUIRE(instance.get_group());
+    REQUIRE(!instance.get_group()->m_component_instance);
+    REQUIRE(!document.get(instance.m_children.front()).get_reference());
   }
 
   TEST_CASE("instances") {

@@ -11,7 +11,8 @@ TEST_SUITE("ArtboardCommands") {
     auto artboard = Artboard();
     artboard.m_frame = Rect(0, 0, 480, 360);
     auto grid = make_default_grid(artboard);
-    REQUIRE(grid.m_type == GridType::LAYOUT);
+    REQUIRE(grid == make_initial_grid(artboard));
+    REQUIRE(grid.m_type == GridType::SQUARE);
     REQUIRE(!grid.m_is_visible);
     REQUIRE(grid.m_column_count == 4);
     REQUIRE(grid.m_default_width == 480);
@@ -47,8 +48,15 @@ TEST_SUITE("ArtboardCommands") {
     auto document = Document();
     auto scene = build_scene(document);
     auto history = History(document);
+    {
+      auto artboard = *document.get(scene.m_artboard).get_artboard();
+      artboard.m_layout_grid = make_initial_grid(artboard);
+      artboard.m_layout_grid->m_type = GridType::LAYOUT;
+      auto transaction = Transaction(document);
+      transaction.replace_payload(scene.m_artboard, std::move(artboard));
+      transaction.commit();
+    }
     auto columns = GridEdit();
-    columns.m_is_visible = true;
     columns.m_column_count = 7;
     columns.m_gutter = 3;
     columns.m_left = 5;
@@ -59,7 +67,7 @@ TEST_SUITE("ArtboardCommands") {
     require_undoable(history, std::make_unique<SetGridCommand>(
       std::vector{scene.m_artboard}, reset));
     auto& grid = *document.get(scene.m_artboard).get_artboard()->m_layout_grid;
-    REQUIRE(grid.m_is_visible);
+    REQUIRE(grid.m_type == GridType::LAYOUT);
     REQUIRE(grid.m_column_count == 4);
     REQUIRE(grid.m_gutter == 10);
     REQUIRE(grid.m_margins == Margins(0, 37, 0, 37));
@@ -70,12 +78,13 @@ TEST_SUITE("ArtboardCommands") {
     auto scene = build_scene(document);
     auto history = History(document);
     auto edit = GridEdit();
-    edit.m_is_visible = true;
+    edit.m_gutter = 10;
     require_undoable(history, std::make_unique<SetGridCommand>(
       std::vector{scene.m_artboard, scene.m_rectangle}, edit));
     REQUIRE(history.get_undo_label() == "Change Grid");
     auto& grid = *document.get(scene.m_artboard).get_artboard()->m_layout_grid;
-    REQUIRE(grid.m_is_visible);
+    REQUIRE(!grid.m_is_visible);
+    REQUIRE(grid.m_type == GridType::SQUARE);
     REQUIRE(grid.m_column_count == 4);
     auto columns = GridEdit();
     columns.m_column_count = 5;
@@ -207,26 +216,5 @@ TEST_SUITE("ArtboardCommands") {
       std::vector{scene.m_artboard}, ArtboardOrientation::PORTRAIT));
     REQUIRE(document.get(scene.m_artboard).get_artboard()->m_frame ==
       Rect(100, 50, 300, 300));
-  }
-
-  TEST_CASE("grid_toggles") {
-    auto document = Document();
-    auto scene = build_scene(document);
-    REQUIRE(get_target_artboards(document, std::vector{scene.m_ellipse}) ==
-      std::vector{scene.m_artboard});
-    REQUIRE(get_target_artboards(document, std::vector<NodeId>()) ==
-      std::vector{scene.m_artboard});
-    auto registry = CommandRegistry();
-    add_artboard_commands(registry);
-    auto history = History(document);
-    require_undoable(history, registry.make(
-      "view.square_grid", document, std::vector<NodeId>()));
-    auto& grid = *document.get(scene.m_artboard).get_artboard()->m_layout_grid;
-    REQUIRE(grid.m_type == GridType::SQUARE);
-    REQUIRE(grid.m_is_visible);
-    require_undoable(history, registry.make(
-      "view.square_grid", document, std::vector<NodeId>()));
-    REQUIRE(!document.get(scene.m_artboard).get_artboard()->m_layout_grid->
-      m_is_visible);
   }
 }

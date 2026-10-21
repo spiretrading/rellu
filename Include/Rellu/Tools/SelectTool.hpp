@@ -1,5 +1,6 @@
 #ifndef RELLU_TOOLS_SELECT_TOOL_HPP
 #define RELLU_TOOLS_SELECT_TOOL_HPP
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -18,7 +19,9 @@ namespace Rellu {
   /**
    * Selects, moves, resizes and rotates nodes as Adobe XD's select tool
    * does. A click selects what lies under the pointer at the level of the
-   * edit context, a double click enters a group, hands the text clicked
+   * edit context, a double click on the handle of text in a fixed size
+   * frame fits it as SelectionHandles::fit_text does, a double click
+   * elsewhere enters a group, hands the text clicked
    * to the tool named text for editing or hands the shape clicked to the
    * tool named path_edit, as Enter does for a single selected shape, Ctrl
    * selects the deepest node, Shift adds a node, or removes a selected one
@@ -33,12 +36,33 @@ namespace Rellu {
    * clicked or reached by the marquee. The pointer hovering an unlocked
    * node outlines it, a shape by its own outline and anything else by its
    * box. The selection
-   * is drawn and edited through SelectionHandles. Arrow
-   * keys nudge the selection, except stack items along their stack's
-   * direction. Locked nodes are selected by a click or a marquee but not
-   * moved. The part of a node lying outside its
+   * is drawn and edited through SelectionHandles, and hidden while a drag
+   * moves it, keeping it on the canvas as keep_on_canvas does. A click on
+   * the lock badge SelectionHandles shows unlocks its node, labelled
+   * Unlock. Arrow
+   * keys nudge the selection by NUDGE, or while Shift is held by
+   * get_large_nudge from the active artboard, kept on the canvas by
+   * keep_on_canvas, except stack items along their stack's direction;
+   * consecutive nudges in one direction are one step, labelled Nudge Left,
+   * Nudge Right, Nudge Up or Nudge Down. With Alt held the arrow keys
+   * resize the selection instead, labelled Resize Nudge Left, Resize Nudge
+   * Right, Resize Nudge Up or Resize Nudge Down: by the same distances,
+   * measured for a large nudge from the bottom right corner of the node
+   * reaching farthest along the arrow, Right and Down growing and Left and
+   * Up shrinking it from its right or bottom edge, along a single node's
+   * own axis nearest the arrow, laid out
+   * responsively, keeping its aspect ratio when locked and no smaller than
+   * half a unit, except a line, and not at all for point text or bounds
+   * that would leave the canvas. Locked nodes are selected by a
+   * click or a marquee but not moved. The part of a node lying outside its
    * artboard is clicked or hovered only while it, or another node of its
    * artboard, is selected, or while it is a child of the container entered.
+   * The container entered is outlined four units wide outside its box in
+   * translucent blue, green for a repeat grid or grey when locked, unless
+   * it is a component or scroll group or shows nothing; the innermost
+   * repeat grid, component and scroll group among it and its containers
+   * are outlined alike, in green, green and blue, a scroll group also
+   * dashing the edges along which it scrolls.
    * A repeat grid or stack selected
    * alone is also edited through LayoutHandles, and a double click enters
    * both a repeat grid and the cell clicked. Stack items dragged make room
@@ -57,7 +81,10 @@ namespace Rellu {
       /** The distance in document units a nudge moves. */
       static constexpr auto NUDGE = 1.0;
 
-      /** The distance in document units a nudge with Shift moves. */
+      /**
+       * The distance in document units a nudge with Shift moves, unless the
+       * active artboard shows its square grid.
+       */
       static constexpr auto LARGE_NUDGE = 10.0;
 
       /** Constructs a SelectTool. */
@@ -85,7 +112,8 @@ namespace Rellu {
         MOVE,
         HANDLE,
         LAYOUT,
-        GUIDE
+        GUIDE,
+        BADGE
       };
       struct CachedBox {
         NodeId m_id;
@@ -98,6 +126,8 @@ namespace Rellu {
       Point m_press_document;
       NodeId m_clicked;
       NodeId m_removed;
+      NodeId m_badge;
+      Point m_pointer;
       bool m_is_marquee_pending;
       std::vector<NodeId> m_nodes;
       SelectionBox m_box;
@@ -107,13 +137,12 @@ namespace Rellu {
       NodeId m_scope;
       std::vector<NodeId> m_base;
       Rect m_marquee;
-      int m_nudge_key;
       ToolCursor m_cursor;
       SelectionHandles m_handles;
       LayoutHandles m_layout_handles;
       ArtboardGuides m_guides;
       mutable CachedBox m_hover_box;
-      mutable CachedBox m_container_box;
+      mutable std::array<CachedBox, 4> m_context_boxes;
 
       const std::optional<SelectionBox>& get_box(const ToolContext& context,
         const NodeId& id, CachedBox& cache) const;
@@ -124,9 +153,13 @@ namespace Rellu {
       void update_move(ToolContext& context, const PointerEvent& event);
       void update_marquee(ToolContext& context, const PointerEvent& event);
       void update_hover(ToolContext& context, const PointerEvent& event);
+      void resize_nudge(ToolContext& context, std::vector<NodeId> nodes,
+        Point direction, Qt::KeyboardModifiers modifiers);
       void finish(ToolContext& context);
       void draw_hover(const ToolContext& context, const NodeId& hover,
         CanvasOverlay& overlay) const;
+      void draw_context(
+        const ToolContext& context, CanvasOverlay& overlay) const;
   };
 }
 

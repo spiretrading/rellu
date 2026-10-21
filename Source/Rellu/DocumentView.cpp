@@ -4,7 +4,6 @@
 #include <functional>
 #include <limits>
 #include <memory>
-#include <numbers>
 #include <utility>
 #include <vector>
 #include <QFontMetricsF>
@@ -13,8 +12,6 @@
 #include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
-#include <QPainter>
-#include <QPainterPath>
 #include <QPixmap>
 #include <QResizeEvent>
 #include <QStyleHints>
@@ -22,19 +19,18 @@
 #include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Rendering/StripRasterizer.hpp"
+#include "Rellu/Tools/CanvasBounds.hpp"
+#include "Rellu/Tools/CanvasCursors.hpp"
 #include "Rellu/Tools/PathEditTool.hpp"
+#include "Rellu/Tools/ViewFit.hpp"
 #include "Rellu/Ui/TextMeasurement.hpp"
 #include "DocumentView.hpp"
 
 using namespace Rellu;
 
 namespace {
-  constexpr auto MINIMUM_ZOOM = 1.0 / 64;
-  constexpr auto MAXIMUM_ZOOM = 256.0;
-  constexpr auto FIT_MARGIN = 24.0;
   constexpr auto WHEEL_ZOOM = 1.0015;
   constexpr auto SCENE_BUDGET = std::chrono::milliseconds(8);
-  constexpr auto CURSOR_SIZE = 24;
   constexpr auto PREPARATION_BUDGET = std::chrono::milliseconds(8);
   constexpr auto TITLE_PADDING = 1;
   constexpr auto TITLE_SLACK = 12.0;
@@ -85,73 +81,6 @@ namespace {
       event.preeditString().toStdU16String(), cursor,
       event.replacementStart(), event.replacementLength());
   }
-
-  Qt::CursorShape get_resize_shape(double angle) {
-    auto eighth = std::numbers::pi / 4;
-    auto index = static_cast<int>(std::lround(angle / eighth)) % 4;
-    if(index < 0) {
-      index += 4;
-    }
-    if(index == 0) {
-      return Qt::SizeHorCursor;
-    } else if(index == 1) {
-      return Qt::SizeFDiagCursor;
-    } else if(index == 2) {
-      return Qt::SizeVerCursor;
-    }
-    return Qt::SizeBDiagCursor;
-  }
-
-  QCursor make_rotate_cursor() {
-    auto pixmap = QPixmap(CURSOR_SIZE, CURSOR_SIZE);
-    pixmap.fill(Qt::transparent);
-    auto painter = QPainter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-    auto arc = QPainterPath();
-    auto bounds = QRectF(5, 5, 14, 14);
-    arc.arcMoveTo(bounds, 200);
-    arc.arcTo(bounds, 200, 230);
-    auto draw = [&] (const QColor& color, double width) {
-      painter.setPen(QPen(color, width, Qt::SolidLine, Qt::RoundCap,
-        Qt::RoundJoin));
-      painter.drawPath(arc);
-      auto start = arc.pointAtPercent(0);
-      auto end = arc.pointAtPercent(1);
-      painter.drawLine(start, start + QPointF(-2.5, -3));
-      painter.drawLine(start, start + QPointF(3, -2));
-      painter.drawLine(end, end + QPointF(3, 1.5));
-      painter.drawLine(end, end + QPointF(1, 3.5));
-    };
-    draw(Qt::white, 3.5);
-    draw(Qt::black, 1.5);
-    painter.end();
-    return QCursor(pixmap, CURSOR_SIZE / 2, CURSOR_SIZE / 2);
-  }
-
-  QCursor make_zoom_cursor(bool is_zooming_out) {
-    auto pixmap = QPixmap(CURSOR_SIZE, CURSOR_SIZE);
-    pixmap.fill(Qt::transparent);
-    auto painter = QPainter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-    auto center = QPointF(9.5, 9.5);
-    auto draw = [&] (const QColor& color, double width) {
-      painter.setPen(QPen(color, width, Qt::SolidLine, Qt::RoundCap,
-        Qt::RoundJoin));
-      painter.setBrush(Qt::NoBrush);
-      painter.drawEllipse(center, 6.5, 6.5);
-      painter.drawLine(QPointF(14.5, 14.5), QPointF(20.5, 20.5));
-      painter.drawLine(QPointF(6.5, 9.5), QPointF(12.5, 9.5));
-      if(!is_zooming_out) {
-        painter.drawLine(QPointF(9.5, 6.5), QPointF(9.5, 12.5));
-      }
-    };
-    draw(Qt::white, 4);
-    draw(Qt::black, 1.6);
-    painter.setPen(QPen(Qt::black, 3, Qt::SolidLine, Qt::RoundCap));
-    painter.drawLine(QPointF(15.5, 15.5), QPointF(20, 20));
-    painter.end();
-    return QCursor(pixmap, 9, 9);
-  }
 }
 
 DocumentView::DocumentView(QWidget* parent)
@@ -162,6 +91,7 @@ DocumentView::DocumentView(QWidget* parent)
       m_offset(0, 0),
       m_level(1),
       m_is_fitting(false),
+      m_is_fit_held(false),
       m_is_space_pressed(false),
       m_is_panning(false),
       m_title_editor(nullptr) {
@@ -191,6 +121,7 @@ DocumentView::~DocumentView() {
   finish_rename(false);
   m_preparation.stop();
   m_caret_timer.stop();
+  m_text_subscription.release();
   m_tool_subscription.release();
   m_tools.reset();
   m_own_editor.reset();
@@ -204,6 +135,7 @@ void DocumentView::set_document(std::unique_ptr<Document> document) {
   finish_rename(false);
   get_renderer().set_draw_list(nullptr);
   get_renderer().set_overlay(CanvasOverlay());
+  m_text_subscription.release();
   m_tool_subscription.release();
   m_tools.reset();
   m_own_editor.reset();
@@ -254,6 +186,10 @@ void DocumentView::fit() {
   }
 }
 
+void DocumentView::set_fit_held(bool is_held) {
+  m_is_fit_held = is_held;
+}
+
 void DocumentView::zoom_to(const Rect& region) {
   m_is_fitting = false;
   frame(region);
@@ -290,6 +226,9 @@ bool DocumentView::event(QEvent* event) {
 }
 
 void DocumentView::render(QRhiCommandBuffer* buffer) {
+  if(!m_is_fit_held) {
+    m_is_fitting = false;
+  }
   if(m_scene && !m_scene->is_current()) {
     auto region = Rect(-m_offset.m_x / m_zoom, -m_offset.m_y / m_zoom,
       width() / m_zoom, height() / m_zoom);
@@ -298,30 +237,35 @@ void DocumentView::render(QRhiCommandBuffer* buffer) {
       update();
     }
   }
-  if(m_tools) {
-    get_renderer().set_overlay(m_tools->draw());
+  if(m_document) {
+    auto overlay = m_tools ? m_tools->draw() : CanvasOverlay();
+    auto outside = std::vector<OverlayShape>();
+    for(auto& region : get_outside_regions(
+        get_renderer().get_view(), Size(width(), height()))) {
+      auto shape = OverlayShape();
+      shape.m_center = region.get_center();
+      shape.m_size = region.get_size();
+      shape.m_fill = OUTSIDE_CANVAS_COLOR;
+      outside.push_back(shape);
+    }
+    overlay.m_shapes.insert(
+      overlay.m_shapes.begin(), outside.begin(), outside.end());
+    get_renderer().set_overlay(std::move(overlay));
   }
   Canvas::render(buffer);
 }
 
 void DocumentView::frame(const Rect& region) {
-  auto width = static_cast<double>(this->width());
-  auto height = static_cast<double>(this->height());
-  if(width > 0 && height > 0) {
-    auto zoom = std::numeric_limits<double>::infinity();
-    if(region.m_width > 0) {
-      zoom = std::max(width - 2 * FIT_MARGIN, 1.0) / region.m_width;
+  auto size = Size(width(), height());
+  if(size.m_width > 0 && size.m_height > 0) {
+    if(region.m_width > 0 || region.m_height > 0) {
+      auto fit = fit_view(region, size);
+      m_zoom = fit.m_zoom;
+      m_offset = fit.m_offset;
+    } else {
+      m_offset = Point(size.m_width / 2 - m_zoom * region.m_x,
+        size.m_height / 2 - m_zoom * region.m_y);
     }
-    if(region.m_height > 0) {
-      zoom = std::min(zoom,
-        std::max(height - 2 * FIT_MARGIN, 1.0) / region.m_height);
-    }
-    if(std::isfinite(zoom)) {
-      m_zoom = std::clamp(zoom, MINIMUM_ZOOM, MAXIMUM_ZOOM);
-    }
-    auto center = region.get_center();
-    m_offset = Point(width / 2 - m_zoom * center.m_x,
-      height / 2 - m_zoom * center.m_y);
   }
   update_view();
 }
@@ -567,41 +511,23 @@ void DocumentView::update_view() {
 }
 
 void DocumentView::update_cursor() {
-  if(m_is_panning) {
-    setCursor(Qt::ClosedHandCursor);
-    return;
-  } else if(m_is_space_pressed) {
-    setCursor(Qt::OpenHandCursor);
-    return;
-  }
   auto cursor = ToolCursor();
-  if(m_tools) {
+  if(m_is_panning) {
+    cursor = ToolCursor(CursorKind::CLOSED_HAND);
+  } else if(m_is_space_pressed) {
+    cursor = ToolCursor(CursorKind::OPEN_HAND);
+  } else if(m_tools) {
     cursor = m_tools->get_cursor();
   }
-  if(cursor.m_kind == CursorKind::RESIZE) {
-    setCursor(get_resize_shape(cursor.m_angle));
-  } else if(cursor.m_kind == CursorKind::TEXT) {
-    setCursor(Qt::IBeamCursor);
-  } else if(cursor.m_kind == CursorKind::ROTATE) {
-    if(!m_rotate_cursor) {
-      m_rotate_cursor = make_rotate_cursor();
-    }
-    setCursor(*m_rotate_cursor);
-  } else if(cursor.m_kind == CursorKind::CROSSHAIR) {
-    setCursor(Qt::CrossCursor);
-  } else if(cursor.m_kind == CursorKind::ZOOM_IN) {
-    if(!m_zoom_in_cursor) {
-      m_zoom_in_cursor = make_zoom_cursor(false);
-    }
-    setCursor(*m_zoom_in_cursor);
-  } else if(cursor.m_kind == CursorKind::ZOOM_OUT) {
-    if(!m_zoom_out_cursor) {
-      m_zoom_out_cursor = make_zoom_cursor(true);
-    }
-    setCursor(*m_zoom_out_cursor);
-  } else {
-    unsetCursor();
+  auto ratio = devicePixelRatio();
+  auto key = std::tuple(cursor.m_kind, get_orientation(cursor), ratio);
+  auto entry = m_cursors.find(key);
+  if(entry == m_cursors.end()) {
+    auto hot_spot = get_hot_spot(cursor);
+    entry = m_cursors.emplace(key, QCursor(QPixmap::fromImage(
+      draw_cursor(cursor, ratio)), hot_spot.x(), hot_spot.y())).first;
   }
+  setCursor(entry->second);
 }
 
 void DocumentView::attach_tools() {
@@ -621,6 +547,7 @@ void DocumentView::attach_tools() {
   if(editor == m_editor && (m_tools || !editor)) {
     return;
   }
+  m_text_subscription.release();
   m_tool_subscription.release();
   m_tools.reset();
   m_editor = editor;
@@ -629,9 +556,13 @@ void DocumentView::attach_tools() {
     m_own_editor.reset();
   }
   update_cursor();
+  update_edited_text();
   if(!editor) {
     return;
   }
+  m_text_subscription = editor->get_text_selection().subscribe([this] {
+    update_edited_text();
+  });
   m_tools = std::make_unique<ToolManager>(
     *editor, make_text_measurer(get_default_font_library()));
   m_tool_subscription = m_tools->subscribe([this] {
@@ -668,6 +599,18 @@ void DocumentView::update_text_editing() {
   if(auto method = QGuiApplication::inputMethod()) {
     method->update(Qt::ImQueryAll);
   }
+}
+
+void DocumentView::update_edited_text() {
+  if(!m_scene) {
+    return;
+  }
+  auto id = NodeId();
+  if(m_editor && m_editor->get_text_selection().is_editing()) {
+    id = m_editor->get_text_selection().get_node();
+  }
+  m_scene->set_edited_text(id);
+  update();
 }
 
 bool DocumentView::forward(QMouseEvent* event, auto handler) {

@@ -93,22 +93,33 @@ std::string CreateArtboardCommand::get_label() const {
 void CreateArtboardCommand::apply(
     const Document& document, Transaction& transaction) {
   auto& size = m_preset.m_size;
-  auto artboard = Artboard();
+  auto position = Point(0, 0);
   if(m_point) {
-    artboard.m_frame = place_artboard_at(document, size, *m_point, m_view);
+    position =
+      place_artboard_at(document, size, *m_point, m_view).get_top_left();
   } else {
-    artboard.m_frame = place_artboards(document, m_selection, m_view,
-      Rect(0, 0, size.m_width, size.m_height));
+    position = place_artboards(document, m_selection, m_view,
+      Rect(0, 0, size.m_width, size.m_height)).get_top_left();
   }
+  m_artboard = insert_preset_artboard(document, transaction, m_preset,
+    position);
+}
+
+NodeId Rellu::insert_preset_artboard(const Document& document,
+    Transaction& transaction, const ArtboardPreset& preset, Point position) {
+  auto& size = preset.m_size;
+  auto artboard = Artboard();
+  artboard.m_frame =
+    Rect(position.m_x, position.m_y, size.m_width, size.m_height);
   artboard.m_background = SolidFill(make_color(255, 255, 255));
   artboard.m_viewport_height = size.m_height;
   artboard.m_layout_grid =
     make_initial_grid(artboard, document.get_resources().m_grid_defaults);
   auto header = NodeHeader();
   header.m_name = make_artboard_name(
-    document, localize("presets", m_preset.m_name), false);
+    document, localize("presets", preset.m_name), false);
   header.m_constraints.m_is_enabled = false;
-  m_artboard = transaction.insert(NodeId(), get_artboard_index(document),
+  return transaction.insert(NodeId(), get_artboard_index(document),
     std::move(header), std::move(artboard));
 }
 

@@ -266,6 +266,20 @@ TEST_SUITE("StripRasterizer") {
     auto rectangle = get_coverage(
       rasterize(make_rectangle(Rect(2, 1.4, 58, 10)), size), size);
     REQUIRE(std::abs(rectangle[64 + 30] - 0.6) < 0.5 / 255);
+    auto draw = [&] (const Rect& bounds) {
+      auto list = DrawList();
+      list.push_back(FillCommand(share(make_rectangle(bounds)), Matrix(),
+        GradientPaint(LinearGradient(), {GradientStop(0, make_color(0, 0, 0)),
+          GradientStop(1, make_color(255, 255, 255))}, Matrix())));
+      auto scene = StripScene();
+      auto rasterizer = StripRasterizer();
+      rasterizer.rasterize(list, Matrix(), size, scene);
+      return get_coverage(scene, size);
+    };
+    auto painted = draw(Rect(2, 1.4, 58, 10));
+    REQUIRE(std::abs(painted[64 + 30] - 0.5) < 0.5 / 255);
+    auto small = draw(Rect(2, 1.4, 10, 10));
+    REQUIRE(std::abs(small[64 + 6] - 0.6) < 0.5 / 255);
   }
 
   TEST_CASE("hairline") {
@@ -305,7 +319,7 @@ TEST_SUITE("StripRasterizer") {
   }
 
   TEST_CASE("stroke_outline") {
-    auto size = QSize(16, 16);
+    auto size = QSize(48, 16);
     auto draw = [&] (const Path& line, double width) {
       auto list = DrawList();
       auto fill = FillCommand(share(outline_stroke(line, StrokeGeometry(width,
@@ -318,11 +332,17 @@ TEST_SUITE("StripRasterizer") {
       rasterizer.rasterize(list, Matrix(), size, scene);
       return get_coverage(scene, size);
     };
-    auto snapped = draw(make_line(Point(1, 4.07), Point(15, 4.07)), 2);
+    auto snapped = draw(make_line(Point(1, 4.07), Point(45, 4.07)), 2);
+    for(auto x = 2; x != 44; ++x) {
+      REQUIRE(snapped[3 * 48 + x] == 1);
+      REQUIRE(snapped[4 * 48 + x] == 1);
+      REQUIRE(snapped[5 * 48 + x] == 0);
+    }
+    auto exact = draw(make_line(Point(1, 4.07), Point(15, 4.07)), 2);
     for(auto x = 2; x != 14; ++x) {
-      REQUIRE(snapped[3 * 16 + x] == 1);
-      REQUIRE(snapped[4 * 16 + x] == 1);
-      REQUIRE(snapped[5 * 16 + x] == 0);
+      REQUIRE(std::abs(exact[3 * 48 + x] - 0.93) < 1.0 / 255);
+      REQUIRE(exact[4 * 48 + x] == 1);
+      REQUIRE(std::abs(exact[5 * 48 + x] - 0.07) < 1.0 / 255);
     }
     auto diagonal = draw(make_line(Point(2, 2), Point(4, 4)), 2);
     for(auto value : diagonal) {

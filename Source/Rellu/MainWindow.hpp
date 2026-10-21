@@ -26,6 +26,7 @@
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/EditActions.hpp"
 #include "Rellu/Ui/GradientHandles.hpp"
+#include "Rellu/Ui/GridActions.hpp"
 #include "Rellu/Ui/GuideActions.hpp"
 #include "Rellu/Ui/LastProperties.hpp"
 #include "Rellu/Ui/LayersPanel.hpp"
@@ -124,6 +125,7 @@ namespace Rellu {
       std::unique_ptr<ComponentActions> m_component_actions;
       std::unique_ptr<TextActions> m_text_actions;
       std::unique_ptr<GuideActions> m_guide_actions;
+      std::unique_ptr<GridActions> m_grid_actions;
       ComponentThumbnails m_thumbnails;
       std::unique_ptr<ComponentDrop> m_component_drop;
       AppBar* m_app_bar;
@@ -151,6 +153,8 @@ namespace Rellu {
       Subscription m_history_subscription;
       Subscription m_selection_subscription;
       Subscription m_tool_subscription;
+      bool m_is_launching;
+      bool m_is_restored_expanded;
 
       QMenuBar* make_layout();
       void add_actions();
@@ -162,6 +166,8 @@ namespace Rellu {
       void set_workspace(Workspace workspace);
       void toggle_preview();
       void restore_settings();
+      void update_launch();
+      void finish_launch();
       void check_language(Language language);
       void choose_language(Language language);
       void show_message(const QString& message);
@@ -183,6 +189,7 @@ namespace Rellu {
       void update_selection_actions();
       void reveal(const NodeId& id);
       void show_region(const Rect& region);
+      void reveal_artboard(const Rect& frame);
       void update_presets();
       void zoom_to_selection();
       double get_zoom() const;
@@ -197,9 +204,13 @@ namespace Rellu {
       bool handle_gradient_event(
         ColorPicker::CanvasEvent event, QPointF position);
       bool handle_gradient_key(const QKeyEvent& event);
+      Point get_gradient_nudge(Point direction, bool is_large) const;
       void update_gradient_editor();
       std::vector<QPolygonF> get_highlight_outlines() const;
-      void update_grid_actions();
+      void update_canvas_color();
+      void load_document_settings(GuideSettings guides, GridSettings grids);
+      void store_guide_settings() const;
+      void store_grid_settings() const;
   };
 }
 

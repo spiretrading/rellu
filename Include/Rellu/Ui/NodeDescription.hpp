@@ -18,7 +18,9 @@ namespace Rellu {
 
   /**
    * Returns the name a node is listed under: its own name, else the name of
-   * the node it is displayed as, else a description of its kind or content.
+   * the node it is displayed as, else a description of its kind or content,
+   * preceded for a component instance by the names of the groups of assets
+   * holding its component, outermost first, each followed by " / ".
    * @param document The document containing the node.
    * @param node The node.
    */

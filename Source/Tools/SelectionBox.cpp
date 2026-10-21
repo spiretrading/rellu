@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numbers>
 #include <utility>
 #include <variant>
 #include "Rellu/Commands/Hierarchy.hpp"
@@ -21,6 +22,8 @@ namespace {
   constexpr auto GRID_HANDLE_WIDTH = 8.0;
   constexpr auto GRID_HANDLE_SHORTEST = 8.0;
   constexpr auto GRID_HANDLE_LONGEST = 38.0;
+  constexpr auto DIAGONAL_TOLERANCE = 22.5;
+  constexpr auto LINE_WIDTH = 1.0;
   constexpr auto CORNERS = std::array<Handle, 4>({Handle::TOP_LEFT,
     Handle::TOP_RIGHT, Handle::BOTTOM_RIGHT, Handle::BOTTOM_LEFT});
   constexpr auto STACKING = std::array<Handle, 8>({Handle::BOTTOM_RIGHT,
@@ -205,8 +208,8 @@ namespace {
     if(layout.m_style == HandleStyle::SCROLL_GROUP) {
       return get_scroll_handle_rect(handle, size, zoom).contains(point);
     }
-    return distance(get_position(handle, size), point) <=
-      HandleLayout::HANDLE_REACH;
+    return distance(get_position(handle, size) + get_handle_offset(handle),
+      point) <= HandleLayout::HANDLE_REACH;
   }
 
   bool is_on_rotator(
@@ -217,21 +220,15 @@ namespace {
       Point(2 * fraction.m_x - 1, 2 * fraction.m_y - 1) * offset;
     auto radius = HandleLayout::ROTATION_RADIUS;
     auto radii = Size(radius, radius);
-    if(layout.m_style == HandleStyle::REPEAT_GRID) {
-      auto grid_handle = std::optional<Rect>();
+    if(layout.m_style == HandleStyle::REPEAT_GRID &&
+        (handle == Handle::RIGHT || handle == Handle::BOTTOM)) {
+      auto grid_handle = get_grid_handle_rect(handle, size);
       if(handle == Handle::RIGHT) {
-        auto length = get_grid_handle_length(size.m_height);
-        radii.m_height = length / 2;
-        grid_handle = Rect(size.m_width - GRID_HANDLE_WIDTH / 2 -
-          HANDLE_INSET, (size.m_height - length) / 2, GRID_HANDLE_WIDTH,
-          length);
-      } else if(handle == Handle::BOTTOM) {
-        auto length = get_grid_handle_length(size.m_width);
-        radii.m_width = length / 2;
-        grid_handle = Rect((size.m_width - length) / 2, size.m_height -
-          GRID_HANDLE_WIDTH / 2 - HANDLE_INSET, length, GRID_HANDLE_WIDTH);
+        radii.m_height = (grid_handle.m_height - LINE_WIDTH) / 2;
+      } else {
+        radii.m_width = (grid_handle.m_width - LINE_WIDTH) / 2;
       }
-      if(grid_handle && grid_handle->contains(point)) {
+      if(grid_handle.contains(point)) {
         return false;
       }
     }
@@ -272,6 +269,10 @@ std::optional<HandleHit> HandleLayout::find(
       return HandleHit(HandleAction::RESIZE, handle);
     }
   }
+  if(point.m_x >= 0 && point.m_x <= size.m_width && point.m_y >= 0 &&
+      point.m_y <= size.m_height) {
+    return std::nullopt;
+  }
   for(auto handle : STACKING) {
     if(is_rotator(handle) && is_on_rotator(*this, handle, size, point)) {
       return HandleHit(HandleAction::ROTATE, handle);
@@ -283,6 +284,19 @@ std::optional<HandleHit> HandleLayout::find(
 bool Rellu::is_corner(Handle handle) {
   return handle == Handle::TOP_LEFT || handle == Handle::TOP_RIGHT ||
     handle == Handle::BOTTOM_RIGHT || handle == Handle::BOTTOM_LEFT;
+}
+
+Point Rellu::get_handle_offset(Handle handle) {
+  auto inset = [] (double fraction) {
+    if(fraction == 0) {
+      return OUTLINE_INSET;
+    } else if(fraction == 1) {
+      return -OUTLINE_INSET;
+    }
+    return 0.0;
+  };
+  auto fraction = get_fraction(handle);
+  return Point(inset(fraction.m_x), inset(fraction.m_y));
 }
 
 Handle Rellu::get_opposite(Handle handle) {
@@ -324,8 +338,12 @@ HandleLayout Rellu::get_handle_layout(const Document& document,
   auto group = node ? node->get_group() : nullptr;
   if(text && std::holds_alternative<PositionedFrame>(text->m_frame)) {
     auto layout = HandleLayout();
-    layout.m_resizers[to_index(Handle::BOTTOM)] = true;
-    layout.m_rotators[to_index(Handle::BOTTOM)] = true;
+    auto handle = Handle::BOTTOM;
+    if(text->m_is_flipped_vertically) {
+      handle = Handle::TOP;
+    }
+    layout.m_resizers[to_index(handle)] = true;
+    layout.m_rotators[to_index(handle)] = true;
     return layout;
   } else if(group && group->m_scroll_group) {
     return get_scroll_layout(
@@ -359,6 +377,12 @@ HandleLayout Rellu::get_handle_layout(const Document& document,
     layout.m_rotators = {};
   }
   hide_crowded(layout, size);
+  if(size.m_width >= 2 * HANDLE_RADIUS && size.m_height >= 2 * HANDLE_RADIUS) {
+    for(auto handle : {Handle::TOP, Handle::RIGHT, Handle::BOTTOM,
+        Handle::LEFT}) {
+      layout.m_rotators[to_index(handle)] = false;
+    }
+  }
   if(std::any_of(nodes.begin(), nodes.end(), [&] (const auto& id) {
       return is_artboard(document, id);
     })) {
@@ -392,6 +416,20 @@ Rect Rellu::get_scroll_handle_rect(Handle handle, Size size, double zoom) {
   }
   return Rect(center.m_x - length / 2, center.m_y - thickness / 2, length,
     thickness);
+}
+
+Rect Rellu::get_grid_handle_rect(Handle handle, Size size) {
+  auto half = LINE_WIDTH / 2;
+  if(handle == Handle::RIGHT) {
+    auto length = get_grid_handle_length(size.m_height);
+    return Rect(size.m_width - GRID_HANDLE_WIDTH / 2 - HANDLE_INSET - half,
+      (size.m_height - length) / 2 - half, GRID_HANDLE_WIDTH + LINE_WIDTH,
+      length + LINE_WIDTH);
+  }
+  auto length = get_grid_handle_length(size.m_width);
+  return Rect((size.m_width - length) / 2 - half,
+    size.m_height - GRID_HANDLE_WIDTH / 2 - HANDLE_INSET - half,
+    length + LINE_WIDTH, GRID_HANDLE_WIDTH + LINE_WIDTH);
 }
 
 HandleLayout Rellu::get_locked_handle_layout(Size size) {
@@ -431,4 +469,20 @@ Rect Rellu::resize(const Rect& rect, Handle handle, Point point,
     place(rect.m_y, rect.m_height, height, fraction.m_y, is_centered);
   return Rect(horizontal.m_start, vertical.m_start, horizontal.m_length,
     vertical.m_length);
+}
+
+Point Rellu::constrain_drag(Point delta) {
+  auto angle = std::atan2(delta.m_y, delta.m_x) * 180 / std::numbers::pi;
+  if(angle < 0) {
+    angle += 360;
+  }
+  if(std::abs(std::fmod(angle, 90) - 45) < DIAGONAL_TOLERANCE) {
+    auto side = std::sqrt(dot(delta, delta) / 2);
+    auto x = angle < 90 || angle > 270 ? 1 : -1;
+    auto y = angle < 180 ? 1 : -1;
+    return Point(x * side, y * side);
+  } else if(std::abs(delta.m_x) > std::abs(delta.m_y)) {
+    return Point(delta.m_x, 0);
+  }
+  return Point(0, delta.m_y);
 }

@@ -1,6 +1,10 @@
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cmath>
 #include <concepts>
+#include <cstdio>
+#include <functional>
 #include <numbers>
 #include <optional>
 #include <string>
@@ -68,6 +72,30 @@ namespace {
       text.chop(1);
     }
     return text;
+  }
+
+  std::string to_fixed(double value) {
+    auto sign = std::string();
+    if(value < 0) {
+      sign = "-";
+      value = -value;
+    }
+    auto buffer = std::array<char, 512>();
+    if(value * 8 == std::floor(value * 8) &&
+        value * 4 != std::floor(value * 4)) {
+      auto hundredths = static_cast<long long>(std::ceil(value * 100));
+      auto result = std::snprintf(buffer.data(), buffer.size(), "%lld.%02lld",
+        hundredths / 100, hundredths % 100);
+      return sign + std::string(buffer.data(), static_cast<std::size_t>(
+        std::max(result, 0)));
+    }
+    auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(),
+      value, std::chars_format::fixed, 2);
+    return sign + std::string(buffer.data(), result.ptr);
+  }
+
+  bool is_ranged(std::string_view path) {
+    return path == "text.size" || path == "text.letter_spacing";
   }
 
   Choice make_choice(auto value, const QStringList& options) {
@@ -188,8 +216,10 @@ namespace {
     }
     auto& definition = component->second;
     auto is_linked = static_cast<bool>(definition.m_link);
-    add(section, "name", "Name", to_qstring(definition.m_name)).
-      m_is_read_only = !instance.m_is_main || is_linked;
+    auto name = get_display_name(document, node);
+    name.replace(QChar('\n'), QChar(' ')).replace(QChar('\r'), QChar(' ')).
+      replace(QChar(0x2028), QChar(' '));
+    add(section, "name", "Name", name);
     auto states = QStringList({translate("inspector", "Default State")});
     auto index = 0;
     for(auto& state : definition.m_states) {
@@ -245,8 +275,10 @@ namespace {
       stack == Orientation::HORIZONTAL;
     add(section, "y", "Y", origin.m_y).m_is_read_only =
       stack == Orientation::VERTICAL;
-    auto rotation = std::atan2(transform.m_b, transform.m_a) *
-      180 / std::numbers::pi;
+    auto rotation = displayed.m_header.m_rotation;
+    if(&displayed != &node) {
+      rotation = fit_rotation(rotation, transform);
+    }
     add(section, "rotation", "Rotation", rotation == 0 ? 0.0 : rotation);
     auto scroll = 0;
     if(auto group = displayed.get_group()) {
@@ -362,7 +394,7 @@ namespace {
       });
     add(section, "size", "Font Size", style.m_font.m_size).m_is_mixed =
       is_mixed([] (const auto& left, const auto& right) {
-        return left.m_font.m_size == right.m_font.m_size;
+        return to_fixed(left.m_font.m_size) == to_fixed(right.m_font.m_size);
       });
     auto weight = style.m_font.m_style.empty() ? QString("Regular") :
       to_qstring(style.m_font.m_style);
@@ -373,7 +405,8 @@ namespace {
     add(section, "letter_spacing", "Character Spacing",
       style.m_letter_spacing).m_is_mixed = is_mixed(
         [] (const auto& left, const auto& right) {
-          return left.m_letter_spacing == right.m_letter_spacing;
+          return to_fixed(left.m_letter_spacing) ==
+            to_fixed(right.m_letter_spacing);
         });
     auto& paragraph = text.m_paragraph_style;
     auto line_height = paragraph.m_line_height.value_or(
@@ -573,17 +606,13 @@ namespace {
   PropertyDescriptor make_grid(const Artboard& artboard) {
     auto section = make_property("grid", "Grid");
     auto& grid = artboard.m_layout_grid;
-    add(section, "visible", "Show Grid", grid && grid->m_is_visible);
-    auto is_square = grid && grid->m_type == GridType::SQUARE;
-    add(section, "type", "Grid Type", Choice(is_square ? 1 : 0, GRID_TYPES));
+    add(section, "visible", "Show Grid", false);
+    add(section, "type", "Grid Type", Choice(0, GRID_TYPES));
     if(!grid) {
       return section;
     }
-    if(is_square) {
-      add(section, "size", "Size", grid->m_square_size.m_width);
-      add(section, "color", "Color", grid->m_square_column_color);
-      return section;
-    }
+    add(section, "size", "Size", grid->m_square_size.m_width);
+    add(section, "color", "Color", grid->m_square_column_color);
     auto& margins = grid->m_margins;
     add(section, "columns", "Columns", grid->m_column_count);
     add(section, "column_color", "Column Color", grid->m_column_color);
@@ -629,6 +658,15 @@ namespace {
     }
   }
 
+  bool is_shown_same(const PropertyValue& left, const PropertyValue& right) {
+    auto left_number = std::get_if<double>(&left);
+    auto right_number = std::get_if<double>(&right);
+    if(left_number && right_number) {
+      return to_fixed(*left_number) == to_fixed(*right_number);
+    }
+    return left == right;
+  }
+
   void intersect_properties(std::vector<PropertyDescriptor>& properties,
       const std::vector<PropertyDescriptor>& others) {
     std::erase_if(properties, [&] (auto& property) {
@@ -639,13 +677,57 @@ namespace {
       if(other == others.end()) {
         return true;
       }
-      if(other->m_is_mixed || !(property.m_value == other->m_value)) {
+      if(other->m_is_mixed ||
+          !is_shown_same(property.m_value, other->m_value)) {
         property.m_is_mixed = true;
       }
       property.m_is_read_only |= other->m_is_read_only;
       intersect_properties(property.m_children, other->m_children);
       return false;
     });
+  }
+
+  void take_last(std::vector<PropertyDescriptor>& properties,
+      const std::vector<PropertyDescriptor>& last) {
+    for(auto& property : properties) {
+      if(!property.m_is_mixed && !is_ranged(property.m_path) &&
+          std::holds_alternative<double>(property.m_value)) {
+        if(auto other = find_property(last, property.m_path)) {
+          property.m_value = other->m_value;
+        }
+      }
+      take_last(property.m_children, last);
+    }
+  }
+
+  void set_corner_mode(PropertyDescriptor& geometry) {
+    for(auto& radii : geometry.m_children) {
+      auto choice = std::get_if<Choice>(&radii.m_value);
+      if(radii.m_path != "geometry.radii" || !choice) {
+        continue;
+      }
+      auto shown = std::vector<std::optional<PropertyValue>>();
+      for(auto& corner : radii.m_children) {
+        if(corner.m_path != "geometry.radii.all") {
+          shown.push_back(corner.m_is_mixed ? std::nullopt :
+            std::optional(corner.m_value));
+        }
+      }
+      auto is_uniform = std::adjacent_find(shown.begin(), shown.end(),
+        std::not_equal_to<>()) == shown.end();
+      choice->m_index = is_uniform ? 0 : 1;
+      radii.m_is_mixed = false;
+    }
+  }
+
+  std::vector<PropertyDescriptor> combine_properties(
+      const std::vector<std::vector<PropertyDescriptor>>& described) {
+    auto properties = described.front();
+    for(auto i = std::size_t(1); i != described.size(); ++i) {
+      intersect_properties(properties, described[i]);
+    }
+    take_last(properties, described.back());
+    return properties;
   }
 
   std::vector<PropertyDescriptor> make_leaf_style(const Node& leaf) {
@@ -666,10 +748,11 @@ namespace {
       style.push_back(make_fill(NoFill()));
       style.push_back(make_stroke(std::nullopt, group));
     } else {
-      style = make_leaf_style(*leaves.front());
-      for(auto i = std::size_t(1); i != leaves.size(); ++i) {
-        intersect_properties(style, make_leaf_style(*leaves[i]));
+      auto described = std::vector<std::vector<PropertyDescriptor>>();
+      for(auto& leaf : leaves) {
+        described.push_back(make_leaf_style(*leaf));
       }
+      style = combine_properties(described);
     }
     for(auto& section : style) {
       if(leaves.empty()) {
@@ -695,40 +778,6 @@ namespace {
     });
   }
 
-  std::optional<double> get_shown_number(
-      const std::vector<PropertyDescriptor>& sections, std::string_view path) {
-    auto property = find_property(sections, path);
-    if(!property) {
-      return std::nullopt;
-    }
-    auto value = std::get_if<double>(&property->m_value);
-    if(!value) {
-      return std::nullopt;
-    }
-    return std::round(*value * 100) / 100;
-  }
-
-  void compare_shown(PropertyDescriptor& section,
-      const std::vector<std::vector<PropertyDescriptor>>& nodes) {
-    for(auto& property : section.m_children) {
-      if(property.m_path != "transform.width" &&
-          property.m_path != "transform.height" &&
-          property.m_path != "transform.rotation") {
-        continue;
-      }
-      auto last = find_property(nodes.back(), property.m_path);
-      auto shown = get_shown_number(nodes.back(), property.m_path);
-      if(!last || !shown) {
-        continue;
-      }
-      property.m_value = last->m_value;
-      property.m_is_mixed = std::any_of(nodes.begin(), nodes.end(),
-        [&] (const auto& sections) {
-          return get_shown_number(sections, property.m_path) != shown;
-        });
-    }
-  }
-
   void limit_size(
       std::vector<PropertyDescriptor>& sections, const StackLimits& limits) {
     auto transform = std::find_if(sections.begin(), sections.end(),
@@ -744,6 +793,18 @@ namespace {
       } else if(property.m_path == "transform.height") {
         property.m_is_read_only |= limits.m_is_height_fixed;
       }
+    }
+  }
+
+  void add_item_spacing(std::vector<PropertyDescriptor>& sections,
+      const Document& document, const std::vector<NodeId>& nodes,
+      const TextMeasurer& measurer) {
+    auto layout = std::find_if(sections.begin(), sections.end(),
+      [] (const auto& section) {
+        return section.m_path == "layout";
+      });
+    if(layout != sections.end()) {
+      add_item_spacing_properties(document, nodes, measurer, *layout);
     }
   }
 
@@ -807,6 +868,7 @@ std::vector<PropertyDescriptor> Rellu::extract_properties(
     const TextSelection* selection) {
   auto sections = extract_node_properties(document, id, measurer, selection);
   limit_size(sections, get_stack_limits(document, std::vector{id}));
+  add_item_spacing(sections, document, std::vector{id}, measurer);
   return sections;
 }
 
@@ -823,19 +885,19 @@ std::vector<PropertyDescriptor> Rellu::extract_common_properties(
     described.push_back(
       extract_node_properties(document, id, measurer, selection));
   }
-  auto sections = described.front();
-  for(auto i = std::size_t(1); i != described.size(); ++i) {
-    intersect_properties(sections, described[i]);
-  }
-  auto transform = std::find_if(sections.begin(), sections.end(),
-    [] (const auto& section) {
-      return section.m_path == "transform";
-    });
-  if(transform != sections.end()) {
-    set_position(*transform, get_frame(document, nodes, measurer));
-    compare_shown(*transform, described);
+  auto sections = combine_properties(described);
+  for(auto& section : sections) {
+    if(section.m_path == "transform") {
+      set_position(section, get_frame(document, nodes, measurer));
+    } else if(section.m_path == "geometry") {
+      set_corner_mode(section);
+    } else if(section.m_path == "component") {
+      section.m_label = "Component";
+      section.m_children.clear();
+    }
   }
   limit_size(sections, get_stack_limits(document, nodes));
+  add_item_spacing(sections, document, nodes, measurer);
   return sections;
 }
 

@@ -12,6 +12,7 @@
 #include <QBuffer>
 #include <QImage>
 #include <QUuid>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/ArtboardPlacement.hpp"
 #include "Rellu/Commands/CopyNames.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
@@ -916,6 +917,10 @@ class Clipboard::PasteCommand : public Command {
         auto artboard = *std::get<Box<Artboard>>(copy.second);
         artboard.m_frame.m_x += offset.m_x;
         artboard.m_frame.m_y += offset.m_y;
+        if(!artboard.m_layout_grid && !m_target.m_is_prototyping) {
+          artboard.m_layout_grid = make_initial_grid(
+            artboard, document.get_resources().m_grid_defaults);
+        }
         copy.second = std::move(artboard);
         copy.first.m_name =
           make_artboard_name(document, copy.first.m_name, true);

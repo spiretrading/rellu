@@ -1,13 +1,9 @@
-#include <algorithm>
 #include <memory>
 #include "Rellu/Commands/ArtboardPresets.hpp"
 #include "Rellu/Tools/ArtboardCreation.hpp"
+#include "Rellu/Tools/ViewFit.hpp"
 
 using namespace Rellu;
-
-namespace {
-  constexpr auto REVEAL_MARGIN = 24.0;
-}
 
 NodeId Rellu::create_clicked_artboard(ToolContext& context, Point point) {
   auto& editor = context.get_editor();
@@ -32,15 +28,11 @@ NodeId Rellu::create_clicked_artboard(ToolContext& context, Point point) {
   if(view.contains(frame)) {
     return artboard;
   }
-  auto zoom = context.get_zoom();
-  auto fit = Size(std::max(size.m_width - 2 * REVEAL_MARGIN, 1.0) / zoom,
-    std::max(size.m_height - 2 * REVEAL_MARGIN, 1.0) / zoom);
-  if(frame.m_width > fit.m_width || frame.m_height > fit.m_height) {
+  if(frame.m_width > view.m_width || frame.m_height > view.m_height) {
     context.zoom_to(frame);
   } else {
-    auto center = frame.get_center();
-    context.zoom_to(Rect(center.m_x - fit.m_width / 2,
-      center.m_y - fit.m_height / 2, fit.m_width, fit.m_height));
+    context.zoom_to(
+      get_fitted_region(frame.get_center(), context.get_zoom(), size));
   }
   return artboard;
 }

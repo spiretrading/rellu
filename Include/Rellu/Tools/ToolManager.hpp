@@ -115,6 +115,20 @@ namespace Rellu {
       /** Returns the pointer to show. */
       ToolCursor get_cursor() const;
 
+      /**
+       * Returns the instance a component dragged over the canvas replaces
+       * if dropped, or nil if there is none.
+       */
+      const NodeId& get_drop_target() const;
+
+      /**
+       * Sets the instance a component dragged over the canvas replaces if
+       * dropped, which the overlay fills with translucent blue as Adobe XD
+       * does.
+       * @param target The instance, or nil for none.
+       */
+      void set_drop_target(const NodeId& target);
+
       /** Draws the overlay. */
       CanvasOverlay draw();
 
@@ -136,6 +150,7 @@ namespace Rellu {
       std::string m_name;
       PointerEvent m_last_move;
       bool m_has_move;
+      NodeId m_drop_target;
       Signal m_signal;
       Signal m_tool_signal;
       Subscription m_document_subscription;

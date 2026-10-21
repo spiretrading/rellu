@@ -65,6 +65,7 @@ namespace {
     auto header = NodeHeader();
     header.m_id = generate_node_id();
     header.m_name = std::move(name);
+    header.m_has_custom_name = !header.m_name.empty();
     header.m_constraints.m_is_enabled = true;
     return header;
   }
@@ -494,6 +495,15 @@ TEST_SUITE("XdWriter") {
   TEST_CASE("components") {
     auto document = Document();
     auto built = build(document);
+    {
+      auto transaction = Transaction(document);
+      auto component =
+        document.get_resources().m_components.at(built.m_component);
+      component.m_placements.push_back(
+        AssetPlacement("groupComponents", "an"));
+      transaction.replace_component(std::move(component));
+      transaction.commit();
+    }
     auto package = XdPackage(write_xd(document));
     auto resources = package.read_resources();
     auto symbols = resources.value("resources"_L1).toObject().value(
@@ -503,6 +513,8 @@ TEST_SUITE("XdWriter") {
     auto master = get_ux(symbols.first().toObject());
     REQUIRE(master.value("symbolId"_L1).toString().toStdString() ==
       to_string(built.m_component));
+    REQUIRE(master.value("assetGroupData"_L1).toObject() ==
+      QJsonObject({{"groupComponents", "an"}}));
     auto states = master.value("states"_L1).toArray();
     REQUIRE(states.size() == 1);
     REQUIRE(states.first().toObject().value("name"_L1) == "Hover"_L1);
@@ -771,6 +783,183 @@ TEST_SUITE("XdWriter") {
     REQUIRE(join(filter(find_differences(document, imported))) == "");
   }
 
+  TEST_CASE("rotation") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(100, 50, 375, 812);
+    auto artboard_id =
+      transaction.append(NodeId(), make_header("Home"), artboard);
+    auto text_header = make_header("Helloell");
+    text_header.m_has_custom_name = false;
+    text_header.m_transform = Matrix(-1, 0, 0, -1, 499, 409);
+    auto payload = make_text_payload(u"Helloell");
+    payload.m_frame = PositionedFrame();
+    payload.m_is_flipped_vertically = true;
+    auto text = transaction.append(artboard_id, text_header, payload);
+    auto outline_header = make_header("Helloell - Outline");
+    outline_header.m_has_custom_name = true;
+    outline_header.m_transform = text_header.m_transform;
+    auto outline = transaction.append(
+      artboard_id, outline_header, make_rectangle_shape(5, 5));
+    auto plain = transaction.append(artboard_id, make_header("Rectangle 1"),
+      make_rectangle_shape(5, 5));
+    auto loose_header = make_header("Rectangle 2");
+    loose_header.m_transform = Matrix(0, 1, -1, 0, 7, 8);
+    auto loose = transaction.append(
+      NodeId(), loose_header, make_rectangle_shape(5, 5));
+    transaction.commit();
+    auto bytes = write_xd(document);
+    auto package = XdPackage(bytes);
+    auto require_matrix = [] (const QJsonValue& value, const Matrix& matrix) {
+      auto json = value.toObject();
+      REQUIRE(json.size() == 6);
+      REQUIRE(Matrix(json.value("a"_L1).toDouble(), json.value("b"_L1).
+        toDouble(), json.value("c"_L1).toDouble(), json.value("d"_L1).
+        toDouble(), json.value("tx"_L1).toDouble(),
+        json.value("ty"_L1).toDouble()) == matrix);
+    };
+    auto written_text = find_written(package, text);
+    require_matrix(written_text.value("transform"_L1),
+      Matrix(-1, 0, 0, -1, 599, 459));
+    auto text_ux = get_ux(written_text);
+    REQUIRE(text_ux.value("nameL10N"_L1) == "SHAPE_GROUP"_L1);
+    REQUIRE(!text_ux.contains("hasCustomName"_L1));
+    REQUIRE(text_ux.value("rotation"_L1).toDouble() == 180);
+    REQUIRE(text_ux.value("flipY"_L1).toBool());
+    REQUIRE(text_ux.value("singleTextObject"_L1).toBool());
+    require_matrix(
+      text_ux.value("localTransform"_L1), Matrix(-1, 0, 0, -1, 499, 409));
+    auto outline_ux = get_ux(find_written(package, outline));
+    REQUIRE(outline_ux.value("hasCustomName"_L1).toBool());
+    REQUIRE(!outline_ux.contains("nameL10N"_L1));
+    REQUIRE(outline_ux.value("rotation"_L1).toDouble() == 180);
+    require_matrix(
+      outline_ux.value("localTransform"_L1), Matrix(-1, 0, 0, -1, 499, 409));
+    auto plain_ux = get_ux(find_written(package, plain));
+    REQUIRE(!plain_ux.contains("rotation"_L1));
+    require_matrix(plain_ux.value("localTransform"_L1), Matrix());
+    auto loose_ux = get_ux(find_written(package, loose));
+    REQUIRE(loose_ux.value("rotation"_L1).toDouble() == 90);
+    REQUIRE(!loose_ux.contains("localTransform"_L1));
+    auto imported = Document();
+    auto report = import_package(bytes, imported);
+    REQUIRE(report.m_unconsumed.empty());
+    REQUIRE(join(filter(find_differences(document, imported))) == "");
+  }
+
+  TEST_CASE("rotation_3d") {
+    auto rows = std::array<std::array<double, 4>, 4>({
+      std::array<double, 4>(
+        {0.8660253882408142, -0.3830222189426422, 0.32139381766319275,
+          427.8380126953125}),
+      std::array<double, 4>(
+        {0.5, 0.663413941860199, -0.5566704273223877, 137.89651489257812}),
+      std::array<double, 4>(
+        {0, 0.6427876353263855, 0.7660444378852844, -160.69691467285156}),
+      std::array<double, 4>({0, 0, 0, 1})});
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(100, 50, 1920, 1080);
+    auto artboard_id =
+      transaction.append(NodeId(), make_header("Web 1920 - 1"), artboard);
+    auto header = make_header("Rectangle 14");
+    header.m_transform = Matrix(rows[0][0], rows[1][0], rows[0][1],
+      rows[1][1], rows[0][3], rows[1][3]);
+    auto& transform = header.m_transform_3d.emplace();
+    for(auto i = std::size_t(0); i != 16; ++i) {
+      transform.m_matrix[i] = rows[i / 4][i % 4];
+    }
+    transform.m_rotation_x = 40;
+    transform.m_perspective_center = Point(336.5, 250);
+    header.m_rotation = 30;
+    auto id = transaction.append(
+      artboard_id, header, make_rectangle_shape(673, 500));
+    transaction.commit();
+    REQUIRE(document.get(id).m_header.m_rotation == 30);
+    auto bytes = write_xd(document);
+    auto written = find_written(XdPackage(bytes), id);
+    auto ux = get_ux(written);
+    REQUIRE(ux.value("rotation"_L1).toDouble() == 30);
+    REQUIRE(ux.value("rotationX"_L1).toDouble() == 40);
+    auto local = ux.value("localTransform"_L1).toObject();
+    auto global = written.value("transform"_L1).toObject();
+    for(auto i = 0; i != 4; ++i) {
+      auto key = QString::number(i);
+      auto local_row = local.value(key).toArray();
+      auto global_row = global.value(key).toArray();
+      REQUIRE(local_row.size() == 4);
+      for(auto j = 0; j != 4; ++j) {
+        REQUIRE(local_row.at(j).toDouble() == doctest::Approx(rows[i][j]));
+      }
+      auto offset = i == 0 ? 100.0 : i == 1 ? 50.0 : 0.0;
+      REQUIRE(global_row.at(3).toDouble() ==
+        doctest::Approx(rows[i][3] + offset));
+    }
+    auto imported = Document();
+    auto report = import_package(bytes, imported);
+    REQUIRE(report.m_unconsumed.empty());
+    REQUIRE(imported.get(id).m_header.m_rotation == 30);
+    REQUIRE(join(filter(find_differences(document, imported))) == "");
+  }
+
+  TEST_CASE("rotation_preservation") {
+    auto package = XdTestPackage();
+    package.m_frames = parse_json(R"({
+      "00000000-0000-0000-0000-000000000001": {"width": 400, "height": 300,
+      "name": "Home", "x": 0, "y": 0}})");
+    package.m_artboards.push_back(parse_json(R"({"type": "artboard",
+      "id": "00000000-0000-0000-0000-000000000001",
+      "style": {"fill": {"type": "none"}},
+      "artboard": {"children": [{"type": "text", "name": "Helloell",
+      "meta": {"ux": {"nameL10N": "SHAPE_GROUP", "rotation": 180,
+      "singleTextObject": true, "flipY": true, "rangedStyles": [{
+      "length": 0, "fontFamily": "Segoe UI", "fontStyle": "Regular",
+      "postscriptName": "SegoeUI", "fontSize": 20}],
+      "localTransform": {"a": -1, "b": 0, "c": 0, "d": -1, "tx": 499,
+      "ty": 409}}}, "id": "00000000-0000-0000-0000-000000000002",
+      "transform": {"a": -1, "b": 0, "c": 0, "d": -1, "tx": 499, "ty": 409},
+      "style": {"fill": {"type": "solid", "color": {"mode": "RGB",
+      "value": {"r": 112, "g": 112, "b": 112}}}, "font": {
+      "postscriptName": "SegoeUI", "family": "Segoe UI", "style": "Regular",
+      "size": 20}}, "text": {"frame": {"type": "positioned"},
+      "rawText": "Helloell"}},
+      {"type": "shape", "name": "Turned", "id":
+      "00000000-0000-0000-0000-000000000003",
+      "meta": {"ux": {"hasCustomName": true, "rotation": 270,
+      "localTransform": {"a": 0, "b": -1, "c": 1, "d": 0, "tx": 3,
+      "ty": 22}}},
+      "transform": {"a": 0, "b": -1, "c": 1, "d": 0, "tx": 3, "ty": 22},
+      "style": {"fill": {"type": "none"}},
+      "shape": {"type": "rect", "x": 0, "y": 0, "width": 4, "height": 4}}],
+      "meta": {"ux": {"path": "00000000-0000-0000-0000-000000000001"}},
+      "ref": "00000000-0000-0000-0000-000000000001"}})"));
+    auto document = Document();
+    import_package(package, document);
+    auto text_id = *parse_node_id("00000000-0000-0000-0000-000000000002");
+    auto turned_id = *parse_node_id("00000000-0000-0000-0000-000000000003");
+    {
+      auto transaction = Transaction(document);
+      auto text = *document.get(text_id).get_text();
+      text.m_style.m_fill = SolidFill(make_color(1, 2, 3));
+      transaction.replace_payload(text_id, text);
+      auto header = document.get(turned_id).m_header;
+      header.m_transform.m_tx += 10;
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    auto written = XdPackage(write_xd(document));
+    auto text_ux = get_ux(find_written(written, text_id));
+    REQUIRE(text_ux.value("rotation"_L1).toDouble() == 180);
+    REQUIRE(text_ux.value("localTransform"_L1).toObject().value(
+      "tx"_L1).toDouble() == 499);
+    auto turned_ux = get_ux(find_written(written, turned_id));
+    REQUIRE(turned_ux.value("rotation"_L1).toDouble() == 270);
+    REQUIRE(turned_ux.value("localTransform"_L1).toObject().value(
+      "tx"_L1).toDouble() == 13);
+  }
+
   TEST_CASE("empty_document") {
     auto document = Document();
     auto package = XdPackage(write_xd(document));
@@ -949,45 +1138,50 @@ TEST_SUITE("XdWriter") {
   }
 
   TEST_CASE("default_names") {
+    auto make_default = [] (std::string name) {
+      auto header = make_header(std::move(name));
+      header.m_has_custom_name = false;
+      return header;
+    };
     auto document = Document();
     auto transaction = Transaction(document);
     auto rectangle = transaction.append(NodeId(),
-      make_header("Rectangle 3"), make_rectangle_shape(5, 5));
-    auto custom_header = make_header("Logo");
+      make_default("Rectangle 3"), make_rectangle_shape(5, 5));
+    auto custom_header = make_default("Logo");
     custom_header.m_has_custom_name = true;
     auto custom = transaction.append(
       NodeId(), custom_header, make_rectangle_shape(5, 5));
     auto unnumbered = transaction.append(
-      NodeId(), make_header("Logo"), make_rectangle_shape(5, 5));
+      NodeId(), make_default("Logo"), make_rectangle_shape(5, 5));
     auto localized = transaction.append(
-      NodeId(), make_header("Rechteck 4"), make_rectangle_shape(5, 5));
+      NodeId(), make_default("Rechteck 4"), make_rectangle_shape(5, 5));
     auto localized_group =
-      transaction.append(NodeId(), make_header("Gruppe 7"), Group());
+      transaction.append(NodeId(), make_default("Gruppe 7"), Group());
     auto ellipse = Shape();
     ellipse.m_geometry = EllipseShape(Point(5, 5), 5, 3);
     auto ellipse_id =
-      transaction.append(NodeId(), make_header("Ellipse 12"), ellipse);
-    auto group = transaction.append(NodeId(), make_header("Group 2"), Group());
+      transaction.append(NodeId(), make_default("Ellipse 12"), ellipse);
+    auto group = transaction.append(NodeId(), make_default("Group 2"), Group());
     transaction.append(
-      group, make_header("Path 1"), make_rectangle_shape(5, 5));
+      group, make_default("Path 1"), make_rectangle_shape(5, 5));
     auto text = transaction.append(
-      NodeId(), make_header("Hello"), make_text_payload(u"Hello"));
-    auto renamed_header = make_header("Title");
+      NodeId(), make_default("Hello"), make_text_payload(u"Hello"));
+    auto renamed_header = make_default("Title");
     renamed_header.m_has_custom_name = true;
     auto renamed = transaction.append(
       NodeId(), renamed_header, make_text_payload(u"Hello"));
     auto grid = Group();
     grid.m_repeat_grid = RepeatGrid(Size(50, 50), 10, 10, 2, 3, Size(110, 170));
     auto grid_id =
-      transaction.append(NodeId(), make_header("Repeat Grid 1"), grid);
+      transaction.append(NodeId(), make_default("Repeat Grid 1"), grid);
     auto add_compound = [&] (CompoundOperation operation, std::string name) {
       auto compound = Shape();
       compound.m_geometry = CompoundShape(
         operation, Shared(*parse_svg_path("M 0 0 L 5 0 L 5 5 Z")));
       auto id =
-        transaction.append(NodeId(), make_header(std::move(name)), compound);
-      transaction.append(id, make_header("A"), make_rectangle_shape(5, 5));
-      transaction.append(id, make_header("B"), make_rectangle_shape(5, 5));
+        transaction.append(NodeId(), make_default(std::move(name)), compound);
+      transaction.append(id, make_default("A"), make_rectangle_shape(5, 5));
+      transaction.append(id, make_default("B"), make_rectangle_shape(5, 5));
       return id;
     };
     auto intersection =
@@ -1002,14 +1196,14 @@ TEST_SUITE("XdWriter") {
       mask.m_mask->m_shapes.push_back(
         MaskShape(Matrix(), EllipseShape(Point(10, 10), 10, 10)));
       auto id =
-        transaction.append(NodeId(), make_header(std::move(name)), mask);
-      transaction.append(id, make_header("A"), make_rectangle_shape(5, 5));
+        transaction.append(NodeId(), make_default(std::move(name)), mask);
+      transaction.append(id, make_default("A"), make_rectangle_shape(5, 5));
       return id;
     };
     auto mask_group = add_mask("Mask Group 1");
     auto masked_group = add_mask("Group 3");
-    auto master = transaction.insert_root(make_header("Component 1"), Group());
-    transaction.append(master, make_header("A"), make_rectangle_shape(5, 5));
+    auto master = transaction.insert_root(make_default("Component 1"), Group());
+    transaction.append(master, make_default("A"), make_rectangle_shape(5, 5));
     auto component = Component();
     component.m_name = "Component 1";
     component.m_master = master;
@@ -1020,7 +1214,7 @@ TEST_SUITE("XdWriter") {
       instance.m_component_instance =
         ComponentInstance(component_id, StateId(), Size(5, 5));
       instance.m_component_instance->m_is_name_inherited = is_custom;
-      auto header = make_header(std::move(name));
+      auto header = make_default(std::move(name));
       header.m_has_custom_name = is_custom;
       return transaction.append(NodeId(), std::move(header), instance);
     };

@@ -2,10 +2,13 @@
 #define RELLU_UI_LAYERS_PANEL_HPP
 #include <cstddef>
 #include <functional>
+#include <unordered_set>
 #include <vector>
+#include <QAbstractProxyModel>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QPoint>
 #include <QToolButton>
 #include <QTreeView>
 #include <QWidget>
@@ -42,13 +45,19 @@ namespace Rellu {
 
   /**
    * The Layers panel, listing a document's layers as Adobe XD does: the
-   * artboards while the current layer is not inside one, otherwise the
-   * layers of the artboard holding the current layer under a heading
-   * naming it, or every layer matching the search and filter. With an
-   * editor, the layers selected are the editor's selection, the current
-   * layer being its primary node, layers are renamed in place, dragged to
-   * reorder and reparent them, shown, hidden, locked and unlocked with the
-   * buttons appearing on hover, and act through a context menu.
+   * artboards and the Pasteboard row while the current layer is not inside
+   * an artboard or on the pasteboard, otherwise the layers of the artboard
+   * holding the current layer under a heading naming it, the layers on the
+   * pasteboard while the current layer is one of them or the Pasteboard row
+   * was double-clicked, or, while searching, every layer matching the
+   * search and filter, flat under a heading naming its artboard, the
+   * pasteboard or the canvas, a selection coming to include a layer outside
+   * the results ending the search. Clicking a container's icon in the tree
+   * selects it and expands or collapses it. With an editor, the layers
+   * selected are the editor's selection, the current layer being its
+   * primary node, layers are renamed in place, dragged to reorder and
+   * reparent them, shown, hidden, locked and unlocked with the buttons
+   * appearing on hover, and act through a context menu.
    */
   class LayersPanel : public QWidget {
     public:
@@ -70,6 +79,13 @@ namespace Rellu {
 
       /** Returns the tree view listing the layers. */
       QTreeView& get_view();
+
+      /**
+       * Returns the list shown in place of the tree view while searching,
+       * listing the matching layers of each artboard, the pasteboard or the
+       * canvas under a heading naming it.
+       */
+      QTreeView& get_results();
 
       /**
        * Lists a document's layers without an editor, clearing the current
@@ -101,7 +117,8 @@ namespace Rellu {
       void set_current(const NodeId& id);
 
       /**
-       * Returns the artboard whose layers are listed, or nil while the
+       * Returns the artboard whose layers are listed, LayersModel::PASTEBOARD
+       * while the layers on the pasteboard are listed, or nil while the
        * artboards are listed.
        */
       const NodeId& get_scope() const;
@@ -200,6 +217,8 @@ namespace Rellu {
     private:
       LayersModel* m_model;
       QTreeView* m_view;
+      QAbstractProxyModel* m_results_model;
+      QTreeView* m_results;
       QLineEdit* m_search;
       QToolButton* m_filter_button;
       QToolButton* m_back;
@@ -213,6 +232,9 @@ namespace Rellu {
       NodeId m_scope;
       bool m_is_synchronizing;
       bool m_is_filtered;
+      bool m_is_pasteboard_open;
+      bool m_is_results_stale;
+      std::unordered_set<NodeId> m_matches;
       CurrentHandler m_current_handler;
       CurrentHandler m_activation_handler;
 
@@ -222,8 +244,14 @@ namespace Rellu {
       void update_scope();
       void show_artboards();
       bool is_searching() const;
-      bool apply_filter(const QModelIndex& index);
-      bool is_match(const QModelIndex& index) const;
+      bool is_match(const Node& node) const;
+      void collect_matches(
+        const NodeId& id, std::vector<NodeId>& matches) const;
+      void update_results();
+      void select_results();
+      void on_result_selection();
+      void exit_search();
+      void show_context_menu(QTreeView& view, const QPoint& position);
   };
 }
 

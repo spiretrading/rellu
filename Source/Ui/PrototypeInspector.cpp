@@ -13,10 +13,12 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QScrollBar>
 #include <QStandardItemModel>
 #include <QTimer>
 #include <QToolButton>
+#include <QWheelEvent>
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Prototype/InteractionCommands.hpp"
@@ -31,6 +33,22 @@ using namespace Rellu;
 
 namespace {
   constexpr auto SIDE_MARGIN = 16;
+
+  class ChoiceBox : public QComboBox {
+    public:
+      ChoiceBox() {
+        setFocusPolicy(Qt::StrongFocus);
+      }
+
+    protected:
+      void wheelEvent(QWheelEvent* event) override {
+        if(hasFocus()) {
+          QComboBox::wheelEvent(event);
+        } else {
+          event->ignore();
+        }
+      }
+  };
 
   struct Option {
     QString m_label;
@@ -162,7 +180,7 @@ namespace {
 
   QComboBox* make_combo(const std::vector<Option>& options, int current,
       std::string_view context = "prototype") {
-    auto box = new QComboBox();
+    auto box = new ChoiceBox();
     box->setObjectName("choice_field");
     for(auto& option : options) {
       box->addItem(translate(context, option.m_label));
@@ -180,7 +198,7 @@ namespace {
 
   QComboBox* make_seconds_combo(
       const std::array<double, 7>& presets, double value) {
-    auto box = new QComboBox();
+    auto box = new ChoiceBox();
     box->setObjectName("choice_field");
     box->setEditable(true);
     box->setInsertPolicy(QComboBox::NoInsert);
@@ -815,7 +833,7 @@ void PrototypeInspector::rebuild() {
       auto has_states = !is_overlay && states.m_states.size() > 1;
       auto destination = get_destination(action);
       auto targets = std::vector<std::pair<NodeId, bool>>();
-      auto box = new QComboBox();
+      auto box = new ChoiceBox();
       box->setObjectName("choice_field");
       auto selected = -1;
       auto add_target = [&] (const NodeId& id, const QString& name,
@@ -905,7 +923,9 @@ void PrototypeInspector::rebuild() {
       for(auto axis : {0, 1}) {
         auto field = new QLineEdit();
         field->setObjectName("number_field");
-        field->setValidator(new QDoubleValidator(field));
+        auto validator = new QDoubleValidator(field);
+        validator->setLocale(QLocale::c());
+        field->setValidator(validator);
         auto value = axis == 0 ? overlay->m_position.m_x :
           overlay->m_position.m_y;
         field->setText(QString::number(value, 'g', 10));

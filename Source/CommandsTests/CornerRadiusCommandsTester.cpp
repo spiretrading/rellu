@@ -56,7 +56,32 @@ TEST_SUITE("CornerRadiusCommands") {
     REQUIRE(get_polygon_radius(document, polygon) == 0);
     require_undoable(history, std::make_unique<SetCornerRadiusCommand>(
       std::vector{scene.m_rectangle}, Corner::BOTTOM_RIGHT, 9));
+    REQUIRE(history.get_undo_label() == "Corner Radius");
     REQUIRE(get_radii(document, scene.m_rectangle) == CornerRadii(1, 2, 9, 4));
+  }
+
+  TEST_CASE("corner_labels") {
+    auto label = [] (Corner corner) {
+      return SetCornerRadiusCommand(
+        std::vector<NodeId>(), corner, 1, true).get_label();
+    };
+    REQUIRE(label(Corner::TOP_LEFT) == "Corner Radius Top Left");
+    REQUIRE(label(Corner::TOP_RIGHT) == "Corner Radius Top Right");
+    REQUIRE(label(Corner::BOTTOM_RIGHT) == "Corner Radius Bottom Right");
+    REQUIRE(label(Corner::BOTTOM_LEFT) == "Corner Radius Bottom Left");
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto history = History(document);
+    auto nodes = std::vector{scene.m_rectangle};
+    REQUIRE(history.merge(std::make_unique<SetCornerRadiusCommand>(
+      nodes, Corner::TOP_LEFT, 3, true)));
+    REQUIRE(history.merge(std::make_unique<SetCornerRadiusCommand>(
+      nodes, Corner::TOP_LEFT, 4, true)));
+    REQUIRE(history.merge(std::make_unique<SetCornerRadiusCommand>(
+      nodes, Corner::TOP_RIGHT, 5, true)));
+    REQUIRE(history.get_undo_count() == 2);
+    REQUIRE(history.get_undo_label() == "Corner Radius Top Right");
+    REQUIRE(get_radii(document, scene.m_rectangle) == CornerRadii(4, 5, 0, 0));
   }
 
   TEST_CASE("radius_merge") {

@@ -294,12 +294,20 @@ TEST_SUITE("Shapes") {
     REQUIRE(contains(triangle, Point(5, 3)));
   }
 
+  TEST_CASE("rounded_star") {
+    auto star = make_polygon(5, Rect(0, 0, 303, 303), 40, 50);
+    REQUIRE(contains(star, Point(151.5, 68.672)));
+    REQUIRE(!contains(star, Point(151.5, 68.652)));
+    REQUIRE(contains(star, Point(151.5, 150)));
+  }
+
   TEST_CASE("oversized_polygon_radius") {
     auto vertices = std::vector{Point(0, 0), Point(10, 0), Point(0, 10)};
     auto path = make_polygon(vertices, 1000);
     auto& segments = path.get_segments();
     REQUIRE(segments.front().m_type == SegmentType::MOVE);
-    REQUIRE(is_near(segments.front().m_points[0], Point(0, 5)));
+    auto radius = 10 / (1 + 1 / std::tan(std::numbers::pi / 8));
+    REQUIRE(is_near(segments.front().m_points[0], Point(0, radius)));
     auto bounds = get_bounds(path);
     REQUIRE(bounds.m_x >= 0);
     REQUIRE(bounds.m_y >= 0);

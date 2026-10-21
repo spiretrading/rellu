@@ -1,9 +1,12 @@
 #include <chrono>
+#include <cmath>
 #include <memory>
+#include <numbers>
 #include <utility>
 #include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Geometry/Shapes.hpp"
+#include "Rellu/Geometry/Stroke.hpp"
 #include "Rellu/Rendering/CanvasRenderer.hpp"
 #include "Rellu/Rendering/OffscreenRenderer.hpp"
 
@@ -173,5 +176,40 @@ TEST_SUITE("TileCache") {
     tiled.m_offscreen.render(SIZE, 1);
     REQUIRE(!tiled.m_renderer.is_complete());
     REQUIRE(tiled.render() == Harness(drawing, 4096, view).render());
+  }
+
+  TEST_CASE("rotated_stroke") {
+    auto line = make_rectangle(Rect(0, 0, 100, 60));
+    auto stroke = FillCommand(share(outline_stroke(line, StrokeGeometry(1,
+      StrokeAlignment::CENTER, StrokeCap::BUTT, StrokeJoin::MITER, 4, {}, 0),
+      0.01)), make_rotation(75 * std::numbers::pi / 180) *
+      make_translation(-50, -30), SolidPaint(make_color(0, 0, 0)));
+    stroke.m_stroke = StrokeLine(share(line), 1, StrokeCap::BUTT);
+    auto list = std::make_shared<DrawList>();
+    list->push_back(stroke);
+    auto drawing = std::make_shared<Drawing>();
+    drawing->set_lists({list});
+    auto view = make_translation(100, 80) * make_scale(1.25, 1.25);
+    auto whole = Harness(drawing, 4096, view).render().convertToFormat(
+      QImage::Format_RGBA8888);
+    auto tiled = Harness(drawing, 16, view).render().convertToFormat(
+      QImage::Format_RGBA8888);
+    REQUIRE(tiled == whole);
+    auto background = static_cast<double>(whole.constScanLine(0)[0]);
+    auto width = 1.25 / std::sin(75 * std::numbers::pi / 180);
+    for(auto y = 36; y != 145; ++y) {
+      auto pixels = whole.constScanLine(y);
+      auto x = 0;
+      while(x != SIZE.width() && pixels[4 * x] == background) {
+        ++x;
+      }
+      auto coverage = 0.0;
+      while(x != SIZE.width() && pixels[4 * x] != background) {
+        coverage += (background - pixels[4 * x]) / background;
+        ++x;
+      }
+      CAPTURE(y);
+      REQUIRE(std::abs(coverage - width) < 0.15);
+    }
   }
 }

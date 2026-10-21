@@ -1,7 +1,9 @@
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <doctest/doctest.h>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Fixture.hpp"
 
@@ -170,6 +172,38 @@ TEST_SUITE("StructureCommands") {
       std::vector{scene.m_ellipse, scene.m_text, scene.m_loose});
   }
 
+  TEST_CASE("ungroup_rotation") {
+    auto document = Document();
+    auto group = NodeId();
+    auto turned = NodeId();
+    auto other = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto header = make_header("Group",
+        make_translation(50, 50) * make_rotation(std::numbers::pi / 6));
+      header.m_rotation = 30;
+      group = transaction.append(NodeId(), header, Group());
+      header = make_header("Turned", make_rotation(-std::numbers::pi / 2));
+      header.m_rotation = -90;
+      turned = transaction.append(group, header, make_rectangle_shape(40, 20));
+      header = make_header("Other", make_rotation(-std::numbers::pi / 2));
+      header.m_rotation = -90;
+      other = transaction.append(group, header, make_rectangle_shape(40, 20));
+      transaction.commit();
+    }
+    auto history = History(document);
+    require_undoable(history, std::make_unique<ReparentCommand>(
+      std::vector{other}, group, 0));
+    REQUIRE(document.get(other).m_header.m_rotation == -90);
+    require_undoable(history, std::make_unique<ReparentCommand>(
+      std::vector{other}, NodeId(), 0));
+    REQUIRE(document.get(other).m_header.m_rotation == doctest::Approx(-60));
+    require_undoable(
+      history, std::make_unique<UngroupCommand>(std::vector{group}));
+    REQUIRE(document.get(turned).m_header.m_rotation == doctest::Approx(-60));
+    REQUIRE(is_congruent(-60, document.get(turned).m_header.m_transform));
+  }
+
   TEST_CASE("ungroupable") {
     auto document = Document();
     auto scene = build_scene(document);
@@ -304,6 +338,22 @@ TEST_SUITE("StructureCommands") {
       m_name == "Rectangle 1");
   }
 
+  TEST_CASE("duplicate_mask_names") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    rename(document, scene.m_mask, "Group 7");
+    auto history = History(document);
+    auto command = history.execute(
+      std::make_unique<DuplicateCommand>(std::vector{scene.m_mask}));
+    REQUIRE(document.get(command->get_selection()->front()).m_header.
+      m_name == "Group 8");
+    rename(document, scene.m_mask, "Mask Group");
+    command = history.execute(
+      std::make_unique<DuplicateCommand>(std::vector{scene.m_mask}));
+    REQUIRE(document.get(command->get_selection()->front()).m_header.
+      m_name == "Mask Group 1");
+  }
+
   TEST_CASE("duplicate_artboards") {
     auto document = Document();
     auto scene = build_scene(document);
@@ -315,6 +365,9 @@ TEST_SUITE("StructureCommands") {
     auto& node = document.get(copy);
     REQUIRE(node.m_header.m_name == "Artboard \xE2\x80\x93 1");
     REQUIRE(node.get_artboard()->m_frame == Rect(570, 50, 400, 300));
+    REQUIRE(node.get_artboard()->m_layout_grid ==
+      make_initial_grid(*node.get_artboard()));
+    REQUIRE(!document.get(scene.m_artboard).get_artboard()->m_layout_grid);
     REQUIRE(document.get_canvas() ==
       std::vector{scene.m_artboard, copy, scene.m_loose});
     REQUIRE(document.get(node.m_children.front()).m_header.m_name ==
@@ -326,6 +379,10 @@ TEST_SUITE("StructureCommands") {
     auto& overlapping = document.get(over->get_selection()->front());
     REQUIRE(overlapping.m_header.m_name == "Artboard \xE2\x80\x93 2");
     REQUIRE(overlapping.get_artboard()->m_frame == Rect(100, 50, 400, 300));
+    auto prototype = history.execute(std::make_unique<DuplicateCommand>(
+      std::vector{scene.m_artboard}, Point(0, 0), DuplicateMode::PROTOTYPE));
+    REQUIRE(!document.get(prototype->get_selection()->front()).
+      get_artboard()->m_layout_grid);
   }
 
   TEST_CASE("duplicate_references") {

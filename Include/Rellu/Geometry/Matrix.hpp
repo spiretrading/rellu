@@ -2,6 +2,7 @@
 #define RELLU_GEOMETRY_MATRIX_HPP
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <optional>
 #include <ostream>
 #include "Rellu/Geometry/Equality.hpp"
@@ -116,6 +117,27 @@ namespace Rellu {
   inline Matrix make_rotation(double angle, Point center) {
     return make_translation(center.m_x, center.m_y) * make_rotation(angle) *
       make_translation(-center.m_x, -center.m_y);
+  }
+
+  /**
+   * Returns the angle a transform turns the x axis by, as Adobe XD shows
+   * the rotation of a node.
+   * @param matrix The transform.
+   * @return The angle in degrees, greater than -180 and at most 180.
+   */
+  inline double get_rotation(const Matrix& matrix) {
+    constexpr auto PRECISION = 1e-9;
+    auto degrees = std::atan2(matrix.m_b, matrix.m_a) * 180 / std::numbers::pi;
+    if(auto whole = std::round(degrees);
+        std::abs(degrees - whole) < PRECISION) {
+      degrees = whole;
+    }
+    if(degrees <= -180) {
+      return 180;
+    } else if(degrees == 0) {
+      return 0;
+    }
+    return degrees;
   }
 
   /**

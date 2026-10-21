@@ -12,7 +12,7 @@
 
 namespace Rellu {
 
-  /** Lists the kinds of grid an artboard displays. */
+  /** Lists the kinds of design grid. */
   enum class GridType : unsigned char {
 
     /** A grid of equal squares. */
@@ -22,13 +22,22 @@ namespace Rellu {
     LAYOUT
   };
 
-  /** The design grid of an artboard, holding both kinds of grid. */
+  /**
+   * The design grid of an artboard, holding both kinds of grid. Which kind
+   * is shown is a setting of the window rather than of the artboard.
+   */
   struct LayoutGrid {
 
-    /** The kind of grid displayed. */
+    /**
+     * The kind of grid an earlier version of Adobe XD recorded as displayed,
+     * kept as read; GridType::SQUARE when none is recorded.
+     */
     GridType m_type = GridType::SQUARE;
 
-    /** Whether the grid is displayed. */
+    /**
+     * Whether an earlier version of Adobe XD recorded the grid as displayed,
+     * kept as read.
+     */
     bool m_is_visible = false;
 
     /** The number of columns of the layout grid. */

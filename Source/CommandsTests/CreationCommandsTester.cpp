@@ -21,14 +21,21 @@ TEST_SUITE("CreationCommands") {
   TEST_CASE("node_name") {
     auto document = Document();
     REQUIRE(make_node_name(document, "Rectangle ") == "Rectangle 1");
+    auto make_default_header = [] (const char* name) {
+      auto header = make_header(name);
+      header.m_has_custom_name = false;
+      return header;
+    };
     auto transaction = Transaction(document);
-    transaction.append(NodeId(), make_header("Rectangle 7"),
+    transaction.append(NodeId(), make_default_header("Rectangle 7"),
       make_rectangle_shape(1, 1));
-    transaction.append(NodeId(), make_header("Rectangle 12a"),
+    transaction.append(NodeId(), make_default_header("Rectangle 12a"),
       make_rectangle_shape(1, 1));
-    transaction.append(NodeId(), make_header("Rectangle 3"),
+    transaction.append(NodeId(), make_default_header("Rectangle 3"),
       make_rectangle_shape(1, 1));
-    transaction.append(NodeId(), make_header("Ellipse 40"),
+    transaction.append(NodeId(), make_default_header("Ellipse 40"),
+      make_rectangle_shape(1, 1));
+    transaction.append(NodeId(), make_header("Rectangle 50"),
       make_rectangle_shape(1, 1));
     transaction.commit();
     REQUIRE(make_node_name(document, "Rectangle ") == "Rectangle 8");

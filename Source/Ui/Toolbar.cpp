@@ -170,11 +170,12 @@ QToolButton* Toolbar::make_button(const ToolEntry& entry) {
   if(entry.m_shortcut.isEmpty()) {
     button->setToolTip(label);
   } else {
-    auto shortcut = to_xd_shortcut_text(entry.m_shortcut);
-    auto tip = QString("%1 (%2)").arg(entry.m_label, shortcut);
+    auto tip = QString("%1 (%2)").arg(entry.m_label,
+      to_xd_shortcut_text(entry.m_shortcut, Language::ENGLISH));
     auto translation = translate("toolbar", tip);
     if(translation == tip) {
-      translation = QString("%1 (%2)").arg(label, shortcut);
+      translation = QString("%1 (%2)").arg(
+        label, to_xd_shortcut_text(entry.m_shortcut));
     }
     button->setToolTip(translation);
   }

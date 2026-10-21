@@ -4,10 +4,12 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <QAbstractProxyModel>
 #include <QActionGroup>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QItemSelectionModel>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QStyledItemDelegate>
@@ -27,6 +29,7 @@ using namespace Rellu;
 
 namespace {
   constexpr auto INDICATOR_WIDTH = 24;
+  constexpr auto ICON_MARGIN = 6;
   const auto FILTERS = std::to_array<std::pair<LayerFilter, const char*>>({
     std::pair(LayerFilter::ALL, "All Items"),
     std::pair(LayerFilter::IMAGES, "Images"),
@@ -70,7 +73,9 @@ namespace {
 
   class StateDelegate : public QStyledItemDelegate {
     public:
-      using QStyledItemDelegate::QStyledItemDelegate;
+      explicit StateDelegate(QTreeView* view)
+        : QStyledItemDelegate(view),
+          m_view(view) {}
 
     protected:
       void initStyleOption(QStyleOptionViewItem* option,
@@ -78,7 +83,12 @@ namespace {
         QStyledItemDelegate::initStyleOption(option, index);
         auto is_hovered =
           static_cast<bool>(option->state & QStyle::State_MouseOver);
-        if(index.column() == LayersModel::VISIBILITY &&
+        if(index.column() == LayersModel::NAME && m_view->isExpanded(index)) {
+          if(auto icon = index.data(LayersModel::EXPANDED_ICON_ROLE);
+              icon.isValid()) {
+            option->icon = icon.value<QIcon>();
+          }
+        } else if(index.column() == LayersModel::VISIBILITY &&
             index.data(LayersModel::VISIBLE_ROLE).toBool() && !is_hovered) {
           option->icon = QIcon();
           option->features &= ~QStyleOptionViewItem::HasDecoration;
@@ -89,13 +99,123 @@ namespace {
           option->features |= QStyleOptionViewItem::HasDecoration;
         }
       }
+
+    private:
+      QTreeView* m_view;
   };
+
+  class ResultsModel : public QAbstractProxyModel {
+    public:
+      struct Row {
+        QPersistentModelIndex m_source;
+        QString m_label;
+      };
+
+      using QAbstractProxyModel::QAbstractProxyModel;
+
+      void set_rows(std::vector<Row> rows) {
+        beginResetModel();
+        m_rows = std::move(rows);
+        endResetModel();
+      }
+
+      QModelIndex index(int row, int column,
+          const QModelIndex& parent = QModelIndex()) const override {
+        if(parent.isValid() || row < 0 || row >= get_size() || column < 0 ||
+            column >= LayersModel::COLUMN_COUNT) {
+          return QModelIndex();
+        }
+        return createIndex(row, column);
+      }
+
+      QModelIndex parent(const QModelIndex& index) const override {
+        return QModelIndex();
+      }
+
+      int rowCount(const QModelIndex& parent = QModelIndex()) const override {
+        if(parent.isValid()) {
+          return 0;
+        }
+        return get_size();
+      }
+
+      int columnCount(
+          const QModelIndex& parent = QModelIndex()) const override {
+        return LayersModel::COLUMN_COUNT;
+      }
+
+      bool hasChildren(
+          const QModelIndex& parent = QModelIndex()) const override {
+        return !parent.isValid() && !m_rows.empty();
+      }
+
+      QModelIndex mapToSource(const QModelIndex& index) const override {
+        if(!index.isValid() || index.row() >= get_size()) {
+          return QModelIndex();
+        }
+        auto& source = m_rows[index.row()].m_source;
+        if(!source.isValid()) {
+          return QModelIndex();
+        }
+        return source.sibling(source.row(), index.column());
+      }
+
+      QModelIndex mapFromSource(const QModelIndex& source) const override {
+        if(!source.isValid()) {
+          return QModelIndex();
+        }
+        auto name = source.sibling(source.row(), LayersModel::NAME);
+        for(auto i = 0; i != get_size(); ++i) {
+          if(m_rows[i].m_source == name) {
+            return index(i, source.column());
+          }
+        }
+        return QModelIndex();
+      }
+
+      QVariant data(const QModelIndex& index, int role) const override {
+        if(index.isValid() && index.row() < get_size() &&
+            !m_rows[index.row()].m_source.isValid()) {
+          if(index.column() != LayersModel::NAME) {
+            return QVariant();
+          } else if(role == Qt::DisplayRole) {
+            return m_rows[index.row()].m_label;
+          } else if(role == Qt::ForegroundRole) {
+            return Colors::SECONDARY_TEXT;
+          }
+          return QVariant();
+        }
+        return QAbstractProxyModel::data(index, role);
+      }
+
+      Qt::ItemFlags flags(const QModelIndex& index) const override {
+        if(!index.isValid() || index.row() >= get_size() ||
+            !m_rows[index.row()].m_source.isValid()) {
+          return Qt::NoItemFlags;
+        }
+        return QAbstractProxyModel::flags(index) &
+          ~(Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled);
+      }
+
+    private:
+      std::vector<Row> m_rows;
+
+      int get_size() const {
+        return static_cast<int>(m_rows.size());
+      }
+  };
+
+  ResultsModel& get_results_model(QAbstractProxyModel& model) {
+    return static_cast<ResultsModel&>(model);
+  }
 }
 
 LayersPanel::LayersPanel(QWidget* parent)
     : QWidget(parent),
       m_model(new LayersModel(this)),
       m_view(new QTreeView()),
+      m_results_model(nullptr),
+      m_results(new QTreeView()),
       m_search(new QLineEdit()),
       m_filter_button(new QToolButton()),
       m_back(new QToolButton()),
@@ -104,7 +224,9 @@ LayersPanel::LayersPanel(QWidget* parent)
       m_actions(nullptr),
       m_filter(LayerFilter::ALL),
       m_is_synchronizing(false),
-      m_is_filtered(false) {
+      m_is_filtered(false),
+      m_is_pasteboard_open(false),
+      m_is_results_stale(true) {
   setObjectName("layers_panel");
   auto search = new QWidget();
   auto search_layout = new QHBoxLayout(search);
@@ -114,6 +236,7 @@ LayersPanel::LayersPanel(QWidget* parent)
   m_search->setPlaceholderText(translate("layers", "All Items"));
   m_search->setAccessibleName(translate("layers", "Search Layers"));
   m_search->setClearButtonEnabled(true);
+  m_search->installEventFilter(this);
   m_search->addAction(get_icon(Glyph::SEARCH), QLineEdit::LeadingPosition);
   search_layout->addWidget(m_search, 1);
   connect(m_search, &QLineEdit::textChanged, this, [this] (const auto& text) {
@@ -155,56 +278,55 @@ LayersPanel::LayersPanel(QWidget* parent)
   heading_layout->addWidget(m_back);
   m_heading->setObjectName("layers_heading");
   heading_layout->addWidget(m_heading, 1);
+  m_results_model = new ResultsModel(this);
+  m_results_model->setSourceModel(m_model);
   m_view->setObjectName("layers");
   m_view->setModel(m_model);
-  m_view->setItemDelegate(new StateDelegate(m_view));
-  m_view->setUniformRowHeights(true);
-  m_view->setHeaderHidden(true);
-  m_view->setSelectionMode(QAbstractItemView::ExtendedSelection);
-  m_view->setSelectionBehavior(QAbstractItemView::SelectRows);
-  m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
-  m_view->setAllColumnsShowFocus(true);
-  m_view->setIndentation(16);
-  m_view->setIconSize(QSize(16, 16));
-  m_view->setFrameShape(QFrame::NoFrame);
-  m_view->setMouseTracking(true);
+  m_results->setObjectName("layers");
+  m_results->setModel(m_results_model);
+  for(auto view : {m_view, m_results}) {
+    view->setItemDelegate(new StateDelegate(view));
+    view->setUniformRowHeights(true);
+    view->setRootIsDecorated(false);
+    view->setHeaderHidden(true);
+    view->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    view->setSelectionBehavior(QAbstractItemView::SelectRows);
+    view->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    view->setAllColumnsShowFocus(true);
+    view->setIndentation(16);
+    view->setIconSize(QSize(16, 16));
+    view->setFrameShape(QFrame::NoFrame);
+    view->setMouseTracking(true);
+    view->setContextMenuPolicy(Qt::CustomContextMenu);
+    view->viewport()->installEventFilter(this);
+    auto header = view->header();
+    header->setStretchLastSection(false);
+    header->setMinimumSectionSize(INDICATOR_WIDTH);
+    header->setSectionResizeMode(LayersModel::NAME, QHeaderView::Stretch);
+    for(auto column : {LayersModel::VISIBILITY, LayersModel::LOCK}) {
+      header->setSectionResizeMode(column, QHeaderView::Fixed);
+      header->resizeSection(column, INDICATOR_WIDTH);
+    }
+    connect(view, &QTreeView::customContextMenuRequested, this,
+      [this, view] (const QPoint& position) {
+        show_context_menu(*view, position);
+      });
+  }
   m_view->setDragDropMode(QAbstractItemView::InternalMove);
   m_view->setDefaultDropAction(Qt::MoveAction);
   m_view->setDropIndicatorShown(true);
-  m_view->setContextMenuPolicy(Qt::CustomContextMenu);
-  m_view->viewport()->installEventFilter(this);
-  auto header = m_view->header();
-  header->setStretchLastSection(false);
-  header->setMinimumSectionSize(INDICATOR_WIDTH);
-  header->setSectionResizeMode(LayersModel::NAME, QHeaderView::Stretch);
-  for(auto column : {LayersModel::VISIBILITY, LayersModel::LOCK}) {
-    header->setSectionResizeMode(column, QHeaderView::Fixed);
-    header->resizeSection(column, INDICATOR_WIDTH);
-  }
+  m_results->setItemsExpandable(false);
+  m_results->setVisible(false);
   auto layout = new QVBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
   layout->addWidget(search);
   layout->addWidget(heading);
   layout->addWidget(m_view, 1);
+  layout->addWidget(m_results, 1);
   connect(m_back, &QToolButton::clicked, this, [this] {
     show_artboards();
   });
-  connect(m_view, &QTreeView::customContextMenuRequested, this,
-    [this] (const QPoint& position) {
-      auto index = m_view->indexAt(position);
-      if(index.isValid() && m_editor &&
-          !m_editor->get_selection().contains(m_model->get_id(index))) {
-        m_editor->get_selection().select(m_model->get_id(index));
-      }
-      auto menu = make_context_menu(m_view);
-      menu->setAttribute(Qt::WA_DeleteOnClose);
-      if(menu->isEmpty()) {
-        menu->deleteLater();
-        return;
-      }
-      menu->popup(m_view->viewport()->mapToGlobal(position));
-    });
   connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged,
     this, [this] {
       if(!m_is_synchronizing) {
@@ -218,8 +340,27 @@ LayersPanel::LayersPanel(QWidget* parent)
       }
       on_selection();
       if(m_activation_handler && current.isValid() &&
+          m_model->get_id(current) != LayersModel::PASTEBOARD &&
           m_view->selectionModel()->isSelected(current)) {
         m_activation_handler(m_model->get_id(current));
+      }
+    });
+  connect(m_results->selectionModel(),
+    &QItemSelectionModel::selectionChanged, this, [this] {
+      if(!m_is_synchronizing) {
+        on_result_selection();
+      }
+    });
+  connect(m_results->selectionModel(), &QItemSelectionModel::currentChanged,
+    this, [this] (const QModelIndex& current) {
+      if(m_is_synchronizing) {
+        return;
+      }
+      on_result_selection();
+      auto source = m_results_model->mapToSource(current);
+      if(m_activation_handler && source.isValid() &&
+          m_results->selectionModel()->isSelected(current)) {
+        m_activation_handler(m_model->get_id(source));
       }
     });
   update_scope();
@@ -238,6 +379,7 @@ void LayersPanel::set_search(const QString& text) {
     m_search->setText(text);
     return;
   }
+  m_is_results_stale = true;
   update_scope();
 }
 
@@ -258,20 +400,15 @@ void LayersPanel::set_filter(LayerFilter filter) {
       actions[i]->setChecked(FILTERS[i].first == filter);
     }
   }
+  m_is_results_stale = true;
   update_scope();
 }
 
 bool LayersPanel::is_filtered_out(const NodeId& id) {
-  auto index = m_model->find(id);
-  if(!index.isValid()) {
-    return true;
+  if(is_searching()) {
+    return !m_matches.contains(id);
   }
-  for(auto current = index; current.isValid(); current = current.parent()) {
-    if(m_view->isRowHidden(current.row(), current.parent())) {
-      return true;
-    }
-  }
-  return false;
+  return !m_model->find(id).isValid();
 }
 
 bool LayersPanel::toggle_visibility(const NodeId& id) {
@@ -333,8 +470,41 @@ QMenu* LayersPanel::make_context_menu(QWidget* parent) {
   return Rellu::make_context_menu(*m_actions, ContextMenuKind::LAYERS, parent);
 }
 
+void LayersPanel::show_context_menu(QTreeView& view, const QPoint& position) {
+  auto index = view.indexAt(position);
+  if(&view == m_results) {
+    index = m_results_model->mapToSource(index);
+  }
+  auto id = m_model->get_id(index);
+  if(index.isValid() && m_editor && id != LayersModel::PASTEBOARD &&
+      !m_editor->get_selection().contains(id)) {
+    m_editor->get_selection().select(id);
+  }
+  auto menu = make_context_menu(&view);
+  menu->setAttribute(Qt::WA_DeleteOnClose);
+  if(menu->isEmpty()) {
+    menu->deleteLater();
+    return;
+  }
+  menu->popup(view.viewport()->mapToGlobal(position));
+}
+
 bool LayersPanel::eventFilter(QObject* watched, QEvent* event) {
-  if(watched != m_view->viewport() || !m_editor ||
+  if(watched == m_search) {
+    if(event->type() == QEvent::KeyPress &&
+        static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+      m_search->clearFocus();
+      return true;
+    } else if(event->type() == QEvent::MouseButtonPress &&
+        !m_search->hasFocus()) {
+      m_search->setFocus(Qt::MouseFocusReason);
+      m_search->selectAll();
+      return true;
+    }
+    return QWidget::eventFilter(watched, event);
+  }
+  auto is_results = watched == m_results->viewport();
+  if((watched != m_view->viewport() && !is_results) ||
       (event->type() != QEvent::MouseButtonPress &&
         event->type() != QEvent::MouseButtonDblClick)) {
     return QWidget::eventFilter(watched, event);
@@ -343,12 +513,37 @@ bool LayersPanel::eventFilter(QObject* watched, QEvent* event) {
   if(mouse->button() != Qt::LeftButton) {
     return QWidget::eventFilter(watched, event);
   }
-  auto index = m_view->indexAt(mouse->position().toPoint());
+  auto position = mouse->position().toPoint();
+  auto index = is_results ?
+    m_results_model->mapToSource(m_results->indexAt(position)) :
+    m_view->indexAt(position);
+  if(!is_results && index.isValid() && index.column() == LayersModel::NAME) {
+    auto rect = m_view->visualRect(index);
+    if(m_view->itemsExpandable() && m_model->hasChildren(index) &&
+        position.x() < rect.left() + m_view->iconSize().width() +
+          ICON_MARGIN) {
+      if(event->type() == QEvent::MouseButtonPress) {
+        auto id = m_model->get_id(index);
+        set_current(id);
+        auto group = m_model->find(id);
+        m_view->setExpanded(group, !m_view->isExpanded(group));
+      }
+      return true;
+    }
+    if(event->type() == QEvent::MouseButtonDblClick &&
+        m_model->get_id(index) == LayersModel::PASTEBOARD) {
+      m_is_pasteboard_open = true;
+      update_scope();
+      return true;
+    }
+  }
   if(!index.isValid() || (index.column() != LayersModel::VISIBILITY &&
       index.column() != LayersModel::LOCK)) {
     return QWidget::eventFilter(watched, event);
   }
-  if(event->type() == QEvent::MouseButtonPress) {
+  if(!m_editor) {
+    return QWidget::eventFilter(watched, event);
+  } else if(event->type() == QEvent::MouseButtonPress) {
     auto id = m_model->get_id(index);
     if(index.column() == LayersModel::VISIBILITY) {
       toggle_visibility(id);
@@ -364,18 +559,14 @@ bool LayersPanel::is_searching() const {
     m_filter != LayerFilter::ALL;
 }
 
-bool LayersPanel::is_match(const QModelIndex& index) const {
-  auto document = m_model->get_document();
-  auto node = document ? document->find(m_model->get_id(index)) : nullptr;
-  if(!node) {
-    return false;
-  }
+bool LayersPanel::is_match(const Node& node) const {
+  auto& document = *m_model->get_document();
   auto text = m_search->text().trimmed();
   if(!text.isEmpty() &&
-      !get_display_name(*document, *node).contains(text, Qt::CaseInsensitive)) {
+      !get_display_name(document, node).contains(text, Qt::CaseInsensitive)) {
     return false;
   }
-  auto displayed = get_displayed_node(*document, *node);
+  auto displayed = get_displayed_node(document, node);
   if(!displayed) {
     return m_filter == LayerFilter::ALL;
   }
@@ -393,20 +584,129 @@ bool LayersPanel::is_match(const QModelIndex& index) const {
   }
 }
 
-bool LayersPanel::apply_filter(const QModelIndex& index) {
-  auto is_visible = false;
-  auto is_searching = this->is_searching();
-  for(auto row = 0; row != m_model->rowCount(index); ++row) {
-    auto child = m_model->index(row, LayersModel::NAME, index);
-    auto has_match = apply_filter(child);
-    auto is_shown = !is_searching || is_match(child) || has_match;
-    m_view->setRowHidden(row, index, !is_shown);
-    if(is_searching && has_match) {
-      m_view->expand(child);
-    }
-    is_visible |= is_shown;
+void LayersPanel::collect_matches(
+    const NodeId& id, std::vector<NodeId>& matches) const {
+  auto& node = m_model->get_document()->get(id);
+  if(is_match(node)) {
+    matches.push_back(id);
   }
-  return is_visible;
+  auto group = node.get_group();
+  if(group && group->m_repeat_grid) {
+    if(!node.m_children.empty()) {
+      collect_matches(node.m_children.front(), matches);
+    }
+    return;
+  }
+  for(auto i = node.m_children.rbegin(); i != node.m_children.rend(); ++i) {
+    collect_matches(*i, matches);
+  }
+}
+
+void LayersPanel::update_results() {
+  m_is_results_stale = false;
+  m_matches.clear();
+  auto rows = std::vector<ResultsModel::Row>();
+  auto document = m_model->get_document();
+  if(!document) {
+    get_results_model(*m_results_model).set_rows(std::move(rows));
+    return;
+  }
+  auto add_group = [&] (const QString& label,
+      const std::vector<NodeId>& roots) {
+    auto matches = std::vector<NodeId>();
+    for(auto& root : roots) {
+      collect_matches(root, matches);
+    }
+    if(matches.empty()) {
+      return;
+    }
+    rows.push_back(ResultsModel::Row(QPersistentModelIndex(), label));
+    for(auto& id : matches) {
+      m_matches.insert(id);
+      rows.push_back(ResultsModel::Row(
+        QPersistentModelIndex(m_model->find(id)), QString()));
+    }
+  };
+  auto artboards = std::vector<NodeId>();
+  auto others = std::vector<NodeId>();
+  auto& canvas = document->get_canvas();
+  for(auto i = canvas.rbegin(); i != canvas.rend(); ++i) {
+    if(document->get(*i).get_artboard()) {
+      artboards.push_back(*i);
+    } else {
+      others.push_back(*i);
+    }
+  }
+  if(artboards.empty()) {
+    add_group(translate("layers", "CANVAS"), others);
+  } else {
+    for(auto& artboard : artboards) {
+      add_group(get_display_name(*document, document->get(artboard)).
+        toUpper(), {artboard});
+    }
+    add_group(translate("layers", "PASTEBOARD"), others);
+  }
+  get_results_model(*m_results_model).set_rows(std::move(rows));
+}
+
+void LayersPanel::select_results() {
+  auto guard = Guard(m_is_synchronizing);
+  auto ids = std::vector<NodeId>();
+  auto primary = m_current;
+  if(m_editor) {
+    ids = m_editor->get_selection().get_nodes();
+    primary = m_editor->get_selection().get_primary();
+  } else if(!m_current.is_nil()) {
+    ids.push_back(m_current);
+  }
+  auto items = QItemSelection();
+  for(auto& id : ids) {
+    if(m_matches.contains(id)) {
+      auto index = m_results_model->mapFromSource(m_model->find(id));
+      items.select(index, index);
+    }
+  }
+  auto model = m_results->selectionModel();
+  model->select(items,
+    QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+  if(m_matches.contains(primary)) {
+    auto index = m_results_model->mapFromSource(m_model->find(primary));
+    model->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
+    m_results->scrollTo(index);
+  }
+}
+
+void LayersPanel::on_result_selection() {
+  auto model = m_results->selectionModel();
+  auto current = model->currentIndex();
+  if(!model->isSelected(current)) {
+    current = QModelIndex();
+  }
+  auto nodes = std::vector<NodeId>();
+  for(auto& row : model->selectedRows(LayersModel::NAME)) {
+    if(auto id = m_model->get_id(m_results_model->mapToSource(row));
+        !id.is_nil()) {
+      nodes.push_back(id);
+    }
+  }
+  auto source = m_results_model->mapToSource(current);
+  if(m_editor) {
+    auto guard = Guard(m_is_synchronizing);
+    m_editor->get_selection().select(nodes, m_model->get_id(source));
+  }
+  if(!source.isValid() && !nodes.empty()) {
+    source = m_model->find(nodes.front());
+  }
+  on_current(source);
+}
+
+void LayersPanel::exit_search() {
+  m_search->clear();
+  set_filter(LayerFilter::ALL);
+}
+
+QTreeView& LayersPanel::get_results() {
+  return *m_results;
 }
 
 LayersModel& LayersPanel::get_model() {
@@ -424,9 +724,12 @@ void LayersPanel::set_document(Document* document) {
   m_model->set_rename_handler(nullptr);
   m_model->set_move_handler(nullptr);
   m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  m_results->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_model->set_document(document);
+  m_is_results_stale = true;
   if(document) {
     m_document_subscription = document->subscribe([this] (const auto&) {
+      m_is_results_stale = true;
       update_scope();
     });
   }
@@ -445,11 +748,14 @@ void LayersPanel::set_editor(Editor* editor) {
     m_model->set_rename_handler(nullptr);
     m_model->set_move_handler(nullptr);
     m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_results->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_model->set_document(nullptr);
+    m_is_results_stale = true;
     on_current(QModelIndex());
     return;
   }
   m_model->set_document(&editor->get_document());
+  m_is_results_stale = true;
   m_editor = editor;
   m_model->set_rename_handler([this] (const auto& id, const auto& name) {
     if(!m_editor) {
@@ -464,10 +770,13 @@ void LayersPanel::set_editor(Editor* editor) {
       auto index) {
     return move(nodes, parent, index);
   });
-  m_view->setEditTriggers(
-    QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
+  for(auto view : {m_view, m_results}) {
+    view->setEditTriggers(
+      QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
+  }
   m_document_subscription =
     editor->get_document().subscribe([this] (const auto&) {
+      m_is_results_stale = true;
       update_scope();
     });
   m_subscription = m_editor->get_selection().subscribe([this] {
@@ -516,10 +825,18 @@ bool LayersPanel::rename(const NodeId& id) {
   if(!index.isValid()) {
     return false;
   }
-  m_view->scrollTo(index);
-  m_view->setCurrentIndex(index);
-  m_view->edit(index);
-  return static_cast<bool>(m_model->flags(index) & Qt::ItemIsEditable);
+  auto view = m_view;
+  if(is_searching()) {
+    index = m_results_model->mapFromSource(index);
+    if(!index.isValid()) {
+      return false;
+    }
+    view = m_results;
+  }
+  view->scrollTo(index);
+  view->setCurrentIndex(index);
+  view->edit(index);
+  return static_cast<bool>(view->model()->flags(index) & Qt::ItemIsEditable);
 }
 
 void LayersPanel::set_current_handler(CurrentHandler handler) {
@@ -531,6 +848,17 @@ void LayersPanel::set_activation_handler(CurrentHandler handler) {
 }
 
 void LayersPanel::synchronize() {
+  if(!m_is_synchronizing) {
+    m_is_pasteboard_open = false;
+    if(is_searching()) {
+      auto& nodes = m_editor->get_selection().get_nodes();
+      if(std::ranges::any_of(nodes, [&] (const auto& id) {
+          return !m_matches.contains(id);
+        })) {
+        exit_search();
+      }
+    }
+  }
   auto guard = Guard(m_is_synchronizing);
   auto& selection = m_editor->get_selection();
   auto items = QItemSelection();
@@ -556,6 +884,9 @@ void LayersPanel::synchronize() {
   if(primary.isValid()) {
     m_view->scrollTo(primary);
   }
+  if(is_searching()) {
+    select_results();
+  }
 }
 
 void LayersPanel::on_selection() {
@@ -567,10 +898,24 @@ void LayersPanel::on_selection() {
   if(m_editor) {
     auto nodes = std::vector<NodeId>();
     for(auto& row : model->selectedRows(LayersModel::NAME)) {
-      nodes.push_back(m_model->get_id(row));
+      if(auto id = m_model->get_id(row); id != LayersModel::PASTEBOARD) {
+        nodes.push_back(id);
+      }
+    }
+    auto primary = m_model->get_id(current);
+    if(primary == LayersModel::PASTEBOARD) {
+      primary = NodeId();
     }
     auto guard = Guard(m_is_synchronizing);
-    m_editor->get_selection().select(nodes, m_model->get_id(current));
+    auto pasteboard =
+      QPersistentModelIndex(m_model->find(LayersModel::PASTEBOARD));
+    auto is_pasteboard_selected = nodes.empty() && pasteboard.isValid() &&
+      model->isSelected(pasteboard);
+    m_editor->get_selection().select(nodes, primary);
+    if(is_pasteboard_selected) {
+      model->setCurrentIndex(pasteboard,
+        QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    }
   }
   if(current.isValid()) {
     on_current(current);
@@ -582,6 +927,9 @@ void LayersPanel::on_selection() {
 
 void LayersPanel::on_current(const QModelIndex& index) {
   auto current = m_model->get_id(index);
+  if(current == LayersModel::PASTEBOARD) {
+    current = NodeId();
+  }
   if(current == m_current) {
     update_scope();
     return;
@@ -598,18 +946,26 @@ void LayersPanel::update_scope() {
   auto scope = NodeId();
   auto is_searching = this->is_searching();
   if(is_searching) {
-    m_view->setRootIndex(QModelIndex());
     m_scope = NodeId();
-    m_view->setRootIsDecorated(true);
-    m_view->setItemsExpandable(true);
-    m_heading->setText(translate("layers", "ARTBOARDS"));
+    m_view->setVisible(false);
+    m_results->setVisible(true);
+    m_heading->setVisible(false);
     m_back->setVisible(false);
-    apply_filter(QModelIndex());
     m_is_filtered = true;
+    if(m_is_results_stale) {
+      update_results();
+      select_results();
+    }
     return;
   } else if(m_is_filtered) {
     m_is_filtered = false;
-    apply_filter(QModelIndex());
+    m_results->setVisible(false);
+    m_view->setVisible(true);
+    m_heading->setVisible(true);
+    get_results_model(*m_results_model).set_rows(
+      std::vector<ResultsModel::Row>());
+    m_matches.clear();
+    m_is_results_stale = true;
     m_view->collapseAll();
     m_scope = NodeId();
     m_view->setRootIndex(QModelIndex());
@@ -619,7 +975,17 @@ void LayersPanel::update_scope() {
     if(!artboard.is_nil() && artboard != m_current &&
         document->is_on_canvas(artboard)) {
       scope = artboard;
+    } else if(artboard.is_nil()) {
+      auto top = m_model->find(m_current);
+      while(top.parent().isValid()) {
+        top = top.parent();
+      }
+      if(m_model->get_id(top) == LayersModel::PASTEBOARD) {
+        scope = LayersModel::PASTEBOARD;
+      }
     }
+  } else if(m_is_pasteboard_open) {
+    scope = LayersModel::PASTEBOARD;
   }
   auto root = scope.is_nil() ? QModelIndex() : m_model->find(scope);
   if(!root.isValid()) {
@@ -632,11 +998,21 @@ void LayersPanel::update_scope() {
     }
     m_view->setRootIndex(root);
   }
-  m_view->setRootIsDecorated(!m_scope.is_nil());
-  m_view->setItemsExpandable(!m_scope.is_nil());
-  if(m_scope.is_nil()) {
+  auto is_canvas = m_scope.is_nil() && document &&
+    std::none_of(document->get_canvas().begin(),
+      document->get_canvas().end(), [&] (const auto& id) {
+        return static_cast<bool>(document->get(id).get_artboard());
+      });
+  m_view->setItemsExpandable(!m_scope.is_nil() || is_canvas);
+  if(is_canvas) {
+    m_heading->setText(translate("layers", "CANVAS"));
+    m_back->setVisible(false);
+  } else if(m_scope.is_nil()) {
     m_heading->setText(translate("layers", "ARTBOARDS"));
     m_back->setVisible(false);
+  } else if(m_scope == LayersModel::PASTEBOARD) {
+    m_heading->setText(translate("layers", "PASTEBOARD"));
+    m_back->setVisible(true);
   } else {
     m_heading->setText(
       get_display_name(*document, document->get(m_scope)).toUpper());
@@ -645,6 +1021,16 @@ void LayersPanel::update_scope() {
 }
 
 void LayersPanel::show_artboards() {
+  if(m_scope == LayersModel::PASTEBOARD) {
+    m_is_pasteboard_open = false;
+    if(m_editor) {
+      m_editor->get_selection().clear();
+    } else {
+      set_current(NodeId());
+    }
+    update_scope();
+    return;
+  }
   if(m_editor) {
     if(!m_scope.is_nil()) {
       m_editor->get_selection().select(m_scope);

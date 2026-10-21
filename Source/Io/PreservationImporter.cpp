@@ -14,6 +14,7 @@
 #include "Rellu/Io/XdPatch.hpp"
 #include "Rellu/Io/XdValues.hpp"
 #include "Rellu/Io/XdWriter.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Parallel.hpp"
 
 using namespace Qt::StringLiterals;
@@ -46,6 +47,24 @@ namespace {
       return "<" + type.toString().toStdString() + ">";
     }
     return "<?>";
+  }
+
+  QJsonObject localize_name(const QJsonObject& json) {
+    auto key = json.value("meta"_L1).toObject().value("ux"_L1).toObject().value(
+      "nameL10N"_L1).toString();
+    auto name = json.value("name"_L1).toString();
+    if(key.isEmpty() || name.isEmpty() ||
+        json.value("type"_L1).toString() == "text"_L1) {
+      return json;
+    }
+    auto localized = QString::fromStdString(localize_default_name(
+      name.toStdString(), key.toStdString(), get_language()));
+    if(localized == name) {
+      return json;
+    }
+    auto copy = json;
+    copy.insert("name"_L1, localized);
+    return copy;
   }
 
   std::vector<NodeId> read_symbols(const QJsonObject& resources) {
@@ -101,7 +120,8 @@ namespace {
           continue;
         }
         auto json = generator.make_node(*node);
-        auto difference = make_patch(QJsonValue(record.m_json), json,
+        auto difference = make_patch(
+          QJsonValue(localize_name(record.m_json)), json,
           XdStructure::get_node(), get_root(record.m_json), &local);
         auto data = XdNodeData();
         data.m_patch = difference.m_patch;

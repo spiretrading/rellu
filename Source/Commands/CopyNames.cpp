@@ -78,7 +78,7 @@ namespace {
       } else if(group->m_scroll_group) {
         return {"Scroll Group"};
       } else if(group->m_mask) {
-        return {"Mask Group"};
+        return {"Mask Group", "Group"};
       }
       return {"Group"};
     }
@@ -88,8 +88,9 @@ namespace {
   bool is_numbered_kind(std::string_view name, std::string_view kind) {
     return std::any_of(LANGUAGES.begin(), LANGUAGES.end(),
       [&] (const auto& language) {
-        return is_numbered(name,
-          std::string(localize("name", kind, language)) + ' ');
+        auto prefix = localize("name", kind, language);
+        return name == prefix ||
+          is_numbered(name, std::string(prefix) + ' ');
       });
   }
 

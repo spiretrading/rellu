@@ -87,6 +87,7 @@ TEST_SUITE("XdClipboard") {
     auto board = transaction.append(NodeId(), NodeHeader(), artboard);
     auto header = NodeHeader();
     header.m_name = "Box";
+    header.m_has_custom_name = true;
     header.m_transform = make_translation(10, 20);
     auto shape = Shape();
     shape.m_geometry = RectangleShape(Rect(0, 0, 30, 40));

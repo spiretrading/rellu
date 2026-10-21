@@ -1,5 +1,6 @@
 #include <concepts>
 #include <variant>
+#include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Ui/NodeDescription.hpp"
 #include "Rellu/Ui/Translation.hpp"
@@ -39,23 +40,35 @@ const Node* Rellu::get_displayed_node(
 }
 
 QString Rellu::get_display_name(const Document& document, const Node& node) {
-  if(!node.m_header.m_name.empty()) {
-    return QString::fromStdString(node.m_header.m_name);
-  }
   auto displayed = get_displayed_node(document, node);
-  if(!displayed) {
+  auto name = QString();
+  if(!node.m_header.m_name.empty()) {
+    name = QString::fromStdString(node.m_header.m_name);
+  } else if(!displayed) {
     return get_kind_name(NodeKind::REFERENCE);
+  } else if(!displayed->m_header.m_name.empty()) {
+    name = QString::fromStdString(displayed->m_header.m_name);
+  } else if(auto text = displayed->get_text()) {
+    name = get_text_name(*text);
   }
-  if(!displayed->m_header.m_name.empty()) {
-    return QString::fromStdString(displayed->m_header.m_name);
+  if(name.isEmpty()) {
+    name = get_type_name(*displayed);
   }
-  if(auto text = displayed->get_text()) {
-    auto name = get_text_name(*text);
-    if(!name.isEmpty()) {
-      return name;
-    }
+  auto group = displayed ? displayed->get_group() : nullptr;
+  if(!group || !group->m_component_instance) {
+    return name;
   }
-  return get_type_name(*displayed);
+  auto& resources = document.get_resources();
+  auto component =
+    resources.m_components.find(group->m_component_instance->m_component);
+  if(component == resources.m_components.end()) {
+    return name;
+  }
+  auto path = get_group_path(resources, component->second.m_master);
+  for(auto i = path.rbegin(); i != path.rend(); ++i) {
+    name = QString::fromStdString(*i) + " / " + name;
+  }
+  return name;
 }
 
 QString Rellu::get_kind_name(NodeKind kind) {

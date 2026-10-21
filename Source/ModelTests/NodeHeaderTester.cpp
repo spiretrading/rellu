@@ -3,6 +3,7 @@
 #include <numbers>
 #include <doctest/doctest.h>
 #include "Rellu/Model/NodeHeader.hpp"
+#include "Rellu/Model/Transaction.hpp"
 
 using namespace Rellu;
 
@@ -76,6 +77,69 @@ TEST_SUITE("NodeHeader") {
       projection.map(Point(0, 61)).m_x;
     REQUIRE(top > 238);
     REQUIRE(bottom < 238);
+  }
+
+  TEST_CASE("derive_rotation") {
+    REQUIRE(derive_rotation(Matrix()) == 0);
+    REQUIRE(derive_rotation(Matrix(0, -1, 1, 0, 3, 22)) == 270);
+    REQUIRE(derive_rotation(Matrix(-1, 0, 0, -1, 0, 0)) == 180);
+    REQUIRE(derive_rotation(Matrix(0.8660253882408142, -0.5, 0.5,
+      0.8660253882408142, 0, 0)) == doctest::Approx(330));
+  }
+
+  TEST_CASE("fit_rotation") {
+    auto turned = Matrix(0, -1, 1, 0, 3, 22);
+    REQUIRE(fit_rotation(-90, turned) == -90);
+    REQUIRE(fit_rotation(270, turned) == 270);
+    REQUIRE(fit_rotation(0, turned) == 270);
+    REQUIRE(fit_rotation(-30, turned) == 270);
+    REQUIRE(fit_rotation(360, Matrix()) == 360);
+    REQUIRE(fit_rotation(-360, Matrix()) == -360);
+    REQUIRE(fit_rotation(180.00001525878906, Matrix(-1, 0, 0, -1, 6, 208)) ==
+      180.00001525878906);
+    REQUIRE(fit_rotation(90, Matrix()) == 0);
+  }
+
+  TEST_CASE("finalize_rotation") {
+    REQUIRE(finalize_rotation(360, Matrix()) == 0);
+    REQUIRE(finalize_rotation(-360, Matrix()) == 0);
+    REQUIRE(finalize_rotation(-90, Matrix(0, -1, 1, 0, 0, 0)) == -90);
+    REQUIRE(finalize_rotation(-90, Matrix(0, 1, -1, 0, 0, 0)) == -270);
+    REQUIRE(finalize_rotation(90, Matrix(0, -1, 1, 0, 0, 0)) == 270);
+    auto turn = [] (double degrees) {
+      return make_rotation(degrees * std::numbers::pi / 180);
+    };
+    REQUIRE(finalize_rotation(30, turn(150)) == doctest::Approx(150));
+    REQUIRE(finalize_rotation(-30, turn(210)) == doctest::Approx(-150));
+    REQUIRE(finalize_rotation(30, turn(-30)) == doctest::Approx(330));
+    REQUIRE(finalize_rotation(270, turn(-90)) == 270);
+  }
+
+  TEST_CASE("transaction_rotation") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto header = NodeHeader();
+    header.m_rotation = -90;
+    header.m_transform = Matrix(0, -1, 1, 0, 0, 0);
+    auto id = transaction.append(NodeId(), header, Group());
+    REQUIRE(document.get(id).m_header.m_rotation == -90);
+    header = document.get(id).m_header;
+    header.m_transform.m_tx = 5;
+    transaction.replace_header(header);
+    REQUIRE(document.get(id).m_header.m_rotation == -90);
+    header.m_transform = Matrix(0, 1, -1, 0, 5, 0);
+    transaction.replace_header(header);
+    REQUIRE(document.get(id).m_header.m_rotation == 90);
+    auto unrotated = NodeHeader();
+    unrotated.m_rotation = 30;
+    auto other = transaction.append(NodeId(), unrotated, Group());
+    REQUIRE(document.get(other).m_header.m_rotation == 0);
+    auto tilted = NodeHeader();
+    tilted.m_rotation = 30;
+    tilted.m_transform_3d.emplace();
+    auto spatial = transaction.append(NodeId(), tilted, Group());
+    REQUIRE(document.get(spatial).m_header.m_rotation == 30);
+    transaction.commit();
   }
 
   TEST_CASE("planar_entries") {

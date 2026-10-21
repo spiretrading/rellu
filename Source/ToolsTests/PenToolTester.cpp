@@ -1,3 +1,5 @@
+#include <cmath>
+#include <numbers>
 #include <variant>
 #include <vector>
 #include <doctest/doctest.h>
@@ -88,7 +90,7 @@ TEST_SUITE("PenTool") {
     auto setup = Setup();
     auto& tools = setup.m_tools;
     auto& history = setup.m_editor.get_history();
-    REQUIRE(tools.get_cursor().m_kind == CursorKind::CROSSHAIR);
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::PEN);
     click(tools, Point(150, 150));
     auto id = setup.get_drawn();
     auto& node = setup.m_document.get(id);
@@ -175,9 +177,14 @@ TEST_SUITE("PenTool") {
     auto anchors = setup.get_contours(id).front().m_anchors;
     REQUIRE(anchors.size() == 4);
     REQUIRE(anchors[1].m_point == Point(150, 50));
-    REQUIRE(anchors[2].m_point.m_x == doctest::Approx(247.5));
-    REQUIRE(anchors[2].m_point.m_y == doctest::Approx(147.5));
-    REQUIRE(anchors[3].m_in.m_y == doctest::Approx(anchors[3].m_point.m_y));
+    auto side = std::sqrt((95.0 * 95.0 + 100.0 * 100.0) / 2);
+    REQUIRE(anchors[2].m_point.m_x == doctest::Approx(150 + side));
+    REQUIRE(anchors[2].m_point.m_y == doctest::Approx(50 + side));
+    auto handle = anchors[3].m_point - anchors[3].m_in;
+    REQUIRE(std::atan2(handle.m_y, handle.m_x) ==
+      doctest::Approx(std::numbers::pi / 12));
+    REQUIRE(length(handle) == doctest::Approx(
+      length(Point(295, 260) - anchors[3].m_point)));
   }
 
   TEST_CASE("close") {

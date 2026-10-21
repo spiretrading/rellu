@@ -1,16 +1,37 @@
+#include <algorithm>
 #include <memory>
 #include <vector>
 #include <doctest/doctest.h>
 #include <QCoreApplication>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
+#include <QLineEdit>
+#include <QMouseEvent>
+#include <QToolButton>
 #include "Rellu/Editor/Editor.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Ui/LayersPanel.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "TestDocument.hpp"
 
 using namespace Rellu;
 using namespace Rellu::Tests;
+
+namespace {
+  void click(QTreeView& view, const QModelIndex& index, bool is_icon) {
+    auto rect = view.visualRect(index);
+    auto point = QPointF(is_icon ? rect.left() + 4 : rect.center().x(),
+      rect.center().y());
+    auto press = QMouseEvent(QEvent::MouseButtonPress, point,
+      view.viewport()->mapToGlobal(point), Qt::LeftButton, Qt::LeftButton,
+      Qt::NoModifier);
+    QCoreApplication::sendEvent(view.viewport(), &press);
+    auto release = QMouseEvent(QEvent::MouseButtonRelease, point,
+      view.viewport()->mapToGlobal(point), Qt::LeftButton, Qt::NoButton,
+      Qt::NoModifier);
+    QCoreApplication::sendEvent(view.viewport(), &release);
+  }
+}
 
 TEST_SUITE("LayersPanel") {
   TEST_CASE("current") {
@@ -109,9 +130,119 @@ TEST_SUITE("LayersPanel") {
     }
     REQUIRE(panel.get_heading() == "START");
     editor.get_selection().select(ids.m_loose);
+    REQUIRE(panel.get_scope() == LayersModel::PASTEBOARD);
+    REQUIRE(panel.get_heading() == "PASTEBOARD");
+    REQUIRE(view.rootIndex() == model.find(LayersModel::PASTEBOARD));
+    editor.get_selection().clear();
     REQUIRE(panel.get_scope().is_nil());
     REQUIRE(panel.get_heading() == "ARTBOARDS");
     REQUIRE(!view.rootIndex().isValid());
+  }
+
+  TEST_CASE("pasteboard") {
+    set_language(Language::GERMAN);
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto panel = LayersPanel();
+    panel.set_editor(&editor);
+    auto& model = panel.get_model();
+    auto& view = panel.get_view();
+    panel.resize(300, 600);
+    panel.show();
+    auto pasteboard = model.find(LayersModel::PASTEBOARD);
+    auto name = model.data(pasteboard, Qt::DisplayRole).toString();
+    editor.get_selection().select(ids.m_ellipse);
+    view.setCurrentIndex(pasteboard);
+    REQUIRE(panel.get_scope().is_nil());
+    REQUIRE(view.selectionModel()->isSelected(pasteboard));
+    REQUIRE(editor.get_selection().is_empty());
+    REQUIRE(panel.get_current().is_nil());
+    auto center = view.visualRect(pasteboard).center();
+    auto click = QMouseEvent(QEvent::MouseButtonDblClick, QPointF(center),
+      view.viewport()->mapToGlobal(QPointF(center)), Qt::LeftButton,
+      Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(view.viewport(), &click);
+    auto heading = panel.get_heading();
+    set_language(Language::ENGLISH);
+    REQUIRE(name == QString::fromUtf8("Montagefl\xC3\xA4" "che"));
+    REQUIRE(heading == QString::fromUtf8("MONTAGEFL\xC3\x84" "CHE"));
+    REQUIRE(panel.get_scope() == LayersModel::PASTEBOARD);
+    REQUIRE(view.rootIndex() == pasteboard);
+    REQUIRE(!model.data(pasteboard, Qt::DecorationRole).isNull());
+    REQUIRE(!model.flags(pasteboard).testFlag(Qt::ItemIsEditable));
+    REQUIRE(!model.flags(pasteboard).testFlag(Qt::ItemIsDragEnabled));
+    REQUIRE(model.flags(pasteboard).testFlag(Qt::ItemIsDropEnabled));
+    auto buttons = panel.findChildren<QToolButton*>();
+    auto back = std::find_if(buttons.begin(), buttons.end(),
+      [] (const auto& button) {
+        return button->objectName() == "panel_button" && !button->menu();
+      });
+    REQUIRE(back != buttons.end());
+    (*back)->click();
+    REQUIRE(panel.get_scope().is_nil());
+    REQUIRE(!view.rootIndex().isValid());
+    editor.get_selection().select(ids.m_loose);
+    REQUIRE(panel.get_scope() == LayersModel::PASTEBOARD);
+    (*back)->click();
+    REQUIRE(panel.get_scope().is_nil());
+    REQUIRE(editor.get_selection().is_empty());
+    {
+      auto transaction = Transaction(document);
+      transaction.remove(ids.m_artboard);
+      transaction.commit();
+    }
+    REQUIRE(!model.find(LayersModel::PASTEBOARD).isValid());
+    REQUIRE(model.find(ids.m_loose).parent() == QModelIndex());
+    panel.hide();
+  }
+
+  TEST_CASE("canvas") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    {
+      auto transaction = Transaction(document);
+      transaction.remove(ids.m_artboard);
+      transaction.commit();
+    }
+    auto folder = NodeId();
+    {
+      auto transaction = Transaction(document);
+      folder = transaction.append(NodeId(), make_header("Folder"), Group());
+      transaction.append(
+        folder, make_header("Inner"), make_rectangle_shape(5, 5));
+      transaction.commit();
+    }
+    auto panel = LayersPanel();
+    panel.set_document(&document);
+    panel.resize(300, 600);
+    panel.show();
+    auto& view = panel.get_view();
+    auto& model = panel.get_model();
+    REQUIRE(panel.get_heading() == "CANVAS");
+    REQUIRE(view.itemsExpandable());
+    REQUIRE(!view.rootIsDecorated());
+    REQUIRE(panel.get_scope().is_nil());
+    auto index = model.find(folder);
+    REQUIRE(model.data(index, LayersModel::EXPANDED_ICON_ROLE).isValid());
+    REQUIRE(!model.data(model.find(ids.m_loose),
+      LayersModel::EXPANDED_ICON_ROLE).isValid());
+    click(view, index, true);
+    REQUIRE(view.isExpanded(index));
+    REQUIRE(panel.get_current() == folder);
+    click(view, index, true);
+    REQUIRE(!view.isExpanded(index));
+    REQUIRE(panel.get_current() == folder);
+    panel.hide();
+    {
+      auto transaction = Transaction(document);
+      auto artboard = Artboard();
+      artboard.m_frame = Rect(0, 0, 10, 10);
+      transaction.append(NodeId(), make_header("Board"), artboard);
+      transaction.commit();
+    }
+    REQUIRE(panel.get_heading() == "ARTBOARDS");
+    REQUIRE(!panel.get_view().itemsExpandable());
   }
 
   TEST_CASE("rename") {
@@ -173,10 +304,24 @@ TEST_SUITE("LayersPanel") {
     REQUIRE(panel.get_search().isEmpty());
     panel.set_search("back");
     REQUIRE(!panel.is_filtered_out(ids.m_background));
-    REQUIRE(!panel.is_filtered_out(ids.m_card));
+    REQUIRE(panel.is_filtered_out(ids.m_card));
     REQUIRE(panel.is_filtered_out(ids.m_ellipse));
     REQUIRE(panel.is_filtered_out(ids.m_loose));
-    REQUIRE(panel.get_view().isExpanded(panel.get_model().find(ids.m_card)));
+    auto& results = *panel.get_results().model();
+    REQUIRE(results.rowCount() == 2);
+    REQUIRE(results.index(0, LayersModel::NAME).data().toString() == "HOME");
+    REQUIRE(results.flags(results.index(0, LayersModel::NAME)) ==
+      Qt::NoItemFlags);
+    REQUIRE(results.index(1, LayersModel::NAME).data().toString() ==
+      "Background");
+    REQUIRE(!results.hasChildren(results.index(1, LayersModel::NAME)));
+    panel.set_search("o");
+    auto names = QStringList();
+    for(auto row = 0; row != results.rowCount(); ++row) {
+      names.push_back(results.index(row, LayersModel::NAME).data().toString());
+    }
+    REQUIRE(names == QStringList({"HOME", "Home", "Button", "Hello world",
+      "Background", "PASTEBOARD", "Loose"}));
     panel.set_search("");
     REQUIRE(!panel.is_filtered_out(ids.m_loose));
     panel.set_filter(LayerFilter::TEXT);
@@ -309,9 +454,91 @@ TEST_SUITE("LayersPanel") {
     REQUIRE(editor.get_selection().get_nodes() ==
       std::vector<NodeId>({ids.m_card}));
     panel.set_search("o");
+    editor.get_selection().select(ids.m_background);
+    REQUIRE(panel.get_search() == "o");
     auto up = QKeyEvent(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
-    QCoreApplication::sendEvent(&view, &up);
+    QCoreApplication::sendEvent(&panel.get_results(), &up);
     REQUIRE(editor.get_selection().get_nodes() ==
-      std::vector<NodeId>({ids.m_instance}));
+      std::vector<NodeId>({ids.m_label}));
+  }
+
+  TEST_CASE("folder_icon") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto panel = LayersPanel();
+    panel.set_editor(&editor);
+    panel.resize(300, 600);
+    panel.show();
+    auto& view = panel.get_view();
+    auto& model = panel.get_model();
+    editor.get_selection().select(ids.m_ellipse);
+    REQUIRE(panel.get_scope() == ids.m_artboard);
+    REQUIRE(!view.rootIsDecorated());
+    auto card = model.find(ids.m_card);
+    click(view, card, false);
+    REQUIRE(editor.get_selection().get_nodes() ==
+      std::vector<NodeId>({ids.m_card}));
+    REQUIRE(!view.isExpanded(card));
+    editor.get_selection().select(ids.m_ellipse);
+    click(view, card, true);
+    REQUIRE(editor.get_selection().get_nodes() ==
+      std::vector<NodeId>({ids.m_card}));
+    REQUIRE(view.isExpanded(card));
+    click(view, card, true);
+    REQUIRE(!view.isExpanded(card));
+    REQUIRE(editor.get_selection().get_nodes() ==
+      std::vector<NodeId>({ids.m_card}));
+    panel.set_search("card");
+    REQUIRE(!view.isVisible());
+    REQUIRE(panel.get_results().isVisible());
+    auto& results = panel.get_results();
+    auto row = results.model()->index(1, LayersModel::NAME);
+    REQUIRE(row.data().toString() == "Card");
+    click(results, row, true);
+    REQUIRE(editor.get_selection().get_nodes() ==
+      std::vector<NodeId>({ids.m_card}));
+    REQUIRE(results.model()->rowCount() == 2);
+    REQUIRE(results.selectionModel()->isSelected(row));
+    editor.get_selection().clear();
+    REQUIRE(panel.get_search() == "card");
+    REQUIRE(results.isVisible());
+    editor.get_selection().select(ids.m_card);
+    REQUIRE(panel.get_search() == "card");
+    REQUIRE(results.selectionModel()->isSelected(
+      results.model()->index(1, LayersModel::NAME)));
+    editor.get_selection().clear();
+    editor.get_selection().select(
+      std::vector<NodeId>({ids.m_card, ids.m_ellipse}), ids.m_ellipse);
+    REQUIRE(panel.get_search().isEmpty());
+    REQUIRE(view.isVisible());
+    REQUIRE(!results.isVisible());
+    REQUIRE(panel.get_scope() == ids.m_artboard);
+    REQUIRE(panel.get_heading() == "HOME");
+    REQUIRE(view.selectionModel()->isSelected(model.find(ids.m_ellipse)));
+    REQUIRE(view.selectionModel()->isSelected(model.find(ids.m_card)));
+    auto field = panel.findChild<QLineEdit*>("search_field");
+    REQUIRE(field->placeholderText() == "All Items");
+    panel.hide();
+  }
+
+  TEST_CASE("search_field") {
+    auto document = Document();
+    build_test_document(document);
+    auto panel = LayersPanel();
+    panel.set_document(&document);
+    auto field = panel.findChild<QLineEdit*>("search_field");
+    REQUIRE(field);
+    panel.set_search("back");
+    auto point = QPointF(field->rect().center());
+    auto press = QMouseEvent(QEvent::MouseButtonPress, point,
+      field->mapToGlobal(point), Qt::LeftButton, Qt::LeftButton,
+      Qt::NoModifier);
+    QCoreApplication::sendEvent(field, &press);
+    REQUIRE(field->selectedText() == "back");
+    auto escape = QKeyEvent(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(field, &escape);
+    REQUIRE(panel.get_search() == "back");
+    REQUIRE(panel.get_results().model()->rowCount() == 2);
   }
 }

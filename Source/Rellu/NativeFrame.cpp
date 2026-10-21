@@ -33,7 +33,8 @@ bool Rellu::handle_frame_event(QWidget& window, void* message,
   if(native->message == WM_NCCALCSIZE && native->wParam) {
     if(IsZoomed(native->hwnd)) {
       auto params = reinterpret_cast<NCCALCSIZE_PARAMS*>(native->lParam);
-      auto monitor = MonitorFromWindow(native->hwnd, MONITOR_DEFAULTTONEAREST);
+      auto monitor =
+        MonitorFromRect(&params->rgrc[0], MONITOR_DEFAULTTONEAREST);
       auto info = MONITORINFO();
       info.cbSize = sizeof(info);
       if(GetMonitorInfoW(monitor, &info)) {

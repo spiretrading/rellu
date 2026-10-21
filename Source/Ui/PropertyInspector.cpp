@@ -22,10 +22,13 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QRadialGradient>
+#include <QResizeEvent>
 #include <QScrollBar>
 #include <QSlider>
 #include <QTimer>
 #include <QToolButton>
+#include <QWheelEvent>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
@@ -41,11 +44,17 @@ using namespace Rellu;
 namespace {
   constexpr auto LARGE_STEP = 10.0;
   constexpr auto SIDE_MARGIN = 16;
+  constexpr auto ALIGN_MARGIN = 10;
   constexpr auto ICON_BUTTON_SIZE = 30;
   constexpr auto ICON_SIZE = 20;
   constexpr auto SEGMENT_SIZE = 32;
+  constexpr auto STROKE_SEGMENT_WIDTH = 35;
   constexpr auto SWATCH_WIDTH = 30;
   constexpr auto SWATCH_HEIGHT = 18;
+  const auto MIXED_SWATCH_BORDER = QColor(0xB3, 0xB3, 0xB3);
+  const auto MIXED_SWATCH_RING = QColor(0xF1, 0xED, 0xE9);
+  const auto MIXED_SWATCH_FILL = QColor(0xFB, 0xF7, 0xF3);
+  const auto MIXED_SWATCH_DASH = QColor(0xC2, 0xC2, 0xC2);
   const auto EM_DASH = QString(QChar(0x2014));
   const auto DEGREE = QString(QChar(0x00B0));
   const auto BLEND_SEPARATORS = QStringList(
@@ -83,6 +92,23 @@ namespace {
       return resolution->m_source;
     }
     return NodeId();
+  }
+
+  void split_corners(std::vector<PropertyDescriptor>& properties) {
+    for(auto& property : properties) {
+      if(auto choice = std::get_if<Choice>(&property.m_value);
+          choice && property.m_path == "geometry.radii") {
+        choice->m_index = 1;
+        property.m_is_mixed = false;
+      }
+      split_corners(property.m_children);
+    }
+  }
+
+  const auto GRID_SETTING_EDITOR = PropertyEditor();
+
+  bool is_grid_setting(std::string_view path) {
+    return path == "grid.visible" || path == "grid.type";
   }
 
   bool is_structural(const std::string& path) {
@@ -211,8 +237,55 @@ namespace {
       }
   };
 
+  class OverlayScrollArea : public QScrollArea {
+    public:
+      OverlayScrollArea()
+          : m_bar(new QScrollBar(Qt::Vertical, this)) {
+        setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_bar->hide();
+        auto source = verticalScrollBar();
+        QObject::connect(source, &QScrollBar::rangeChanged, m_bar,
+          [this] (int minimum, int maximum) {
+            m_bar->setRange(minimum, maximum);
+            m_bar->setPageStep(viewport()->height());
+            m_bar->setVisible(maximum > minimum);
+            m_bar->raise();
+          });
+        QObject::connect(
+          source, &QScrollBar::valueChanged, m_bar, &QScrollBar::setValue);
+        QObject::connect(
+          m_bar, &QScrollBar::valueChanged, source, &QScrollBar::setValue);
+      }
+
+    protected:
+      void resizeEvent(QResizeEvent* event) override {
+        QScrollArea::resizeEvent(event);
+        auto extent = m_bar->sizeHint().width();
+        m_bar->setGeometry(width() - extent, 0, extent, height());
+        m_bar->setPageStep(viewport()->height());
+      }
+
+    private:
+      QScrollBar* m_bar;
+  };
+
+  class Slider : public QSlider {
+    public:
+      Slider()
+        : QSlider(Qt::Horizontal) {}
+
+    protected:
+      void wheelEvent(QWheelEvent* event) override {
+        event->ignore();
+      }
+  };
+
   class ChoiceBox : public QComboBox {
     protected:
+      void wheelEvent(QWheelEvent* event) override {
+        event->ignore();
+      }
+
       void paintEvent(QPaintEvent* event) override {
         QComboBox::paintEvent(event);
         auto painter = QPainter(this);
@@ -703,7 +776,8 @@ namespace {
   };
 
   QWidget* make_segments(const Binding& binding, const std::string& path,
-      std::vector<Segment> segments, bool is_toggle = false) {
+      std::vector<Segment> segments, bool is_toggle = false,
+      int width = SEGMENT_SIZE + 6) {
     auto property = binding.m_find(path);
     if(!property) {
       return nullptr;
@@ -723,7 +797,7 @@ namespace {
         segment.m_glyph, segment.m_tip, is_toggle ? "icon_toggle" : "segment");
       button->setCheckable(true);
       if(!is_toggle) {
-        button->setFixedSize(SEGMENT_SIZE + 6, SEGMENT_SIZE);
+        button->setFixedSize(width, SEGMENT_SIZE);
       }
       button->setEnabled(binding.m_is_enabled && editor);
       layout->addWidget(button);
@@ -775,6 +849,22 @@ namespace {
     auto painter = QPainter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing);
     auto bounds = QRectF(0.5, 0.5, SWATCH_WIDTH - 1, SWATCH_HEIGHT - 1);
+    if(property && property->m_is_mixed) {
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(MIXED_SWATCH_RING);
+      painter.drawRoundedRect(bounds, 2, 2);
+      painter.setBrush(MIXED_SWATCH_FILL);
+      painter.drawRect(bounds.adjusted(1.5, 1.5, -1.5, -1.5));
+      painter.setBrush(MIXED_SWATCH_DASH);
+      painter.drawRect(QRectF(SWATCH_WIDTH / 2.0 - 4, SWATCH_HEIGHT / 2.0 - 1,
+        8, 2));
+      painter.setPen(QPen(MIXED_SWATCH_BORDER, 1.25));
+      painter.setBrush(Qt::NoBrush);
+      painter.drawRoundedRect(bounds, 2, 2);
+      painter.end();
+      button.setIcon(QIcon(pixmap));
+      return;
+    }
     painter.setPen(Qt::NoPen);
     painter.setBrush(Qt::white);
     painter.drawRoundedRect(bounds, 2, 2);
@@ -919,7 +1009,7 @@ namespace {
     column->addWidget(make_label(label));
     auto layout = static_cast<QHBoxLayout*>(nullptr);
     auto row = make_row(layout, 16);
-    auto slider = new QSlider(Qt::Horizontal);
+    auto slider = new Slider();
     slider->setObjectName("opacity_slider");
     slider->setAccessibleName(translate("inspector", property->m_label));
     slider->setFocusPolicy(Qt::NoFocus);
@@ -953,6 +1043,9 @@ namespace {
   }
 
   void build_align(const Binding& binding, QVBoxLayout& layout) {
+    auto margins = layout.contentsMargins();
+    layout.setContentsMargins(
+      ALIGN_MARGIN, margins.top(), ALIGN_MARGIN, margins.bottom());
     auto row_layout = static_cast<QHBoxLayout*>(nullptr);
     auto row = make_row(row_layout, 2);
     auto add = [&] (Glyph glyph, const QString& tip, const char* action) {
@@ -1317,6 +1410,17 @@ namespace {
         frame.m_layout->addWidget(stack);
       }
     }
+    if(binding.m_find("layout.spacing_before") ||
+        binding.m_find("layout.spacing_after")) {
+      auto spacings = make_row(layout, 10);
+      layout->addWidget(make_label("Adjacent Spacings", "row_label"), 1);
+      for(auto path : {"layout.spacing_before", "layout.spacing_after"}) {
+        if(auto field = make_number(binding, path)) {
+          layout->addWidget(field, 1);
+        }
+      }
+      frame.m_layout->addWidget(spacings);
+    }
     if(binding.m_find("layout.repeat_grid")) {
       for(auto [path, label] : {
           std::pair("layout.repeat_grid.column_spacing", "Column Spacing"),
@@ -1411,7 +1515,7 @@ namespace {
       frame.m_layout->addWidget(make_label("Opacity"));
       auto layout = static_cast<QHBoxLayout*>(nullptr);
       auto row = make_row(layout, 16);
-      auto slider = new QSlider(Qt::Horizontal);
+      auto slider = new Slider();
       slider->setObjectName("opacity_slider");
       slider->setAccessibleName(translate("inspector", "Opacity"));
       slider->setFocusPolicy(Qt::NoFocus);
@@ -1508,13 +1612,15 @@ namespace {
     if(auto segments = make_segments(binding, "stroke.alignment", {
         Segment(1, Glyph::STROKE_INNER, "Inner Stroke"),
         Segment(2, Glyph::STROKE_OUTER, "Outer Stroke"),
-        Segment(0, Glyph::STROKE_CENTER, "Center Stroke")})) {
+        Segment(0, Glyph::STROKE_CENTER, "Center Stroke")}, false,
+        STROKE_SEGMENT_WIDTH)) {
       layout->addWidget(segments);
     }
     if(auto segments = make_segments(binding, "stroke.cap", {
         Segment(0, Glyph::CAP_BUTT, "Butt Cap"),
         Segment(1, Glyph::CAP_ROUND, "Round Cap"),
-        Segment(2, Glyph::CAP_PROJECTING, "Projecting Cap")})) {
+        Segment(2, Glyph::CAP_PROJECTING, "Projecting Cap")}, false,
+        STROKE_SEGMENT_WIDTH)) {
       layout->addWidget(segments);
     }
     layout->addStretch(1);
@@ -1524,7 +1630,8 @@ namespace {
     if(auto segments = make_segments(binding, "stroke.join", {
         Segment(0, Glyph::JOIN_MITER, "Miter Join"),
         Segment(1, Glyph::JOIN_ROUND, "Round Join"),
-        Segment(2, Glyph::JOIN_BEVEL, "Bevel Join")})) {
+        Segment(2, Glyph::JOIN_BEVEL, "Bevel Join")}, false,
+        STROKE_SEGMENT_WIDTH)) {
       layout->addWidget(segments);
     }
     layout->addStretch(1);
@@ -1763,13 +1870,15 @@ PropertyInspector::PropertyInspector(QWidget* parent)
       m_document(nullptr),
       m_editor(nullptr),
       m_actions(nullptr),
+      m_grid_actions(nullptr),
       m_workspace(Workspace::DESIGN),
       m_measurer(estimate_text_bounds),
       m_generation(0),
       m_is_committing(false),
       m_is_rebuild_pending(false),
       m_is_locked(false),
-      m_scroll(new QScrollArea()),
+      m_is_corner_split(false),
+      m_scroll(new OverlayScrollArea()),
       m_content(nullptr),
       m_layout(nullptr),
       m_picker(new ColorPicker(this)),
@@ -1809,6 +1918,7 @@ PropertyInspector::~PropertyInspector() = default;
 void PropertyInspector::set_document(Document* document) {
   m_selection_subscription.release();
   m_text_selection_subscription.release();
+  m_history_subscription.release();
   m_editor = nullptr;
   attach(document);
   rebuild();
@@ -1821,6 +1931,7 @@ Editor* PropertyInspector::get_editor() const {
 void PropertyInspector::set_editor(Editor* editor) {
   m_selection_subscription.release();
   m_text_selection_subscription.release();
+  m_history_subscription.release();
   m_editor = editor;
   if(!m_editor) {
     attach(nullptr);
@@ -1829,6 +1940,7 @@ void PropertyInspector::set_editor(Editor* editor) {
   }
   attach(&m_editor->get_document());
   auto follow = [this] {
+    give_initial_grids();
     auto& selection = m_editor->get_selection();
     auto nodes = selection.get_nodes();
     auto primary =
@@ -1843,6 +1955,9 @@ void PropertyInspector::set_editor(Editor* editor) {
     m_editor->get_text_selection().subscribe([this] {
       refresh();
     });
+  m_history_subscription = m_editor->get_history().subscribe([this] {
+    give_initial_grids();
+  });
   follow();
 }
 
@@ -1861,8 +1976,20 @@ void PropertyInspector::set_actions(ActionRegistry* actions) {
   rebuild();
 }
 
+void PropertyInspector::set_grid_actions(GridActions* actions) {
+  m_grid_subscription.release();
+  m_grid_actions = actions;
+  if(m_grid_actions) {
+    m_grid_subscription = m_grid_actions->subscribe([this] {
+      refresh();
+    });
+  }
+  rebuild();
+}
+
 void PropertyInspector::set_workspace(Workspace workspace) {
   m_workspace = workspace;
+  give_initial_grids();
   rebuild();
 }
 
@@ -1896,8 +2023,11 @@ const std::vector<NodeId>& PropertyInspector::get_nodes() const {
 }
 
 void PropertyInspector::set_nodes(std::vector<NodeId> nodes) {
-  if(nodes != m_nodes && m_picker->isVisible()) {
-    m_picker->hide();
+  if(nodes != m_nodes) {
+    m_is_corner_split = false;
+    if(m_picker->isVisible()) {
+      m_picker->hide();
+    }
   }
   m_nodes = std::move(nodes);
   m_current = m_nodes.empty() ? NodeId() : m_nodes.back();
@@ -1958,6 +2088,45 @@ void PropertyInspector::attach(Document* document) {
   }
 }
 
+void PropertyInspector::give_initial_grids() {
+  if(!m_editor || m_workspace != Workspace::DESIGN ||
+      m_editor->get_document().is_publishing()) {
+    return;
+  }
+  initialize_grids(
+    m_editor->get_document(), m_editor->get_selection().get_nodes());
+}
+
+void PropertyInspector::show_grid_settings(
+    std::vector<PropertyDescriptor>& properties) const {
+  auto section = std::find_if(properties.begin(), properties.end(),
+    [] (const auto& property) { return property.m_path == "grid"; });
+  if(section == properties.end()) {
+    return;
+  }
+  auto settings = m_grid_actions ? m_grid_actions->get_settings() :
+    GridSettings();
+  auto is_square = get_offered_grid(settings) == GridType::SQUARE;
+  std::erase_if(section->m_children, [&] (const auto& property) {
+    auto is_square_property =
+      property.m_path == "grid.size" || property.m_path == "grid.color";
+    auto is_shared =
+      property.m_path == "grid.visible" || property.m_path == "grid.type";
+    return !is_shared && is_square_property != is_square;
+  });
+  for(auto& property : section->m_children) {
+    if(property.m_path == "grid.visible") {
+      property.m_value = is_grid_visible(settings);
+      property.m_is_mixed = false;
+    } else if(property.m_path == "grid.type") {
+      auto choice = std::get<Choice>(property.m_value);
+      choice.m_index = is_square ? 1 : 0;
+      property.m_value = std::move(choice);
+      property.m_is_mixed = false;
+    }
+  }
+}
+
 void PropertyInspector::refresh() {
   auto properties = std::vector<PropertyDescriptor>();
   m_sources.clear();
@@ -1968,6 +2137,10 @@ void PropertyInspector::refresh() {
     auto selection = m_editor ? &m_editor->get_text_selection() : nullptr;
     properties = extract_common_properties(
       *m_document, m_nodes, m_measurer, selection);
+    if(m_is_corner_split) {
+      split_corners(properties);
+    }
+    show_grid_settings(properties);
     for(auto& id : m_nodes) {
       if(auto source = get_source(*m_document, id); !source.is_nil()) {
         m_sources.push_back(source);
@@ -2065,6 +2238,9 @@ void PropertyInspector::rebuild() {
         const PropertyDescriptor& property) -> const PropertyEditor* {
       if(is_empty || !m_editor || property.m_is_read_only) {
         return nullptr;
+      }
+      if(is_grid_setting(property.m_path)) {
+        return m_grid_actions ? &GRID_SETTING_EDITOR : nullptr;
       }
       return m_property_editors.find(property.m_path);
     };
@@ -2202,6 +2378,20 @@ void PropertyInspector::apply(
   if(!m_editor) {
     return;
   }
+  if(is_grid_setting(path)) {
+    if(m_grid_actions) {
+      m_is_committing = true;
+      if(path == "grid.visible") {
+        m_grid_actions->toggle(
+          get_offered_grid(m_grid_actions->get_settings()));
+      } else if(auto choice = std::get_if<Choice>(&value)) {
+        m_grid_actions->choose(
+          choice->m_index == 1 ? GridType::SQUARE : GridType::LAYOUT);
+      }
+      m_is_committing = false;
+    }
+    return;
+  }
   auto editor = m_property_editors.find(path);
   if(!editor) {
     return;
@@ -2211,7 +2401,15 @@ void PropertyInspector::apply(
     history.seal();
     m_edited_path = path;
   }
+  auto is_corner_mode = path == "geometry.radii";
+  if(auto choice = std::get_if<Choice>(&value); choice && is_corner_mode) {
+    m_is_corner_split = choice->m_index == 1;
+  }
   auto command = editor->m_setter(m_editor->get_document(), m_nodes, value);
+  if(is_corner_mode && !command) {
+    refresh();
+    return;
+  }
   m_is_committing = true;
   if(command) {
     try {
@@ -2354,7 +2552,8 @@ void PropertyInspector::on_change(const ChangeSet& changes) {
     [&] (const auto& id) {
       return !m_document->find(id);
     });
-  if(is_removed || is_affected(changes) || !changes.m_components.empty()) {
+  if(is_removed || is_affected(changes) || !changes.m_components.empty() ||
+      changes.m_is_asset_group_changed) {
     refresh();
   }
 }

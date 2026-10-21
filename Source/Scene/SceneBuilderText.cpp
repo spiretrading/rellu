@@ -1,4 +1,5 @@
 #include <cmath>
+#include <utility>
 #include <variant>
 #include "Rellu/Scene/SceneBuilder.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
@@ -130,6 +131,23 @@ void SceneBuilder::set_device_transform(
   m_device_transform = transform;
 }
 
+const NodeId& SceneBuilder::get_edited_text() const {
+  return m_edited_text;
+}
+
+void SceneBuilder::set_edited_text(const NodeId& id) {
+  if(id == m_edited_text) {
+    return;
+  }
+  auto previous = std::exchange(m_edited_text, id);
+  for(auto& changed : {previous, id}) {
+    if(!changed.is_nil()) {
+      m_texts.erase(changed);
+      invalidate(changed);
+    }
+  }
+}
+
 void SceneBuilder::add_text(
     const Node& node, const Placement& placement, DrawList& list) {
   auto& outline = get_text_outline(node);
@@ -200,7 +218,8 @@ SceneBuilder::TextOutline& SceneBuilder::get_text_outline(const Node& node) {
     }
     outline.m_rasters.clear();
     outline.m_mirror = Matrix();
-    if(auto& text = *node.get_text(); text.m_is_flipped_vertically) {
+    if(auto& text = *node.get_text();
+        text.m_is_flipped_vertically && node.get_id() != m_edited_text) {
       auto bounds = measure_text(text, get_default_font_library());
       outline.m_mirror =
         Matrix(1, 0, 0, -1, 0, 2 * bounds.m_y + bounds.m_height);

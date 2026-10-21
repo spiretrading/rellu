@@ -28,8 +28,12 @@ namespace Rellu {
    * stack taking the place in it its position calls for once drawn,
    * styled as XD styles them and named after their kind with the next
    * number free, such as Rectangle 1. Shift draws a square, circle or
-   * regular polygon, or constrains a line to multiples of 45 degrees, and
-   * Alt draws from the center.
+   * regular polygon, or constrains a line as constrain_drag does, and Alt
+   * draws from the center. The ends of a line snap as the snap service's
+   * snap_line snaps them, a constrained line keeping its angle, and then
+   * land on the center of the pixel they lie in, as the centered stroke a
+   * line is drawn with calls for, or on the nearest whole pixel when its
+   * start snapped to a grid.
    */
   class ShapeTool : public DrawTool {
     public:
@@ -49,6 +53,8 @@ namespace Rellu {
     protected:
       std::unique_ptr<Command> make_command(ToolContext& context,
         NodeHeader header, Point start, Point end,
+        Qt::KeyboardModifiers modifiers) override;
+      Point snap_end(ToolContext& context, Point end,
         Qt::KeyboardModifiers modifiers) override;
 
     private:

@@ -257,6 +257,19 @@ namespace {
         m_top >= -MAXIMUM_COORDINATE && m_bottom <= MAXIMUM_COORDINATE;
     }
 
+    bool is_fat() const {
+      if(std::ceil(m_right) - std::floor(m_left) < 3) {
+        return false;
+      }
+      auto left = std::ceil(static_cast<double>(m_left) - 0.5);
+      auto top = std::ceil(static_cast<double>(m_top) - 0.5);
+      auto right = std::floor(static_cast<double>(m_right) + 0.5);
+      auto bottom = std::floor(static_cast<double>(m_bottom) + 0.5);
+      auto width = static_cast<int>(right - left);
+      return width <= MASK_WIDTH &&
+        ((width + 3) & ~3) * (bottom - top) <= MASK_STORAGE;
+    }
+
     Antialiasing get_antialiasing() const {
       auto width = m_right - m_left;
       auto height = m_bottom - m_top;
@@ -734,10 +747,16 @@ Supersampler::Supersampler()
 Supersampler::~Supersampler() = default;
 
 Antialiasing Supersampler::get_antialiasing(
-    const Path& path, const Matrix& matrix) {
+    const Path& path, const Matrix& matrix, PathDrawing drawing) {
   auto measure = measure_points(path, matrix);
-  if(!measure.is_bounded() || is_rectangle(path, matrix)) {
+  if(!measure.is_bounded()) {
     return Antialiasing::EXACT;
+  } else if(is_rectangle(path, matrix)) {
+    if(drawing == PathDrawing::RECTANGLE ||
+        (drawing == PathDrawing::PATH && measure.is_fat())) {
+      return Antialiasing::EXACT;
+    }
+    return Antialiasing::ANALYTIC;
   }
   return measure.get_antialiasing();
 }
@@ -779,6 +798,9 @@ Antialiasing Supersampler::get_antialiasing(const CurveOutline& outline) {
     return Antialiasing::EXACT;
   }
   if(is_rectangle(outline)) {
+    if(measure.is_fat()) {
+      return Antialiasing::EXACT;
+    }
     return Antialiasing::ANALYTIC;
   }
   return measure.get_antialiasing();

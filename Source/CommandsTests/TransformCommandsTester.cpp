@@ -32,6 +32,142 @@ namespace {
 }
 
 TEST_SUITE("TransformCommands") {
+  TEST_CASE("rotation_of_moved_and_resized_nodes") {
+    auto document = Document();
+    auto turn = NodeId();
+    auto quarter = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto header = make_header("Turn", make_translation(10, 10));
+      header.m_rotation = 360;
+      turn = transaction.append(NodeId(), header, make_rectangle_shape(40, 20));
+      header = make_header("Quarter",
+        make_translation(100, 100) * make_rotation(-std::numbers::pi / 2));
+      header.m_rotation = -90;
+      quarter =
+        transaction.append(NodeId(), header, make_rectangle_shape(40, 20));
+      transaction.commit();
+    }
+    REQUIRE(document.get(turn).m_header.m_rotation == 360);
+    auto history = History(document);
+    require_undoable(history, make_nudge_command({turn, quarter}, Point(1, 0)));
+    REQUIRE(document.get(turn).m_header.m_rotation == 360);
+    REQUIRE(document.get(quarter).m_header.m_rotation == -90);
+    require_undoable(history, make_bounds_command(
+      document, quarter, Rect(0, 0, 50, 20)));
+    REQUIRE(document.get(quarter).m_header.m_rotation == -90);
+    auto bounds = *get_world_bounds(document, turn);
+    require_undoable(history, make_resize_command({turn}, bounds,
+      Rect(bounds.m_x, bounds.m_y, bounds.m_width + 10, bounds.m_height)));
+    REQUIRE(document.get(turn).m_header.m_rotation == 0);
+  }
+
+  TEST_CASE("rotation_drag") {
+    auto drag = RotationDrag({0}, {0});
+    drag.update(10.4, false);
+    REQUIRE(drag.get_turn() == 10);
+    REQUIRE(drag.get_rotations() == std::vector<double>{10});
+    drag.update(350, false);
+    REQUIRE(drag.get_turn() == 350);
+    REQUIRE(drag.get_rotations() == std::vector<double>{-10});
+    drag.update(270, false);
+    REQUIRE(drag.get_rotations() == std::vector<double>{-90});
+    drag.update(5, false);
+    REQUIRE(drag.get_rotations() == std::vector<double>{5});
+    drag.update(359.6, false);
+    REQUIRE(drag.get_turn() == 0);
+    REQUIRE(drag.get_rotations() == std::vector<double>{0});
+    auto snapped = RotationDrag({-90}, {-90});
+    snapped.update(8, true);
+    REQUIRE(snapped.get_turn() == 15);
+    REQUIRE(snapped.get_rotations() == std::vector<double>{-75});
+    snapped.update(95, true);
+    REQUIRE(snapped.get_turn() == 90);
+    REQUIRE(snapped.get_rotations() == std::vector<double>{0});
+    auto closing = RotationDrag({-270}, {90});
+    closing.update(270, false);
+    REQUIRE(closing.get_rotations() == std::vector<double>{-360});
+    closing.update(260, false);
+    REQUIRE(closing.get_rotations() == std::vector<double>{-10});
+    auto full = RotationDrag({360}, {0});
+    full.update(0.2, false);
+    REQUIRE(full.get_rotations() == std::vector<double>{360});
+    full.update(30, false);
+    REQUIRE(full.get_rotations() == std::vector<double>{30});
+    auto several = RotationDrag({30, -90}, {30, -90});
+    several.update(20, false);
+    REQUIRE(several.get_rotations() == std::vector<double>{50, 290});
+  }
+
+  TEST_CASE("rotation_drag_fraction") {
+    auto drag = RotationDrag({30.4}, {30.4});
+    REQUIRE(drag.get_fractions().size() == 1);
+    REQUIRE(drag.get_fractions().front() == doctest::Approx(0.4));
+    drag.update(90, false);
+    REQUIRE(drag.get_turn() == 90);
+    REQUIRE(drag.get_rotations() == std::vector<double>{120});
+    auto negative = RotationDrag({-0.5}, {-0.5});
+    REQUIRE(negative.get_fractions().front() == doctest::Approx(-0.5));
+    negative.update(359, false);
+    REQUIRE(negative.get_rotations() == std::vector<double>{-1});
+    auto whole = RotationDrag({180.00001525878906}, {180});
+    REQUIRE(whole.get_fractions().front() ==
+      doctest::Approx(0.00001525878906));
+    whole.update(10, false);
+    REQUIRE(whole.get_rotations() == std::vector<double>{190});
+  }
+
+  TEST_CASE("rotate_command_adjustments") {
+    auto document = Document();
+    auto id = NodeId();
+    auto center = Point(120, 110);
+    {
+      auto transaction = Transaction(document);
+      auto header = make_header("Turned", make_rotation(
+        30.4 * std::numbers::pi / 180, center) * make_translation(100, 100));
+      header.m_rotation = 30.4;
+      id = transaction.append(NodeId(), header, make_rectangle_shape(40, 20));
+      transaction.commit();
+    }
+    auto command = make_rotate_command(std::vector{id}, std::numbers::pi / 4,
+      center, std::vector<double>{75});
+    command->set_adjustments(
+      std::vector{make_rotation(-0.4 * std::numbers::pi / 180, center)});
+    REQUIRE(command->merge(*make_rotate_command(std::vector{id},
+      std::numbers::pi / 4, center, std::vector<double>{120})));
+    REQUIRE(command->get_adjustments().size() == 1);
+    auto history = History(document);
+    require_undoable(history, std::move(command));
+    auto& header = document.get(id).m_header;
+    REQUIRE(header.m_rotation == 120);
+    REQUIRE(get_rotation(header.m_transform) == doctest::Approx(120));
+    REQUIRE(distance(header.m_transform.map(Point(20, 10)), center) < 1e-9);
+  }
+
+  TEST_CASE("rotate_command_rotations") {
+    auto document = Document();
+    auto id = NodeId();
+    {
+      auto transaction = Transaction(document);
+      id = transaction.append(NodeId(), make_header("Turned"),
+        make_rectangle_shape(40, 20));
+      transaction.commit();
+    }
+    auto history = History(document);
+    require_undoable(history, make_rotate_command(std::vector{id},
+      -std::numbers::pi / 2, Point(20, 10), std::vector<double>{-90}));
+    REQUIRE(document.get(id).m_header.m_rotation == -90);
+    auto command = make_rotate_command(std::vector{id}, -std::numbers::pi / 2,
+      Point(20, 10), std::vector<double>{-180});
+    REQUIRE(command->merge(*make_rotate_command(std::vector{id},
+      -std::numbers::pi / 2, Point(20, 10), std::vector<double>{-270})));
+    REQUIRE(command->get_rotations() == std::vector<double>{-270});
+    auto merged = History(document);
+    require_undoable(merged, std::move(command));
+    REQUIRE(document.get(id).m_header.m_rotation == -270);
+    REQUIRE(is_congruent(-270, document.get(id).m_header.m_transform));
+  }
+
   TEST_CASE("translate") {
     auto document = Document();
     auto scene = build_scene(document);
@@ -104,6 +240,79 @@ TEST_SUITE("TransformCommands") {
     REQUIRE(history.undo());
     REQUIRE(get_world_transform(document, scene.m_rectangle) ==
       make_translation(110, 60));
+  }
+
+  TEST_CASE("large_nudge") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(100, 50, 400, 300);
+    auto id = transaction.append(NodeId(), make_header("Board"), artboard);
+    transaction.commit();
+    auto right = Point(1, 0);
+    auto up = Point(0, -1);
+    REQUIRE(get_large_nudge(document, id, Point(103, 50), right) ==
+      Point(10, 0));
+    REQUIRE(get_large_nudge(document, NodeId(), Point(103, 50), up) ==
+      Point(0, -10));
+    artboard.m_layout_grid = LayoutGrid();
+    artboard.m_layout_grid->m_square_size = Size(8, 6);
+    auto change = Transaction(document);
+    change.replace_payload(id, artboard);
+    change.commit();
+    REQUIRE(get_large_nudge(document, id, Point(103, 50), right) ==
+      Point(10, 0));
+    artboard.m_layout_grid->m_is_visible = true;
+    auto show = Transaction(document);
+    show.replace_payload(id, artboard);
+    show.commit();
+    REQUIRE(get_large_nudge(document, id, Point(103, 50), right) ==
+      Point(5, 0));
+    REQUIRE(get_large_nudge(document, id, Point(103, 50), Point(-1, 0)) ==
+      Point(-3, 0));
+    REQUIRE(get_large_nudge(document, id, Point(108, 50), right) ==
+      Point(8, 0));
+    REQUIRE(get_large_nudge(document, id, Point(108, 50), Point(-1, 0)) ==
+      Point(-8, 0));
+    REQUIRE(get_large_nudge(document, id, Point(96, 52), Point(-1, 0)) ==
+      Point(-4, 0));
+    REQUIRE(get_large_nudge(document, id, Point(103, 52), up) ==
+      Point(0, -2));
+    REQUIRE(get_large_nudge(document, id, Point(103, 52), Point(0, 1)) ==
+      Point(0, 4));
+    artboard.m_layout_grid->m_square_size = Size(8, 8);
+    auto square = Transaction(document);
+    square.replace_payload(id, artboard);
+    square.commit();
+    REQUIRE(get_large_nudge(document, id, Point(103, 352), Point(0, 1)) ==
+      Point(0, 2));
+    REQUIRE(get_large_nudge(document, id, Point(103, 352), up) ==
+      Point(0, -6));
+    artboard.m_layout_grid->m_type = GridType::LAYOUT;
+    auto layout = Transaction(document);
+    layout.replace_payload(id, artboard);
+    layout.commit();
+    REQUIRE(get_large_nudge(document, id, Point(103, 50), right) ==
+      Point(10, 0));
+  }
+
+  TEST_CASE("keep_on_canvas") {
+    auto& canvas = CANVAS_BOUNDS;
+    auto bounds = Rect(canvas.get_right() - 15, 0, 10, 10);
+    REQUIRE(keep_on_canvas(bounds, Point(3, 7)) == Point(3, 7));
+    REQUIRE(keep_on_canvas(bounds, Point(10, 2)) == Point(5, 2));
+    REQUIRE(keep_on_canvas(Rect(canvas.get_left() + 2,
+      canvas.get_bottom() - 20, 10, 10), Point(-10, 30)) == Point(-2, 10));
+    auto wide = Rect(canvas.get_left() - 10, 0, canvas.m_width + 20, 10);
+    REQUIRE(keep_on_canvas(wide, Point(5, 0)) == Point(5, 0));
+    REQUIRE(keep_on_canvas(wide, Point(canvas.m_width, 0)) ==
+      Point(canvas.m_width, 0));
+    REQUIRE(keep_on_canvas(wide, Point(canvas.m_width + 10, 0)) ==
+      Point(canvas.m_width, 0));
+    REQUIRE(keep_on_canvas(Rect(0, 0, 14, 80), Point(99999, 99999)) ==
+      Point(24986, 24920));
+    REQUIRE(keep_on_canvas(Rect(0, 0, 14, 80), Point(-99999, -99999)) ==
+      Point(-25000, -25000));
   }
 
   TEST_CASE("resize") {

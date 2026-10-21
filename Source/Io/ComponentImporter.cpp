@@ -168,6 +168,13 @@ namespace {
     }
     component.m_size = Size(
       ux.get_number("width"_L1, 0), ux.get_number("height"_L1, 0));
+    auto groups = ux.get_json().value("assetGroupData"_L1).toObject();
+    for(auto entry = groups.begin(); entry != groups.end(); ++entry) {
+      if(entry->isString()) {
+        component.m_placements.push_back(AssetPlacement(
+          to_std_string(entry.key()), to_std_string(entry->toString())));
+      }
+    }
     ux.ignore({"linkedElementBookmarkRef"_L1});
     ignore_component_keys(ux);
     component.m_states = import_states(ux, import);

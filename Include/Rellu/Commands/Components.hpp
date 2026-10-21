@@ -226,8 +226,9 @@ namespace Rellu {
 
   /**
    * Returns the name Adobe XD gives a new instance of a component: the
-   * component's name followed by an en dash and the next number when the
-   * component's instances are numbered so, otherwise the component's name.
+   * name of a main component named by the user, otherwise the component's
+   * name followed by an en dash and one more than the largest such number
+   * of its instances named by default.
    * @param document The document holding the component.
    * @param component The component's id.
    */

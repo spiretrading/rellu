@@ -88,7 +88,10 @@ namespace Rellu {
       bool m_is_locked;
   };
 
-  /** Gives a node a custom name, labelled Rename. */
+  /**
+   * Gives a node a custom name, labelled Rename, a component instance being
+   * renamed as rename_instance describes.
+   */
   class RenameCommand : public Command {
     public:
 

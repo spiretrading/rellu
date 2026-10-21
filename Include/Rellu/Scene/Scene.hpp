@@ -51,6 +51,13 @@ namespace Rellu {
        */
       void set_tolerance(double tolerance);
 
+      /**
+       * Sets the text node drawn as Adobe XD draws text while it is edited,
+       * without its vertical flip, taking effect on the following updates.
+       * @param id The text node, or nil for none.
+       */
+      void set_edited_text(const NodeId& id);
+
       /** Returns the drawing, which changes only when updated. */
       const std::shared_ptr<const Drawing>& get_drawing() const;
 

@@ -4,7 +4,6 @@
 #include <string>
 #include <vector>
 #include "Rellu/Commands/Command.hpp"
-#include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Model/Artboard.hpp"
 
 namespace Rellu {
@@ -14,15 +13,9 @@ namespace Rellu {
 
     /**
      * Whether the grid is first reset to the default for its artboard's
-     * width, keeping whether and which grid is shown, as Use Default does.
+     * width, as Use Default does.
      */
     std::optional<bool> m_is_default;
-
-    /** Whether the grid is displayed. */
-    std::optional<bool> m_is_visible;
-
-    /** The kind of grid displayed. */
-    std::optional<GridType> m_type;
 
     /** The number of columns of the layout grid. */
     std::optional<int> m_column_count;
@@ -61,8 +54,8 @@ namespace Rellu {
   };
 
   /**
-   * Returns the grid Adobe XD gives an artboard that has none: a hidden
-   * layout grid colored #00FFFF at 25% whose columns, gutter and margins
+   * Returns the grid Adobe XD gives an artboard that has none: a layout
+   * grid colored #00FFFF at 25% whose columns, gutter and margins
    * depend on the artboard's width (1 column within margins of 28 up to
    * 312, 4 with a gutter of 10 and margins of 36 up to 599, 8 with a gutter
    * of 16 and margins of 80 up to 834, 12 with a gutter of 16 and margins
@@ -77,13 +70,34 @@ namespace Rellu {
     const Artboard& artboard, const GridDefaults& defaults = GridDefaults());
 
   /**
-   * Returns the grid Adobe XD saves for an artboard whose grid was never
-   * shown: the default grid for the artboard's width, square and hidden.
+   * Returns the grid Adobe XD saves for an artboard given one: the default
+   * grid for the artboard's width.
    * @param artboard The artboard.
    * @param defaults The grids made the default.
    */
   LayoutGrid make_initial_grid(
     const Artboard& artboard, const GridDefaults& defaults = GridDefaults());
+
+  /**
+   * Gives the selected artboards lacking a grid the grid of
+   * make_initial_grid for the document's grid defaults when the first node
+   * selected is an artboard, as Adobe XD does once its inspector shows the
+   * grid of such a selection, without recording the change for undo.
+   * @param document The document holding the selection.
+   * @param selection The selected nodes, in the order they were selected.
+   * @return <code>true</code> iff any artboard was given a grid.
+   */
+  bool initialize_grids(
+    Document& document, const std::vector<NodeId>& selection);
+
+  /**
+   * Gives every artboard lacking a grid the grid of make_initial_grid for
+   * the document's grid defaults, as Adobe XD does while it shows grids,
+   * without recording the change for undo.
+   * @param document The document.
+   * @return <code>true</code> iff any artboard was given a grid.
+   */
+  bool initialize_all_grids(Document& document);
 
   /** Returns Adobe XD's own layout grids by artboard width. */
   std::vector<GridOverride> get_built_in_overrides();
@@ -255,23 +269,6 @@ namespace Rellu {
       std::vector<NodeId> m_artboards;
       ArtboardOrientation m_orientation;
   };
-
-  /**
-   * Returns the artboards a view command acts on: those selected or holding
-   * a selected node, or every artboard when there are none.
-   * @param document The document.
-   * @param nodes The selected nodes.
-   */
-  std::vector<NodeId> get_target_artboards(
-    const Document& document, const std::vector<NodeId>& nodes);
-
-  /**
-   * Adds the commands view.layout_grid and view.square_grid, which show the
-   * layout or square grid of the target artboards, or hide it when every
-   * target artboard shows it.
-   * @param registry The registry to add to.
-   */
-  void add_artboard_commands(CommandRegistry& registry);
 }
 
 #endif

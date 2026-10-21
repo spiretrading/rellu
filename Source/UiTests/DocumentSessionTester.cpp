@@ -5,15 +5,22 @@
 #include <variant>
 #include <vector>
 #include <doctest/doctest.h>
+#include <QDate>
+#include <QDateTime>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QTemporaryDir>
+#include <QTime>
+#include <QTimeZone>
+#include "Rellu/Commands/ArtboardCommands.hpp"
+#include "Rellu/Commands/ArtboardPresets.hpp"
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/StyleCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Io/XdImporters.hpp"
+#include "Rellu/Io/XdMetadata.hpp"
 #include "Rellu/Io/XdOpaque.hpp"
 #include "Rellu/Io/XdPackage.hpp"
 #include "Rellu/Io/XdWriter.hpp"
@@ -22,6 +29,7 @@
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/TextMeasurement.hpp"
+#include "Rellu/Ui/Theme.hpp"
 #include "TestDocument.hpp"
 #include "TestOptions.hpp"
 
@@ -79,9 +87,23 @@ namespace {
     return xml.substr(start, xml.find('"', start) - start);
   }
 
-  std::string read_document_id(const QString& path) {
-    auto metadata = XdPackage(to_path(path)).read("META-INF/metadata.xml").
+  std::string read_metadata(const QString& path) {
+    return XdPackage(to_path(path)).read("META-INF/metadata.xml").
       toStdString();
+  }
+
+  std::size_t count_events(const std::string& metadata) {
+    auto count = std::size_t(0);
+    for(auto position = metadata.find("stEvt:action=");
+        position != std::string::npos;
+        position = metadata.find("stEvt:action=", position + 1)) {
+      ++count;
+    }
+    return count;
+  }
+
+  std::string read_document_id(const QString& path) {
+    auto metadata = read_metadata(path);
     auto id = read_attribute(metadata, "xmpMM:DocumentID");
     if(read_attribute(metadata, "xmpMM:OriginalDocumentID") != id) {
       return std::string();
@@ -194,6 +216,34 @@ TEST_SUITE("DocumentSession") {
     REQUIRE(reopened.get_canvas().empty());
   }
 
+  TEST_CASE("made_document") {
+    auto previous = get_last_used_preset();
+    set_last_used_preset(get_artboard_presets()[0].m_presets[1]);
+    auto document = make_new_document();
+    auto& canvas = document->get_canvas();
+    REQUIRE(canvas.size() == 1);
+    auto& node = document->get(canvas.front());
+    REQUIRE(node.m_header.m_name == "Web 1920 \xE2\x80\x93 1");
+    REQUIRE(!node.m_header.m_has_custom_name);
+    REQUIRE(!node.m_header.m_constraints.m_is_enabled);
+    auto& artboard = *node.get_artboard();
+    REQUIRE(artboard.m_frame == Rect(0, 0, 1920, 1080));
+    REQUIRE(artboard.m_background ==
+      Fill(SolidFill(make_color(255, 255, 255))));
+    REQUIRE(artboard.m_viewport_height == 1080);
+    REQUIRE(artboard.m_layout_grid == make_initial_grid(artboard));
+    REQUIRE(artboard.m_layout_grid->m_margins.m_left == 140);
+    auto& web = get_artboard_presets()[2].m_presets[0];
+    REQUIRE(web.m_name == "Web 1920");
+    REQUIRE(get_last_used_preset().m_name == web.m_name);
+    REQUIRE(get_last_used_preset().m_size == web.m_size);
+    set_last_used_preset(previous);
+    REQUIRE(get_canvas_color(*document) == QColor(0xE4, 0xE4, 0xE4));
+    auto session = DocumentSession(*document, QString(), XdTextLayout());
+    REQUIRE(!session.is_dirty());
+    REQUIRE(session.get_editor().get_history().get_undo_count() == 0);
+  }
+
   TEST_CASE("launched_document") {
     auto document = Document();
     auto session = std::unique_ptr<DocumentSession>();
@@ -224,11 +274,15 @@ TEST_SUITE("DocumentSession") {
     auto document = Document();
     build_test_document(document);
     auto session = DocumentSession(document, QString(), XdTextLayout());
-    REQUIRE(session.get_id().empty());
+    auto untitled = session.get_id();
+    require_new_id(untitled);
+    REQUIRE(DocumentSession(document, QString(), XdTextLayout()).get_id() !=
+      untitled);
     auto path = directory.filePath("Design.xd");
     session.save(path);
     auto id = session.get_id();
     require_new_id(id);
+    REQUIRE(id != untitled);
     REQUIRE(read_manifest(path, "uxdesign#id") == id);
     REQUIRE(read_manifest(path, "uxdesign#parentDocId") == id);
     session.save(path);
@@ -298,6 +352,66 @@ TEST_SUITE("DocumentSession") {
     REQUIRE(read_manifest(other, "uxdesign#id") == session.get_id());
     REQUIRE(read_manifest(other, "uxdesign#parentDocId") == id);
     REQUIRE(read_manifest(other, "id") != copy_composite);
+  }
+
+  TEST_CASE("save_metadata") {
+    auto directory = QTemporaryDir();
+    REQUIRE(directory.isValid());
+    auto path = directory.filePath("Design.xd");
+    {
+      auto built = Document();
+      build_test_document(built);
+      write_xd(built, to_path(path));
+    }
+    auto original = read_metadata(path);
+    auto composite = read_manifest(path, "id");
+    auto document = Document();
+    import_xd(to_path(path), document);
+    auto session = DocumentSession(document, path, XdTextLayout());
+    auto time = QDateTime(QDate(2026, 10, 20), QTime(9, 30, 15, 250),
+      QTimeZone::fromSecondsAheadOfUtc(-4 * 3600));
+    session.save(path, time);
+    auto saved = read_metadata(path);
+    auto instance = read_attribute(saved, "xmpMM:InstanceID");
+    require_new_id(instance);
+    REQUIRE(saved ==
+      save_xd_metadata(original, "Design\x01", composite, instance, time));
+    REQUIRE(read_attribute(saved, "xmp:ModifyDate") ==
+      "2026-10-20T09:30:15.25-04:00");
+    REQUIRE(read_attribute(saved, "xmp:CreateDate") ==
+      read_attribute(original, "xmp:CreateDate"));
+    REQUIRE(read_document_id(path) == composite);
+    REQUIRE(count_events(saved) == 1);
+    REQUIRE(read_manifest(path, "uxdesign#version") == "2.33");
+    REQUIRE(read_manifest(path, "uxdesign#applicationVersion") ==
+      "61.0.12.1");
+    auto later = time.addSecs(75);
+    session.save(path, later);
+    auto resaved = read_metadata(path);
+    auto next = read_attribute(resaved, "xmpMM:InstanceID");
+    require_new_id(next);
+    REQUIRE(next != instance);
+    REQUIRE(resaved ==
+      save_xd_metadata(saved, "Design\x01", composite, next, later));
+    REQUIRE(count_events(resaved) == 1);
+    auto copy = directory.filePath("Copy.xd");
+    auto copied = later.addSecs(200);
+    session.save(copy, copied);
+    auto fresh = read_metadata(copy);
+    auto copy_composite = read_manifest(copy, "id");
+    REQUIRE(copy_composite != composite);
+    REQUIRE(fresh == save_xd_metadata("", "Copy\x01", copy_composite,
+      read_attribute(fresh, "xmpMM:InstanceID"), copied));
+    REQUIRE(read_attribute(fresh, "xmp:CreateDate") ==
+      "2026-10-20T09:34:50.25-04:00");
+    REQUIRE(count_events(fresh) == 2);
+    REQUIRE(read_metadata(path) == resaved);
+    auto last = copied.addSecs(5);
+    session.save(copy, last);
+    auto refreshed = read_metadata(copy);
+    REQUIRE(refreshed == save_xd_metadata(fresh, "Copy\x01", copy_composite,
+      read_attribute(refreshed, "xmpMM:InstanceID"), last));
+    REQUIRE(count_events(refreshed) == 2);
   }
 
   TEST_CASE("failed_save") {

@@ -32,6 +32,7 @@ namespace {
     auto header = NodeHeader();
     header.m_id = generate_node_id();
     header.m_name = std::move(name);
+    header.m_has_custom_name = !header.m_name.empty();
     header.m_transform = make_translation(x, y);
     return header;
   }
@@ -170,6 +171,7 @@ TEST_SUITE("LayoutProperties") {
     apply(history, editors, "layout.stack.spacing", {board.m_stack}, 4.0);
     REQUIRE(get_transform(document, board.m_second) ==
       make_translation(0, 24));
+    REQUIRE(history.get_undo_label() == "All Spacings Value");
     apply(history, editors, "layout.stack.orientation", {board.m_stack},
       Choice(0, QStringList({"Horizontal", "Vertical"})));
     REQUIRE(get_transform(document, board.m_second) ==
@@ -206,6 +208,94 @@ TEST_SUITE("LayoutProperties") {
     Q_EMIT line->editingFinished();
     REQUIRE(get_transform(document, board.m_second) ==
       make_translation(0, 32));
+    REQUIRE(editor.get_history().get_undo_label() == "All Spacings Value");
+  }
+
+  TEST_CASE("item_spacing") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 400, 400);
+    auto board =
+      transaction.append(NodeId(), make_header("Artboard"), artboard);
+    auto group = Group();
+    group.m_stack = Stack(Orientation::VERTICAL);
+    auto stack =
+      transaction.append(board, make_header("Stack", 20, 20), group);
+    auto bottom = transaction.append(
+      stack, make_header("Bottom", 0, 70), make_box(100, 20));
+    auto middle = transaction.append(
+      stack, make_header("Middle", 0, 30), make_box(100, 20));
+    auto top = transaction.append(stack, make_header("Top"), make_box(100, 20));
+    auto payload = *document.get(stack).get_group();
+    payload.m_stack->m_spacing.emplace(top, 10);
+    payload.m_stack->m_spacing.emplace(middle, 20);
+    transaction.replace_payload(stack, payload);
+    transaction.commit();
+    document.clear_history();
+    auto find = [&] (const std::vector<NodeId>& nodes, const char* path) {
+      static auto properties = std::vector<PropertyDescriptor>();
+      properties =
+        extract_common_properties(document, nodes, estimate_text_bounds);
+      return find_property(properties, path);
+    };
+    auto require_spacing = [&] (const std::vector<NodeId>& nodes,
+        const char* path, double value, bool is_mixed) {
+      auto property = find(nodes, path);
+      REQUIRE(property);
+      REQUIRE(property->m_value == PropertyValue(value));
+      REQUIRE(property->m_is_mixed == is_mixed);
+    };
+    REQUIRE(find({middle}, "layout.spacing_before")->m_label ==
+      "Spacing Before Value");
+    REQUIRE(find({middle}, "layout.spacing_after")->m_label ==
+      "Spacing After Value");
+    REQUIRE(!find({top}, "layout.spacing_before"));
+    require_spacing({top}, "layout.spacing_after", 10, false);
+    require_spacing({middle}, "layout.spacing_before", 10, false);
+    require_spacing({middle}, "layout.spacing_after", 20, false);
+    require_spacing({bottom}, "layout.spacing_before", 20, false);
+    REQUIRE(!find({bottom}, "layout.spacing_after"));
+    require_spacing({top, bottom}, "layout.spacing_before", 20, false);
+    require_spacing({top, bottom}, "layout.spacing_after", 10, false);
+    require_spacing({top, middle}, "layout.spacing_after", 10, true);
+    REQUIRE(!find({stack}, "layout.spacing_before"));
+    REQUIRE(!find({stack}, "layout.spacing_after"));
+    auto editors = make_editors();
+    auto history = History(document);
+    apply(history, editors, "layout.spacing_after", {middle}, 15.0);
+    REQUIRE(get_transform(document, bottom) == make_translation(0, 65));
+    REQUIRE(history.get_undo_label() == "Spacing After Value");
+    apply(history, editors, "layout.spacing_before", {middle, bottom}, 5.0);
+    REQUIRE(get_transform(document, middle) == make_translation(0, 25));
+    REQUIRE(get_transform(document, bottom) == make_translation(0, 50));
+    REQUIRE(history.get_undo_label() == "Spacing Before Value");
+    REQUIRE(history.get_undo_count() == 2);
+    REQUIRE(editors.find("layout.spacing_before")->m_minimum == 0);
+    REQUIRE(editors.find("layout.spacing_after")->m_maximum == 10000);
+    auto package = XdPackage(write_xd(document));
+    REQUIRE(get_ux(find_written(package, top)).value(
+      "contentStackMarginAfter"_L1).toDouble() == 5);
+    auto reopened = Document();
+    import_xd(package, reopened);
+    reopened.set_opaque(document.get_opaque());
+    REQUIRE(is_equal(document, reopened));
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    inspector.set_property_editors(make_editors());
+    inspector.set_editor(&editor);
+    editor.get_selection().select(middle);
+    auto line = qobject_cast<QLineEdit*>(
+      inspector.find_field("layout.spacing_after"));
+    REQUIRE(line);
+    REQUIRE(line->text() == "5");
+    REQUIRE(inspector.find_field("layout.spacing_before"));
+    line->setText("8");
+    Q_EMIT line->editingFinished();
+    REQUIRE(get_transform(document, bottom) == make_translation(0, 53));
+    editor.get_selection().select(top);
+    REQUIRE(!inspector.find_field("layout.spacing_before"));
+    REQUIRE(inspector.find_field("layout.spacing_after"));
   }
 
   TEST_CASE("saving") {

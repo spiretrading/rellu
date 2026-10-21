@@ -184,6 +184,34 @@ void History::record(std::string label, std::function<void ()> revert,
   m_signal();
 }
 
+bool History::attach(
+    std::function<void ()> revert, std::function<void ()> reapply) {
+  synchronize();
+  if(m_undo.empty()) {
+    return false;
+  }
+  auto& step = m_undo.back();
+  step.m_revert = [first = std::move(revert),
+      second = std::move(step.m_revert)] {
+    if(first) {
+      first();
+    }
+    if(second) {
+      second();
+    }
+  };
+  step.m_reapply = [first = std::move(step.m_reapply),
+      second = std::move(reapply)] {
+    if(first) {
+      first();
+    }
+    if(second) {
+      second();
+    }
+  };
+  return true;
+}
+
 void History::seal() {
   m_is_open = false;
 }
@@ -243,8 +271,13 @@ bool History::undo() {
       m_undo.back().m_revert();
     }
   } else {
-    auto guard = Guard(m_is_applying);
-    m_document->undo();
+    {
+      auto guard = Guard(m_is_applying);
+      m_document->undo();
+    }
+    if(m_undo.back().m_revert) {
+      m_undo.back().m_revert();
+    }
   }
   m_redo.push_back(std::move(m_undo.back()));
   m_undo.pop_back();
@@ -264,8 +297,13 @@ bool History::redo() {
       m_redo.back().m_reapply();
     }
   } else {
-    auto guard = Guard(m_is_applying);
-    m_document->redo();
+    {
+      auto guard = Guard(m_is_applying);
+      m_document->redo();
+    }
+    if(m_redo.back().m_reapply) {
+      m_redo.back().m_reapply();
+    }
   }
   m_undo.push_back(std::move(m_redo.back()));
   m_redo.pop_back();

@@ -492,6 +492,36 @@ TEST_SUITE("Scene") {
     REQUIRE(edited[1] == lists[1]);
   }
 
+  TEST_CASE("edited_text") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto payload = make_text(u"Text");
+    payload.m_is_flipped_vertically = true;
+    auto flip = Matrix(-1, 0, 0, -1, 80, 30);
+    auto text = transaction.append(NodeId(), make_header(flip), payload);
+    transaction.append(NodeId(), make_header(make_translation(100, 0)),
+      make_shape(Rect(0, 0, 4, 4), make_color(255, 0, 0)));
+    transaction.commit();
+    auto scene = Scene(document, TOLERANCE);
+    scene.update();
+    auto lists = scene.get_drawing()->get_lists();
+    REQUIRE(std::get<FillCommand>(flatten(scene).front()).m_transform !=
+      flip);
+    scene.set_edited_text(text);
+    REQUIRE(!scene.is_current());
+    scene.update();
+    auto& edited = scene.get_drawing()->get_lists();
+    REQUIRE(edited[0] != lists[0]);
+    REQUIRE(edited[1] == lists[1]);
+    REQUIRE(std::get<FillCommand>(flatten(scene).front()).m_transform ==
+      flip);
+    scene.set_edited_text(text);
+    REQUIRE(scene.is_current());
+    scene.set_edited_text(NodeId());
+    scene.update();
+    REQUIRE(is_rebuilt_equal(document, scene));
+  }
+
   TEST_CASE("canvas") {
     auto document = Document();
     auto transaction = std::optional<Transaction>(std::in_place, document);

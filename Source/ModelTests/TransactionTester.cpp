@@ -1,4 +1,5 @@
 #include <stdexcept>
+#include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Model/Transaction.hpp"
 #include "SampleDocument.hpp"
@@ -160,6 +161,29 @@ TEST_SUITE("Transaction") {
     transaction.replace_payload(sample.m_stack, group);
     REQUIRE(!document.get(sample.m_stack).get_group()->m_stack);
     transaction.commit();
+  }
+
+  TEST_CASE("commit_unrecorded") {
+    auto document = Document();
+    auto sample = build_sample(document);
+    auto count = document.get_undo_count();
+    auto published = std::vector<ChangeSet>();
+    auto subscription = document.subscribe([&] (const auto& changes) {
+      published.push_back(changes);
+    });
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(sample.m_rectangle).m_header;
+      header.m_name = "Renamed";
+      transaction.replace_header(header);
+      REQUIRE(transaction.commit_unrecorded());
+    }
+    REQUIRE(document.get(sample.m_rectangle).m_header.m_name == "Renamed");
+    REQUIRE(document.get_undo_count() == count);
+    REQUIRE(published.size() == 1);
+    REQUIRE(published.front().m_modified.size() == 1);
+    REQUIRE(!Transaction(document).commit_unrecorded());
+    REQUIRE(published.size() == 1);
   }
 
   TEST_CASE("stored_layout") {

@@ -14,6 +14,12 @@ namespace {
     ChangeMask::REFERENCE;
   constexpr auto END = std::numeric_limits<std::size_t>::max();
 
+  void fit_header_rotation(NodeHeader& header) {
+    if(!header.m_transform_3d) {
+      header.m_rotation = fit_rotation(header.m_rotation, header.m_transform);
+    }
+  }
+
   std::invalid_argument make_error(std::string message, const NodeId& id) {
     return std::invalid_argument(message + ": " + to_string(id));
   }
@@ -487,6 +493,7 @@ NodeId Transaction::insert_root(NodeHeader header, Payload payload) {
   if(nodes.contains(id)) {
     throw make_error("Duplicate node", id);
   }
+  fit_header_rotation(header);
   auto slot = nodes.add(std::make_shared<Node>(std::move(header),
     std::move(payload), NodeId(), std::vector<NodeId>()), true);
   touch_insertion(id, slot);
@@ -562,6 +569,7 @@ void Transaction::replace_header(NodeHeader header) {
     throw make_error("Unknown node", header.m_id);
   }
   touch(slot);
+  fit_header_rotation(header);
   nodes.edit_slot(slot).m_header = std::move(header);
 }
 
@@ -841,6 +849,18 @@ bool Transaction::amend() {
   return is_recorded;
 }
 
+bool Transaction::commit_unrecorded() {
+  check_open();
+  auto changes = make_change_set(*m_document, m_revision, m_moved,
+    !m_removed.empty(), !m_moved.empty());
+  finish();
+  if(changes.is_empty()) {
+    return false;
+  }
+  m_document->publish(changes);
+  return true;
+}
+
 void Transaction::check_open() const {
   if(!m_is_open) {
     throw std::logic_error("The transaction is not open.");
@@ -879,6 +899,7 @@ NodeId Transaction::add(const NodeId& parent, std::size_t index,
   if(nodes.contains(id)) {
     throw make_error("Duplicate node", id);
   }
+  fit_header_rotation(header);
   auto slot = nodes.add(std::make_shared<Node>(
     std::move(header), std::move(payload), parent, std::vector<NodeId>()),
     true);

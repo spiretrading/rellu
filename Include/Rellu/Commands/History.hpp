@@ -98,6 +98,17 @@ namespace Rellu {
       void record(std::string label, std::function<void ()> revert,
         std::function<void ()> reapply);
 
+      /**
+       * Adds a change made outside of the document, such as to a setting, to
+       * the most recent step, reverted when that step is undone and
+       * reapplied when it is redone.
+       * @param revert The function undoing the change, or empty for none.
+       * @param reapply The function redoing the change, or empty for none.
+       * @return <code>true</code> iff there was a step to add the change to.
+       */
+      bool attach(std::function<void ()> revert,
+        std::function<void ()> reapply);
+
       /** Closes the most recent step to merging. */
       void seal();
 

@@ -5,9 +5,15 @@
 #include <vector>
 #include <doctest/doctest.h>
 #include <QByteArray>
+#include <QDate>
+#include <QDateTime>
 #include <QJsonArray>
+#include <QTime>
+#include <QTimeZone>
+#include "Rellu/Io/XdMetadata.hpp"
 #include "Rellu/Io/XdValues.hpp"
 #include "Rellu/Io/XdWriter.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/DocumentComparison.hpp"
 #include "Rellu/Model/Transaction.hpp"
 #include "XdTestPackage.hpp"
@@ -119,7 +125,7 @@ namespace {
     R"(00000000-0000-0000-0000-000000000109" xmpMM:InstanceID=")"
     R"(00000000-0000-0000-0000-00000000010d"/>)");
 
-  QByteArray make_manifest_package() {
+  QByteArray make_manifest_package(std::string_view manifest = MANIFEST) {
     auto package = XdTestPackage();
     package.m_pasteboard = parse_json_array(R"([
       {"type": "shape", "id": "00000000-0000-0000-0000-00000000000a",
@@ -130,8 +136,8 @@ namespace {
     auto entries = std::vector<std::pair<std::string, QByteArray>>();
     for(auto& name : built.get_entries()) {
       if(name == XdPackage::MANIFEST) {
-        entries.emplace_back(name, QByteArray(MANIFEST.data(),
-          static_cast<qsizetype>(MANIFEST.size())));
+        entries.emplace_back(name, QByteArray(manifest.data(),
+          static_cast<qsizetype>(manifest.size())));
       } else {
         entries.emplace_back(name, built.read(name));
       }
@@ -286,6 +292,37 @@ TEST_SUITE("XdPreservation") {
       XdPackage::MANIFEST).toStdString() == MANIFEST);
   }
 
+  TEST_CASE("save") {
+    auto old = std::string(MANIFEST);
+    for(auto [from, to] : {std::pair("\"2.33\"", "\"2.29\""),
+        std::pair("\"61.0.12.1\"", "\"47.0.22.9\"")}) {
+      old.replace(old.find(from), std::string_view(from).size(), to);
+    }
+    auto document = Document();
+    import_package(make_manifest_package(old), document);
+    REQUIRE(XdPackage(write_xd(document)).read(
+      XdPackage::MANIFEST).toStdString() == old);
+    auto options = XdWriteOptions();
+    options.m_time = QDateTime(QDate(2026, 10, 20), QTime(9, 30, 15, 250),
+      QTimeZone::fromSecondsAheadOfUtc(-4 * 3600));
+    options.m_instance = "00000000-0000-0000-0000-0000000001fd";
+    auto written = XdPackage(write_xd(document, options));
+    REQUIRE(written.read(XdPackage::MANIFEST).toStdString() == MANIFEST);
+    auto created = save_xd_metadata("", "Design\x01",
+      "00000000-0000-0000-0000-000000000109", options.m_instance,
+      options.m_time);
+    REQUIRE(written.read("META-INF/metadata.xml").toStdString() == created);
+    options.m_metadata = created;
+    options.m_time = options.m_time.addSecs(90);
+    options.m_instance = "00000000-0000-0000-0000-0000000001fc";
+    auto rewritten = XdPackage(write_xd(document, options));
+    REQUIRE(rewritten.read(XdPackage::MANIFEST).toStdString() == MANIFEST);
+    REQUIRE(rewritten.read("META-INF/metadata.xml").toStdString() ==
+      save_xd_metadata(created, "Design\x01",
+        "00000000-0000-0000-0000-000000000109", options.m_instance,
+        options.m_time));
+  }
+
   TEST_CASE("new_composite") {
     auto document = Document();
     import_package(make_manifest_package(), document);
@@ -329,6 +366,46 @@ TEST_SUITE("XdPreservation") {
     options.m_composite = "00000000-0000-0000-0000-000000000109";
     REQUIRE(collect_ids(XdPackage(write_xd(document, options)).get_manifest().
       value("children"_L1)) == original);
+  }
+
+  TEST_CASE("localized_default_names") {
+    auto package = XdTestPackage();
+    package.m_pasteboard = parse_json_array(R"([
+      {"type": "shape", "id": "00000000-0000-0000-0000-00000000000a",
+       "name": "Rectangle 1", "meta": {"ux": {"nameL10N": "SHAPE_RECTANGLE"}},
+       "shape": {"type": "rect", "x": 0, "y": 0, "width": 10, "height": 10},
+       "visualBounds": {"x": 0, "y": 0, "width": 10, "height": 10}},
+      {"type": "shape", "id": "00000000-0000-0000-0000-00000000000b",
+       "name": "Rechteck 2", "meta": {"ux": {"nameL10N": "SHAPE_RECTANGLE"}},
+       "shape": {"type": "rect", "x": 0, "y": 0, "width": 10, "height": 10}},
+      {"type": "shape", "id": "00000000-0000-0000-0000-00000000000c",
+       "name": "Rectangle 3", "meta": {"ux": {"hasCustomName": true}},
+       "shape": {"type": "rect", "x": 0, "y": 0, "width": 10,
+         "height": 10}}])");
+    set_language(Language::GERMAN);
+    auto document = Document();
+    import_package(package, document);
+    auto bytes = write_xd(document);
+    set_language(Language::ENGLISH);
+    auto children =
+      XdPackage(bytes).read_pasteboard().value("children"_L1).toArray();
+    auto rectangle = find_child(children, SHAPE);
+    REQUIRE(rectangle.value("name"_L1) == "Rechteck 1"_L1);
+    REQUIRE(rectangle.value("meta"_L1).toObject().value("ux"_L1).toObject().
+      value("nameL10N"_L1) == "SHAPE_RECTANGLE"_L1);
+    REQUIRE(rectangle.contains("visualBounds"_L1));
+    REQUIRE(find_child(children, MOVED).value("name"_L1) == "Rechteck 2"_L1);
+    REQUIRE(find_child(children, FILLED).value("name"_L1) ==
+      "Rectangle 3"_L1);
+    auto reimported = Document();
+    import_package(bytes, reimported);
+    REQUIRE(reimported.get(to_id(SHAPE)).m_header.m_name == "Rectangle 1");
+    REQUIRE(reimported.get(to_id(MOVED)).m_header.m_name == "Rectangle 2");
+    auto english = Document();
+    import_package(package, english);
+    auto unchanged = XdPackage(write_xd(english)).read_pasteboard().value(
+      "children"_L1).toArray();
+    REQUIRE(find_child(unchanged, MOVED).value("name"_L1) == "Rectangle 2"_L1);
   }
 
   TEST_CASE("unchanged_round_trip") {

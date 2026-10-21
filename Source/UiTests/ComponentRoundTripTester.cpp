@@ -13,6 +13,7 @@
 #include "Rellu/Io/XdPackage.hpp"
 #include "Rellu/Io/XdWriter.hpp"
 #include "Rellu/Model/DocumentComparison.hpp"
+#include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Model/Transaction.hpp"
 
 using namespace Rellu;
@@ -22,6 +23,7 @@ namespace {
     auto header = NodeHeader();
     header.m_id = generate_node_id();
     header.m_name = std::move(name);
+    header.m_has_custom_name = !header.m_name.empty();
     header.m_transform = transform;
     return header;
   }
@@ -148,6 +150,60 @@ TEST_SUITE("ComponentRoundTrip") {
       role.m_overrides);
     REQUIRE(imported.get_resources().m_components.at(component).
       m_states.size() == 1);
+  }
+
+  TEST_CASE("deleted") {
+    auto document = Document();
+    auto group = NodeId();
+    {
+      auto transaction = Transaction(document);
+      group = transaction.append(NodeId(), make_header("Card"), Group());
+      transaction.append(group, make_header("Fill"),
+        make_rectangle(40, 40, make_color(10, 20, 30)));
+      transaction.append(group, make_header("Label"), make_label(u"Card"));
+      transaction.commit();
+    }
+    auto editor = Editor(document);
+    auto make = editor.execute(
+      std::make_unique<MakeComponentCommand>(std::vector{group}));
+    auto inner =
+      static_cast<const MakeComponentCommand&>(*make).get_component();
+    group = static_cast<const MakeComponentCommand&>(*make).get_main();
+    auto nested = static_cast<const InsertInstanceCommand&>(*editor.execute(
+      std::make_unique<InsertInstanceCommand>(inner, NodeId(),
+        make_translation(100, 0)))).get_instance();
+    make = editor.execute(
+      std::make_unique<MakeComponentCommand>(std::vector{nested}));
+    auto outer =
+      static_cast<const MakeComponentCommand&>(*make).get_component();
+    auto outer_instance = static_cast<const InsertInstanceCommand&>(
+      *editor.execute(std::make_unique<InsertInstanceCommand>(outer, NodeId(),
+        make_translation(300, 0)))).get_instance();
+    editor.get_selection().select(group);
+    editor.execute(std::make_unique<DeleteComponentsCommand>(
+      std::vector{inner}, editor.get_selection().get_nodes()));
+    REQUIRE(!document.find(group));
+    auto converted = editor.get_selection().get_primary();
+    REQUIRE(!converted.is_nil());
+    REQUIRE(converted != group);
+    REQUIRE(!get_instance_role(document.get(converted)));
+    auto outer_master =
+      document.get_resources().m_components.at(outer).m_master;
+    auto copy = document.get(outer_instance).m_children.front();
+    auto resolution = resolve_reference(document.get_nodes(), copy);
+    REQUIRE(resolution);
+    REQUIRE(resolution->m_source ==
+      document.get(outer_master).m_children.front());
+    require_round_trip(document);
+    auto imported = Document();
+    import_xd(XdPackage(write_xd(document)), imported);
+    REQUIRE(imported.find(converted));
+    REQUIRE(!imported.find(group));
+    REQUIRE(resolve_reference(imported.get_nodes(), copy));
+    REQUIRE(editor.undo());
+    REQUIRE(document.find(group));
+    REQUIRE(get_instance_role(document.get(group))->m_component == inner);
+    REQUIRE(!document.find(converted));
   }
 
   TEST_CASE("ungrouped") {

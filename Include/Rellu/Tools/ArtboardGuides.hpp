@@ -2,6 +2,7 @@
 #define RELLU_TOOLS_ARTBOARD_GUIDES_HPP
 #include <optional>
 #include <string>
+#include <vector>
 #include "Rellu/Geometry/Color.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Model/Artboard.hpp"
@@ -37,7 +38,9 @@ namespace Rellu {
    * While dragging, the distances to the neighbouring guides or artboard
    * edges and the guide's position are shown. A guide released outside its
    * artboard or onto another is deleted, and a new one is then discarded.
-   * The changes are labelled Add Guide, Move Guide and Delete Guide.
+   * While a guide is dragged, its artboard is selected in place of the
+   * selection, which is restored once the drag ends. The changes are
+   * labelled Add Guide, Move Guide and Delete Guide.
    */
   class ArtboardGuides {
     public:
@@ -114,6 +117,7 @@ namespace Rellu {
       };
       std::optional<Grip> m_grip;
       std::optional<Grip> m_hover;
+      std::vector<NodeId> m_selection;
       double m_position;
       bool m_is_shown_once;
       Point m_pointer;

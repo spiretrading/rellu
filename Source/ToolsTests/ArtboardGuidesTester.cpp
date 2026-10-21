@@ -75,6 +75,7 @@ TEST_SUITE("ArtboardGuides") {
     REQUIRE(guide.m_position == 130);
     REQUIRE(!guide.m_id.empty());
     REQUIRE(setup.get_label() == "Add Guide");
+    REQUIRE(setup.m_editor.get_history().is_dirty());
     drag(setup.m_tools, Point(300, 99), Point(300, 180));
     REQUIRE(setup.get_guides().size() == 2);
     REQUIRE(setup.get_guides().front().m_orientation ==
@@ -101,6 +102,35 @@ TEST_SUITE("ArtboardGuides") {
     REQUIRE(setup.get_guides().size() == 2);
   }
 
+  TEST_CASE("title_band") {
+    auto setup = Setup();
+    auto& tools = setup.m_tools;
+    tools.set_view(make_scale(0.88, 0.88), 0.88, Size(1000, 800));
+    auto above = [] (double pixels) {
+      return 88 - pixels / 1.5;
+    };
+    for(auto pixels : {4.0, 10.0, 14.0}) {
+      drag(tools, Point(300, above(pixels)), Point(300, 200));
+      REQUIRE(setup.get_guides().size() == 1);
+      REQUIRE(setup.m_editor.undo());
+    }
+    drag(tools, Point(300, above(18)), Point(300, 200));
+    REQUIRE(setup.get_guides().empty());
+    auto& titles = tools.get_context().get_titles();
+    REQUIRE(titles.get_titles().size() == 1);
+    auto x = titles.get_titles().front().m_bounds.m_x + 5;
+    for(auto pixels : {4.0, 6.0}) {
+      drag(tools, Point(x, above(pixels)), Point(x, 200));
+      REQUIRE(setup.get_guides().size() == 1);
+      REQUIRE(setup.m_editor.undo());
+    }
+    REQUIRE(titles.find(Point(x, above(18))) == setup.m_artboard);
+    drag(tools, Point(x, above(8)), Point(x + 44, above(8)));
+    REQUIRE(setup.get_guides().empty());
+    REQUIRE(setup.m_document.get(setup.m_artboard).get_artboard()->m_frame ==
+      Rect(150, 100, 400, 300));
+  }
+
   TEST_CASE("move") {
     auto setup = Setup();
     drag(setup.m_tools, Point(99, 300), Point(230, 300));
@@ -119,6 +149,27 @@ TEST_SUITE("ArtboardGuides") {
     REQUIRE(setup.get_guides().front().m_position == 52);
   }
 
+  TEST_CASE("cursor") {
+    auto setup = Setup();
+    auto& tools = setup.m_tools;
+    auto hover = [&] (Point position) {
+      tools.move(make_event(position, Qt::NoButton, Qt::NoButton, {}));
+      return tools.get_cursor().m_kind;
+    };
+    REQUIRE(hover(Point(99, 300)) == CursorKind::VERTICAL_GUIDE);
+    REQUIRE(hover(Point(300, 99)) == CursorKind::HORIZONTAL_GUIDE);
+    REQUIRE(hover(Point(300, 300)) == CursorKind::ARROW);
+    tools.press(make_event(Point(300, 99), Qt::LeftButton, Qt::LeftButton, {}));
+    tools.move(
+      make_event(Point(300, 180), Qt::NoButton, Qt::LeftButton, {}));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::HORIZONTAL_GUIDE);
+    tools.release(
+      make_event(Point(300, 180), Qt::LeftButton, Qt::NoButton, {}));
+    REQUIRE(hover(Point(250, 180)) == CursorKind::HORIZONTAL_GUIDE);
+    drag(tools, Point(99, 300), Point(230, 300));
+    REQUIRE(hover(Point(230, 250)) == CursorKind::VERTICAL_GUIDE);
+  }
+
   TEST_CASE("delete") {
     auto setup = Setup();
     drag(setup.m_tools, Point(99, 300), Point(230, 300));
@@ -130,6 +181,26 @@ TEST_SUITE("ArtboardGuides") {
     drag(setup.m_tools, Point(230, 300), Point(40, 300));
     REQUIRE(setup.get_guides().empty());
     REQUIRE(setup.get_label() == "Delete Guide");
+  }
+
+  TEST_CASE("selection") {
+    auto setup = Setup();
+    auto& tools = setup.m_tools;
+    auto& selection = setup.m_editor.get_selection();
+    auto rectangle =
+      setup.m_document.get(setup.m_artboard).m_children.front();
+    selection.select(rectangle);
+    tools.press(
+      make_event(Point(99, 300), Qt::LeftButton, Qt::LeftButton, {}));
+    tools.move(make_event(Point(230, 300), Qt::NoButton, Qt::LeftButton, {}));
+    REQUIRE(selection.get_nodes() == std::vector{setup.m_artboard});
+    for(auto& shape : tools.draw().m_shapes) {
+      REQUIRE(shape.m_radius == 0);
+    }
+    tools.release(
+      make_event(Point(230, 300), Qt::LeftButton, Qt::NoButton, {}));
+    REQUIRE(setup.get_guides().size() == 1);
+    REQUIRE(selection.get_nodes() == std::vector{rectangle});
   }
 
   TEST_CASE("settings") {

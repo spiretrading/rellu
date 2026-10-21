@@ -1,4 +1,6 @@
+#include <string>
 #include <doctest/doctest.h>
+#include "Rellu/Localization/Localization.hpp"
 #include "XdTestPackage.hpp"
 
 using namespace Rellu;
@@ -20,7 +22,7 @@ TEST_SUITE("HeaderImporter") {
       "meta": {"ux": {"locked": true, "markedForExport": true,
       "customConstraints": true, "constraintLeft": true,
       "constraintBottom": true, "constraintWidth": true,
-      "hasCustomName": true, "nameL10N": "SHAPE_RECTANGLE", "rotation": 0,
+      "hasCustomName": true, "rotation": 0,
       "aspectLock": {"width": 2, "height": 1}, "fixed": true}},
       "visualBounds": {"x": 0, "y": 0, "width": 1, "height": 1},
       "shape": {"type": "rect", "x": 0, "y": 0, "width": 1,
@@ -75,6 +77,88 @@ TEST_SUITE("HeaderImporter") {
     REQUIRE(is_custom("00000000-0000-0000-0000-000000000002"));
     REQUIRE(is_custom("00000000-0000-0000-0000-000000000003"));
     REQUIRE(!is_custom("00000000-0000-0000-0000-000000000004"));
+  }
+
+  TEST_CASE("default_names") {
+    auto get_name = [] (const Document& document, const char* id) {
+      return document.get(*parse_node_id(id)).m_header.m_name;
+    };
+    auto nodes = std::string(R"([
+      {"type": "shape", "name": "Rectangle 1",
+       "id": "00000000-0000-0000-0000-000000000001",
+       "meta": {"ux": {"nameL10N": "SHAPE_RECTANGLE"}},
+       "shape": {"type": "rect", "x": 0, "y": 0, "width": 1, "height": 1}},
+      {"type": "group", "name": "Component 1 \u2013 2",
+       "id": "00000000-0000-0000-0000-000000000002",
+       "meta": {"ux": {"nameL10N": "SHAPE_COMPONENT"}}},
+      {"type": "shape", "name": "Logo 3",
+       "id": "00000000-0000-0000-0000-000000000003",
+       "meta": {"ux": {"hasCustomName": true}},
+       "shape": {"type": "rect", "x": 0, "y": 0, "width": 1, "height": 1}},
+      {"type": "group", "name": "Symbol 4",
+       "id": "00000000-0000-0000-0000-000000000004",
+       "meta": {"ux": {"nameL10N": "SHAPE_SYMBOL"}}},
+      {"type": "shape", "name": "Image",
+       "id": "00000000-0000-0000-0000-000000000005",
+       "meta": {"ux": {"nameL10N": "SHAPE_IMAGE", "hasCustomName": true}},
+       "shape": {"type": "rect", "x": 0, "y": 0, "width": 1, "height": 1}},
+      {"type": "text", "name": "Rectangle 6",
+       "id": "00000000-0000-0000-0000-000000000006",
+       "meta": {"ux": {"nameL10N": "SHAPE_GROUP"}},
+       "style": {"font": {"postscriptName": "Roboto-Regular",
+         "family": "Roboto", "style": "Regular", "size": 12}},
+       "text": {"frame": {"type": "positioned"},
+         "rawText": "Hello\r\nworld"}},
+      {"type": "shape", "name": "Box",
+       "id": "00000000-0000-0000-0000-000000000007",
+       "meta": {"ux": {"nameL10N": "SHAPE_RECTANGLE"}},
+       "shape": {"type": "rect", "x": 0, "y": 0, "width": 1, "height": 1}},
+      {"type": "text", "name": "Title",
+       "id": "00000000-0000-0000-0000-000000000008",
+       "style": {"font": {"postscriptName": "Roboto-Regular",
+         "family": "Roboto", "style": "Regular", "size": 12}},
+       "text": {"frame": {"type": "positioned"}, "rawText": "Body"}},
+      {"type": "text", "id": "00000000-0000-0000-0000-000000000009",
+       "style": {"font": {"postscriptName": "Roboto-Regular",
+         "family": "Roboto", "style": "Regular", "size": 12}},
+       "text": {"frame": {"type": "positioned"}, "rawText": "Unnamed"}}])");
+    set_language(Language::GERMAN);
+    auto german = Document();
+    import_nodes(nodes, german);
+    set_language(Language::JAPANESE);
+    auto japanese = Document();
+    import_nodes(nodes, japanese);
+    set_language(Language::ENGLISH);
+    auto english = Document();
+    import_nodes(nodes, english);
+    REQUIRE(get_name(german, "00000000-0000-0000-0000-000000000001") ==
+      "Rechteck 1");
+    REQUIRE(get_name(german, "00000000-0000-0000-0000-000000000002") ==
+      "Komponente 1 \xE2\x80\x93 2");
+    REQUIRE(get_name(german, "00000000-0000-0000-0000-000000000003") ==
+      "Logo 3");
+    REQUIRE(get_name(german, "00000000-0000-0000-0000-000000000004") ==
+      "Symbol 4");
+    REQUIRE(get_name(german, "00000000-0000-0000-0000-000000000005") ==
+      "Bild");
+    REQUIRE(get_name(german, "00000000-0000-0000-0000-000000000006") ==
+      "Hello\nworld");
+    REQUIRE(get_name(german, "00000000-0000-0000-0000-000000000007") ==
+      "Rechteck");
+    REQUIRE(get_name(english, "00000000-0000-0000-0000-000000000007") ==
+      "Rectangle");
+    REQUIRE(get_name(english, "00000000-0000-0000-0000-000000000008") ==
+      "Title");
+    REQUIRE(get_name(english, "00000000-0000-0000-0000-000000000009") ==
+      "Unnamed");
+    REQUIRE(get_name(japanese, "00000000-0000-0000-0000-000000000001") ==
+      "\xE9\x95\xB7\xE6\x96\xB9\xE5\xBD\xA2 1");
+    REQUIRE(get_name(english, "00000000-0000-0000-0000-000000000001") ==
+      "Rectangle 1");
+    REQUIRE(get_name(english, "00000000-0000-0000-0000-000000000005") ==
+      "Image");
+    REQUIRE(german.get(*parse_node_id(
+      "00000000-0000-0000-0000-000000000005")).m_header.m_has_custom_name);
   }
 
   TEST_CASE("defaults") {

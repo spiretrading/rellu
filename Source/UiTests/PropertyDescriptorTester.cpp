@@ -99,9 +99,66 @@ TEST_SUITE("PropertyDescriptor") {
     REQUIRE(get_text(properties, "transform.y") == "0");
     REQUIRE(!find_property(properties, "transform.x")->m_is_mixed);
     REQUIRE(get_text(properties, "transform.width") == "40");
+    REQUIRE(std::get<double>(find_property(properties,
+      "transform.width")->m_value) == doctest::Approx(40.001).epsilon(1e-9));
     REQUIRE(!find_property(properties, "transform.width")->m_is_mixed);
     REQUIRE(find_property(properties, "transform.height")->m_is_mixed);
     REQUIRE(!find_property(properties, "transform.rotation")->m_is_mixed);
+  }
+
+  TEST_CASE("common_values") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto add = [&] (CornerRadii radii, double opacity) {
+      auto id = add_shape(document, ids.m_artboard,
+        RectangleShape(Rect(0, 0, 40, 30), radii));
+      auto transaction = Transaction(document);
+      auto header = document.get(id).m_header;
+      header.m_opacity = opacity;
+      transaction.replace_header(header);
+      transaction.commit();
+      return id;
+    };
+    auto first = add(CornerRadii(1, 1, 2, 2), 0.501);
+    auto second = add(CornerRadii(2, 2, 1, 1), 0.504);
+    auto third = add(CornerRadii(1, 1.004, 1, 1), 0.125);
+    auto fourth = add(CornerRadii(1, 1, 1, 1), 0.13);
+    auto get_value = [] (const std::vector<PropertyDescriptor>& properties,
+        const char* path) {
+      return std::get<double>(find_property(properties, path)->m_value);
+    };
+    auto properties =
+      extract_common_properties(document, std::vector{first, second});
+    REQUIRE(!find_property(properties, "appearance.opacity")->m_is_mixed);
+    REQUIRE(get_value(properties, "appearance.opacity") == 0.504);
+    REQUIRE(get_text(properties, "geometry.radii") ==
+      "Same radius for all corners");
+    REQUIRE(find_property(properties, "geometry.radii.all")->m_is_mixed);
+    properties =
+      extract_common_properties(document, std::vector{second, third});
+    REQUIRE(find_property(properties, "appearance.opacity")->m_is_mixed);
+    REQUIRE(get_value(properties, "appearance.opacity") == 0.504);
+    REQUIRE(get_text(properties, "geometry.radii") ==
+      "Different radius for each corner");
+    properties =
+      extract_common_properties(document, std::vector{third, fourth});
+    REQUIRE(!find_property(properties, "appearance.opacity")->m_is_mixed);
+    REQUIRE(get_value(properties, "appearance.opacity") == 0.13);
+    REQUIRE(!find_property(properties, "geometry.radii.top_right")->
+      m_is_mixed);
+    REQUIRE(get_value(properties, "geometry.radii.top_right") == 1);
+    REQUIRE(get_text(properties, "geometry.radii") ==
+      "Same radius for all corners");
+    auto text = make_text(u"Larger");
+    text.m_base_style.m_font.m_size = 14.004;
+    text.m_runs.front().m_style = text.m_base_style;
+    auto transaction = Transaction(document);
+    auto larger = transaction.append(ids.m_artboard, make_header(""), text);
+    transaction.commit();
+    properties =
+      extract_common_properties(document, std::vector{ids.m_label, larger});
+    REQUIRE(!find_property(properties, "text.size")->m_is_mixed);
+    REQUIRE(get_value(properties, "text.size") == 14);
   }
 
   TEST_CASE("group") {

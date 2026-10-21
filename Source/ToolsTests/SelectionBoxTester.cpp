@@ -1,3 +1,4 @@
+#include <cmath>
 #include <numbers>
 #include <doctest/doctest.h>
 #include "Rellu/Tools/SelectionBox.hpp"
@@ -138,23 +139,23 @@ TEST_SUITE("SelectionBox") {
     transaction.commit();
     auto size = Size(100, 100);
     REQUIRE(get_handle_layout(document, std::vector{row}, size, 1) ==
-      make_layout({Handle::TOP, Handle::BOTTOM}, EVERY));
+      make_layout({Handle::TOP, Handle::BOTTOM}, CORNERS));
     REQUIRE(get_handle_layout(document, std::vector{column}, size, 1) ==
-      make_layout({Handle::RIGHT, Handle::LEFT}, EVERY));
+      make_layout({Handle::RIGHT, Handle::LEFT}, CORNERS));
     REQUIRE(get_handle_layout(document, std::vector{first}, size, 1) ==
-      make_layout(EVERY, EVERY));
+      make_layout(EVERY, CORNERS));
     REQUIRE(get_handle_layout(document, std::vector{cell}, size, 1) ==
-      make_layout(EVERY, EVERY));
+      make_layout(EVERY, CORNERS));
     REQUIRE(get_handle_layout(document, std::vector{first, column}, size,
       1) == make_layout({Handle::TOP, Handle::BOTTOM}, {}));
     REQUIRE(get_handle_layout(document, std::vector{cell, loose}, size, 1) ==
       make_layout({Handle::RIGHT, Handle::LEFT}, {}));
     REQUIRE(get_handle_layout(document, std::vector{loose, first}, size,
-      1) == make_layout(EVERY, EVERY));
+      1) == make_layout(EVERY, CORNERS));
     REQUIRE(get_handle_layout(document, std::vector{row, loose}, size, 1) ==
-      make_layout(EVERY, EVERY));
+      make_layout(EVERY, CORNERS));
     REQUIRE(get_handle_layout(document, std::vector{padding}, size, 1) ==
-      make_layout(EVERY, EVERY));
+      make_layout(EVERY, CORNERS));
     auto crowded = std::vector({Handle::TOP, Handle::RIGHT, Handle::LEFT});
     REQUIRE(get_handle_layout(document, std::vector{row}, Size(100, 5), 1) ==
       make_layout(crowded, crowded));
@@ -169,6 +170,10 @@ TEST_SUITE("SelectionBox") {
       NodeId(), make_header("Auto"), make_text(AutoHeightFrame(100)));
     auto area = transaction.append(
       NodeId(), make_header("Area"), make_text(AreaFrame(Size(100, 40))));
+    auto flipped_text = make_text(PositionedFrame());
+    flipped_text.m_is_flipped_vertically = true;
+    auto flipped =
+      transaction.append(NodeId(), make_header("Flipped"), flipped_text);
     transaction.commit();
     auto size = Size(100, 100);
     auto bottom = make_layout({Handle::BOTTOM}, {Handle::BOTTOM});
@@ -176,13 +181,15 @@ TEST_SUITE("SelectionBox") {
       bottom);
     REQUIRE(get_handle_layout(document, std::vector{point}, Size(4, 4), 1) ==
       bottom);
+    REQUIRE(get_handle_layout(document, std::vector{flipped}, size, 1) ==
+      make_layout({Handle::TOP}, {Handle::TOP}));
     REQUIRE(get_handle_layout(document, std::vector{automatic}, size, 1) ==
       make_layout({Handle::TOP, Handle::RIGHT, Handle::BOTTOM, Handle::LEFT},
-        EVERY));
+        CORNERS));
     REQUIRE(get_handle_layout(document, std::vector{area}, size, 1) ==
-      make_layout(EVERY, EVERY));
+      make_layout(EVERY, CORNERS));
     REQUIRE(get_handle_layout(document, std::vector{point, automatic}, size,
-      1) == make_layout(EVERY, EVERY));
+      1) == make_layout(EVERY, CORNERS));
   }
 
   TEST_CASE("scroll_group_handles") {
@@ -250,18 +257,48 @@ TEST_SUITE("SelectionBox") {
     REQUIRE(!layout.find(size, 1, Point(171, 62.5)));
     REQUIRE(!layout.find(size, 1, Point(150, 60)));
     REQUIRE(!layout.find(size, 1, Point(302.5, -2.5)));
+    REQUIRE(get_grid_handle_rect(Handle::RIGHT, size) ==
+      Rect(295, 19.5, 9, 21));
+    REQUIRE(get_grid_handle_rect(Handle::BOTTOM, size) ==
+      Rect(130.5, 55, 39, 9));
+    REQUIRE(get_grid_handle_rect(Handle::RIGHT, Size(300, 12)) ==
+      Rect(295, 1.5, 9, 9));
+  }
+
+  TEST_CASE("constrain_drag") {
+    REQUIRE(constrain_drag(Point(10, 3)) == Point(10, 0));
+    REQUIRE(constrain_drag(Point(-2, -9)) == Point(0, -9));
+    auto diagonal = constrain_drag(Point(30, 40));
+    REQUIRE(diagonal.m_x == doctest::Approx(std::sqrt(1250)));
+    REQUIRE(diagonal.m_y == doctest::Approx(std::sqrt(1250)));
+    auto opposite = constrain_drag(Point(-40, 30));
+    REQUIRE(opposite.m_x == doctest::Approx(-std::sqrt(1250)));
+    REQUIRE(opposite.m_y == doctest::Approx(std::sqrt(1250)));
   }
 
   TEST_CASE("find_handle") {
     auto layout = make_layout(EVERY, EVERY);
     auto size = Size(100, 50);
-    REQUIRE(layout.find(size, 1, Point(104, 54)) ==
+    REQUIRE(layout.find(size, 1, Point(102, 52)) ==
       HandleHit(HandleAction::RESIZE, Handle::BOTTOM_RIGHT));
-    REQUIRE(layout.find(size, 1, Point(105, 55)) ==
+    REQUIRE(layout.find(size, 1, Point(103, 53)) ==
       HandleHit(HandleAction::ROTATE, Handle::BOTTOM_RIGHT));
     REQUIRE(!layout.find(size, 1, Point(108, 58)));
-    REQUIRE(layout.find(size, 1, Point(50, -5)) ==
+    REQUIRE(layout.find(size, 1, Point(50, -3.75)) ==
       HandleHit(HandleAction::RESIZE, Handle::TOP));
+    REQUIRE(layout.find(size, 1, Point(50, 4.75)) ==
+      HandleHit(HandleAction::RESIZE, Handle::TOP));
+    REQUIRE(!layout.find(size, 1, Point(50, 5)));
+    REQUIRE(layout.find(size, 1, Point(50, -4)) ==
+      HandleHit(HandleAction::ROTATE, Handle::TOP));
+    REQUIRE(layout.find(size, 1, Point(-3.75, 0.5)) ==
+      HandleHit(HandleAction::RESIZE, Handle::TOP_LEFT));
+    REQUIRE(layout.find(size, 1, Point(3.5, 3.5)) ==
+      HandleHit(HandleAction::RESIZE, Handle::TOP_LEFT));
+    REQUIRE(!layout.find(size, 1, Point(4, 4)));
+    REQUIRE(layout.find(size, 1, Point(-4, 0.5)) ==
+      HandleHit(HandleAction::ROTATE, Handle::TOP_LEFT));
+    REQUIRE(!layout.find(size, 1, Point(55, 1)));
     REQUIRE(layout.find(size, 1, Point(50, -9)) ==
       HandleHit(HandleAction::ROTATE, Handle::TOP));
     REQUIRE(!layout.find(size, 1, Point(50, -10)));
@@ -270,8 +307,10 @@ TEST_SUITE("SelectionBox") {
     REQUIRE(!layout.find(size, 1, Point(50, 25)));
     REQUIRE(!layout.find(size, 1, Point(80, -5)));
     auto hidden = make_layout({}, EVERY);
-    REQUIRE(hidden.find(size, 1, Point(50, 3)) ==
+    REQUIRE(hidden.find(size, 1, Point(50, -3)) ==
       HandleHit(HandleAction::ROTATE, Handle::TOP));
+    REQUIRE(!hidden.find(size, 1, Point(50, 3)));
+    REQUIRE(!hidden.find(size, 1, Point(2, 2)));
     REQUIRE(!make_layout(EVERY, {}).find(size, 1, Point(50, -9)));
     auto scroll =
       make_layout({Handle::TOP, Handle::BOTTOM}, {}, HandleStyle::SCROLL_GROUP);
@@ -303,11 +342,11 @@ TEST_SUITE("SelectionBox") {
     auto flat = std::vector({Handle::TOP_LEFT, Handle::TOP, Handle::TOP_RIGHT,
       Handle::BOTTOM_RIGHT, Handle::BOTTOM, Handle::BOTTOM_LEFT});
     REQUIRE(get_handle_layout(document, nodes, Size(100, 12), 1) ==
-      make_layout(flat, flat));
+      make_layout(flat, CORNERS));
     auto narrow = std::vector({Handle::TOP_LEFT, Handle::TOP_RIGHT,
       Handle::RIGHT, Handle::BOTTOM_RIGHT, Handle::BOTTOM_LEFT, Handle::LEFT});
     REQUIRE(get_handle_layout(document, nodes, Size(12, 100), 1) ==
-      make_layout(narrow, narrow));
+      make_layout(narrow, CORNERS));
     REQUIRE(get_handle_layout(document, std::vector{artboard},
       Size(100, 100), 1) == make_layout(EVERY, {}));
     REQUIRE(get_handle_layout(document, std::vector{artboard}, Size(5, 5),

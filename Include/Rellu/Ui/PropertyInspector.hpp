@@ -18,6 +18,7 @@
 #include "Rellu/Ui/ActionRegistry.hpp"
 #include "Rellu/Ui/AppBar.hpp"
 #include "Rellu/Ui/ColorPicker.hpp"
+#include "Rellu/Ui/GridActions.hpp"
 #include "Rellu/Ui/PropertyDescriptor.hpp"
 #include "Rellu/Ui/PropertyEditors.hpp"
 
@@ -87,6 +88,16 @@ namespace Rellu {
        *        buttons. It must outlive this inspector or be replaced first.
        */
       void set_actions(ActionRegistry* actions);
+
+      /**
+       * Sets the grid settings the grid section shows and changes, its
+       * checkbox toggling the kind of grid offered and its type showing only
+       * the kind chosen.
+       * @param actions The grid settings, or <code>nullptr</code> to show no
+       *        grid as editable. They must outlive this inspector or be
+       *        replaced first.
+       */
+      void set_grid_actions(GridActions* actions);
 
       /**
        * Shows the inspector of a workspace.
@@ -182,10 +193,13 @@ namespace Rellu {
       Document* m_document;
       Editor* m_editor;
       ActionRegistry* m_actions;
+      GridActions* m_grid_actions;
       Workspace m_workspace;
       Subscription m_subscription;
       Subscription m_selection_subscription;
       Subscription m_text_selection_subscription;
+      Subscription m_history_subscription;
+      Subscription m_grid_subscription;
       PropertyEditors m_property_editors;
       TextMeasurer m_measurer;
       std::vector<NodeId> m_nodes;
@@ -200,6 +214,7 @@ namespace Rellu {
       bool m_is_committing;
       bool m_is_rebuild_pending;
       bool m_is_locked;
+      bool m_is_corner_split;
       QScrollArea* m_scroll;
       QWidget* m_content;
       QVBoxLayout* m_layout;
@@ -208,6 +223,9 @@ namespace Rellu {
       bool m_is_footer_exclusive;
 
       void attach(Document* document);
+      void give_initial_grids();
+      void show_grid_settings(
+        std::vector<PropertyDescriptor>& properties) const;
       void refresh();
       void rebuild();
       void update_fields();

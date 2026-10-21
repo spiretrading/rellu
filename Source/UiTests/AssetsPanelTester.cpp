@@ -5,6 +5,7 @@
 #include <QColor>
 #include <QImage>
 #include "Rellu/Commands/AssetCommands.hpp"
+#include "Rellu/Commands/Components.hpp"
 #include "Rellu/Ui/AssetsPanel.hpp"
 #include "TestDocument.hpp"
 
@@ -99,6 +100,36 @@ TEST_SUITE("AssetsPanel") {
     REQUIRE(renders == 2);
   }
 
+  TEST_CASE("component_drag") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto panel = AssetsPanel();
+    panel.set_document(&document);
+    REQUIRE(get_component_drop_action(NodeId()) == Qt::CopyAction);
+    REQUIRE(get_component_drop_action(ids.m_instance) == SWAP_DROP_ACTION);
+    REQUIRE(make_drag_cursor(Qt::CopyAction).toImage() ==
+      make_arrow_cursor().toImage());
+    REQUIRE(make_drag_cursor(SWAP_DROP_ACTION).toImage() ==
+      make_swap_cursor().toImage());
+    auto arrow = make_arrow_cursor().toImage();
+    REQUIRE(arrow.pixelColor(3, 8) == QColor(Qt::white));
+    REQUIRE(arrow.pixelColor(0, 4).alpha() == 255);
+    REQUIRE(arrow.pixelColor(25, 25).alpha() == 0);
+    auto pixmap = panel.make_drag_pixmap(ids.m_component);
+    REQUIRE(!pixmap.isNull());
+    REQUIRE(pixmap.deviceIndependentSize().height() == 38);
+    REQUIRE(pixmap.deviceIndependentSize().width() > 38);
+    auto image = pixmap.toImage();
+    REQUIRE(image.pixelColor(2, 2) == QColor(0xE0, 0xF0, 0xFA));
+    auto has_text = false;
+    for(auto x = 60; x != image.width() && !has_text; ++x) {
+      for(auto y = 0; y != image.height() && !has_text; ++y) {
+        has_text = image.pixelColor(x, y).lightness() < 128;
+      }
+    }
+    REQUIRE(has_text);
+  }
+
   TEST_CASE("component_actions") {
     auto document = Document();
     auto ids = build_test_document(document);
@@ -113,11 +144,18 @@ TEST_SUITE("AssetsPanel") {
     auto menu = std::unique_ptr<QMenu>(
       panel.make_component_menu(ids.m_component, nullptr));
     auto actions = menu->actions();
-    REQUIRE(actions.size() == 2);
+    actions.removeIf([] (auto action) {
+      return action->isSeparator();
+    });
+    REQUIRE(actions.size() == 5);
     REQUIRE(actions[0]->text() == "Edit Main Component");
-    REQUIRE(actions[1]->text() == "Rename");
-    REQUIRE(actions[0]->isEnabled());
-    REQUIRE(actions[1]->isEnabled());
+    REQUIRE(actions[1]->text() == "New group from element");
+    REQUIRE(actions[2]->text() == "Move to...");
+    REQUIRE(actions[3]->text() == "Rename");
+    REQUIRE(actions[4]->text() == "Delete");
+    for(auto action : actions) {
+      REQUIRE(action->isEnabled());
+    }
     actions[0]->trigger();
     REQUIRE(edited == std::vector{ids.m_component});
     REQUIRE(panel.rename_component(ids.m_component, "Primary"));
@@ -126,6 +164,60 @@ TEST_SUITE("AssetsPanel") {
     REQUIRE(panel.get_entries(AssetSection::COMPONENTS) ==
       std::vector<QString>({"Primary"}));
     REQUIRE(!panel.rename_component(ids.m_component, " "));
+    auto group = panel.group_assets({ids.m_master});
+    REQUIRE(!group.empty());
+    REQUIRE(panel.get_group_names(AssetSection::COMPONENTS) ==
+      std::vector<QString>({"New group"}));
+    REQUIRE(panel.rename_group(group, "Forms"));
+    REQUIRE(panel.get_group_names(AssetSection::COMPONENTS) ==
+      std::vector<QString>({"Forms"}));
+    REQUIRE(panel.get_components() == std::vector{ids.m_component});
+    menu.reset(panel.make_group_menu(group, nullptr));
+    REQUIRE(menu->actions().back()->isEnabled());
+    auto asked = std::vector<QString>();
+    auto answer = AssetConfirmation();
+    panel.set_confirmation_handler([&] (const QString& title,
+        const QString& message, const QString& ok, const QString& cancel,
+        const QString& dismissal) {
+      asked = {title, message, ok, cancel, dismissal};
+      return answer;
+    });
+    REQUIRE(!panel.delete_group(group));
+    REQUIRE(asked == std::vector<QString>({"Delete group and contents",
+      "This will delete the group and any subgroups or elements that it "
+      "contains. To remove the group without deleting its elements, use the "
+      "Ungroup action.", "Delete", "Cancel", "Do not show this again"}));
+    REQUIRE(!document.get_resources().m_asset_groups.empty());
+    answer = AssetConfirmation(true, true);
+    editor.get_selection().select(ids.m_instance);
+    REQUIRE(panel.delete_group(group));
+    REQUIRE(!panel.is_group_deletion_confirmed());
+    REQUIRE(document.get_resources().m_components.empty());
+    REQUIRE(document.get_resources().m_asset_groups.empty());
+    REQUIRE(!document.find(ids.m_instance));
+    auto selected = editor.get_selection().get_nodes();
+    REQUIRE(selected.size() == 1);
+    REQUIRE(!get_instance_role(document.get(selected.front())));
+    REQUIRE(editor.get_history().get_undo_label() == "Delete Asset Group");
+    REQUIRE(editor.get_history().undo());
+    REQUIRE(get_instance_role(document.get(ids.m_instance)));
+    REQUIRE(panel.get_components() == std::vector{ids.m_component});
+    panel.set_removal_limit(0);
+    answer = AssetConfirmation();
+    REQUIRE(!panel.delete_components({ids.m_component}));
+    REQUIRE(asked == std::vector<QString>({"Permanently delete",
+      "Are you sure you want to delete 1 items? This cannot be undone.",
+      "Delete", "Cancel", QString()}));
+    REQUIRE(panel.get_components() == std::vector{ids.m_component});
+    asked.clear();
+    answer = AssetConfirmation(true, false);
+    REQUIRE(panel.delete_group(panel.group_assets({ids.m_master})));
+    REQUIRE(asked.front() == "Permanently delete");
+    REQUIRE(editor.get_history().undo());
+    panel.set_removal_limit(2000);
+    REQUIRE(panel.delete_components({ids.m_component}));
+    REQUIRE(editor.get_history().get_undo_label() == "Delete Components");
+    REQUIRE(panel.get_components().empty());
   }
 
   TEST_CASE("colors") {

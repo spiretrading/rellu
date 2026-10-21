@@ -29,6 +29,7 @@ namespace {
       "modTime": 1, "stateId": "d631c702-7e61-4081-a819-f8a7b1f06234",
       "linkedElementRef": "library", "resolvedRefName": "Layout",
       "linkedElementLastModified": 1688052553040,
+      "assetGroupData": {"g1": "an"},
       "states": [{"type": "group", "name": "Hover State",
       "id": "39ddf6a0-4f57-463a-b655-c8b5eba46177", "meta": {"ux": {
       "symbolId": "d631c702-7e61-4081-a819-f8a7b1f06234", "width": 143,
@@ -87,6 +88,8 @@ TEST_SUITE("ComponentImporter") {
     REQUIRE(component.m_default_state == COMPONENT_ID);
     REQUIRE(component.m_link ==
       ComponentLink("library", "Layout", 1688052553040));
+    REQUIRE(component.m_placements ==
+      std::vector<AssetPlacement>({AssetPlacement("g1", "an")}));
     REQUIRE(!document.is_on_canvas(MASTER_ID));
     REQUIRE(document.get_children(MASTER_ID) ==
       std::vector<NodeId>({MASTER_SHAPE_ID}));

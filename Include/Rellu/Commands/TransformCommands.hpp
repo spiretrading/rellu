@@ -50,6 +50,12 @@ namespace Rellu {
     DRAG,
 
     /**
+     * Turns the nodes, composing the mapping with their transforms, as a
+     * rotate handle being dragged does.
+     */
+    ROTATE,
+
+    /**
      * Updates the contents of the artboards among the nodes without
      * transforming anything, as releasing a dragged handle does.
      */
@@ -179,12 +185,42 @@ namespace Rellu {
       /** Returns the way the contents of containers follow. */
       ResizeRule get_rule() const;
 
+      /**
+       * Returns the rotations the nodes take once transformed, by index in
+       * the nodes transformed, empty to fit them to their transforms.
+       */
+      const std::vector<double>& get_rotations() const;
+
+      /**
+       * Sets the rotations the nodes take once transformed, as Adobe XD
+       * sets the rotation of a node it turns.
+       * @param rotations The rotation in degrees of each node, by index in
+       *        the nodes transformed.
+       */
+      void set_rotations(std::vector<double> rotations);
+
+      /**
+       * Returns the mappings in document space applied to the nodes before
+       * the mapping, by index in the nodes transformed, empty for none.
+       */
+      const std::vector<Matrix>& get_adjustments() const;
+
+      /**
+       * Sets the mappings in document space applied to the nodes before the
+       * mapping in the ROTATE mode, as Adobe XD turns a node back by the
+       * fraction of a degree its rotation has before turning it.
+       * @param adjustments The mapping of each node, by index in the nodes
+       *        transformed.
+       */
+      void set_adjustments(std::vector<Matrix> adjustments);
+
       std::string get_label() const override;
       void apply(const Document& document, Transaction& transaction) override;
 
       /**
        * Composes the mapping of a TransformCommand with the same label
-       * transforming the same nodes.
+       * transforming the same nodes, taking its rotations if it sets any
+       * and composing its adjustments.
        */
       bool merge(const Command& command) override;
 
@@ -195,6 +231,62 @@ namespace Rellu {
       TransformMode m_mode;
       ResizeRule m_rule;
       TextMeasurer m_measurer;
+      std::vector<double> m_rotations;
+      std::vector<Matrix> m_adjustments;
+
+      void apply_rotations(
+        const Document& document, Transaction& transaction) const;
+  };
+
+  /**
+   * Tracks the rotations Adobe XD gives nodes turned by dragging a rotate
+   * handle, which turns them by whole degrees and keeps the sign of their
+   * rotation until the drag crosses their starting angle.
+   */
+  class RotationDrag {
+    public:
+
+      /**
+       * Constructs a RotationDrag.
+       * @param rotations The rotation in degrees of each node at the press.
+       * @param angles The angle in degrees each node's transform turns its x
+       *        axis by at the press.
+       */
+      RotationDrag(std::vector<double> rotations, std::vector<double> angles);
+
+      /**
+       * Updates the drag for the pointer's position.
+       * @param angle The angle in degrees, in [0, 360), the pointer has
+       *        turned about the selection's center since the press.
+       * @param is_snapped Whether the nodes turn in steps of 15 degrees.
+       */
+      void update(double angle, bool is_snapped);
+
+      /**
+       * Returns the angle in degrees the nodes are turned by, before each
+       * is turned back by the fraction of a degree of its rotation at the
+       * press.
+       */
+      double get_turn() const;
+
+      /**
+       * Returns the fraction of a degree of each node's rotation at the
+       * press, which the drag turns it back by.
+       */
+      const std::vector<double>& get_fractions() const;
+
+      /** Returns the rotation in degrees of each node. */
+      const std::vector<double>& get_rotations() const;
+
+    private:
+      std::vector<double> m_initial;
+      std::vector<double> m_angles;
+      std::vector<double> m_rotations;
+      std::vector<double> m_fractions;
+      double m_unsigned;
+      double m_previous;
+      double m_turn;
+      int m_sign;
   };
 
   /**
@@ -205,6 +297,44 @@ namespace Rellu {
    */
   std::unique_ptr<TranslateCommand> make_nudge_command(
     std::vector<NodeId> nodes, Point delta);
+
+  /**
+   * The bounds in document space of the canvas, within which Adobe XD keeps
+   * what is moved.
+   */
+  inline constexpr auto CANVAS_BOUNDS = Rect(-25000, -25000, 50000, 50000);
+
+  /**
+   * Returns the displacement of a nudge with Shift held, as Adobe XD
+   * computes it: ten units, or while the artboard shows its square
+   * grid, the distance along the nudge from a point to the next line of the
+   * grid, a whole cell when the point lies on a line.
+   * @param document The document.
+   * @param artboard The active artboard, or nil if there is none.
+   * @param origin The point nudged in document space, the top left corner of
+   *        the bounds of what is nudged.
+   * @param direction The direction of the nudge, one unit along one axis.
+   */
+  Point get_large_nudge(const Document& document, const NodeId& artboard,
+    Point origin, Point direction);
+
+  /**
+   * Returns <code>true</code> iff bounds lie on the canvas as Adobe XD
+   * keeps them: within it, or for bounds larger than the canvas, with at
+   * least ten units of each side over it.
+   * @param bounds The bounds in document space.
+   */
+  bool is_within_canvas(const Rect& bounds);
+
+  /**
+   * Limits a displacement so that bounds moved by it stay on the canvas as
+   * Adobe XD keeps them: bounds no larger than the canvas end up within it,
+   * and larger bounds keep at least ten units of each side over it.
+   * @param bounds The bounds in document space before the displacement.
+   * @param delta The displacement proposed.
+   * @return The displacement to apply.
+   */
+  Point keep_on_canvas(const Rect& bounds, Point delta);
 
   /**
    * Makes a command labelled Resize mapping a rect in document space, such
@@ -239,9 +369,12 @@ namespace Rellu {
    * @param nodes The nodes to rotate.
    * @param angle The angle in radians, clockwise on screen.
    * @param center The point in document space that remains fixed.
+   * @param rotations The rotation in degrees each node takes, by index in
+   *        <i>nodes</i>, or empty to fit them to their transforms.
    */
   std::unique_ptr<TransformCommand> make_rotate_command(
-    std::vector<NodeId> nodes, double angle, Point center);
+    std::vector<NodeId> nodes, double angle, Point center,
+    std::vector<double> rotations = {});
 }
 
 #endif

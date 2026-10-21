@@ -76,18 +76,60 @@ The common header holds: `id`, `name`, `has_custom_name`, `is_visible`,
 When Scrolling) and `aspect_lock` (XD `meta.ux.aspectLock`, the size whose
 proportions a resize keeps while Lock Aspect is on).
 
+The transform of an artboard's child is relative to the artboard. XD stores
+it in document coordinates as `transform` and, on save, relative to the
+artboard as `meta.ux.localTransform`, the last `ux` member of every child
+of an artboard and of no other node (ArtboardExtension.js
+`serializeChildrenAGC`); on load `localTransform` wins over `transform`
+(`deserializeAGC`). XD also writes `meta.ux.rotation`, the node's rotation
+in degrees, for every rotated node other than a `syncRef`, right after its
+name key: a flipped or rotated text carries it like any shape or group.
+For a 3D node `localTransform` takes the 3D matrix form and `rotation` is
+the turn about the z axis (verified in XD 61).
+
+The header's `rotation` is that stored rotation, the value the inspector
+shows, which XD keeps rather than derives (verified in XD 61 by saving the
+results of each operation):
+- Setting a transform keeps the rotation while it still turns as the
+  transform does and otherwise derives it in [0, 360) (a node at -90 or 360
+  that is moved keeps it). Transaction applies this to every header.
+- A resize or flip finalizes it (DefaultNodeResizer.js `finalizeRotation`):
+  the fitted rotation, less 360 when it was negative, modulo 360, so 360
+  becomes 0 and -90 stays -90.
+- Flipping a rotated shape or text turns its transform to 180 minus the
+  rotation (horizontally) or 360 minus it (vertically) and mirrors it within
+  its own bounds top to bottom (SimplifiedFlipScale.js Y_REFLECTION): 30
+  flips to 150 or 330, -90 vertically to -270, text toggling `flipY`.
+- The inspector's field normalizes the value typed within a turn, keeping
+  its sign and 360 (PropertyUtils.js `normalizeRotation`), so 360500 sets
+  140.
+- Ungrouping, or moving a node out of a container, adds the container's
+  rotation, modulo 360 unless the sum is a whole turn (GroupExtension.js
+  `reparent`): -90 in a group at 30 becomes -60.
+- Dragging a rotate handle turns by whole degrees, first turning each node
+  back by the fraction of a degree its rotation has (180.0000153 turns as
+  180), and sets the rotation RotationDrag computes (RotateDragMode.js).
+
 `has_custom_name` is XD's `hasCustomName`, which every node carries: a name
 given explicitly (renaming, Outline Stroke, a new component state) rather
 than generated for the kind of node (Rectangle 3, Union 1, a text's content).
 XD writes `meta.ux.hasCustomName: true` for a custom name and otherwise the
 kind's `meta.ux.nameL10N` key (SHAPE_RECTANGLE, SHAPE_IMAGE, SHAPE_GROUP for
 text, ...), and reads a named node without `nameL10N` as custom
-(GroupExtensionSerialization.js `deserializeAGC`). Copies keep custom names
+(GroupExtensionSerialization.js `deserializeAGC`). Reading a node with
+`nameL10N` (other than text) replaces its stored name's kind with the kind's
+default name in the user interface language, keeping the number it ends with
+(NamingRegistry.js `localizeName`), so a document saved in English shows and
+saves Rechteck 3 in German and a Box named by default reads as Rectangle; a
+text named by default takes its content, cut to 256 code units
+(TextExtension.js `assignName`). Copies keep custom names
 and renumber generated ones (SceneNodeUtil.js `applyNamingRules`), a text's
 generated name follows its content, and a boolean group's generated name
 follows its operation. `ComponentInstance::m_is_name_inherited` is XD's
 `isCustomNameInherited`: the instance carries the main component's custom
-name, so Reset to Main State and Swap treat it as not renamed.
+name, so Reset to Main State and Swap treat it as not renamed, and renaming
+the component renames it along with the instances without a custom name
+(SymbolGroupExtension.js `setInheritedName`).
 
 ### Groups and their roles
 
@@ -216,7 +258,12 @@ Opacity and blend mode live in the node header because groups have them too.
   the content: consumers clamp `from` and `to` to the content length.
 - `is_flipped_vertically`: XD `meta.ux.flipY`. The text is drawn mirrored
   top to bottom about the middle of its bounds; the node's transform, as XD
-  stores it, does not include the mirror.
+  stores it, does not include the mirror. Flip Horizontal turns the
+  transform by 180 degrees about the text's center and toggles the flag
+  (ResizeUtil.js `flipText`), so the text shows and saves rotation 180.
+  While the text is edited it is drawn without the mirror, as XD's
+  `editInProgress` draws it, and the flip commands are disabled
+  (FlipCommands.js `canFlip`).
 
 ### Artboards
 
@@ -278,7 +325,7 @@ Verified in XD 61:
 ### Components
 
 `Component{id, name, master (a group subtree), states, default state,
-link}`:
+link, placements}`:
 
 - `states`: `ComponentState{id, name, tree (a group subtree),
   added (node ids), removed (node ids), overridden property names,
@@ -289,6 +336,28 @@ link}`:
   (`linkedElementRef`, `resolvedRefName`, `linkedElementLastModified`), the
   source description. XD embeds a local copy, which the model uses; the link
   is informational until linked updates are supported.
+- `placements`: the component's places among the groups of the document's
+  assets, XD's `assetGroupData` on the master's `meta.ux` (the canonical
+  instance's, SymbolGroupExtension.js `serializeAGC`). The component's
+  library element is identified by its master's id (LibraryFolder.js
+  `getElementIdForSymbol`), which the groups of the `groupComponents`
+  section list. A name with slashes, given to a single node made a component
+  or to a main component, files the component into the groups its parts
+  name (SymbolCommands.js `createSymbolHelper`, RenameCommands.js
+  `renameSymbolNode`), and the Layers panel shows a component instance
+  under the names of those groups followed by its own (LayersPane.js
+  `_getDisplayName`). The copies of `assetGroupData` XD leaves on instances
+  are kept as opaque data.
+- Deleting a component from the Document Assets panel (SymbolCommands.js
+  `deleteSymbolById`, `_convertSymbolToGroup`) replaces each instance, the
+  main component among them, with a new ordinary group (a new id), or with
+  its only child when that child is a group or boolean group; references,
+  sync maps, overrides, interactions and the selection then refer to the
+  replacement. An instance mirroring another instance of the component
+  within a component instance or state becomes a copy of what that instance
+  became, which the model makes a reference. Deleting more than 2000 assets
+  at once first asks Permanently delete (main.js `deleteElements`,
+  `deleteGroups`, `MAX_REMOVED_ELEMENTS`).
 - Masters and states live in `Resources`, not on the canvas. Their nodes are
   ordinary nodes in the same node store, so references can point at them.
 
@@ -375,17 +444,33 @@ entries), the archive order and the patches of the entries' roots. The
 writer edits the manifest in place, keeping its member order and XD's
 compact formatting, so that a document saved without changes keeps the
 manifest XD wrote, apart from what XD itself changes on save: the `name`
-(the file's name followed by U+0001), a new `uxdesign#serializationId`, and
+(the file's name followed by U+0001), a new `uxdesign#serializationId`,
 `uxdesign#id`, `uxdesign#parentDocId` and `uxdesign#compositeID`
 (DocumentCommands.js `saveToComposite`, serialization.js `serializeToDCX`,
-SerializationUtil.js `serializeDocAndParentId`). Save As to another file
-makes a new DCX composite, as `saveLocalDocument` does with
+SerializationUtil.js `serializeDocAndParentId`), and `uxdesign#version`
+"2.33" and `uxdesign#applicationVersion` "61.0.12.1". Save As to another
+file makes a new DCX composite, as `saveLocalDocument` does with
 `dcx.createEmptyComposite`: a new manifest `id` and `uxdesign#compositeID`,
 new ids for every folder and component of the manifest (derived from the old
-ones and the composite, so later saves keep them), and the new composite id
-as the XMP `DocumentID` and `OriginalDocumentID` in META-INF/metadata.xml;
-the copy also gets a new `uxdesign#id` and keeps `uxdesign#parentDocId`,
-or takes its new id as its parent when there is none.
+ones and the composite, so later saves keep them); the copy also gets a new
+`uxdesign#id` and keeps `uxdesign#parentDocId`, or takes its new id as its
+parent when there is none.
+
+Every save also rewrites the XMP in META-INF/metadata.xml as XD 61's XMP
+toolkit serializes it (`x:xmptk` "Adobe XMP Core 9.0-c001 ...", attribute
+form, LF line endings, 2048 bytes of padding). Dates are the save time in
+the local time zone, with milliseconds stripped of trailing zeros
+(`2026-10-19T23:45:45.2-04:00`, `Z` for UTC). A save over the file sets
+`ModifyDate` and `MetadataDate` to the time, `InstanceID` to a new id and the
+`dc:title` to the name (U+0001 becomes a space), and adds a `saved` event by
+`XD` to the history, or updates the instance and time of the last event when
+it already is a `saved` event by `XD` (no corpus file has two consecutive
+`saved` events by the same agent); everything else is kept. A save to a new
+file writes a fresh XMP: `CreatorTool` XD, the three dates equal, the new
+composite id as `DocumentID` and `OriginalDocumentID`, and a `created` event
+(the composite id) followed by a `saved` event (the new `InstanceID`). Writes
+that are not saves, such as the corpus round trip, record no save in the XMP
+and keep the versions as read.
 
 ## What the importer does
 

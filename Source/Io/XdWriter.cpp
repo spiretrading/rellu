@@ -15,6 +15,7 @@
 #include "Rellu/Geometry/BooleanOperation.hpp"
 #include "Rellu/Geometry/Polyline.hpp"
 #include "Rellu/Io/XdError.hpp"
+#include "Rellu/Io/XdMetadata.hpp"
 #include "Rellu/Io/XdOpaque.hpp"
 #include "Rellu/Io/XdPackage.hpp"
 #include "Rellu/Io/XdPatch.hpp"
@@ -448,6 +449,7 @@ namespace {
       std::string write_interactions() const;
       std::string write_manifest(const std::vector<Entry>& entries) const;
       std::string get_image_name(const ImageResource& image) const;
+      std::string get_name() const;
   };
 
   Writer::Writer(const Document& document, const XdWriteOptions& options)
@@ -622,6 +624,18 @@ namespace {
     return "resources/" + to_uid(image.m_id);
   }
 
+  std::string Writer::get_name() const {
+    if(!m_options->m_name.empty()) {
+      return m_options->m_name;
+    }
+    if(m_manifest.is_object()) {
+      if(auto name = m_manifest.find("name")) {
+        return std::string(name->to_string());
+      }
+    }
+    return "Untitled";
+  }
+
   std::string Writer::write_manifest(const std::vector<Entry>& entries) const {
     auto names = std::unordered_set<std::string_view>();
     for(auto& entry : entries) {
@@ -668,6 +682,10 @@ namespace {
     }
     if(!m_options->m_parent.empty()) {
       manifest.set("uxdesign#parentDocId", m_options->m_parent);
+    }
+    if(m_options->m_time.isValid()) {
+      manifest.set("uxdesign#applicationVersion", XD_APPLICATION_VERSION);
+      manifest.set("uxdesign#version", XD_DOCUMENT_VERSION);
     }
     auto& components = manifest.find("components") ?
       *manifest.find("components") :
@@ -848,7 +866,16 @@ namespace {
         Entry("mimetype", std::string(MIMETYPE)));
     }
     auto metadata = available.find(std::string(METADATA));
-    if(!m_manifest.is_object() && metadata == available.end()) {
+    if(m_options->m_time.isValid()) {
+      auto xmp = save_xd_metadata(m_options->m_metadata, get_name(),
+        m_composite, m_options->m_instance, m_options->m_time);
+      if(metadata == available.end()) {
+        available.emplace(std::string(METADATA),
+          Entry(std::string(METADATA), std::move(xmp)));
+      } else {
+        metadata->second.m_data = std::move(xmp);
+      }
+    } else if(!m_manifest.is_object() && metadata == available.end()) {
       available.emplace(std::string(METADATA), Entry(std::string(METADATA),
         make_metadata(m_composite, m_options->m_name.empty() ?
           std::string_view("Untitled") : m_options->m_name)));

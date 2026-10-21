@@ -3,10 +3,13 @@
 #include <string_view>
 #include <utility>
 #include <QFileInfo>
+#include "Rellu/Commands/ArtboardPresets.hpp"
+#include "Rellu/Io/XdMetadata.hpp"
 #include "Rellu/Io/XdOpaque.hpp"
 #include "Rellu/Io/XdValue.hpp"
 #include "Rellu/Io/XdWriter.hpp"
 #include "Rellu/Model/NodeId.hpp"
+#include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/Translation.hpp"
 
@@ -22,6 +25,16 @@ namespace {
     }
     return std::string();
   }
+
+  std::string read_metadata(const Document& document) {
+    auto data = decode_package_data(document.get_opaque().get_bytes());
+    for(auto& part : data.m_parts) {
+      if(part.first == "META-INF/metadata.xml") {
+        return part.second;
+      }
+    }
+    return std::string();
+  }
 }
 
 DocumentSession::DocumentSession(
@@ -31,8 +44,12 @@ DocumentSession::DocumentSession(
     m_id(read_manifest(document, "uxdesign#id")),
     m_parent(read_manifest(document, "uxdesign#parentDocId")),
     m_composite(read_manifest(document, "id")),
+    m_metadata(read_metadata(document)),
     m_layout(std::move(layout)),
     m_editor(document) {
+  if(m_id.empty()) {
+    m_id = to_string(generate_node_id());
+  }
   m_editor.get_history().set_compound_filter([] (const Node& compound) {
     return decode_node_data(compound.m_header.m_opaque.get_bytes()).
       m_orphans.empty();
@@ -67,6 +84,10 @@ bool DocumentSession::is_dirty() const {
 }
 
 void DocumentSession::save(const QString& path) {
+  save(path, QDateTime::currentDateTime());
+}
+
+void DocumentSession::save(const QString& path, const QDateTime& time) {
   auto options = XdWriteOptions();
   options.m_layout = m_layout;
   options.m_name = QFileInfo(path).completeBaseName().toStdString() +
@@ -75,7 +96,11 @@ void DocumentSession::save(const QString& path) {
   options.m_parent = m_parent;
   options.m_composite = m_composite;
   options.m_serialization = to_string(generate_node_id());
+  options.m_time = time;
+  options.m_instance = to_string(generate_node_id());
+  options.m_metadata = m_metadata;
   if(m_path.isEmpty() || path != m_path || !QFileInfo::exists(path)) {
+    options.m_metadata.clear();
     options.m_id = to_string(generate_node_id());
     if(options.m_parent.empty()) {
       options.m_parent = options.m_id;
@@ -90,6 +115,8 @@ void DocumentSession::save(const QString& path) {
     }
   }
   write_xd(*m_document, std::filesystem::path(path.toStdU16String()), options);
+  m_metadata = save_xd_metadata(options.m_metadata, options.m_name,
+    options.m_composite, options.m_instance, time);
   m_path = path;
   m_id = std::move(options.m_id);
   m_parent = std::move(options.m_parent);
@@ -108,6 +135,19 @@ bool Rellu::resolve_unsaved_changes(const DocumentSession& session,
     return save();
   }
   return choice == UnsavedChoice::DISCARD;
+}
+
+std::unique_ptr<Document> Rellu::make_new_document() {
+  auto document = std::make_unique<Document>();
+  auto preset = ArtboardPreset("Web 1920", Size(1920, 1080));
+  {
+    auto transaction = Transaction(*document);
+    insert_preset_artboard(*document, transaction, preset, Point(0, 0));
+    transaction.commit();
+  }
+  document->clear_history();
+  set_last_used_preset(preset);
+  return document;
 }
 
 bool Rellu::open_launched_document(const QStringList& arguments,

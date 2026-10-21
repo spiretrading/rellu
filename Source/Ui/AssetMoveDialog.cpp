@@ -159,11 +159,11 @@ QString AssetMoveDialog::get_location() const {
 std::vector<AssetMoveDialog::Entry> AssetMoveDialog::get_entries() const {
   auto entries = std::vector<Entry>();
   if(m_group.empty()) {
-    for(auto& section : {COLOR_SECTION, CHARACTER_STYLE_SECTION}) {
+    for(auto& section :
+        {COLOR_SECTION, CHARACTER_STYLE_SECTION, COMPONENT_SECTION}) {
       entries.push_back(
         Entry(section, get_section_name(section), section == m_section));
     }
-    entries.push_back(Entry(std::string(), get_section_name(""), false));
     return entries;
   }
   auto& resources = m_editor->get_document().get_resources();

@@ -94,8 +94,7 @@ namespace Rellu {
       static bool is_editable(const GradientFill& fill);
 
       /**
-       * Handles a key pressed while the handles are shown. Tab and Shift+Tab
-       * select the next and the previous stop, wrapping around. Delete and
+       * Handles a key pressed while the handles are shown. Delete and
        * Backspace remove the selected stop unless it lies at an end of the
        * track, selecting the stop before it. The arrow keys, with no
        * modifier but Shift, nudge the selected stop along the node's axes by
@@ -117,6 +116,20 @@ namespace Rellu {
       static GradientEdit press_key(const GradientFill& fill,
         const Rect& bounds, double zoom, int stop, int key,
         Qt::KeyboardModifiers modifiers);
+
+      /**
+       * Nudges the selected stop as an arrow key does, by a displacement
+       * along the node's axes.
+       * @param fill The fill.
+       * @param bounds The bounding box of the filled node in its local space.
+       * @param zoom The zoom of the view, dividing the displacement.
+       * @param stop The index of the selected stop.
+       * @param delta The displacement in units of the node's local space,
+       *        before it is divided by the <i>zoom</i>.
+       * @return The change made.
+       */
+      static GradientEdit nudge(const GradientFill& fill, const Rect& bounds,
+        double zoom, int stop, Point delta);
 
       /** Constructs GradientHandles with no drag in progress. */
       GradientHandles();

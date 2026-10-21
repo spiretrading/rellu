@@ -2,12 +2,15 @@
 #include <atomic>
 #include <cstddef>
 #include <tuple>
+#include <unordered_map>
 #include "Rellu/Localization/Localization.hpp"
 #include "Translations.hpp"
 
 using namespace Rellu;
 
 namespace {
+  constexpr auto APP_PREFIX = std::string_view("app:");
+  constexpr auto NUMBER_SEPARATOR = std::string_view(" \xE2\x80\x93 ");
   std::atomic<Language> current_language = Language::ENGLISH;
 
   const Translation* find_translation(
@@ -23,6 +26,61 @@ namespace {
       return nullptr;
     }
     return &*i;
+  }
+
+  const Translation* find_name_translation(std::string_view key) {
+    static const auto names = [] {
+      auto names = std::unordered_map<std::string_view, const Translation*>();
+      for(auto& translation : get_translations()) {
+        if((translation.m_context == "name" ||
+            translation.m_context.starts_with("name.")) &&
+            translation.m_id.starts_with(APP_PREFIX) &&
+            translation.m_text.find('%') == std::string_view::npos) {
+          names.emplace(
+            translation.m_id.substr(APP_PREFIX.size()), &translation);
+        }
+      }
+      return names;
+    }();
+    auto name = names.find(key);
+    if(name == names.end()) {
+      return nullptr;
+    }
+    return name->second;
+  }
+
+  std::size_t count_digits(std::string_view text) {
+    return static_cast<std::size_t>(std::find_if(text.begin(), text.end(),
+      [] (const auto& c) { return c < '0' || c > '9'; }) - text.begin());
+  }
+
+  bool is_number(std::string_view text) {
+    if(!text.starts_with(' ')) {
+      return false;
+    }
+    text.remove_prefix(1);
+    auto digits = count_digits(text);
+    if(digits == 0) {
+      return false;
+    } else if(digits == text.size()) {
+      return true;
+    }
+    text.remove_prefix(digits);
+    if(!text.starts_with(NUMBER_SEPARATOR)) {
+      return false;
+    }
+    text.remove_prefix(NUMBER_SEPARATOR.size());
+    digits = count_digits(text);
+    return digits != 0 && digits == text.size();
+  }
+
+  std::string_view get_number(std::string_view name) {
+    for(auto i = std::size_t(0); i != name.size(); ++i) {
+      if(is_number(name.substr(i))) {
+        return name.substr(i);
+      }
+    }
+    return std::string_view();
   }
 }
 
@@ -124,4 +182,21 @@ std::string_view Rellu::localize(
 
 std::string_view Rellu::localize(std::string_view text) {
   return localize(std::string_view(), text);
+}
+
+std::string Rellu::localize_default_name(
+    std::string_view name, std::string_view key, Language language) {
+  auto translation = find_name_translation(key);
+  if(!translation) {
+    return std::string(name);
+  }
+  auto prefix = translation->m_text;
+  if(language != Language::ENGLISH) {
+    auto& localized =
+      translation->m_translations[static_cast<std::size_t>(language) - 1];
+    if(!localized.empty()) {
+      prefix = localized;
+    }
+  }
+  return std::string(prefix) + std::string(get_number(name));
 }

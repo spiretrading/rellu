@@ -1,7 +1,9 @@
 #ifndef RELLU_DOCUMENT_VIEW_HPP
 #define RELLU_DOCUMENT_VIEW_HPP
+#include <map>
 #include <memory>
 #include <optional>
+#include <tuple>
 #include <QCursor>
 #include <QLineEdit>
 #include <QPointF>
@@ -73,14 +75,24 @@ namespace Rellu {
       ToolManager* get_tools() const;
 
       /**
-       * Zooms and centers the view so that every node is visible, keeping
-       * it so as the view is resized until the user pans or zooms.
+       * Zooms and centers the view so that every node is visible, as
+       * fit_view does, keeping it so as the view is resized until the view
+       * is next drawn while its fit is not held. Resizing a drawn view keeps
+       * its zoom and the point of the document at its top left corner.
        */
       void fit();
 
       /**
+       * Sets whether the view keeps fitting as it is resized when drawn, as
+       * while its window is first shown.
+       * @param is_held <code>true</code> iff drawing keeps the fit.
+       */
+      void set_fit_held(bool is_held);
+
+      /**
        * Zooms and centers the view so that a region of the document is
-       * visible.
+       * visible, as fit_view does, or centers the view on it at the same zoom
+       * when it is a point.
        * @param region The region in document coordinates.
        */
       void zoom_to(const Rect& region);
@@ -122,16 +134,16 @@ namespace Rellu {
       std::unique_ptr<ToolManager> m_tools;
       Subscription m_subscription;
       Subscription m_tool_subscription;
+      Subscription m_text_subscription;
       double m_zoom;
       Point m_offset;
       double m_level;
       bool m_is_fitting;
+      bool m_is_fit_held;
       bool m_is_space_pressed;
       bool m_is_panning;
       QPointF m_position;
-      std::optional<QCursor> m_rotate_cursor;
-      std::optional<QCursor> m_zoom_in_cursor;
-      std::optional<QCursor> m_zoom_out_cursor;
+      std::map<std::tuple<CursorKind, int, double>, QCursor> m_cursors;
       QTimer m_preparation;
       QTimer m_caret_timer;
       QLineEdit* m_title_editor;
@@ -145,6 +157,7 @@ namespace Rellu {
       void attach_tools();
       TextTool* get_text_tool() const;
       void update_text_editing();
+      void update_edited_text();
       bool forward(QMouseEvent* event, auto handler);
       bool start_rename(Point position);
       void finish_rename(bool is_committed);

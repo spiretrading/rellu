@@ -70,7 +70,9 @@ const std::vector<ArtboardTitles::Title>& ArtboardTitles::get_titles() const {
 
 NodeId ArtboardTitles::find(Point position) const {
   for(auto i = m_titles.rbegin(); i != m_titles.rend(); ++i) {
-    if(i->m_bounds.contains(position)) {
+    auto region = i->m_bounds;
+    region.m_height = HEIGHT + GAP - HIT_GAP;
+    if(region.contains(position)) {
       return i->m_artboard;
     }
   }

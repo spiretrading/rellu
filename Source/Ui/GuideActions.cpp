@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QUuid>
 #include "Rellu/Commands/GuideCommands.hpp"
+#include "Rellu/Ui/DocumentSettings.hpp"
 #include "Rellu/Ui/GuideActions.hpp"
 #include "Rellu/Ui/Translation.hpp"
 
@@ -151,14 +152,20 @@ bool GuideActions::paste(const QMimeData& data, bool is_applied) {
   if(artboards.empty()) {
     return true;
   }
-  m_editor->execute(std::make_unique<PasteGuidesCommand>(
+  auto command = m_editor->execute(std::make_unique<PasteGuidesCommand>(
     std::move(artboards), std::move(*guides), [] {
       return QUuid::createUuid().toString(QUuid::WithoutBraces).
         toStdString();
     }));
-  if(!m_settings.m_is_visible) {
-    m_settings.m_is_visible = true;
-    publish();
+  if(m_settings.m_is_visible) {
+    return true;
+  }
+  auto settings = m_settings;
+  settings.m_is_visible = true;
+  auto [revert, reapply] = make_change(settings);
+  auto& history = m_editor->get_history();
+  if(!command || !history.attach(revert, reapply)) {
+    history.record("Paste Guides", std::move(revert), std::move(reapply));
   }
   return true;
 }
@@ -217,23 +224,29 @@ void GuideActions::copy() {
 }
 
 void GuideActions::change(GuideSettings settings, std::string label) {
+  auto [revert, reapply] = make_change(settings);
+  if(m_editor) {
+    m_editor->get_history().record(
+      std::move(label), std::move(revert), std::move(reapply));
+  }
+}
+
+std::pair<std::function<void ()>, std::function<void ()>>
+    GuideActions::make_change(GuideSettings settings) {
   auto previous = m_settings;
   m_settings = settings;
   publish();
-  if(!m_editor) {
-    return;
-  }
   auto self = std::weak_ptr<GuideActions*>(m_self);
   auto apply = [self] (const GuideSettings& settings) {
     if(auto actions = self.lock()) {
       (*actions)->set_settings(settings);
     }
   };
-  m_editor->get_history().record(std::move(label), [=] {
+  return std::pair(std::function<void ()>([=] {
     apply(previous);
-  }, [=] {
+  }), std::function<void ()>([=] {
     apply(settings);
-  });
+  }));
 }
 
 void GuideActions::publish() {
@@ -267,4 +280,26 @@ std::optional<std::vector<Guide>> Rellu::read_guides_data(
   read_list(model, "horizontalGuides", Orientation::HORIZONTAL, guides);
   read_list(model, "verticalGuides", Orientation::VERTICAL, guides);
   return guides;
+}
+
+std::optional<GuideSettings> Rellu::find_guide_settings(
+    const QByteArray& store, std::string_view document) {
+  auto data = find_document_settings(store, document);
+  if(!data) {
+    return std::nullopt;
+  }
+  return GuideSettings(data->value("visible").toBool(),
+    !data->value("enabled").toBool());
+}
+
+QByteArray Rellu::record_guide_settings(const QByteArray& store,
+    std::string_view document, const GuideSettings& settings,
+    std::int64_t time) {
+  auto data = std::optional<QJsonObject>();
+  if(settings != GuideSettings()) {
+    data.emplace();
+    data->insert("enabled", !settings.m_is_locked);
+    data->insert("visible", settings.m_is_visible);
+  }
+  return record_document_settings(store, document, data, time);
 }

@@ -2,9 +2,11 @@
 #include <cmath>
 #include <optional>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include "Rellu/Commands/AssetCommands.hpp"
+#include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
 
@@ -65,6 +67,16 @@ namespace {
       get_order_between(FIRST_KEY, upper.substr(lower.size()));
   }
 
+  const Component* find_master_component(
+      const Resources& resources, const NodeId& master) {
+    for(auto& component : resources.m_components) {
+      if(component.second.m_master == master) {
+        return &component.second;
+      }
+    }
+    return nullptr;
+  }
+
   const std::vector<AssetPlacement>* find_placements(
       const Resources& resources, const NodeId& asset) {
     for(auto& swatch : resources.m_swatches) {
@@ -76,6 +88,9 @@ namespace {
       if(style.m_id == asset) {
         return &style.m_placements;
       }
+    }
+    if(auto component = find_master_component(resources, asset)) {
+      return &component->m_placements;
     }
     return nullptr;
   }
@@ -122,6 +137,10 @@ namespace {
       for(auto& style : resources.m_character_styles) {
         assets.push_back(style.m_id);
       }
+    } else if(section == COMPONENT_SECTION) {
+      for(auto& component : resources.m_components) {
+        assets.push_back(component.second.m_master);
+      }
     }
     return assets;
   }
@@ -165,6 +184,13 @@ namespace {
           transaction.replace_character_style(std::move(replacement));
         }
         return;
+      }
+    }
+    if(auto component = find_master_component(resources, asset)) {
+      auto replacement = *component;
+      replacement.m_placements = std::move(placements);
+      if(!(replacement == *component)) {
+        transaction.replace_component(std::move(replacement));
       }
     }
   }
@@ -747,6 +773,11 @@ void AddAssetsCommand::apply(
   }
 }
 
+void Rellu::place_new_assets(const Document& document,
+    Transaction& transaction, const std::string& section) {
+  order_new_assets(document, transaction, section);
+}
+
 std::string Rellu::make_order_between(
     const std::string& lower, const std::string& upper) {
   return get_order_between(lower, upper);
@@ -778,7 +809,79 @@ std::string Rellu::find_section(
       return CHARACTER_STYLE_SECTION;
     }
   }
+  if(find_master_component(resources, asset)) {
+    return COMPONENT_SECTION;
+  }
   return std::string();
+}
+
+std::vector<std::string> Rellu::get_group_path(
+    const Resources& resources, const NodeId& asset) {
+  auto path = std::vector<std::string>();
+  auto group = find_group(resources, find_asset_group(resources, asset));
+  for(auto depth = 0; group && depth != MAXIMUM_DEPTH; ++depth) {
+    path.insert(path.begin(), group->m_name);
+    group = find_group(resources, group->m_parent);
+  }
+  return path;
+}
+
+void Rellu::file_asset(const Document& document, Transaction& transaction,
+    const NodeId& asset, const std::vector<std::string>& path) {
+  auto section = find_section(document.get_resources(), asset);
+  if(section.empty()) {
+    throw std::invalid_argument("Unknown asset.");
+  }
+  auto group = section;
+  for(auto& name : path) {
+    auto& resources = document.get_resources();
+    auto child = std::find_if(resources.m_asset_groups.begin(),
+      resources.m_asset_groups.end(), [&] (const auto& candidate) {
+        return candidate.m_parent == group && candidate.m_name == name;
+      });
+    if(child != resources.m_asset_groups.end()) {
+      group = child->m_id;
+      continue;
+    }
+    auto command = AddAssetGroupCommand(group, name);
+    command.apply(document, transaction);
+    group = command.get_group();
+  }
+  auto& resources = document.get_resources();
+  auto current = find_asset_group(resources, asset);
+  if(current == group) {
+    return;
+  }
+  auto order = make_order_between(
+    std::string(), find_first_order(resources, group, {asset}));
+  auto groups = resources.m_asset_groups;
+  auto element = to_string(asset);
+  for(auto& entry : groups) {
+    std::erase(entry.m_elements, element);
+    if(entry.m_id == group) {
+      entry.m_elements.push_back(element);
+    }
+  }
+  for(auto empty = current; empty != section;) {
+    auto entry = std::find_if(groups.begin(), groups.end(),
+      [&] (const auto& candidate) {
+        return candidate.m_id == empty;
+      });
+    if(entry == groups.end() || !entry->m_elements.empty() ||
+        !entry->m_children.empty()) {
+      break;
+    }
+    auto parent = entry->m_parent;
+    groups.erase(entry);
+    for(auto& other : groups) {
+      std::erase(other.m_children, empty);
+    }
+    empty = parent;
+  }
+  if(groups != resources.m_asset_groups) {
+    transaction.set_asset_groups(std::move(groups));
+  }
+  set_placements(document, transaction, asset, {AssetPlacement(group, order)});
 }
 
 std::string Rellu::find_asset_group(
@@ -981,7 +1084,7 @@ void AddAssetGroupCommand::apply(
     const Document& document, Transaction& transaction) {
   auto& resources = document.get_resources();
   if(!find_group(resources, m_parent) && m_parent != COLOR_SECTION &&
-      m_parent != CHARACTER_STYLE_SECTION) {
+      m_parent != CHARACTER_STYLE_SECTION && m_parent != COMPONENT_SECTION) {
     throw std::invalid_argument("Unknown asset group.");
   }
   auto groups = resources.m_asset_groups;
@@ -1005,6 +1108,17 @@ RemoveAssetGroupCommand::RemoveAssetGroupCommand(
   : m_group(std::move(group)),
     m_is_content_deleted(is_content_deleted) {}
 
+RemoveAssetGroupCommand::RemoveAssetGroupCommand(
+  std::string group, std::vector<NodeId> selection) noexcept
+  : m_group(std::move(group)),
+    m_is_content_deleted(true),
+    m_selection(std::move(selection)) {}
+
+std::optional<std::vector<NodeId>>
+    RemoveAssetGroupCommand::get_selection() const {
+  return m_remapped;
+}
+
 std::string RemoveAssetGroupCommand::get_label() const {
   return "Delete Asset Group";
 }
@@ -1016,6 +1130,9 @@ void RemoveAssetGroupCommand::apply(
   if(!group) {
     throw std::invalid_argument("Unknown asset group.");
   }
+  m_remapped = std::nullopt;
+  auto replacements = std::unordered_map<NodeId, NodeId>();
+  auto is_component_deleted = false;
   auto parent = group->m_parent;
   auto removed = std::vector<std::string>({m_group});
   if(m_is_content_deleted) {
@@ -1031,7 +1148,8 @@ void RemoveAssetGroupCommand::apply(
     return std::find(removed.begin(), removed.end(), id) != removed.end();
   };
   auto assets = std::vector<NodeId>();
-  for(auto section : {COLOR_SECTION, CHARACTER_STYLE_SECTION}) {
+  for(auto section :
+      {COLOR_SECTION, CHARACTER_STYLE_SECTION, COMPONENT_SECTION}) {
     for(auto& asset : get_section_assets(resources, section)) {
       if(is_removed(find_asset_group(resources, asset))) {
         assets.push_back(asset);
@@ -1064,7 +1182,14 @@ void RemoveAssetGroupCommand::apply(
   transaction.set_asset_groups(std::move(groups));
   for(auto& asset : assets) {
     if(m_is_content_deleted) {
-      if(find_section(resources, asset) == COLOR_SECTION) {
+      auto section = find_section(resources, asset);
+      if(section == COMPONENT_SECTION) {
+        auto id = find_master_component(resources, asset)->m_id;
+        if(can_delete_component(document, id)) {
+          delete_component(document, transaction, id, &replacements);
+          is_component_deleted = true;
+        }
+      } else if(section == COLOR_SECTION) {
         relink_fills(document, transaction, asset, nullptr);
         transaction.remove_swatch(asset);
       } else {
@@ -1080,6 +1205,9 @@ void RemoveAssetGroupCommand::apply(
       }
     }
     set_placements(document, transaction, asset, std::move(placements));
+  }
+  if(is_component_deleted) {
+    m_remapped = remap_selection(document, m_selection, replacements);
   }
 }
 

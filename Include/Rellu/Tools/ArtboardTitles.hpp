@@ -33,6 +33,13 @@ namespace Rellu {
       /** The distance in logical units between a title and its artboard. */
       static constexpr auto GAP = 3.0;
 
+      /**
+       * The distance in logical units between an artboard and the bottom of
+       * the region in which its title is clicked, which reaches below the
+       * title's text.
+       */
+      static constexpr auto HIT_GAP = 4.5;
+
       /** The size of a title's font in logical units. */
       static constexpr auto FONT_SIZE = 11.0;
 
@@ -64,7 +71,8 @@ namespace Rellu {
       const std::vector<Title>& get_titles() const;
 
       /**
-       * Finds the title at a position.
+       * Finds the title clicked at a position, within the width of its text
+       * and from the top of its text down to HIT_GAP above its artboard.
        * @param position The position in logical units.
        * @return The artboard whose title is top-most at the <i>position</i>,
        *         or nil if there is none.

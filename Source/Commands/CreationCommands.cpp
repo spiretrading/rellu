@@ -30,7 +30,8 @@ std::string Rellu::make_node_name(
   auto largest = std::uint64_t(0);
   document.get_nodes().for_each([&] (const Node& node) {
     auto name = std::string_view(node.m_header.m_name);
-    if(!name.starts_with(prefix)) {
+    if(node.m_header.m_has_custom_name || node.get_text() ||
+        !name.starts_with(prefix)) {
       return;
     }
     auto digits = name.substr(prefix.size());

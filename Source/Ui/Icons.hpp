@@ -98,6 +98,8 @@ namespace Rellu {
     LAYER_BOOLEAN,
     LAYER_TEXT,
     LAYER_GROUP,
+    LAYER_OPEN_GROUP,
+    LAYER_PASTEBOARD,
     LAYER_COMPONENT,
     LAYER_REFERENCE,
     EYE,
@@ -125,6 +127,12 @@ namespace Rellu {
    * @param is_reference Whether the node listed is a reference.
    */
   const QIcon& get_layer_icon(const Node& node, bool is_reference);
+
+  /** Returns the icon of an expanded group in the layers panel. */
+  const QIcon& get_open_group_icon();
+
+  /** Returns the icon of the Pasteboard row in the layers panel. */
+  const QIcon& get_pasteboard_icon();
 
   /**
    * Returns the icon of a kind of node.

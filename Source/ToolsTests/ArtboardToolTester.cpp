@@ -70,6 +70,32 @@ TEST_SUITE("ArtboardTool") {
     REQUIRE(square.m_header.m_name == "Artboard \xE2\x80\x93 2");
   }
 
+  TEST_CASE("drawn_grid") {
+    auto document = Document();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    tools.set_tool("artboard");
+    drag(tools, Point(0, 0), Point(2299, 1711));
+    auto& node = document.get(editor.get_selection().get_primary());
+    REQUIRE(!node.m_header.m_constraints.m_is_enabled);
+    auto& artboard = *node.get_artboard();
+    REQUIRE(artboard.m_frame == Rect(0, 0, 2299, 1711));
+    REQUIRE(!artboard.m_viewport_height);
+    REQUIRE(artboard.m_layout_grid);
+    auto& grid = *artboard.m_layout_grid;
+    REQUIRE(grid.m_type == GridType::SQUARE);
+    REQUIRE(!grid.m_is_visible);
+    REQUIRE(grid.m_default_width == 2299);
+    REQUIRE(grid.m_column_count == 12);
+    REQUIRE(grid.m_gutter == 16);
+    REQUIRE(grid.m_margins == Margins(0, 137, 0, 137));
+    REQUIRE(grid.m_square_size == Size(8, 8));
+    REQUIRE(grid.m_square_row_color == Color(
+      199 / 255.0, 199 / 255.0, 199 / 255.0, 128 / 255.0));
+    REQUIRE(grid.m_column_color == Color(0, 1, 1, 64 / 255.0));
+  }
+
   TEST_CASE("handles") {
     auto document = Document();
     build_artboard(document);
@@ -87,10 +113,10 @@ TEST_SUITE("ArtboardTool") {
       }
     }
     REQUIRE(handles == 8);
-    tools.move(make_event(Point(805, 250), Qt::NoButton, Qt::NoButton));
+    tools.move(make_event(Point(803.5, 250), Qt::NoButton, Qt::NoButton));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
-    tools.move(make_event(Point(809, 250), Qt::NoButton, Qt::NoButton));
-    REQUIRE(tools.get_cursor().m_kind == CursorKind::CROSSHAIR);
+    tools.move(make_event(Point(804, 250), Qt::NoButton, Qt::NoButton));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ARTBOARD);
     drag(tools, Point(800, 250), Point(850, 250));
     REQUIRE(document.get(drawn).get_artboard()->m_frame ==
       Rect(500, 100, 350, 300));

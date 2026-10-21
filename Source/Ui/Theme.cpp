@@ -637,6 +637,15 @@ QPalette Rellu::make_light_palette() {
   return palette;
 }
 
+QColor Rellu::get_canvas_color(const Document& document) {
+  for(auto& id : document.get_canvas()) {
+    if(document.get(id).get_artboard()) {
+      return Colors::PASTEBOARD;
+    }
+  }
+  return WHITE;
+}
+
 void Rellu::apply_theme(QApplication& application) {
   application.setStyle(new RelluStyle());
   application.setPalette(make_light_palette());

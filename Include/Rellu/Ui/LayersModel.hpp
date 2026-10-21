@@ -1,6 +1,8 @@
 #ifndef RELLU_UI_LAYERS_MODEL_HPP
 #define RELLU_UI_LAYERS_MODEL_HPP
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <unordered_map>
@@ -18,10 +20,18 @@ namespace Rellu {
 
   /**
    * Presents a document's canvas as a tree of layers, one row per node with
-   * the topmost first, kept up to date as the document changes.
+   * the topmost first, kept up to date as the document changes. As in Adobe
+   * XD, while the canvas holds both artboards and other layers, the canvas
+   * lists the artboards followed by a Pasteboard row listing the other
+   * layers.
    */
   class LayersModel : public QAbstractItemModel {
     public:
+
+      /** The id of the Pasteboard row. */
+      static inline const auto PASTEBOARD = NodeId(std::to_array<std::uint8_t>(
+        {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x4F, 0xFF, 0xBF, 0xFF, 0xFF,
+          0xFF, 0xFF, 0xFF, 0xFF, 0xFF}));
 
       /** Lists the columns. */
       enum Column {
@@ -55,7 +65,13 @@ namespace Rellu {
         LOCKED_ROLE,
 
         /** The node's id in canonical text form. */
-        ID_ROLE
+        ID_ROLE,
+
+        /**
+         * The icon shown in place of the decoration while the row is
+         * expanded, null if the decoration stays.
+         */
+        EXPANDED_ICON_ROLE
       };
 
       /**
@@ -117,10 +133,11 @@ namespace Rellu {
 
       /**
        * Tests whether layers may be placed in a parent, as Adobe XD allows:
-       * artboards only on the canvas, other layers on the canvas, in
-       * artboards or in plain groups, and never in themselves.
+       * artboards only on the canvas, other layers on the canvas, the
+       * Pasteboard row, in artboards or in plain groups, and never in
+       * themselves.
        * @param nodes The nodes moved.
-       * @param parent The parent's id, or nil for the canvas.
+       * @param parent The parent's id, nil for the canvas or PASTEBOARD.
        */
       bool is_movable(
         const std::vector<NodeId>& nodes, const NodeId& parent) const;
@@ -128,13 +145,14 @@ namespace Rellu {
       /**
        * Returns the id of the node at an index.
        * @param index The index.
-       * @return The node's id, or nil for an invalid index.
+       * @return The node's id, PASTEBOARD for the Pasteboard row, or nil for
+       *         an invalid index.
        */
       NodeId get_id(const QModelIndex& index) const;
 
       /**
        * Returns the index of a node on the canvas.
-       * @param id The node's id.
+       * @param id The node's id, or PASTEBOARD for the Pasteboard row.
        * @param column The column.
        * @return The node's index, or an invalid index if the node is not on
        *         the canvas.
@@ -183,6 +201,7 @@ namespace Rellu {
       LayersModel& operator =(const LayersModel&) = delete;
       Item* get_item(const QModelIndex& index) const;
       Item* find_item(const NodeId& id) const;
+      bool has_pasteboard() const;
       QModelIndex make_index(Item& item, int column) const;
       void populate(Item& item) const;
       std::vector<NodeId> get_rows(const Item& item) const;

@@ -27,8 +27,9 @@ namespace Rellu {
 
   /**
    * Sets the corner radii of rectangles and the corner radius of polygons,
-   * labelled Corner Radius. Radii are at least zero, and nodes of other
-   * kinds are left unchanged.
+   * labelled Corner Radius, or for a corner set from its own field, Corner
+   * Radius followed by the corner's name, such as Corner Radius Top Left.
+   * Radii are at least zero, and nodes of other kinds are left unchanged.
    */
   class SetCornerRadiusCommand : public Command {
     public:
@@ -56,20 +57,26 @@ namespace Rellu {
        * @param nodes The nodes to change.
        * @param corner The corner.
        * @param radius The corner's radius.
+       * @param is_field Whether the radius is set from the corner's own
+       *        field, which names the corner in the label.
        */
-      SetCornerRadiusCommand(
-        std::vector<NodeId> nodes, Corner corner, double radius) noexcept;
+      SetCornerRadiusCommand(std::vector<NodeId> nodes, Corner corner,
+        double radius, bool is_field = false) noexcept;
 
       std::string get_label() const override;
       void apply(const Document& document, Transaction& transaction) override;
 
-      /** Combines a SetCornerRadiusCommand changing the same nodes. */
+      /**
+       * Combines a SetCornerRadiusCommand changing the same nodes under the
+       * same label.
+       */
       bool merge(const Command& command) override;
 
     private:
       std::vector<NodeId> m_nodes;
       std::array<std::optional<double>, 4> m_radii;
       std::optional<double> m_polygon_radius;
+      std::optional<Corner> m_field;
   };
 }
 

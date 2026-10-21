@@ -18,6 +18,7 @@ namespace {
   constexpr auto MAXIMUM_BINS = std::size_t(4096);
   constexpr auto MINIMUM_WIDE_BINS = std::size_t(4);
   constexpr auto DASH_LENGTH = 2.0;
+  constexpr auto LINE_TOLERANCE = 0.001;
 
   struct Interval {
     double m_start;
@@ -86,6 +87,18 @@ namespace {
     if(!best || std::abs(offset) < std::abs(*best)) {
       best = offset;
     }
+  }
+
+  std::optional<Point> pick_smaller(
+      const std::optional<Point>& left, const std::optional<Point>& right) {
+    if(!left) {
+      return right;
+    } else if(!right) {
+      return left;
+    } else if(dot(*left, *left) <= dot(*right, *right)) {
+      return left;
+    }
+    return right;
   }
 
   std::optional<Interval> find_before(
@@ -376,6 +389,7 @@ SmartGuides::SmartGuides(const ToolContext& context)
   : m_context(&context),
     m_is_active(false),
     m_is_collected(false),
+    m_is_grid_snapped(false),
     m_mark(0),
     m_label_scale(0) {}
 
@@ -404,6 +418,7 @@ void SmartGuides::begin(
     const NodeId& container, const std::vector<NodeId>& nodes) {
   m_is_active = true;
   m_is_collected = false;
+  m_is_grid_snapped = false;
   m_container = container;
   m_nodes = nodes;
   clear_guides();
@@ -445,6 +460,7 @@ Point SmartGuides::snap_move(
 Point SmartGuides::snap_point(
     Point point, SnapAxes axes, Qt::KeyboardModifiers modifiers) {
   clear_guides();
+  m_is_grid_snapped = false;
   if(!m_is_active || modifiers.testFlag(Qt::ControlModifier)) {
     return point;
   }
@@ -456,11 +472,14 @@ Point SmartGuides::snap_point(
   if(has_x(axes)) {
     if(auto offset = find_alignment(true, {point.m_x}, threshold)) {
       snapped.m_x += *offset;
+      m_is_grid_snapped = is_on_grid(true, snapped.m_x);
     }
   }
   if(has_y(axes)) {
     if(auto offset = find_alignment(false, {point.m_y}, threshold)) {
       snapped.m_y += *offset;
+      m_is_grid_snapped =
+        m_is_grid_snapped || is_on_grid(false, snapped.m_y);
     }
   }
   auto rect = Rect(snapped.m_x, snapped.m_y, 0, 0);
@@ -473,9 +492,54 @@ Point SmartGuides::snap_point(
   return snapped;
 }
 
+LineEnds SmartGuides::snap_line(Point start, Point end, bool is_angle_kept,
+    bool is_mirrored, Qt::KeyboardModifiers modifiers) {
+  clear_guides();
+  if(!m_is_active || modifiers.testFlag(Qt::ControlModifier)) {
+    return LineEnds(start, end);
+  }
+  if(!m_is_collected) {
+    collect();
+  }
+  auto end_offset = find_line_offset(end, start, is_angle_kept);
+  auto start_offset = std::optional<Point>();
+  if(is_mirrored) {
+    start_offset = find_line_offset(start, end, is_angle_kept);
+  }
+  auto offset = pick_smaller(end_offset, start_offset);
+  if(!offset) {
+    return LineEnds(start, end);
+  }
+  auto ends = LineEnds(start, end);
+  auto snapped = Point(0, 0);
+  if(offset == end_offset) {
+    ends.m_end = end + *offset;
+    if(is_mirrored) {
+      ends.m_start = start - *offset;
+    }
+    snapped = ends.m_end;
+  } else {
+    ends.m_start = start + *offset;
+    ends.m_end = end - *offset;
+    snapped = ends.m_start;
+  }
+  auto rect = Rect(std::min(ends.m_start.m_x, ends.m_end.m_x),
+    std::min(ends.m_start.m_y, ends.m_end.m_y),
+    std::abs(ends.m_end.m_x - ends.m_start.m_x),
+    std::abs(ends.m_end.m_y - ends.m_start.m_y));
+  add_lines(true, rect, {snapped.m_x});
+  add_lines(false, rect, {snapped.m_y});
+  return ends;
+}
+
+bool SmartGuides::is_grid_snapped() const {
+  return m_is_grid_snapped;
+}
+
 void SmartGuides::end() {
   m_is_active = false;
   m_is_collected = false;
+  m_is_grid_snapped = false;
   m_nodes.clear();
   m_targets.clear();
   m_objects.clear();
@@ -693,7 +757,7 @@ std::vector<std::size_t> SmartGuides::find_row(
 void SmartGuides::add_target(
     const Rect& bounds, bool is_shown, bool is_object) {
   auto index = m_targets.size();
-  m_targets.push_back(Target(bounds, is_shown));
+  m_targets.push_back(Target(bounds, is_shown, false));
   if(is_object) {
     m_objects.push_back(index);
   }
@@ -705,9 +769,9 @@ void SmartGuides::add_target(
   }
 }
 
-void SmartGuides::add_line(bool is_x, double value) {
+void SmartGuides::add_line(bool is_x, double value, bool is_grid) {
   auto index = m_targets.size();
-  m_targets.push_back(Target(Rect(0, 0, 0, 0), false));
+  m_targets.push_back(Target(Rect(0, 0, 0, 0), false, is_grid));
   if(is_x) {
     m_x_entries.push_back(Entry(value, index));
   } else {
@@ -723,16 +787,17 @@ void SmartGuides::add_artboard(const NodeId& id) {
     if(!m_context->get_guide_settings().m_is_visible) {
       break;
     } else if(guide.m_orientation == Orientation::HORIZONTAL) {
-      add_line(false, frame.m_y + guide.m_position);
+      add_line(false, frame.m_y + guide.m_position, false);
     } else {
-      add_line(true, frame.m_x + guide.m_position);
+      add_line(true, frame.m_x + guide.m_position, false);
     }
   }
+  auto& settings = m_context->get_grid_settings();
   auto& grid = artboard->m_layout_grid;
-  if(!grid || !grid->m_is_visible) {
+  if(!grid || !is_grid_visible(settings)) {
     return;
   }
-  if(grid->m_type == GridType::SQUARE) {
+  if(settings.m_is_square_visible) {
     if(grid->m_square_size.m_width > 0 && grid->m_square_size.m_height > 0) {
       m_square_grid = SquareGrid(frame, grid->m_square_size);
     }
@@ -750,8 +815,8 @@ void SmartGuides::add_artboard(const NodeId& id) {
   }
   for(auto i = 0; i != count; ++i) {
     auto left = frame.m_x + margins.m_left + i * (width + grid->m_gutter);
-    add_line(true, left);
-    add_line(true, left + width);
+    add_line(true, left, true);
+    add_line(true, left + width, true);
   }
 }
 
@@ -796,6 +861,60 @@ std::optional<double> SmartGuides::find_alignment(bool is_x,
     }
   }
   return best;
+}
+
+bool SmartGuides::is_on_grid(bool is_x, double value) const {
+  auto& entries = is_x ? m_x_entries : m_y_entries;
+  auto i = std::lower_bound(entries.begin(), entries.end(),
+    value - LINE_TOLERANCE, [] (const auto& entry, auto bound) {
+      return entry.m_value < bound;
+    });
+  for(; i != entries.end() && i->m_value <= value + LINE_TOLERANCE; ++i) {
+    if(m_targets[i->m_target].m_is_grid) {
+      return true;
+    }
+  }
+  if(!m_square_grid) {
+    return false;
+  }
+  auto extent = get_along(m_square_grid->m_frame, is_x);
+  auto size = is_x ? m_square_grid->m_size.m_width :
+    m_square_grid->m_size.m_height;
+  auto line = extent.m_start +
+    std::round((value - extent.m_start) / size) * size;
+  return line >= extent.m_start && line <= extent.m_end &&
+    std::abs(line - value) <= LINE_TOLERANCE;
+}
+
+std::optional<Point> SmartGuides::find_line_offset(
+    Point point, Point anchor, bool is_angle_kept) const {
+  auto threshold = get_threshold();
+  auto x = find_alignment(true, {point.m_x}, threshold);
+  auto y = find_alignment(false, {point.m_y}, threshold);
+  if(!x && !y) {
+    return std::nullopt;
+  } else if(!is_angle_kept) {
+    return Point(x.value_or(0), y.value_or(0));
+  }
+  auto direction = point - anchor;
+  auto along_x = std::optional<Point>();
+  if(x && direction.m_x != 0) {
+    along_x = Point(*x, *x * direction.m_y / direction.m_x);
+  } else if(x && *x == 0) {
+    along_x = Point(0, 0);
+  }
+  auto along_y = std::optional<Point>();
+  if(y && direction.m_y != 0) {
+    along_y = Point(*y * direction.m_x / direction.m_y, *y);
+  } else if(y && *y == 0) {
+    along_y = Point(0, 0);
+  }
+  if(along_x && along_y &&
+      (std::abs(along_x->m_x - along_y->m_x) <= LINE_TOLERANCE ||
+        std::abs(along_x->m_y - along_y->m_y) <= LINE_TOLERANCE)) {
+    return Point(along_x->m_x, along_y->m_y);
+  }
+  return pick_smaller(along_x, along_y);
 }
 
 std::optional<double> SmartGuides::find_spacing(
@@ -949,25 +1068,7 @@ std::shared_ptr<const QImage> SmartGuides::get_label(
   if(m_labels.size() >= MAXIMUM_LABELS) {
     m_labels.clear();
   }
-  auto font = QFont();
-  font.setPixelSize(
-    std::max(1, static_cast<int>(std::lround(FONT_SIZE * scale))));
-  auto metrics = QFontMetricsF(font);
-  auto content = QString::fromStdString(text);
-  auto width = static_cast<int>(std::ceil(
-    metrics.horizontalAdvance(content) + 2 * LABEL_PADDING * scale));
-  auto height = static_cast<int>(std::ceil(LABEL_HEIGHT * scale));
-  auto image = std::make_shared<QImage>(std::max(width, 1),
-    std::max(height, 1), QImage::Format_RGBA8888_Premultiplied);
-  image->fill(Qt::transparent);
-  auto painter = QPainter(image.get());
-  painter.setRenderHint(QPainter::TextAntialiasing);
-  painter.setFont(font);
-  painter.setPen(to_qcolor(LABEL_COLOR));
-  painter.drawText(QRectF(0, 0, image->width(), image->height()),
-    Qt::AlignCenter | Qt::TextSingleLine, content);
-  painter.end();
-  auto label = std::shared_ptr<const QImage>(std::move(image));
+  auto label = make_distance_label(text, scale);
   m_labels.emplace(text, label);
   return label;
 }
@@ -1023,6 +1124,30 @@ void SmartGuides::draw_distance(const Matrix& view,
     center.m_x -= LABEL_OFFSET + size.m_x / 2 - LABEL_PADDING;
   }
   overlay.m_images.push_back(OverlayImage(label, center - size / 2));
+}
+
+std::shared_ptr<const QImage> Rellu::make_distance_label(
+    const std::string& text, double scale) {
+  auto font = QFont();
+  font.setPixelSize(std::max(1,
+    static_cast<int>(std::lround(SmartGuides::FONT_SIZE * scale))));
+  auto metrics = QFontMetricsF(font);
+  auto content = QString::fromStdString(text);
+  auto width = static_cast<int>(std::ceil(metrics.horizontalAdvance(content) +
+    2 * SmartGuides::LABEL_PADDING * scale));
+  auto height =
+    static_cast<int>(std::ceil(SmartGuides::LABEL_HEIGHT * scale));
+  auto image = std::make_shared<QImage>(std::max(width, 1),
+    std::max(height, 1), QImage::Format_RGBA8888_Premultiplied);
+  image->fill(Qt::transparent);
+  auto painter = QPainter(image.get());
+  painter.setRenderHint(QPainter::TextAntialiasing);
+  painter.setFont(font);
+  painter.setPen(to_qcolor(SmartGuides::LABEL_COLOR));
+  painter.drawText(QRectF(0, 0, image->width(), image->height()),
+    Qt::AlignCenter | Qt::TextSingleLine, content);
+  painter.end();
+  return image;
 }
 
 std::string Rellu::format_distance(double distance) {

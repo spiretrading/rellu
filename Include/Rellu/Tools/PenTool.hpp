@@ -17,11 +17,15 @@ namespace Rellu {
    * and styled by make_default_path_style. A click adds a corner point and a
    * drag adds a smooth point with symmetric handles, of which only the
    * outgoing one follows the pointer while Alt is held; Shift constrains
-   * points and handles to multiples of 45 degrees. Clicking the first point
-   * closes the path and Enter or Escape finishes an open one, after which
-   * Escape returns to the select tool. A double click on a point toggles it
-   * between corner and smooth. Points placed and handles dragged snap
-   * through the context's snap service, and a path started while a group is
+   * points from the previous point as constrain_drag does and turns
+   * handles about their point, keeping their length, to the nearest
+   * multiple of fifteen degrees, or to the direction opposite the point's
+   * other handle within six degrees of it. Clicking the first point closes
+   * the path and Enter or Escape finishes an open one, after which Escape
+   * returns to the select tool. A double click on a point toggles it
+   * between corner and smooth. Points placed snap through the snap
+   * service's snap_line, as the end of a line from the previous point that
+   * keeps its angle while Shift is held, and a path started while a group is
    * entered goes in that group, as find_drawing_parent finds. With a single
    * path selected, clicking one of
    * its open ends continues it and clicking a segment adds a point. Every

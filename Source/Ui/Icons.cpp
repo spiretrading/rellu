@@ -705,6 +705,24 @@ namespace {
         fill(painter, color, folder);
         break;
       }
+      case Glyph::LAYER_OPEN_GROUP:
+      {
+        auto folder = QPainterPath(QPointF(5, 7.5));
+        folder.lineTo(9.5, 7.5);
+        folder.lineTo(11, 9.25);
+        folder.lineTo(19, 9.25);
+        folder.lineTo(19, 17.5);
+        folder.lineTo(5, 17.5);
+        folder.closeSubpath();
+        stroke(painter, color, folder, 1.2);
+        break;
+      }
+      case Glyph::LAYER_PASTEBOARD:
+        stroke_rect(painter, color, QRectF(5.25, 5.75, 13.5, 12.5));
+        fill_rect(painter, color, QRectF(7.5, 8, 4.5, 8));
+        fill_rect(painter, color, QRectF(13, 8, 3.5, 3.5));
+        fill_rect(painter, color, QRectF(13, 12.5, 3.5, 3.5));
+        break;
       case Glyph::LAYER_COMPONENT:
       case Glyph::LAYER_REFERENCE:
       {
@@ -877,6 +895,18 @@ const QIcon& Rellu::get_layer_icon(const Node& node, bool is_reference) {
     i = icons.emplace(glyph, make_icon(glyph, get_layer_color(glyph))).first;
   }
   return i->second;
+}
+
+const QIcon& Rellu::get_open_group_icon() {
+  static auto icon = make_icon(
+    Glyph::LAYER_OPEN_GROUP, get_layer_color(Glyph::LAYER_OPEN_GROUP));
+  return icon;
+}
+
+const QIcon& Rellu::get_pasteboard_icon() {
+  static auto icon = make_icon(
+    Glyph::LAYER_PASTEBOARD, get_layer_color(Glyph::LAYER_PASTEBOARD));
+  return icon;
 }
 
 const QIcon& Rellu::get_kind_icon(NodeKind kind, bool is_reference) {

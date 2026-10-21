@@ -85,7 +85,7 @@ TEST_SUITE("ShapeTool") {
     auto tools = ToolManager(editor);
     tools.set_view(Matrix(), 1, Size(1000, 800));
     tools.set_tool("rectangle");
-    REQUIRE(tools.get_cursor().m_kind == CursorKind::CROSSHAIR);
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::RECTANGLE);
     drag(tools, Point(150.2, 149.8), Point(250, 200));
     auto& node = get_drawn(editor);
     REQUIRE(node.m_parent == artboard);
@@ -193,22 +193,111 @@ TEST_SUITE("ShapeTool") {
     auto& node = get_drawn(editor);
     REQUIRE(node.m_parent == artboard);
     REQUIRE(node.m_header.m_name == "Line 1");
-    REQUIRE(node.m_header.m_transform == make_translation(50, 50));
+    REQUIRE(node.m_header.m_transform == make_translation(50.5, 50.5));
     REQUIRE(get_geometry(node) ==
       ShapeGeometry(LineShape(Point(100, 0), Point(0, 50))));
     REQUIRE(node.get_shape()->m_style == make_default_line_style());
     REQUIRE(editor.get_history().get_undo_label() == "Draw Line");
-    drag(tools, Point(150, 150), Point(250, 170), Qt::ShiftModifier);
+    drag(tools, Point(150, 150), Point(240, 170), Qt::ShiftModifier);
     REQUIRE(get_geometry(get_drawn(editor)) ==
-      ShapeGeometry(LineShape(Point(0, 0), Point(100, 0))));
+      ShapeGeometry(LineShape(Point(0, 0), Point(90, 0))));
     drag(tools, Point(150, 250), Point(210, 300), Qt::ShiftModifier);
     REQUIRE(get_geometry(get_drawn(editor)) ==
       ShapeGeometry(LineShape(Point(0, 0), Point(55, 55))));
     drag(tools, Point(200, 200), Point(220, 190), Qt::AltModifier);
     REQUIRE(get_drawn(editor).m_header.m_transform ==
-      make_translation(80, 90));
+      make_translation(78.5, 90.5));
     REQUIRE(get_geometry(get_drawn(editor)) ==
-      ShapeGeometry(LineShape(Point(0, 20), Point(40, 0))));
+      ShapeGeometry(LineShape(Point(0, 21), Point(45, 0))));
+  }
+
+  TEST_CASE("line_snapping") {
+    auto document = Document();
+    auto artboard = build_artboard(document);
+    {
+      auto transaction = Transaction(document);
+      transaction.append(artboard, make_header("Post",
+        make_translation(200, 0)), make_rectangle_shape(10, 300));
+      transaction.commit();
+      document.clear_history();
+    }
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    tools.set_tool("line");
+    drag(tools, Point(150, 150), Point(248, 248), Qt::ShiftModifier);
+    auto& node = get_drawn(editor);
+    REQUIRE(node.m_header.m_transform == make_translation(50.5, 50.5));
+    REQUIRE(get_geometry(node) ==
+      ShapeGeometry(LineShape(Point(0, 0), Point(100, 100))));
+    drag(tools, Point(150, 400), Point(297, 403));
+    REQUIRE(get_geometry(get_drawn(editor)) ==
+      ShapeGeometry(LineShape(Point(0, 0), Point(150, 0))));
+    drag(tools, Point(150, 450), Point(297, 451), Qt::ControlModifier);
+    REQUIRE(get_geometry(get_drawn(editor)) ==
+      ShapeGeometry(LineShape(Point(0, 0), Point(147, 1))));
+  }
+
+  TEST_CASE("line_to_stroked_edge") {
+    auto document = Document();
+    auto artboard = build_artboard(document);
+    {
+      auto transaction = Transaction(document);
+      for(auto alignment : {StrokeAlignment::CENTER, StrokeAlignment::INSIDE,
+          StrokeAlignment::OUTSIDE}) {
+        auto shape = make_rectangle_shape(48, 50);
+        shape.m_style.m_stroke = Stroke(make_color(0, 0, 0), 2);
+        shape.m_style.m_stroke->m_alignment = alignment;
+        auto row = static_cast<double>(alignment) * 100;
+        transaction.append(artboard, make_header("Stroked",
+          make_translation(100, row)), shape);
+      }
+      transaction.commit();
+      document.clear_history();
+    }
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    tools.set_tool("line");
+    for(auto row : {0.0, 100.0, 200.0}) {
+      drag(tools, Point(150, row + 125), Point(246, row + 125));
+      auto& node = get_drawn(editor);
+      REQUIRE(node.m_header.m_transform ==
+        make_translation(50.5, row + 25.5));
+      REQUIRE(get_geometry(node) ==
+        ShapeGeometry(LineShape(Point(0, 0), Point(98, 0))));
+    }
+  }
+
+  TEST_CASE("line_on_grid") {
+    auto document = Document();
+    auto artboard = build_artboard(document);
+    {
+      auto transaction = Transaction(document);
+      auto payload = *document.get(artboard).get_artboard();
+      payload.m_layout_grid = LayoutGrid();
+      payload.m_layout_grid->m_square_size = Size(8, 8);
+      transaction.replace_payload(artboard, payload);
+      transaction.commit();
+      document.clear_history();
+    }
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto settings = GridSettings();
+    settings.m_is_square_visible = true;
+    tools.get_context().set_grid_settings(settings);
+    tools.set_tool("line");
+    drag(tools, Point(153, 150), Point(230.3, 190.6));
+    auto& node = get_drawn(editor);
+    REQUIRE(node.m_header.m_transform == make_translation(56, 48));
+    REQUIRE(get_geometry(node) ==
+      ShapeGeometry(LineShape(Point(0, 0), Point(72, 40))));
+    drag(tools, Point(303, 350), Point(380.3, 390.6), Qt::ControlModifier);
+    REQUIRE(get_drawn(editor).m_header.m_transform ==
+      make_translation(203.5, 250.5));
+    REQUIRE(get_geometry(get_drawn(editor)) ==
+      ShapeGeometry(LineShape(Point(0, 0), Point(77, 40))));
   }
 
   TEST_CASE("preview") {
@@ -247,16 +336,19 @@ TEST_SUITE("ShapeTool") {
     auto& history = editor.get_history();
     drag(tools, Point(200, 200), Point(300, 250));
     auto rectangle = get_drawn(editor).get_id();
-    auto centers = get_handle_centers(tools.draw());
-    REQUIRE(centers.size() == 12);
-    REQUIRE(centers[4] == Point(300, 250));
-    REQUIRE(centers[8] == Point(214, 214));
+    REQUIRE(get_handle_centers(tools.draw()).size() == 11);
     REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
     hover(tools, Point(250, 225));
-    REQUIRE(tools.get_cursor().m_kind == CursorKind::CROSSHAIR);
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::RECTANGLE);
+    auto centers = get_handle_centers(tools.draw());
+    REQUIRE(centers.size() == 12);
+    REQUIRE(centers[4] == Point(299.5, 249.5));
+    REQUIRE(centers[8] == Point(213.5, 213.5));
     hover(tools, Point(250, 201));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
     hover(tools, Point(250, 191));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::RECTANGLE);
+    hover(tools, Point(305, 195));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
     drag(tools, Point(300, 250), Point(340, 270));
     REQUIRE(tools.get_tool_name() == "rectangle");
@@ -267,9 +359,9 @@ TEST_SUITE("ShapeTool") {
     REQUIRE(history.get_undo_count() == 2);
     drag(tools, Point(214, 214), Point(224, 224));
     REQUIRE(std::get<RectangleShape>(get_geometry(get_drawn(editor))).m_radii ==
-      CornerRadii(10, 10, 10, 10));
+      CornerRadii(24, 24, 24, 24));
     REQUIRE(history.get_undo_label() == "Corner Radius");
-    drag(tools, Point(270, 191), Point(349, 235));
+    drag(tools, Point(345, 195), Point(310, 310));
     auto transform = get_world_transform(document, rectangle);
     REQUIRE(std::atan2(transform.m_b, transform.m_a) ==
       doctest::Approx(std::numbers::pi / 2));
@@ -280,9 +372,10 @@ TEST_SUITE("ShapeTool") {
     REQUIRE(tools.draw().m_shapes.empty());
     tools.release(make_event(Point(550, 350), Qt::LeftButton, Qt::NoButton));
     REQUIRE(document.get(artboard).m_children.size() == 2);
-    REQUIRE(get_handle_centers(tools.draw()).size() == 12);
+    REQUIRE(get_handle_centers(tools.draw()).size() == 11);
     REQUIRE(tools.get_tool_name() == "rectangle");
     tools.set_tool("ellipse");
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ELLIPSE);
     drag(tools, Point(550, 350), Point(560, 380));
     REQUIRE(document.get(artboard).m_children.size() == 2);
     REQUIRE(*get_world_bounds(document, get_drawn(editor).get_id()) ==
@@ -300,19 +393,21 @@ TEST_SUITE("ShapeTool") {
     tools.set_tool("line");
     drag(tools, Point(250, 150), Point(150, 200));
     auto line = get_drawn(editor).get_id();
+    REQUIRE(get_handle_centers(tools.draw()) ==
+      std::vector{Point(250.5, 150.5)});
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
+    hover(tools, Point(200, 175));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::LINE);
     auto overlay = tools.draw();
     REQUIRE(overlay.m_shapes.size() == 2);
     REQUIRE(get_handle_centers(overlay) ==
-      std::vector{Point(250, 150), Point(150, 200)});
-    REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
-    hover(tools, Point(200, 175));
-    REQUIRE(tools.get_cursor().m_kind == CursorKind::CROSSHAIR);
+      std::vector{Point(250.5, 150.5), Point(150.5, 200.5)});
     drag(tools, Point(150, 200), Point(170, 230));
     REQUIRE(document.get(artboard).m_children.size() == 1);
     REQUIRE(get_geometry(document.get(line)) ==
       ShapeGeometry(LineShape(Point(80, 0), Point(0, 80))));
     REQUIRE(document.get(line).m_header.m_transform ==
-      make_translation(70, 50));
+      make_translation(70.5, 50.5));
     REQUIRE(editor.get_history().get_undo_label() == "Drag Handle");
     REQUIRE(tools.get_tool_name() == "line");
   }

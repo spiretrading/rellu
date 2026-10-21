@@ -49,8 +49,9 @@ namespace Rellu {
        * Constructs a DrawTool.
        * @param prefix The prefix of the names of the nodes drawn, such as
        *        "Rectangle ".
+       * @param crosshair The pointer shown while no handle is under it.
        */
-      explicit DrawTool(std::string prefix);
+      DrawTool(std::string prefix, CursorKind crosshair);
 
       /**
        * Makes the command inserting or reshaping the node drawn.
@@ -65,6 +66,18 @@ namespace Rellu {
       virtual std::unique_ptr<Command> make_command(ToolContext& context,
         NodeHeader header, Point start, Point end,
         Qt::KeyboardModifiers modifiers) = 0;
+
+      /**
+       * Snaps the point a drag reaches before make_command shapes the node
+       * drawn to it.
+       * @param context The context worked in.
+       * @param end The point in document space the drag reached.
+       * @param modifiers The modifier keys held.
+       * @return The point snapped through the context's snap service by
+       *         default.
+       */
+      virtual Point snap_end(
+        ToolContext& context, Point end, Qt::KeyboardModifiers modifiers);
 
       /**
        * Handles a press released without dragging.
@@ -95,6 +108,7 @@ namespace Rellu {
       bool m_is_applied;
       bool m_is_held;
       std::string m_prefix;
+      CursorKind m_crosshair;
       Point m_press;
       Point m_start;
       std::optional<NodeHeader> m_header;

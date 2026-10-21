@@ -53,6 +53,20 @@ TEST_SUITE("Matrix") {
     REQUIRE(is_near(matrix.map(Point(12, 11)), Point(8, 9)));
   }
 
+  TEST_CASE("get_rotation") {
+    REQUIRE(get_rotation(Matrix()) == 0);
+    REQUIRE(get_rotation(make_translation(5, 6)) == 0);
+    REQUIRE(get_rotation(Matrix(1, -0.0, 0, 1, 0, 0)) == 0);
+    REQUIRE(get_rotation(Matrix(-1, 0, 0, -1, 499, 409)) == 180);
+    REQUIRE(get_rotation(Matrix(-1, -0.0, 0, -1, 0, 0)) == 180);
+    REQUIRE(get_rotation(make_rotation(std::numbers::pi / 2)) == 90);
+    REQUIRE(get_rotation(make_rotation(-std::numbers::pi / 2)) == -90);
+    REQUIRE(get_rotation(make_rotation(-std::numbers::pi)) == 180);
+    REQUIRE(get_rotation(make_rotation(std::numbers::pi / 4)) == 45);
+    REQUIRE(get_rotation(make_rotation(0.5)) ==
+      doctest::Approx(0.5 * 180 / std::numbers::pi));
+  }
+
   TEST_CASE("composition") {
     auto translation = make_translation(10, 0);
     auto scale = make_scale(2, 2);

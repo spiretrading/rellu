@@ -4,15 +4,22 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QLayout>
 #include <QLineEdit>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QSlider>
 #include <QToolButton>
+#include <QWheelEvent>
 #include <QWidget>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Ui/ComponentActions.hpp"
 #include "Rellu/Ui/ComponentPropertyEditors.hpp"
+#include "Rellu/Ui/GridActions.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "TestDocument.hpp"
@@ -129,6 +136,68 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(inspector.get_sections() == Sections({"interaction"}));
     inspector.set_workspace(Workspace::SHARE);
     REQUIRE(inspector.get_sections() == Sections({"link_settings"}));
+  }
+
+  TEST_CASE("width") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto inspector = PropertyInspector();
+    inspector.set_document(&document);
+    inspector.set_current(ids.m_background);
+    auto width = PropertyInspector::WIDTH - 1;
+    REQUIRE(inspector.find_section("align")->minimumSizeHint().width() <=
+      width);
+    auto margins =
+      inspector.find_section("stroke")->layout()->contentsMargins();
+    for(auto path : {"stroke.alignment", "stroke.join"}) {
+      auto row = inspector.find_display(path)->parentWidget();
+      REQUIRE(row->minimumSizeHint().width() + margins.left() +
+        margins.right() <= width);
+    }
+  }
+
+  TEST_CASE("scroll_bar") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto inspector = PropertyInspector();
+    inspector.set_document(&document);
+    inspector.set_current(ids.m_background);
+    inspector.resize(600, 200);
+    inspector.show();
+    QCoreApplication::processEvents();
+    auto scroll = inspector.findChild<QScrollArea*>("inspector_scroll");
+    REQUIRE(scroll);
+    REQUIRE(scroll->verticalScrollBar()->maximum() > 0);
+    REQUIRE(scroll->widget()->width() == scroll->width());
+  }
+
+  TEST_CASE("wheel") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(ids.m_background);
+    auto scroll = [] (QWidget& widget) {
+      auto event = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(),
+        QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
+        false);
+      QCoreApplication::sendEvent(&widget, &event);
+      return event.isAccepted();
+    };
+    auto slider = inspector.findChild<QSlider*>("opacity_slider");
+    REQUIRE(slider);
+    REQUIRE(slider->value() == 100);
+    REQUIRE(!scroll(*slider));
+    REQUIRE(slider->value() == 100);
+    REQUIRE(get_line(inspector, "appearance.opacity").text() == "100%");
+    auto box =
+      qobject_cast<QComboBox*>(inspector.find_field("appearance.blend_mode"));
+    REQUIRE(box);
+    auto index = box->currentIndex();
+    REQUIRE(!scroll(*box));
+    REQUIRE(box->currentIndex() == index);
+    REQUIRE(!editor.get_history().can_undo());
   }
 
   TEST_CASE("updates") {
@@ -263,6 +332,54 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(document.get(ids.m_background).m_header.m_opacity == 1);
   }
 
+  TEST_CASE("position_clamp") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 400, 300);
+    auto board =
+      transaction.append(NodeId(), make_header("Board"), artboard);
+    auto box = transaction.append(
+      board, make_header("Box"), make_rectangle_shape(14, 80));
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(box);
+    enter(inspector, "transform.x", "99999");
+    REQUIRE(get_text(inspector, "transform.x") == "24986");
+    enter(inspector, "transform.y", "99999");
+    REQUIRE(get_text(inspector, "transform.y") == "24920");
+    enter(inspector, "transform.x", "-99999");
+    REQUIRE(get_text(inspector, "transform.x") == "-25000");
+    REQUIRE(*get_world_bounds(document, box) ==
+      Rect(-25000, 24920, 14, 80));
+  }
+
+  TEST_CASE("rotation_edits") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(ids.m_background);
+    enter(inspector, "transform.rotation", "-90");
+    REQUIRE(get_text(inspector, "transform.rotation") == "-90");
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation == -90);
+    REQUIRE(get_rotation(document.get(ids.m_background).m_header.
+      m_transform) == doctest::Approx(-90));
+    enter(inspector, "transform.rotation", "360500");
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation ==
+      doctest::Approx(140));
+    enter(inspector, "transform.rotation", "360");
+    REQUIRE(get_text(inspector, "transform.rotation") == "360");
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation == 360);
+    enter(inspector, "transform.rotation", "-450");
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation ==
+      doctest::Approx(-90));
+  }
+
   TEST_CASE("choice_edits") {
     auto document = Document();
     auto ids = build_test_document(document);
@@ -378,6 +495,85 @@ TEST_SUITE("PropertyInspector") {
       Rect(100, 50, 812, 375));
     REQUIRE(get_text(inspector, "transform.orientation") == "Landscape");
     REQUIRE(editor.get_history().get_undo_label() == "Resize");
+  }
+
+  TEST_CASE("mixed_swatches") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto white = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto shape = make_rectangle_shape(20, 20);
+      shape.m_style.m_fill = SolidFill(make_color(255, 255, 255));
+      shape.m_style.m_stroke = Stroke(make_color(0, 0, 255), 2);
+      white = transaction.append(ids.m_artboard, make_header("White"), shape);
+      auto red = *document.get(ids.m_background).get_shape();
+      red.m_style.m_stroke = Stroke(make_color(0, 255, 0), 2);
+      transaction.replace_payload(ids.m_background, red);
+      transaction.commit();
+    }
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    auto sample = [&] (const char* path, int x, int y) {
+      auto swatch = qobject_cast<QToolButton*>(inspector.find_field(path));
+      REQUIRE(swatch);
+      return swatch->icon().pixmap(QSize(30, 18), 1.0).toImage().pixelColor(
+        x, y);
+    };
+    editor.get_selection().select(ids.m_background);
+    REQUIRE(sample("fill.paint", 15, 9) == QColor(255, 0, 0));
+    editor.get_selection().select(
+      std::vector<NodeId>({ids.m_background, white}));
+    REQUIRE(get_text(inspector, "fill.enabled") == "Yes");
+    for(auto path : {"fill.paint", "stroke.color"}) {
+      REQUIRE(is_mixed(inspector, path));
+      REQUIRE(sample(path, 15, 9) == QColor(0xC2, 0xC2, 0xC2));
+      REQUIRE(sample(path, 6, 9) == QColor(0xFB, 0xF7, 0xF3));
+    }
+  }
+
+  TEST_CASE("corner_modes") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    editor.get_selection().select(std::vector<NodeId>({ids.m_background}));
+    auto click = [&] (int index) {
+      auto field = inspector.find_field("geometry.radii");
+      REQUIRE(field);
+      auto buttons = field->findChildren<QToolButton*>();
+      REQUIRE(buttons.size() == 2);
+      buttons[index]->click();
+      QCoreApplication::processEvents();
+    };
+    auto get_radii = [&] {
+      return std::get<RectangleShape>(
+        document.get(ids.m_background).get_shape()->m_geometry).m_radii;
+    };
+    REQUIRE(inspector.find_field("geometry.radii.all"));
+    click(1);
+    REQUIRE(get_text(inspector, "geometry.radii") ==
+      "Different radius for each corner");
+    REQUIRE(!inspector.find_field("geometry.radii.all"));
+    REQUIRE(editor.get_history().get_undo_count() == 0);
+    enter(inspector, "geometry.radii.top_left", "6");
+    REQUIRE(get_radii() == CornerRadii(6, 0, 0, 0));
+    REQUIRE(editor.get_history().get_undo_label() ==
+      "Corner Radius Top Left");
+    click(0);
+    REQUIRE(get_radii() == CornerRadii(6, 6, 6, 6));
+    REQUIRE(editor.get_history().get_undo_label() == "Corner Radius");
+    REQUIRE(editor.get_history().get_undo_count() == 2);
+    REQUIRE(get_text(inspector, "geometry.radii") ==
+      "Same radius for all corners");
+    click(1);
+    REQUIRE(inspector.find_field("geometry.radii.top_left"));
+    editor.get_selection().select(std::vector<NodeId>({ids.m_ellipse}));
+    editor.get_selection().select(std::vector<NodeId>({ids.m_background}));
+    REQUIRE(inspector.find_field("geometry.radii.all"));
+    REQUIRE(editor.get_history().get_undo_count() == 2);
   }
 
   TEST_CASE("action_buttons") {
@@ -670,18 +866,28 @@ TEST_SUITE("PropertyInspector") {
     auto document = Document();
     auto ids = build_test_document(document);
     auto editor = Editor(document);
+    auto window = QWidget();
+    auto actions = ActionRegistry(window);
+    add_xd_menus(actions);
+    auto grids = GridActions(actions);
+    grids.set_editor(&editor);
     auto inspector = PropertyInspector();
     make_editable(inspector, editor);
+    inspector.set_grid_actions(&grids);
     editor.get_selection().select(ids.m_artboard);
     REQUIRE(inspector.find_field("transform.lock_aspect"));
     auto visible =
       qobject_cast<QCheckBox*>(inspector.find_field("grid.visible"));
     REQUIRE(visible);
+    REQUIRE(!visible->isChecked());
     visible->click();
     QCoreApplication::processEvents();
+    REQUIRE(grids.get_settings().m_is_layout_visible);
+    REQUIRE(editor.get_history().get_undo_label() == "Show Layout Grid");
     auto& grid = document.get(ids.m_artboard).get_artboard()->m_layout_grid;
     REQUIRE(grid);
-    REQUIRE(grid->m_is_visible);
+    REQUIRE(!grid->m_is_visible);
+    REQUIRE(grid->m_type == GridType::SQUARE);
     REQUIRE(get_line(inspector, "grid.columns").text() == "4");
     REQUIRE(get_line(inspector, "grid.margin_linked").text() == "36");
     enter(inspector, "grid.columns", "6");
@@ -712,6 +918,71 @@ TEST_SUITE("PropertyInspector") {
     QCoreApplication::processEvents();
     REQUIRE(document.get(ids.m_artboard).get_artboard()->m_viewport_height ==
       812);
+    auto type = qobject_cast<QComboBox*>(inspector.find_field("grid.type"));
+    REQUIRE(type);
+    REQUIRE(type->currentIndex() == 0);
+    Q_EMIT type->activated(1);
+    QCoreApplication::processEvents();
+    REQUIRE(grids.get_settings().m_is_square_visible);
+    REQUIRE(!grids.get_settings().m_is_layout_visible);
+    REQUIRE(editor.get_history().get_undo_label() == "Grid Type");
+    REQUIRE(get_line(inspector, "grid.size").text() == "8");
+    REQUIRE(!find_property(inspector.get_properties(), "grid.columns"));
+    qobject_cast<QCheckBox*>(inspector.find_field("grid.visible"))->click();
+    QCoreApplication::processEvents();
+    REQUIRE(!is_grid_visible(grids.get_settings()));
+    REQUIRE(editor.get_history().get_undo_label() == "Hide Square Grid");
+    REQUIRE(qobject_cast<QComboBox*>(
+      inspector.find_field("grid.type"))->currentIndex() == 1);
+    REQUIRE(!document.get(ids.m_artboard).get_artboard()->m_layout_grid->
+      m_is_visible);
+  }
+
+  TEST_CASE("initial_grids") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto second = NodeId();
+    auto third = NodeId();
+    {
+      auto artboard = Artboard();
+      artboard.m_frame = Rect(600, 50, 1920, 1080);
+      auto gridded = artboard;
+      gridded.m_frame = Rect(2600, 50, 400, 300);
+      gridded.m_layout_grid = LayoutGrid();
+      gridded.m_layout_grid->m_column_count = 5;
+      auto transaction = Transaction(document);
+      second = transaction.append(NodeId(), make_header("Second"), artboard);
+      third = transaction.append(NodeId(), make_header("Third"), gridded);
+      transaction.commit();
+    }
+    auto editor = Editor(document);
+    auto& history = editor.get_history();
+    auto inspector = PropertyInspector();
+    make_editable(inspector, editor);
+    auto get_grid = [&] (const NodeId& id) {
+      return document.get(id).get_artboard()->m_layout_grid;
+    };
+    inspector.set_workspace(Workspace::PROTOTYPE);
+    editor.get_selection().select(ids.m_artboard);
+    REQUIRE(!get_grid(ids.m_artboard));
+    editor.get_selection().select(std::vector{ids.m_ellipse, second});
+    inspector.set_workspace(Workspace::DESIGN);
+    REQUIRE(!get_grid(second));
+    editor.get_selection().select(std::vector{third, ids.m_ellipse, second});
+    REQUIRE(get_grid(third)->m_column_count == 5);
+    auto& artboard = *document.get(second).get_artboard();
+    REQUIRE(get_grid(second) == make_initial_grid(artboard));
+    REQUIRE(get_grid(second)->m_column_count == 12);
+    REQUIRE(!get_grid(ids.m_artboard));
+    REQUIRE(!history.can_undo());
+    REQUIRE(!history.is_dirty());
+    inspector.set_workspace(Workspace::PROTOTYPE);
+    editor.get_selection().select(ids.m_artboard);
+    inspector.set_workspace(Workspace::DESIGN);
+    REQUIRE(get_grid(ids.m_artboard) ==
+      make_initial_grid(*document.get(ids.m_artboard).get_artboard()));
+    REQUIRE(!history.can_undo());
+    REQUIRE(!history.is_dirty());
   }
 
   TEST_CASE("group_style") {

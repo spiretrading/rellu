@@ -768,14 +768,6 @@ void ColorPicker::set_key_handler(KeyHandler handler) {
   m_key_handler = std::move(handler);
 }
 
-bool ColorPicker::event(QEvent* event) {
-  if(event->type() == QEvent::KeyPress &&
-      handle_key(*static_cast<QKeyEvent*>(event))) {
-    return true;
-  }
-  return QFrame::event(event);
-}
-
 void ColorPicker::mousePressEvent(QMouseEvent* event) {
   if(!rect().contains(event->position().toPoint()) && m_canvas_handler) {
     if(auto focus = focusWidget(); focus && focus != this) {
@@ -817,7 +809,9 @@ void ColorPicker::hideEvent(QHideEvent* event) {
 }
 
 void ColorPicker::keyPressEvent(QKeyEvent* event) {
-  if(event->key() == Qt::Key_Escape) {
+  if(handle_key(*event)) {
+    return;
+  } else if(event->key() == Qt::Key_Escape) {
     hide();
     return;
   }
@@ -825,7 +819,8 @@ void ColorPicker::keyPressEvent(QKeyEvent* event) {
 }
 
 bool ColorPicker::handle_key(QKeyEvent& event) {
-  if(!m_key_handler) {
+  if(!m_key_handler || event.key() == Qt::Key_Tab ||
+      event.key() == Qt::Key_Backtab) {
     return false;
   }
   auto focus = focusWidget();

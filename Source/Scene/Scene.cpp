@@ -43,6 +43,20 @@ void Scene::set_tolerance(double tolerance) {
   }
 }
 
+void Scene::set_edited_text(const NodeId& id) {
+  auto previous = m_builder.get_edited_text();
+  if(id == previous) {
+    return;
+  }
+  m_builder.set_edited_text(id);
+  m_is_changed = true;
+  for(auto& changed : {previous, id}) {
+    if(!changed.is_nil()) {
+      mark(changed, false);
+    }
+  }
+}
+
 const std::shared_ptr<const Drawing>& Scene::get_drawing() const {
   return m_view;
 }

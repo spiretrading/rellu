@@ -72,6 +72,31 @@ TEST_SUITE("SceneBuilder") {
     REQUIRE(drawn.get_bottom() <= 30 + bounds.get_bottom() + 0.5);
   }
 
+  TEST_CASE("edited_text") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto text = make_text(make_color(255, 0, 0));
+    text.m_is_flipped_vertically = true;
+    auto flip = Matrix(-1, 0, 0, -1, 80, 30);
+    auto id = transaction.append(NodeId(), make_header(flip), text);
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto dependencies = SceneDependencies();
+    auto lists = builder.build_lists(id, dependencies);
+    REQUIRE(builder.get_edited_text().is_nil());
+    auto bounds = measure_text(text, get_default_font_library());
+    auto mirror = Matrix(1, 0, 0, -1, 0, 2 * bounds.m_y + bounds.m_height);
+    REQUIRE(get_fill(*lists.at(0), 0).m_transform == flip * mirror);
+    builder.set_edited_text(id);
+    REQUIRE(builder.get_edited_text() == id);
+    lists = builder.build_lists(id, dependencies);
+    REQUIRE(get_fill(*lists.at(0), 0).m_transform == flip);
+    REQUIRE(get_fill(builder.build(), 0).m_transform == flip);
+    builder.set_edited_text(NodeId());
+    lists = builder.build_lists(id, dependencies);
+    REQUIRE(get_fill(*lists.at(0), 0).m_transform == flip * mirror);
+  }
+
   TEST_CASE("rasterized_text") {
     auto document = Document();
     auto transaction = Transaction(document);

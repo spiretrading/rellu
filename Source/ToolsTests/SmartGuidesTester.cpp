@@ -113,6 +113,57 @@ TEST_SUITE("SmartGuides") {
       std::vector{GuideLine(Point(200, 0), Point(200, 300))});
   }
 
+  TEST_CASE("line_ends") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto& guides = get_guides(tools);
+    guides.begin(board.m_artboard, std::vector{board.m_moved});
+    REQUIRE(guides.snap_line(Point(10, 10), Point(148, 60), false, false,
+      Qt::NoModifier) == LineEnds(Point(10, 10), Point(150, 60)));
+    REQUIRE(guides.get_lines() ==
+      std::vector{GuideLine(Point(150, 10), Point(150, 150))});
+    REQUIRE(guides.snap_line(Point(0, 52), Point(97, 149), true, false,
+      Qt::NoModifier) == LineEnds(Point(0, 52), Point(98, 150)));
+    REQUIRE(guides.snap_line(Point(20, 60), Point(148, 60), true, false,
+      Qt::NoModifier) == LineEnds(Point(20, 60), Point(150, 60)));
+    REQUIRE(guides.snap_line(Point(98, 20), Point(98, 70), true, false,
+      Qt::NoModifier) == LineEnds(Point(98, 20), Point(98, 70)));
+    REQUIRE(guides.snap_line(Point(20, 60), Point(147, 60), false, true,
+      Qt::NoModifier) == LineEnds(Point(17, 60), Point(150, 60)));
+    REQUIRE(guides.snap_line(Point(99, 60), Point(180, 60), false, true,
+      Qt::NoModifier) == LineEnds(Point(100, 60), Point(179, 60)));
+    REQUIRE(guides.snap_line(Point(10, 10), Point(148, 60), false, false,
+      Qt::ControlModifier) == LineEnds(Point(10, 10), Point(148, 60)));
+    REQUIRE(guides.get_lines().empty());
+  }
+
+  TEST_CASE("stroked_targets") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = add_artboard(transaction, Rect(0, 0, 400, 300));
+    auto shape = make_rectangle_shape(50, 50);
+    shape.m_style.m_stroke = Stroke(make_color(0, 0, 0), 1);
+    transaction.append(artboard,
+      make_header("Stroked", make_translation(100, 100)), shape);
+    auto moved = add_rectangle(transaction, artboard, Rect(200, 200, 10, 10));
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto& guides = get_guides(tools);
+    guides.begin(artboard, std::vector{moved});
+    REQUIRE(guides.snap_line(Point(10, 10), Point(148.5, 60), false, false,
+      Qt::NoModifier) == LineEnds(Point(10, 10), Point(150, 60)));
+    REQUIRE(guides.snap_line(Point(20, 60), Point(152, 60), true, false,
+      Qt::NoModifier) == LineEnds(Point(20, 60), Point(150, 60)));
+    REQUIRE(guides.snap_move(Rect(200, 200, 10, 10), Point(-47.5, 0),
+      Qt::NoModifier) == Point(-50, 0));
+  }
+
   TEST_CASE("threshold") {
     auto document = Document();
     auto board = build_board(document);
@@ -316,7 +367,6 @@ TEST_SUITE("SmartGuides") {
     transaction.commit();
     auto artboard = *document.get(id).get_artboard();
     artboard.m_layout_grid = LayoutGrid();
-    artboard.m_layout_grid->m_type = GridType::LAYOUT;
     artboard.m_layout_grid->m_column_count = 4;
     artboard.m_layout_grid->m_gutter = 10;
     artboard.m_layout_grid->m_margins.m_left = 20;
@@ -329,15 +379,21 @@ TEST_SUITE("SmartGuides") {
     guides.begin(id, std::vector<NodeId>());
     REQUIRE(guides.snap_point(Point(104, 50), SnapAxes::HORIZONTAL,
       Qt::NoModifier) == Point(104, 50));
+    REQUIRE(!guides.is_grid_snapped());
     guides.end();
-    artboard.m_layout_grid->m_is_visible = true;
-    set_artboard(document, id, artboard);
+    auto settings = GridSettings();
+    settings.m_is_layout_visible = true;
+    tools.get_context().set_grid_settings(settings);
     guides.begin(id, std::vector<NodeId>());
     REQUIRE(guides.snap_point(Point(104, 50), SnapAxes::HORIZONTAL,
       Qt::NoModifier) == Point(102.5, 50));
+    REQUIRE(guides.is_grid_snapped());
     REQUIRE(guides.snap_point(Point(379, 50), SnapAxes::HORIZONTAL,
       Qt::NoModifier) == Point(380, 50));
     REQUIRE(guides.get_lines().empty());
+    REQUIRE(guides.snap_point(Point(2, 50), SnapAxes::HORIZONTAL,
+      Qt::NoModifier) == Point(0, 50));
+    REQUIRE(!guides.is_grid_snapped());
   }
 
   TEST_CASE("square_grid") {
@@ -347,19 +403,29 @@ TEST_SUITE("SmartGuides") {
     transaction.commit();
     auto artboard = *document.get(id).get_artboard();
     artboard.m_layout_grid = LayoutGrid();
-    artboard.m_layout_grid->m_type = GridType::SQUARE;
-    artboard.m_layout_grid->m_is_visible = true;
+    artboard.m_layout_grid->m_type = GridType::LAYOUT;
     artboard.m_layout_grid->m_square_size = Size(8, 8);
     set_artboard(document, id, artboard);
     auto editor = Editor(document);
     auto tools = ToolManager(editor);
     tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto settings = GridSettings();
+    settings.m_is_square_visible = true;
+    tools.get_context().set_grid_settings(settings);
     auto& guides = get_guides(tools);
     guides.begin(id, std::vector<NodeId>());
     REQUIRE(guides.snap_point(Point(219, 133), SnapAxes::BOTH,
       Qt::NoModifier) == Point(220, 132));
+    REQUIRE(guides.is_grid_snapped());
     REQUIRE(guides.snap_point(Point(80, 133), SnapAxes::BOTH,
       Qt::NoModifier) == Point(80, 132));
+    REQUIRE(guides.is_grid_snapped());
+    REQUIRE(guides.snap_point(Point(219, 133), SnapAxes::BOTH,
+      Qt::ControlModifier) == Point(219, 133));
+    REQUIRE(!guides.is_grid_snapped());
+    REQUIRE(guides.snap_point(Point(80, 300), SnapAxes::HORIZONTAL,
+      Qt::NoModifier) == Point(80, 300));
+    REQUIRE(!guides.is_grid_snapped());
   }
 
   TEST_CASE("ruler_guides") {

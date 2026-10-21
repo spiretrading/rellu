@@ -48,10 +48,13 @@ namespace {
   constexpr auto GROUP_INDENT = 16;
   const auto EM_DASH = QString(QChar(0x2014));
   const auto HIGHLIGHT = QString("background: #E0F0FA;");
+  const auto SELECTED_ROW = QColor(0xE0, 0xF0, 0xFA);
 
   std::string get_section_id(AssetSection section) {
     if(section == AssetSection::COLORS) {
       return COLOR_SECTION;
+    } else if(section == AssetSection::COMPONENTS) {
+      return COMPONENT_SECTION;
     }
     return CHARACTER_STYLE_SECTION;
   }
@@ -259,11 +262,14 @@ namespace {
         m_is_pressed = false;
         auto drag = new QDrag(this);
         drag->setMimeData(make_component_mime_data(m_component));
-        auto thumbnail = m_panel->get_thumbnail(m_component);
-        if(!thumbnail.isNull()) {
-          drag->setPixmap(thumbnail);
+        auto pixmap = m_panel->make_drag_pixmap(m_component);
+        if(!pixmap.isNull()) {
+          drag->setPixmap(pixmap);
+          drag->setHotSpot(m_press);
         }
-        drag->setDragCursor(make_swap_cursor(), SWAP_DROP_ACTION);
+        for(auto action : {Qt::CopyAction, SWAP_DROP_ACTION}) {
+          drag->setDragCursor(make_drag_cursor(action), action);
+        }
         drag->exec(Qt::CopyAction | SWAP_DROP_ACTION, Qt::CopyAction);
       }
 
@@ -590,6 +596,8 @@ AssetsPanel::AssetsPanel(QWidget* parent)
       m_editor(nullptr),
       m_entries(4),
       m_group_names(4),
+      m_is_group_deletion_confirmed(true),
+      m_removal_limit(2000),
       m_picker(new ColorPicker(this)),
       m_content(new QWidget()),
       m_content_layout(new QVBoxLayout(m_content)),
@@ -764,6 +772,25 @@ void AssetsPanel::render_thumbnails() {
   }
 }
 
+QPixmap AssetsPanel::make_drag_pixmap(const ComponentId& component) {
+  auto row = m_component_rows.find(component);
+  if(row == m_component_rows.end() || !row->second) {
+    return get_thumbnail(component);
+  }
+  auto& widget = *row->second;
+  widget.ensurePolished();
+  if(auto layout = widget.layout()) {
+    layout->activate();
+  }
+  auto size = widget.size().isEmpty() ? widget.sizeHint() : widget.size();
+  auto ratio = widget.devicePixelRatioF();
+  auto pixmap = QPixmap(size * ratio);
+  pixmap.setDevicePixelRatio(ratio);
+  pixmap.fill(SELECTED_ROW);
+  widget.render(&pixmap, QPoint(), QRegion(), QWidget::DrawChildren);
+  return pixmap;
+}
+
 QMenu* AssetsPanel::make_component_menu(
     const ComponentId& component, QWidget* parent) {
   auto menu = new QMenu(parent);
@@ -775,6 +802,26 @@ QMenu* AssetsPanel::make_component_menu(
       m_main_component_handler(component);
     }
   });
+  auto master = NodeId();
+  if(m_document) {
+    auto& components = m_document->get_resources().m_components;
+    if(auto entry = components.find(component); entry != components.end()) {
+      master = entry->second.m_master;
+    }
+  }
+  menu->addSeparator();
+  auto group = menu->addAction(translate("assets", "New group from element"));
+  group->setEnabled(m_editor && !master.is_nil());
+  QObject::connect(group, &QAction::triggered, this, [this, master] {
+    group_assets({master});
+  });
+  menu->addSeparator();
+  if(master.is_nil()) {
+    add_move_menu(*menu, "Move to...", {});
+  } else {
+    add_move_menu(*menu, "Move to...", {master});
+  }
+  menu->addSeparator();
   auto rename = menu->addAction(translate("assets", "Rename"));
   rename->setEnabled(m_editor && !linked);
   QObject::connect(rename, &QAction::triggered, this, [this, component] {
@@ -802,7 +849,90 @@ QMenu* AssetsPanel::make_component_menu(
         rename_component(component, text);
       });
   });
+  auto remove = menu->addAction(translate("assets", "Delete"));
+  remove->setEnabled(
+    m_editor && can_delete_component(m_editor->get_document(), component));
+  QObject::connect(remove, &QAction::triggered, this, [this, component] {
+    delete_components({component});
+  });
   return menu;
+}
+
+void AssetsPanel::set_confirmation_handler(AssetConfirmationHandler handler) {
+  m_confirmation_handler = std::move(handler);
+}
+
+bool AssetsPanel::is_group_deletion_confirmed() const {
+  return m_is_group_deletion_confirmed;
+}
+
+void AssetsPanel::set_group_deletion_confirmed(bool is_confirmed) {
+  m_is_group_deletion_confirmed = is_confirmed;
+}
+
+void AssetsPanel::set_removal_limit(std::size_t limit) {
+  m_removal_limit = limit;
+}
+
+bool AssetsPanel::confirm_removal(std::size_t count) {
+  if(count <= m_removal_limit || !m_confirmation_handler) {
+    return true;
+  }
+  return m_confirmation_handler(translate("assets", "Permanently delete"),
+    translate("assets",
+      "Are you sure you want to delete %1 items? This cannot be undone.").
+        arg(count), translate("assets", "Delete"),
+    translate("assets", "Cancel"), QString()).m_is_accepted;
+}
+
+bool AssetsPanel::delete_group(const std::string& group) {
+  if(!m_editor) {
+    return false;
+  }
+  auto& resources = m_editor->get_document().get_resources();
+  auto count = std::size_t(0);
+  auto pending = std::vector<std::string>({group});
+  for(auto i = std::size_t(0); i != pending.size(); ++i) {
+    for(auto& entry : list_assets(resources, pending[i])) {
+      if(entry.m_group.empty()) {
+        ++count;
+      } else {
+        pending.push_back(entry.m_group);
+      }
+    }
+  }
+  auto selection = m_editor->get_selection().get_nodes();
+  if(count > m_removal_limit) {
+    if(!confirm_removal(count)) {
+      return false;
+    }
+    return run(std::make_unique<RemoveAssetGroupCommand>(group, selection));
+  }
+  if(m_is_group_deletion_confirmed && m_confirmation_handler) {
+    auto answer = m_confirmation_handler(
+      translate("assets", "Delete group and contents"),
+      translate("assets", "This will delete the group and any subgroups or "
+        "elements that it contains. To remove the group without deleting "
+        "its elements, use the Ungroup action."),
+      translate("assets", "Delete"), translate("assets", "Cancel"),
+      translate("assets", "Do not show this again"));
+    if(!answer.m_is_accepted) {
+      return false;
+    }
+    if(answer.m_is_dismissed) {
+      m_is_group_deletion_confirmed = false;
+    }
+  }
+  return run(std::make_unique<RemoveAssetGroupCommand>(group, selection));
+}
+
+bool AssetsPanel::delete_components(
+    const std::vector<ComponentId>& components) {
+  if(!m_editor || components.empty() || !confirm_removal(components.size())) {
+    return false;
+  }
+  return run(std::make_unique<DeleteComponentsCommand>(
+    components, m_editor->get_selection().get_nodes()));
 }
 
 bool AssetsPanel::rename_component(
@@ -880,11 +1010,6 @@ void AssetsPanel::rebuild() {
     std::erase_if(m_selected, [&] (const auto& id) {
       return find_section(resources, id).empty();
     });
-    for(auto& component : resources.m_components) {
-      m_entries[static_cast<int>(AssetSection::COMPONENTS)].push_back(
-        QString::fromStdString(component.second.m_name));
-      m_components.push_back(component.first);
-    }
   }
   add_section(AssetSection::COLORS, "Colors");
   add_section(AssetSection::CHARACTER_STYLES, "Character Styles");
@@ -965,16 +1090,8 @@ void AssetsPanel::add_section(AssetSection section, const QString& title) {
   auto rows_layout = new QVBoxLayout(rows);
   rows_layout->setContentsMargins(0, 0, 0, 0);
   rows_layout->setSpacing(0);
-  if(m_document) {
-    auto& resources = m_document->get_resources();
-    if(section == AssetSection::COLORS ||
-        section == AssetSection::CHARACTER_STYLES) {
-      add_entries(section, get_section_id(section), *rows_layout, 0);
-    } else if(section == AssetSection::COMPONENTS) {
-      for(auto& component : resources.m_components) {
-        rows_layout->addWidget(make_component_row(component.second));
-      }
-    }
+  if(m_document && section != AssetSection::VIDEOS) {
+    add_entries(section, get_section_id(section), *rows_layout, 0);
   }
   m_content_layout->addWidget(rows);
   QObject::connect(toggle, &QToolButton::toggled, rows, [=] (bool is_open) {
@@ -1526,7 +1643,7 @@ bool AssetsPanel::rename_group(const std::string& group, const QString& name) {
 }
 
 bool AssetsPanel::delete_assets(const std::vector<NodeId>& assets) {
-  if(!m_document || assets.empty()) {
+  if(!m_document || assets.empty() || !confirm_removal(assets.size())) {
     return false;
   }
   auto& resources = m_document->get_resources();
@@ -1588,7 +1705,7 @@ QMenu* AssetsPanel::make_group_menu(
   auto remove = menu->addAction(translate("assets", "Delete"));
   remove->setEnabled(static_cast<bool>(m_editor));
   QObject::connect(remove, &QAction::triggered, this, [this, group] {
-    run(std::make_unique<RemoveAssetGroupCommand>(group, true));
+    delete_group(group);
   });
   return menu;
 }
@@ -1649,6 +1766,15 @@ void AssetsPanel::add_entries(AssetSection section, const std::string& group,
           m_entries[index].push_back(get_swatch_label(swatch));
           m_swatches.push_back(swatch.m_id);
           row = make_swatch_row(swatch);
+        }
+      }
+    } else if(section == AssetSection::COMPONENTS) {
+      for(auto& component : resources.m_components) {
+        if(component.second.m_master == entry.m_asset) {
+          m_entries[index].push_back(
+            QString::fromStdString(component.second.m_name));
+          m_components.push_back(component.first);
+          row = make_component_row(component.second);
         }
       }
     } else {
@@ -1877,6 +2003,37 @@ QPixmap Rellu::make_swap_cursor() {
   draw(Qt::black, 1.5);
   painter.end();
   return pixmap;
+}
+
+QPixmap Rellu::make_arrow_cursor() {
+  constexpr auto SIZE = 32;
+  auto pixmap = QPixmap(SIZE, SIZE);
+  pixmap.fill(Qt::transparent);
+  auto painter = QPainter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing);
+  auto arrow = QPolygonF({QPointF(0.5, 0.5), QPointF(0.5, 17),
+    QPointF(4.5, 13), QPointF(7.5, 19.5), QPointF(10, 18.5),
+    QPointF(7, 12), QPointF(12.5, 12)});
+  painter.setPen(QPen(Qt::black, 1, Qt::SolidLine, Qt::SquareCap,
+    Qt::MiterJoin));
+  painter.setBrush(Qt::white);
+  painter.drawPolygon(arrow);
+  painter.end();
+  return pixmap;
+}
+
+QPixmap Rellu::make_drag_cursor(Qt::DropAction action) {
+  if(action == SWAP_DROP_ACTION) {
+    return make_swap_cursor();
+  }
+  return make_arrow_cursor();
+}
+
+Qt::DropAction Rellu::get_component_drop_action(const NodeId& target) {
+  if(target.is_nil()) {
+    return Qt::CopyAction;
+  }
+  return SWAP_DROP_ACTION;
 }
 
 QString Rellu::get_swatch_label(const ColorSwatch& swatch) {

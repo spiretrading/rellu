@@ -232,7 +232,9 @@ void EditActions::run(auto operation) {
 }
 
 bool EditActions::is_available(const std::string& name) const {
-  return name != "object.reset_main_state" ||
+  return (name != "object.reset_main_state" &&
+    name != "object.transform.flip_horizontally" &&
+    name != "object.transform.flip_vertically") ||
     !m_editor->get_text_selection().is_editing();
 }
 

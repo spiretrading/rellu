@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <functional>
@@ -10,6 +11,7 @@
 #include <utility>
 #include <QAbstractButton>
 #include <QApplication>
+#include <QCheckBox>
 #include <QCloseEvent>
 #include <QContextMenuEvent>
 #include <QFileDialog>
@@ -24,6 +26,7 @@
 #include <QPixmap>
 #include <QPolygonF>
 #include <QPushButton>
+#include <QScreen>
 #include <QSettings>
 #include <QToolButton>
 #include <QTimer>
@@ -39,18 +42,23 @@
 #include "Rellu/Commands/PathCommands.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Commands/StyleCommands.hpp"
+#include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Rendering/RenderPlan.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
+#include "Rellu/Tools/ViewFit.hpp"
+#include "Rellu/Ui/CanvasFrame.hpp"
 #include "Rellu/Ui/ComponentPropertyEditors.hpp"
 #include "Rellu/Ui/ContextMenus.hpp"
+#include "Rellu/Ui/DocumentSettings.hpp"
 #include "Rellu/Ui/LastProperties.hpp"
 #include "Rellu/Ui/LayoutProperties.hpp"
 #include "Rellu/Ui/PropertyEditors.hpp"
 #include "Rellu/Ui/TextMeasurement.hpp"
 #include "Rellu/Ui/TextPropertyEditors.hpp"
+#include "Rellu/Ui/Theme.hpp"
 #include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "MainWindow.hpp"
@@ -61,7 +69,6 @@ using namespace Rellu;
 namespace {
   constexpr auto ZOOM_STEP = 2.0;
   constexpr auto MAXIMUM_RECENT_FILES = 15;
-  constexpr auto REVEAL_MARGIN = 24.0;
   constexpr auto LEFT_PANEL_WIDTH = 407;
   constexpr auto MENU_ROW_HEIGHT = 32;
   constexpr auto CAPTION_BUTTON_WIDTH = 46;
@@ -75,6 +82,14 @@ namespace {
   const auto LANGUAGE_PREFIX = std::string("edit.preferences.language.");
   const auto LANGUAGE_KEY = QString("preferences/language");
   const auto LAST_PROPERTIES_KEY = QString("last_text_properties");
+  const auto GROUP_DELETION_KEY =
+    QString("assets/delete_nested_group_contents_dismissed");
+  const auto GUIDE_SETTINGS_KEY = QString("guides/documents");
+  const auto GRID_SETTINGS_KEY = QString("grids/documents");
+
+  std::int64_t get_time() {
+    return QDateTime::currentDateTimeUtc().toMSecsSinceEpoch();
+  }
 
   std::string get_recent_name(int index) {
     return "file.recent." + std::to_string(index);
@@ -91,6 +106,19 @@ namespace {
       return "Nudge Down";
     }
     return std::string();
+  }
+
+  std::optional<Point> get_nudge_direction(int key) {
+    if(key == Qt::Key_Left) {
+      return Point(-1, 0);
+    } else if(key == Qt::Key_Right) {
+      return Point(1, 0);
+    } else if(key == Qt::Key_Up) {
+      return Point(0, -1);
+    } else if(key == Qt::Key_Down) {
+      return Point(0, 1);
+    }
+    return std::nullopt;
   }
 
   std::string get_panel_action(const std::string& panel) {
@@ -267,7 +295,9 @@ MainWindow::MainWindow(QWidget* parent)
       m_recent_files(MAXIMUM_RECENT_FILES),
       m_measurer(make_text_measurer(get_default_font_library())),
       m_highlight(nullptr),
-      m_gradient_overlay(nullptr) {
+      m_gradient_overlay(nullptr),
+      m_is_launching(false),
+      m_is_restored_expanded(false) {
   add_standard_commands(m_commands, m_measurer);
   add_align_commands(m_commands, m_measurer);
   add_path_commands(
@@ -275,7 +305,6 @@ MainWindow::MainWindow(QWidget* parent)
   add_repeat_grid_commands(m_commands, m_measurer);
   add_component_commands(m_commands, m_measurer);
   add_header_commands(m_commands, m_measurer);
-  add_artboard_commands(m_commands);
   add_asset_commands(m_commands);
   m_view->get_renderer().set_background(PASTEBOARD);
   m_view->installEventFilter(this);
@@ -332,6 +361,9 @@ MainWindow::MainWindow(QWidget* parent)
   m_app_bar->set_zoom_handler([this] (auto zoom) {
     m_view->set_zoom(zoom);
   });
+  m_app_bar->set_release_handler([this] {
+    m_view->setFocus();
+  });
   auto bar = make_layout();
   add_xd_menus(m_actions);
   add_actions();
@@ -345,7 +377,17 @@ MainWindow::MainWindow(QWidget* parent)
       tools->get_context().set_guide_settings(settings);
       m_view->update();
     }
+    store_guide_settings();
   });
+  m_grid_actions = std::make_unique<GridActions>(m_actions);
+  m_grid_actions->set_settings_handler([this] (const auto& settings) {
+    if(auto tools = m_view->get_tools()) {
+      tools->get_context().set_grid_settings(settings);
+      m_view->update();
+    }
+    store_grid_settings();
+  });
+  m_inspector->set_grid_actions(m_grid_actions.get());
   m_edit_actions->set_paste_handler([this] (const auto& data, auto is_applied) {
     return m_guide_actions->paste(data, is_applied);
   });
@@ -432,7 +474,11 @@ bool MainWindow::make_new() {
   if(!confirm_close()) {
     return false;
   }
-  install(std::make_unique<Document>(), QString());
+  install(make_new_document(), QString());
+  auto& canvas = m_session->get_document().get_canvas();
+  if(!canvas.empty()) {
+    m_session->get_editor().get_selection().select(canvas.front());
+  }
   return true;
 }
 
@@ -473,6 +519,9 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 
 void MainWindow::changeEvent(QEvent* event) {
   QMainWindow::changeEvent(event);
+  if(event->type() == QEvent::WindowStateChange) {
+    update_launch();
+  }
   if(event->type() == QEvent::WindowStateChange && m_maximize) {
     auto tip = translate("window",
       isMaximized() ? QString("Restore Down") : QString("Maximize"));
@@ -484,6 +533,12 @@ void MainWindow::changeEvent(QEvent* event) {
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
   if(m_view && watched == m_view) {
+    if(event->type() == QEvent::Resize || event->type() == QEvent::Show) {
+      update_launch();
+    } else if(event->type() == QEvent::MouseButtonPress ||
+        event->type() == QEvent::Wheel || event->type() == QEvent::KeyPress) {
+      finish_launch();
+    }
     if(event->type() == QEvent::Resize) {
       m_highlight->setGeometry(m_view->rect());
       m_gradient_overlay->setGeometry(m_view->rect());
@@ -566,29 +621,6 @@ bool MainWindow::select_for_context_menu(QPoint position) {
   }
   selection.clear();
   return background.is_nil();
-}
-
-void MainWindow::update_grid_actions() {
-  auto texts = std::to_array<std::tuple<const char*, GridType, const char*,
-      const char*>>({
-    std::tuple("view.layout_grid", GridType::LAYOUT, "Show Layout Grid",
-      "Hide Layout Grid"),
-    std::tuple("view.square_grid", GridType::SQUARE, "Show Square Grid",
-      "Hide Square Grid")});
-  for(auto& [name, type, show, hide] : texts) {
-    auto is_shown = false;
-    if(m_session) {
-      auto& document = m_session->get_document();
-      auto artboards = get_target_artboards(document,
-        m_session->get_editor().get_selection().get_nodes());
-      is_shown = !artboards.empty() && std::all_of(artboards.begin(),
-        artboards.end(), [&] (const auto& id) {
-          auto& grid = document.get(id).get_artboard()->m_layout_grid;
-          return grid && grid->m_is_visible && grid->m_type == type;
-        });
-    }
-    m_actions.get(name).setText(translate("menu", is_shown ? hide : show));
-  }
 }
 
 bool MainWindow::is_caption(QPoint position) const {
@@ -680,15 +712,28 @@ bool MainWindow::handle_gradient_key(const QKeyEvent& event) {
     return false;
   }
   auto& picker = m_inspector->get_color_picker();
-  auto edit = GradientHandles::press_key(target->m_fill,
-    target->m_frame.m_bounds, get_zoom(), picker.get_stop(), event.key(),
-    event.modifiers());
+  auto& editor = m_session->get_editor();
+  auto direction = get_nudge_direction(event.key());
+  auto edit = GradientEdit();
+  if(direction && event.modifiers().testFlag(Qt::AltModifier)) {
+    return true;
+  } else if(direction) {
+    edit = GradientHandles::nudge(target->m_fill, target->m_frame.m_bounds,
+      get_zoom(), picker.get_stop(), get_gradient_nudge(*direction,
+        event.modifiers().testFlag(Qt::ShiftModifier)));
+  } else {
+    edit = GradientHandles::press_key(target->m_fill,
+      target->m_frame.m_bounds, get_zoom(), picker.get_stop(), event.key(),
+      event.modifiers());
+  }
   if(!edit.m_is_handled) {
     return false;
   }
-  auto& editor = m_session->get_editor();
   if(auto label = get_nudge_label(event.key()); !label.empty()) {
     if(edit.m_fill) {
+      if(!editor.get_history().is_dirty()) {
+        editor.get_history().seal();
+      }
       editor.merge(std::make_unique<SetFillCommand>(
         m_inspector->get_nodes(), Fill(*edit.m_fill), std::move(label)));
       picker.set_fill(*edit.m_fill);
@@ -708,6 +753,33 @@ bool MainWindow::handle_gradient_key(const QKeyEvent& event) {
   }
   m_gradient_overlay->update();
   return true;
+}
+
+Point MainWindow::get_gradient_nudge(Point direction, bool is_large) const {
+  auto& document = m_session->get_document();
+  auto& editor = m_session->get_editor();
+  auto& nodes = m_inspector->get_nodes();
+  auto delta = direction;
+  if(is_large) {
+    auto artboard = editor.get_context().get_artboard();
+    auto nudged = std::vector<NodeId>();
+    for(auto& id : nodes) {
+      if(find_artboard(document, id) == artboard) {
+        nudged.push_back(id);
+      }
+    }
+    delta = direction * 10;
+    if(auto bounds = get_world_bounds(
+        document, nudged, BoundsType::GEOMETRY, m_measurer)) {
+      delta =
+        get_large_nudge(document, artboard, bounds->get_top_left(), direction);
+    }
+  }
+  if(auto bounds =
+      get_world_bounds(document, nodes, BoundsType::GEOMETRY, m_measurer)) {
+    delta = keep_on_canvas(*bounds, delta);
+  }
+  return delta;
 }
 
 void MainWindow::update_gradient_editor() {
@@ -906,7 +978,7 @@ QMenuBar* MainWindow::make_layout() {
   m_left_panel->addWidget(m_layers);
   m_left_panel->addWidget(m_plugins);
   body_layout->addWidget(m_left_panel);
-  body_layout->addWidget(m_view, 1);
+  body_layout->addWidget(new CanvasFrame(*m_view), 1);
   m_inspector_frame->setObjectName("inspector_frame");
   m_inspector_frame->setAttribute(Qt::WA_StyledBackground);
   m_inspector_frame->setFixedWidth(PropertyInspector::WIDTH);
@@ -951,7 +1023,7 @@ void MainWindow::add_actions() {
     show_region(region);
   });
   m_presets->set_reveal_handler([this] (const auto& region) {
-    show_region(region);
+    reveal_artboard(region);
   });
   m_edit_actions->set_error_handler([this] (const auto& message) {
     QMessageBox::warning(this, "Rellu", message);
@@ -1037,6 +1109,31 @@ void MainWindow::add_component_actions() {
   m_assets->set_main_component_handler([this] (const auto& component) {
     m_component_actions->edit_main_component(component);
   });
+  m_assets->set_group_deletion_confirmed(
+    !QSettings().value(GROUP_DELETION_KEY, false).toBool());
+  m_assets->set_confirmation_handler([this] (const QString& title,
+      const QString& message, const QString& ok, const QString& cancel,
+      const QString& dismissal) {
+    auto box = QMessageBox(QMessageBox::Warning, title, message,
+      QMessageBox::NoButton, this);
+    auto accept = box.addButton(ok, QMessageBox::AcceptRole);
+    box.addButton(QMessageBox::Cancel)->setText(cancel);
+    box.setDefaultButton(accept);
+    auto check = static_cast<QCheckBox*>(nullptr);
+    if(!dismissal.isEmpty()) {
+      check = new QCheckBox(dismissal);
+      box.setCheckBox(check);
+    }
+    box.exec();
+    auto answer = AssetConfirmation();
+    answer.m_is_accepted = box.clickedButton() == accept;
+    answer.m_is_dismissed =
+      answer.m_is_accepted && check && check->isChecked();
+    if(answer.m_is_dismissed) {
+      QSettings().setValue(GROUP_DELETION_KEY, true);
+    }
+    return answer;
+  });
   m_component_drop = std::make_unique<ComponentDrop>(*m_view);
 }
 
@@ -1110,6 +1207,7 @@ void MainWindow::set_workspace(Workspace workspace) {
   m_inspector->set_workspace(workspace);
   m_edit_actions->set_workspace(workspace);
   m_guide_actions->set_workspace(workspace);
+  m_grid_actions->set_workspace(workspace);
   update_presets();
   m_inspector->setVisible(workspace != Workspace::PROTOTYPE);
   m_prototype_inspector->setVisible(workspace == Workspace::PROTOTYPE);
@@ -1153,14 +1251,51 @@ void MainWindow::restore_settings() {
   m_recent_files.set_paths(settings.value("recent_files").toStringList());
   update_recent_files();
   if(!restoreGeometry(settings.value("main_window/geometry").toByteArray())) {
-    resize(1600, 960);
+    if(auto screen = this->screen()) {
+      auto area = screen->availableGeometry();
+      auto geometry = center_window(Size(1600, 960),
+        Rect(area.x(), area.y(), area.width(), area.height()));
+      setGeometry(static_cast<int>(geometry.m_x),
+        static_cast<int>(geometry.m_y), static_cast<int>(geometry.m_width),
+        static_cast<int>(geometry.m_height));
+    } else {
+      resize(1600, 960);
+    }
   }
+  m_is_restored_expanded = static_cast<bool>(
+    windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen));
+  m_is_launching = true;
+  m_view->set_fit_held(true);
   show_panel(settings.value("main_window/panel", DEFAULT_PANEL).toString().
     toStdString());
   check_language(load_language());
-  m_guide_actions->set_settings(GuideSettings(
-    settings.value("guides/visible", true).toBool(),
-    settings.value("guides/locked", false).toBool()));
+}
+
+void MainWindow::update_launch() {
+  if(!m_is_launching || !isVisible()) {
+    return;
+  }
+  auto state = windowState();
+  auto area = QRect();
+  if(auto screen = this->screen()) {
+    area = state & Qt::WindowFullScreen ? screen->geometry() :
+      screen->availableGeometry();
+  }
+  auto frame = frameGeometry();
+  if(is_settled(m_is_restored_expanded,
+      static_cast<bool>(state & (Qt::WindowMaximized | Qt::WindowFullScreen)),
+      Size(frame.width(), frame.height()), Size(area.width(), area.height()))) {
+    QTimer::singleShot(0, this, [this] {
+      finish_launch();
+    });
+  }
+}
+
+void MainWindow::finish_launch() {
+  if(m_is_launching) {
+    m_is_launching = false;
+    m_view->set_fit_held(false);
+  }
 }
 
 void MainWindow::check_language(Language language) {
@@ -1244,16 +1379,57 @@ void MainWindow::change_properties_id() {
   apply_properties(properties);
 }
 
+void MainWindow::load_document_settings(
+    GuideSettings guides, GridSettings grids) {
+  if(m_session && !m_session->get_id().empty()) {
+    auto& id = m_session->get_id();
+    auto settings = QSettings();
+    auto time = get_time();
+    for(auto& key : {GUIDE_SETTINGS_KEY, GRID_SETTINGS_KEY}) {
+      settings.setValue(key, purge_document_settings(
+        settings.value(key).toByteArray(), id, time));
+    }
+    if(auto recorded = find_guide_settings(
+        settings.value(GUIDE_SETTINGS_KEY).toByteArray(), id)) {
+      guides = *recorded;
+    }
+    if(auto recorded = find_grid_settings(
+        settings.value(GRID_SETTINGS_KEY).toByteArray(), id, grids)) {
+      grids = *recorded;
+    }
+  }
+  m_guide_actions->set_settings(guides);
+  m_grid_actions->set_settings(grids);
+  store_guide_settings();
+  store_grid_settings();
+}
+
+void MainWindow::store_guide_settings() const {
+  if(!m_guide_actions || !m_session || m_session->get_id().empty()) {
+    return;
+  }
+  auto settings = QSettings();
+  settings.setValue(GUIDE_SETTINGS_KEY, record_guide_settings(
+    settings.value(GUIDE_SETTINGS_KEY).toByteArray(), m_session->get_id(),
+    m_guide_actions->get_settings(), get_time()));
+}
+
+void MainWindow::store_grid_settings() const {
+  if(!m_grid_actions || !m_session || m_session->get_id().empty()) {
+    return;
+  }
+  auto settings = QSettings();
+  settings.setValue(GRID_SETTINGS_KEY, record_grid_settings(
+    settings.value(GRID_SETTINGS_KEY).toByteArray(), m_session->get_id(),
+    m_grid_actions->get_settings(), get_time()));
+}
+
 void MainWindow::save_settings() const {
   auto settings = QSettings();
   settings.setValue("recent_files", m_recent_files.get_paths());
   settings.setValue("main_window/geometry", saveGeometry());
   settings.setValue("main_window/panel",
     QString::fromStdString(m_toolbar->get_panel()));
-  settings.setValue(
-    "guides/visible", m_guide_actions->get_settings().m_is_visible);
-  settings.setValue(
-    "guides/locked", m_guide_actions->get_settings().m_is_locked);
 }
 
 void MainWindow::update_recent_files() {
@@ -1310,6 +1486,8 @@ bool MainWindow::save_to(const QString& path) {
     store_properties();
   } else {
     change_properties_id();
+    load_document_settings(
+      m_guide_actions->get_settings(), m_grid_actions->get_settings());
   }
   return true;
 }
@@ -1366,11 +1544,13 @@ void MainWindow::install(
   m_component_actions->set_editor(&editor);
   m_text_actions->set_editor(&editor);
   m_guide_actions->set_editor(&editor);
+  m_grid_actions->set_editor(&editor);
+  load_document_settings(GuideSettings(), GridSettings());
   m_component_drop->set_editor(&editor);
   m_history_subscription = editor.get_history().subscribe([this] {
     update_title();
     update_asset_actions();
-    update_grid_actions();
+    update_canvas_color();
   });
   m_selection_subscription = editor.get_selection().subscribe([this] {
     set_highlights({});
@@ -1379,6 +1559,7 @@ void MainWindow::install(
   if(auto tools = m_view->get_tools()) {
     tools->get_context().set_text_measurer(m_measurer);
     m_guide_actions->set_settings(m_guide_actions->get_settings());
+    m_grid_actions->set_settings(m_grid_actions->get_settings());
     m_tool_subscription = tools->subscribe_tool([this] {
       update_tool();
     });
@@ -1388,7 +1569,18 @@ void MainWindow::install(
   update_selection_actions();
   update_zoom();
   update_document_state();
+  update_canvas_color();
   m_view->setFocus();
+}
+
+void MainWindow::update_canvas_color() {
+  auto color = m_session ? get_canvas_color(m_session->get_document()) :
+    PASTEBOARD;
+  auto& renderer = m_view->get_renderer();
+  if(renderer.get_background() != color) {
+    renderer.set_background(color);
+    m_view->update();
+  }
 }
 
 void MainWindow::detach() {
@@ -1406,6 +1598,9 @@ void MainWindow::detach() {
   }
   if(m_guide_actions) {
     m_guide_actions->set_editor(nullptr);
+  }
+  if(m_grid_actions) {
+    m_grid_actions->set_editor(nullptr);
   }
   if(m_component_drop) {
     m_component_drop->set_editor(nullptr);
@@ -1460,7 +1655,6 @@ void MainWindow::update_selection_actions() {
   m_actions.set_enabled("view.zoom_selection", has_selection);
   m_actions.set_enabled("edit.rename", has_selection);
   update_asset_actions();
-  update_grid_actions();
   update_presets();
 }
 
@@ -1478,17 +1672,26 @@ void MainWindow::reveal(const NodeId& id) {
   if(visible.intersects(*bounds) || visible.contains(bounds->get_center())) {
     return;
   }
-  auto zoom = get_zoom();
-  auto size = Size(
-    std::max(m_view->width() - 2 * REVEAL_MARGIN, 1.0) / zoom,
-    std::max(m_view->height() - 2 * REVEAL_MARGIN, 1.0) / zoom);
-  if(bounds->m_width > size.m_width || bounds->m_height > size.m_height) {
+  auto fitted = get_fitted_region(bounds->get_center(), get_zoom(),
+    Size(m_view->width(), m_view->height()));
+  if(bounds->m_width > fitted.m_width || bounds->m_height > fitted.m_height) {
     m_view->zoom_to(*bounds);
     return;
   }
-  auto center = bounds->get_center();
-  m_view->zoom_to(Rect(center.m_x - size.m_width / 2,
-    center.m_y - size.m_height / 2, size.m_width, size.m_height));
+  m_view->zoom_to(fitted);
+}
+
+void MainWindow::reveal_artboard(const Rect& frame) {
+  auto inverse = invert(m_view->get_renderer().get_view());
+  if(!inverse || m_view->width() <= 0 || m_view->height() <= 0) {
+    return;
+  }
+  auto visible = inverse->map(Rect(0, 0, m_view->width(), m_view->height()));
+  if(frame.m_width > visible.m_width || frame.m_height > visible.m_height) {
+    m_view->zoom_to(frame);
+    return;
+  }
+  show_region(frame);
 }
 
 void MainWindow::show_region(const Rect& region) {
@@ -1527,7 +1730,9 @@ void MainWindow::zoom_to_selection() {
   auto& nodes = m_session->get_editor().get_selection().get_nodes();
   if(auto bounds = get_world_bounds(m_session->get_document(), nodes,
       BoundsType::GEOMETRY, m_measurer)) {
-    m_view->zoom_to(*bounds);
+    m_view->zoom_to(Rect(bounds->m_x, bounds->m_y,
+      bounds->m_width > 0 ? bounds->m_width : 1,
+      bounds->m_height > 0 ? bounds->m_height : 1));
   }
 }
 

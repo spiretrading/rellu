@@ -1,7 +1,9 @@
 #ifndef RELLU_UI_DOCUMENT_SESSION_HPP
 #define RELLU_UI_DOCUMENT_SESSION_HPP
 #include <functional>
+#include <memory>
 #include <string>
+#include <QDateTime>
 #include <QString>
 #include <QStringList>
 #include "Rellu/Editor/Editor.hpp"
@@ -36,8 +38,9 @@ namespace Rellu {
       QString get_name() const;
 
       /**
-       * Returns the id Adobe XD gives the document, recorded in the file it
-       * was read from or last saved to, or empty if there is none.
+       * Returns the uxdesign#id Adobe XD gives the document, recorded in the
+       * file it was read from or last saved to, or a new id while the
+       * document has none.
        */
       const std::string& get_id() const;
 
@@ -48,8 +51,9 @@ namespace Rellu {
       bool is_dirty() const;
 
       /**
-       * Saves the document as an Adobe XD file, leaving any existing file
-       * untouched unless the save completes, and on success makes the path
+       * Saves the document as an Adobe XD file, recording the save at the
+       * current time and leaving any existing file untouched unless the save
+       * completes, and on success makes the path
        * the one saved to and the document clean. Unless the file saved to is
        * the existing one at the document's path, the document is given a new
        * id and a new composite, as Adobe XD gives a copy. Throws XdError on
@@ -58,12 +62,21 @@ namespace Rellu {
        */
       void save(const QString& path);
 
+      /**
+       * Saves the document as save(const QString&) does, recording the save
+       * at a given time.
+       * @param path The path of the .xd file.
+       * @param time The time of the save, in the time zone it is recorded in.
+       */
+      void save(const QString& path, const QDateTime& time);
+
     private:
       Document* m_document;
       QString m_path;
       std::string m_id;
       std::string m_parent;
       std::string m_composite;
+      std::string m_metadata;
       XdTextLayout m_layout;
       Editor m_editor;
 
@@ -96,6 +109,13 @@ namespace Rellu {
   bool resolve_unsaved_changes(const DocumentSession& session,
     const std::function<UnsavedChoice ()>& prompt,
     const std::function<bool ()>& save);
+
+  /**
+   * Makes the document Adobe XD's File &gt; New makes: a Web 1920 artboard at
+   * the origin, as the Web 1920 preset makes one, which becomes the preset
+   * last used, with nothing to undo.
+   */
+  std::unique_ptr<Document> make_new_document();
 
   /**
    * Opens the file the application is launched with, or makes a new,

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <numbers>
 #include <optional>
 #include <type_traits>
@@ -21,6 +22,9 @@ namespace {
   constexpr auto MINIMUM_FONT_SIZE = 1.0;
   constexpr auto MAXIMUM_FONT_SIZE = 1000.0;
   constexpr auto FONT_STEP = 5.0;
+  constexpr auto LARGE_NUDGE = 10.0;
+  constexpr auto GRID_TOLERANCE = 0.001;
+  constexpr auto CANVAS_MARGIN = 10.0;
 
   std::optional<Point> get_axis_scale(const Matrix& matrix) {
     auto magnitude = std::abs(matrix.m_a) + std::abs(matrix.m_d);
@@ -161,6 +165,20 @@ namespace {
     return make_translation(center.m_x, center.m_y) *
       make_scale(is_horizontal ? -1 : 1, is_vertical ? -1 : 1) *
       make_translation(-center.m_x, -center.m_y);
+  }
+
+  bool is_rotated_reflection(
+      const Node& node, const Matrix& transform, const Matrix& local) {
+    constexpr auto REFLECTION_TOLERANCE = 1e-9;
+    if(node.get_text() || !is_mirrorable(node) ||
+        get_rotation(transform) == 0 || !(local.get_determinant() < 0)) {
+      return false;
+    }
+    return std::abs(local.m_a * local.m_a + local.m_b * local.m_b - 1) <
+      REFLECTION_TOLERANCE && std::abs(local.m_c * local.m_c +
+        local.m_d * local.m_d - 1) < REFLECTION_TOLERANCE &&
+      std::abs(local.m_a * local.m_c + local.m_b * local.m_d) <
+        REFLECTION_TOLERANCE;
   }
 
   CornerRadii mirror_radii(
@@ -402,6 +420,19 @@ namespace {
   void reshape(const Document& document, Transaction& transaction,
       const NodeId& id, const Matrix& transform, Matrix local,
       Matrix composed, const TextMeasurer& measurer) {
+    if(is_rotated_reflection(document.get(id), transform, local)) {
+      if(auto bounds = get_local_bounds(
+          document, id, BoundsType::GEOMETRY, measurer)) {
+        auto center = bounds->get_center();
+        mirror_content(
+          document, transaction, id, center, false, true, measurer);
+        auto updated = composed * make_reflection(center, false, true);
+        if(updated != transform) {
+          set_transform(document, transaction, id, updated);
+        }
+        return;
+      }
+    }
     auto scale = get_axis_scale(local);
     auto base = transform;
     auto is_text_mirrored = false;
@@ -431,6 +462,10 @@ namespace {
         }
       }
     }
+    if(!scale && local.get_determinant() < 0 &&
+        document.get(id).get_text()) {
+      is_text_mirrored = true;
+    }
     if(scale && scale->m_x > 0 && scale->m_y > 0 &&
         is_scalable(document.get(id), *scale)) {
       auto updated = base * make_translation(local.m_tx, local.m_ty);
@@ -451,6 +486,31 @@ namespace {
         document, transaction, id, get_transform(document, id) * flip);
       payload.m_is_flipped_vertically = !payload.m_is_flipped_vertically;
       transaction.replace_payload(id, std::move(payload));
+    }
+  }
+
+  double round_half_up(double value) {
+    return std::floor(value + 0.5);
+  }
+
+  struct RotationRecord {
+    NodeId m_id;
+    std::shared_ptr<const Node> m_node;
+    double m_rotation;
+    bool m_is_resized;
+  };
+
+  void record_rotations(const Document& document, const NodeId& id,
+      bool is_resized, std::vector<RotationRecord>& records) {
+    auto& node = document.get(id);
+    if(!node.get_artboard() && !node.get_reference() &&
+        !node.m_header.m_transform_3d) {
+      records.push_back(RotationRecord(id,
+        document.get_nodes().get_record(id), node.m_header.m_rotation,
+        is_resized));
+    }
+    for(auto& child : node.m_children) {
+      record_rotations(document, child, false, records);
     }
   }
 
@@ -674,6 +734,22 @@ ResizeRule TransformCommand::get_rule() const {
   return m_rule;
 }
 
+const std::vector<double>& TransformCommand::get_rotations() const {
+  return m_rotations;
+}
+
+void TransformCommand::set_rotations(std::vector<double> rotations) {
+  m_rotations = std::move(rotations);
+}
+
+const std::vector<Matrix>& TransformCommand::get_adjustments() const {
+  return m_adjustments;
+}
+
+void TransformCommand::set_adjustments(std::vector<Matrix> adjustments) {
+  m_adjustments = std::move(adjustments);
+}
+
 std::string TransformCommand::get_label() const {
   return m_label;
 }
@@ -692,19 +768,75 @@ void TransformCommand::apply(
     }
     return;
   }
+  if(m_mode == TransformMode::ROTATE) {
+    for(auto& id : nodes) {
+      if(is_artboard(id)) {
+        continue;
+      }
+      auto mapping = m_mapping;
+      auto index = static_cast<std::size_t>(
+        std::find(m_nodes.begin(), m_nodes.end(), id) - m_nodes.begin());
+      if(index < m_adjustments.size()) {
+        mapping = mapping * m_adjustments[index];
+      }
+      auto parent = get_parent_transform(document, id);
+      if(auto inverse = invert(parent)) {
+        set_transform(document, transaction, id,
+          *inverse * mapping * parent * get_transform(document, id));
+      }
+    }
+    apply_rotations(document, transaction);
+    return;
+  }
   auto sizes = std::vector<std::pair<NodeId, Size>>();
   for(auto& id : nodes) {
     if(auto artboard = document.get(id).get_artboard()) {
       sizes.emplace_back(id, artboard->m_frame.get_size());
     }
   }
+  auto records = std::vector<RotationRecord>();
+  if(m_rotations.empty()) {
+    for(auto& id : nodes) {
+      record_rotations(document, id, true, records);
+    }
+  }
   resize_nodes(document, transaction, nodes, m_mapping, m_rule,
     m_mode == TransformMode::DRAG, m_measurer);
+  for(auto& record : records) {
+    auto node = document.find(record.m_id);
+    if(!node || (!record.m_is_resized &&
+        document.get_nodes().get_record(record.m_id) == record.m_node)) {
+      continue;
+    }
+    auto header = node->m_header;
+    header.m_rotation =
+      finalize_rotation(record.m_rotation, header.m_transform);
+    if(header != node->m_header) {
+      transaction.replace_header(std::move(header));
+    }
+  }
+  apply_rotations(document, transaction);
   if(m_mode == TransformMode::RESIZE) {
     for(auto& [id, size] : sizes) {
       if(document.get(id).get_artboard()->m_frame.get_size() != size) {
         update_artboard_contents(document, transaction, id);
       }
+    }
+  }
+}
+
+void TransformCommand::apply_rotations(
+    const Document& document, Transaction& transaction) const {
+  for(auto i = std::size_t(0); i < m_rotations.size() && i < m_nodes.size();
+      ++i) {
+    auto node = document.find(m_nodes[i]);
+    if(!node || node->get_artboard() || node->get_reference()) {
+      continue;
+    }
+    auto header = node->m_header;
+    header.m_rotation = m_rotations[i];
+    if(header != node->m_header) {
+      transaction.replace_header(std::move(header));
     }
   }
 }
@@ -716,12 +848,161 @@ bool TransformCommand::merge(const Command& command) {
     return false;
   }
   m_mapping = transformation->m_mapping * m_mapping;
+  if(!transformation->m_rotations.empty()) {
+    m_rotations = transformation->m_rotations;
+  }
+  if(m_adjustments.empty()) {
+    m_adjustments = transformation->m_adjustments;
+  } else {
+    for(auto i = std::size_t(0); i < m_adjustments.size() &&
+        i < transformation->m_adjustments.size(); ++i) {
+      m_adjustments[i] = transformation->m_adjustments[i] * m_adjustments[i];
+    }
+  }
   return true;
+}
+
+RotationDrag::RotationDrag(
+    std::vector<double> rotations, std::vector<double> angles)
+    : m_initial(rotations),
+      m_angles(std::move(angles)),
+      m_rotations(std::move(rotations)),
+      m_unsigned(0),
+      m_previous(0),
+      m_turn(0),
+      m_sign(1) {
+  for(auto rotation : m_initial) {
+    m_fractions.push_back(rotation - round_half_up(rotation));
+  }
+  if(m_initial.size() == 1) {
+    auto rotation = m_initial.front();
+    m_unsigned = std::fmod(rotation + 360, 360);
+    if(rotation < 0) {
+      m_sign = -1;
+    }
+  }
+}
+
+void RotationDrag::update(double angle, bool is_snapped) {
+  auto previous = std::fmod(m_unsigned + m_previous, 360);
+  auto current = std::fmod(m_unsigned + angle, 360);
+  if(previous >= 270 && previous < 360 && current > 0 && current <= 90) {
+    m_sign = 1;
+  } else if(previous >= 0 && previous <= 90 && current >= 270 &&
+      current < 360) {
+    m_sign = -1;
+  }
+  m_previous = angle;
+  auto turn = angle;
+  if(is_snapped) {
+    turn = 15 * round_half_up((turn + m_unsigned) / 15) - m_unsigned;
+  }
+  m_turn = std::fmod(round_half_up(turn), 360);
+  for(auto i = std::size_t(0); i != m_rotations.size(); ++i) {
+    auto rotation = m_rotations[i];
+    auto angle_after = m_turn - m_fractions[i];
+    if(i < m_angles.size()) {
+      angle_after += m_angles[i];
+    }
+    auto radians = angle_after * std::numbers::pi / 180;
+    auto derived = round_half_up(
+      fit_rotation(rotation, make_rotation(radians)));
+    auto result = std::fmod(derived + 360 * m_sign, 360);
+    auto is_turn = std::abs(rotation) == 360;
+    auto is_closing = std::abs(rotation) >= 270 && result == 0;
+    if(is_turn && is_closing) {
+      result = rotation;
+    } else if(is_closing) {
+      result = 360 * m_sign;
+    } else if(is_turn && rotation < 0 && derived <= 90) {
+      result = rotation + derived;
+    } else if(is_turn && rotation > 0 && derived >= 270) {
+      result = derived;
+    }
+    m_rotations[i] = result == 0 ? 0 : result;
+  }
+}
+
+double RotationDrag::get_turn() const {
+  return m_turn;
+}
+
+const std::vector<double>& RotationDrag::get_fractions() const {
+  return m_fractions;
+}
+
+const std::vector<double>& RotationDrag::get_rotations() const {
+  return m_rotations;
 }
 
 std::unique_ptr<TranslateCommand> Rellu::make_nudge_command(
     std::vector<NodeId> nodes, Point delta) {
   return std::make_unique<TranslateCommand>(std::move(nodes), delta, "Nudge");
+}
+
+Point Rellu::get_large_nudge(const Document& document,
+    const NodeId& artboard, Point origin, Point direction) {
+  auto distance = LARGE_NUDGE;
+  auto node = document.find(artboard);
+  auto board = node ? node->get_artboard() : nullptr;
+  auto grid = board && board->m_layout_grid ? &*board->m_layout_grid : nullptr;
+  if(grid && grid->m_is_visible && grid->m_type == GridType::SQUARE) {
+    auto is_x = direction.m_x != 0;
+    auto spacing =
+      is_x ? grid->m_square_size.m_width : grid->m_square_size.m_height;
+    if(spacing > 0) {
+      auto local = origin - board->m_frame.get_top_left();
+      auto position = is_x ? local.m_x : local.m_y;
+      auto remainder =
+        std::fmod(std::fmod(position, spacing) + spacing, spacing);
+      distance = remainder;
+      if(direction.m_x + direction.m_y > 0) {
+        distance = spacing - remainder;
+      }
+      if(distance < GRID_TOLERANCE) {
+        distance += spacing;
+      }
+    }
+  }
+  return direction * distance;
+}
+
+bool Rellu::is_within_canvas(const Rect& bounds) {
+  auto& canvas = CANVAS_BOUNDS;
+  if(canvas.contains(bounds)) {
+    return true;
+  } else if(canvas.m_width < bounds.m_width ||
+      canvas.m_height < bounds.m_height) {
+    auto overlap = intersect(canvas, bounds);
+    return overlap.m_width >= CANVAS_MARGIN &&
+      overlap.m_height >= CANVAS_MARGIN;
+  }
+  return false;
+}
+
+Point Rellu::keep_on_canvas(const Rect& bounds, Point delta) {
+  auto moved = Rect(bounds.m_x + delta.m_x, bounds.m_y + delta.m_y,
+    bounds.m_width, bounds.m_height);
+  if(is_within_canvas(moved)) {
+    return delta;
+  }
+  auto& canvas = CANVAS_BOUNDS;
+  auto left = canvas.get_left();
+  auto right = canvas.get_right();
+  auto top = canvas.get_top();
+  auto bottom = canvas.get_bottom();
+  if(canvas.m_width < moved.m_width || canvas.m_height < moved.m_height) {
+    left -= moved.m_width - CANVAS_MARGIN;
+    right -= CANVAS_MARGIN;
+    top -= moved.m_height - CANVAS_MARGIN;
+    bottom -= CANVAS_MARGIN;
+  } else {
+    right -= moved.m_width;
+    bottom -= moved.m_height;
+  }
+  auto x = std::max(std::min(right, moved.m_x), left);
+  auto y = std::max(std::min(bottom, moved.m_y), top);
+  return Point(x - bounds.m_x, y - bounds.m_y);
 }
 
 std::unique_ptr<TransformCommand> Rellu::make_resize_command(
@@ -750,7 +1031,10 @@ std::unique_ptr<TransformCommand> Rellu::make_bounds_command(
 }
 
 std::unique_ptr<TransformCommand> Rellu::make_rotate_command(
-    std::vector<NodeId> nodes, double angle, Point center) {
-  return std::make_unique<TransformCommand>(
-    std::move(nodes), make_rotation(angle, center), "Rotate");
+    std::vector<NodeId> nodes, double angle, Point center,
+    std::vector<double> rotations) {
+  auto command = std::make_unique<TransformCommand>(std::move(nodes),
+    make_rotation(angle, center), "Rotate", TransformMode::ROTATE);
+  command->set_rotations(std::move(rotations));
+  return command;
 }

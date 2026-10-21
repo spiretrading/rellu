@@ -7,6 +7,7 @@
 #include <doctest/doctest.h>
 #include <QImage>
 #include <QMimeData>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Editor/Editor.hpp"
@@ -274,6 +275,43 @@ TEST_SUITE("Clipboard") {
       make_target({ids.m_artboard}, Rect(0, 0, 2000, 1000)))));
     REQUIRE(document.get(editor.get_selection().get_primary()).
       get_artboard()->m_frame == Rect(990, 50, 375, 812));
+  }
+
+  TEST_CASE("artboard_grids") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto clipboard = Clipboard();
+    REQUIRE(clipboard.copy(document, {ids.m_artboard}));
+    auto other = Document();
+    auto layout = GridOverride();
+    layout.m_maximum_width = 2000;
+    layout.m_column_count = 3;
+    layout.m_gutter = 20;
+    auto defaults = GridDefaults();
+    defaults.m_overrides = std::vector{layout};
+    {
+      auto transaction = Transaction(other);
+      transaction.set_grid_defaults(defaults);
+      transaction.commit();
+    }
+    auto editor = Editor(other);
+    REQUIRE(editor.execute(clipboard.make_paste_command()));
+    auto pasted = editor.get_selection().get_primary();
+    auto& artboard = *other.get(pasted).get_artboard();
+    REQUIRE(artboard.m_layout_grid == make_initial_grid(artboard, defaults));
+    REQUIRE(artboard.m_layout_grid->m_column_count == 3);
+    REQUIRE(!document.get(ids.m_artboard).get_artboard()->m_layout_grid);
+    auto target = PasteTarget();
+    target.m_is_prototyping = true;
+    REQUIRE(editor.execute(clipboard.make_paste_command(target)));
+    REQUIRE(!other.get(editor.get_selection().get_primary()).get_artboard()->
+      m_layout_grid);
+    REQUIRE(clipboard.copy(other, {pasted}));
+    auto grid = *other.get(pasted).get_artboard()->m_layout_grid;
+    auto source_editor = Editor(document);
+    REQUIRE(source_editor.execute(clipboard.make_paste_command()));
+    REQUIRE(document.get(source_editor.get_selection().get_primary()).
+      get_artboard()->m_layout_grid == grid);
   }
 
   TEST_CASE("interactions") {

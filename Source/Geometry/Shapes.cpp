@@ -15,26 +15,31 @@ namespace {
     bool m_is_rounded;
   };
 
-  Corner make_corner(Point previous, Point vertex, Point next, double radius) {
+  double get_half_tangent(Point previous, Point vertex, Point next) {
     auto before = previous - vertex;
     auto after = next - vertex;
     auto before_length = length(before);
     auto after_length = length(after);
-    if(radius <= 0 || before_length == 0 || after_length == 0) {
-      return Corner(vertex, vertex, vertex, vertex, false);
+    if(before_length == 0 || after_length == 0) {
+      return 0;
     }
     before = before / before_length;
     after = after / after_length;
-    auto angle = std::atan2(std::abs(cross(before, after)), dot(before, after));
-    auto half_tangent = std::tan(angle / 2);
-    if(half_tangent <= 0 || !std::isfinite(radius / half_tangent)) {
+    return std::tan(
+      std::atan2(std::abs(cross(before, after)), dot(before, after)) / 2);
+  }
+
+  Corner make_corner(Point previous, Point vertex, Point next, double radius) {
+    auto half_tangent = get_half_tangent(previous, vertex, next);
+    if(radius <= 0 || half_tangent <= 0 ||
+        !std::isfinite(radius / half_tangent)) {
       return Corner(vertex, vertex, vertex, vertex, false);
     }
-    auto distance = std::min(
-      radius / half_tangent, std::min(before_length, after_length) / 2);
-    auto effective_radius = distance * half_tangent;
-    auto handle =
-      4 * std::tan((std::numbers::pi - angle) / 4) * effective_radius / 3;
+    auto before = (previous - vertex) / length(previous - vertex);
+    auto after = (next - vertex) / length(next - vertex);
+    auto angle = 2 * std::atan(half_tangent);
+    auto distance = radius / half_tangent;
+    auto handle = 4 * std::tan((std::numbers::pi - angle) / 4) * radius / 3;
     auto start = vertex + before * distance;
     auto end = vertex + after * distance;
     return Corner(
@@ -163,11 +168,30 @@ Path Rellu::make_line(Point start, Point end) {
 
 Path Rellu::make_polygon(
     std::span<const Point> vertices, double corner_radius) {
-  auto corners = std::vector<Corner>();
   auto count = vertices.size();
+  auto radius = corner_radius;
+  if(radius > 0) {
+    auto distances = std::vector<double>(count, 0);
+    for(auto i = std::size_t(0); i != count; ++i) {
+      auto half_tangent = get_half_tangent(vertices[(i + count - 1) % count],
+        vertices[i], vertices[(i + 1) % count]);
+      if(half_tangent > 0) {
+        distances[i] = 1 / half_tangent;
+      }
+    }
+    for(auto i = std::size_t(0); i != count; ++i) {
+      auto next = (i + 1) % count;
+      auto needed = radius * (distances[i] + distances[next]);
+      auto edge = distance(vertices[i], vertices[next]);
+      if(needed > edge) {
+        radius *= edge / needed;
+      }
+    }
+  }
+  auto corners = std::vector<Corner>();
   for(auto i = std::size_t(0); i != count; ++i) {
     corners.push_back(make_corner(vertices[(i + count - 1) % count],
-      vertices[i], vertices[(i + 1) % count], corner_radius));
+      vertices[i], vertices[(i + 1) % count], radius));
   }
   return make_path(corners);
 }

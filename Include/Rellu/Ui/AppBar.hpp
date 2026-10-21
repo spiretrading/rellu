@@ -44,6 +44,13 @@ namespace Rellu {
        */
       using ZoomHandler = std::function<void (double zoom)>;
 
+      /**
+       * The type of function called when the zoom field gives up the
+       * keyboard focus after a zoom is entered with the Enter key or the
+       * edit is cancelled with the Escape key.
+       */
+      using ReleaseHandler = std::function<void ()>;
+
       /** The height of the bar in device independent pixels. */
       static constexpr auto HEIGHT = 42;
 
@@ -97,6 +104,14 @@ namespace Rellu {
        */
       void set_zoom_handler(ZoomHandler handler);
 
+      /**
+       * Sets the function called when the zoom field gives up the keyboard
+       * focus after a zoom is entered with the Enter key or the edit is
+       * cancelled with the Escape key.
+       * @param handler The function to call.
+       */
+      void set_release_handler(ReleaseHandler handler);
+
       /** Returns the zoom field. */
       QLineEdit& get_zoom_field();
 
@@ -106,11 +121,15 @@ namespace Rellu {
        */
       QToolButton& get_workspace_button(Workspace workspace);
 
+    protected:
+      bool eventFilter(QObject* watched, QEvent* event) override;
+
     private:
       Workspace m_workspace;
       double m_zoom;
       WorkspaceHandler m_workspace_handler;
       ZoomHandler m_zoom_handler;
+      ReleaseHandler m_release_handler;
       QToolButton* m_design;
       QToolButton* m_prototype;
       QToolButton* m_share;

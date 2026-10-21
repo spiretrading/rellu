@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <deque>
 #include <map>
@@ -10,6 +11,7 @@
 #include <unordered_set>
 #include <utility>
 #include <variant>
+#include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
@@ -38,6 +40,115 @@ namespace {
     auto role = get_instance_role(node);
     return node.m_header.m_has_custom_name &&
       !(role && role->m_is_name_inherited);
+  }
+
+  std::size_t get_space_size(std::string_view text) {
+    static constexpr auto SPACES = std::to_array<std::string_view>({" ", "\t",
+      "\n", "\v", "\f", "\r", "\xC2\xA0", "\xE1\x9A\x80", "\xE2\x80\x80",
+      "\xE2\x80\x81", "\xE2\x80\x82", "\xE2\x80\x83", "\xE2\x80\x84",
+      "\xE2\x80\x85", "\xE2\x80\x86", "\xE2\x80\x87", "\xE2\x80\x88",
+      "\xE2\x80\x89", "\xE2\x80\x8A", "\xE2\x80\xA8", "\xE2\x80\xA9",
+      "\xE2\x80\xAF", "\xE2\x81\x9F", "\xE3\x80\x80", "\xEF\xBB\xBF"});
+    for(auto& space : SPACES) {
+      if(text.starts_with(space)) {
+        return space.size();
+      }
+    }
+    return 0;
+  }
+
+  std::string_view trim(std::string_view text) {
+    while(auto size = get_space_size(text)) {
+      text.remove_prefix(size);
+    }
+    auto end = text.size();
+    for(auto i = std::size_t(0); i != text.size();) {
+      if(auto size = get_space_size(text.substr(i))) {
+        i += size;
+      } else {
+        ++i;
+        end = i;
+      }
+    }
+    return text.substr(0, end);
+  }
+
+  std::vector<std::string> split_path(std::string_view name) {
+    auto parts = std::vector<std::string>();
+    while(true) {
+      auto separator = name.find('/');
+      if(auto part = trim(name.substr(0, separator)); !part.empty()) {
+        parts.emplace_back(part);
+      }
+      if(separator == std::string_view::npos) {
+        return parts;
+      }
+      name.remove_prefix(separator + 1);
+    }
+  }
+
+  std::string get_entered_name(std::string_view name) {
+    auto parts = split_path(name);
+    if(parts.empty()) {
+      return std::string();
+    }
+    return parts.back();
+  }
+
+  std::vector<std::string> get_group_names(std::string_view name) {
+    auto parts = split_path(name);
+    if(!parts.empty()) {
+      parts.pop_back();
+    }
+    return parts;
+  }
+
+  const ComponentInstance* find_rendered_role(
+      const Document& document, const NodeId& id) {
+    auto node = document.find(id);
+    if(!node) {
+      return nullptr;
+    }
+    if(auto role = get_instance_role(*node)) {
+      return role;
+    }
+    if(!node->get_reference()) {
+      return nullptr;
+    }
+    auto resolution = resolve_reference(document.get_nodes(), id);
+    if(!resolution) {
+      return nullptr;
+    }
+    if(auto source = document.find(resolution->m_source)) {
+      return get_instance_role(*source);
+    }
+    return nullptr;
+  }
+
+  void take_name(const Document& document, Transaction& transaction,
+      const NodeId& id, const std::string& name) {
+    auto node = document.find(id);
+    if(!node || !get_instance_role(*node)) {
+      return;
+    }
+    auto group = *node->get_group();
+    auto header = node->m_header;
+    header.m_name = name;
+    header.m_has_custom_name = true;
+    if(header != node->m_header) {
+      transaction.replace_header(std::move(header));
+    }
+    if(!group.m_component_instance->m_is_name_inherited) {
+      group.m_component_instance->m_is_name_inherited = true;
+      transaction.replace_payload(id, std::move(group));
+    }
+  }
+
+  void inherit_name(const Document& document, Transaction& transaction,
+      const NodeId& id, const std::string& name) {
+    if(auto node = document.find(id); node && !is_renamed(*node)) {
+      take_name(document, transaction, id, name);
+    }
   }
 
   bool has_structure_overrides(const Overrides& overrides) {
@@ -132,6 +243,14 @@ namespace {
     auto group = node.get_group();
     return group && !group->m_mask && !group->m_repeat_grid &&
       !group->m_scroll_group && !group->m_component_instance;
+  }
+
+  bool has_visual_styles(const Node& node) {
+    auto& header = node.m_header;
+    auto& transform = header.m_transform;
+    return header.m_opacity != 1 || header.m_blend_mode != BlendMode::NORMAL ||
+      header.m_is_isolated || header.m_transform_3d || transform.m_a != 1 ||
+      transform.m_b != 0 || transform.m_c != 0 || transform.m_d != 1;
   }
 
   bool is_inside_instance(const Document& document, const NodeId& id) {
@@ -660,11 +779,6 @@ namespace {
     if(has_custom_name) {
       header.m_name = node.m_header.m_name;
       header.m_has_custom_name = true;
-      auto group = *document.get(swapped).get_group();
-      if(group.m_component_instance->m_is_name_inherited) {
-        group.m_component_instance->m_is_name_inherited = false;
-        transaction.replace_payload(swapped, std::move(group));
-      }
     }
     header.m_is_locked = node.m_header.m_is_locked;
     header.m_opacity = node.m_header.m_opacity;
@@ -780,23 +894,49 @@ void MakeComponentCommand::apply(
     materialize_references(document, transaction, nodes);
   }
   auto name = std::string();
-  if(nodes.size() == 1 && is_plain_group(document.get(nodes.front()))) {
+  auto constraints = std::optional<Constraints>();
+  auto path = std::vector<std::string>();
+  if(nodes.size() == 1) {
+    auto& header = document.get(nodes.front()).m_header;
+    if(header.m_has_custom_name) {
+      name = get_entered_name(header.m_name);
+    }
+    path = get_group_names(header.m_name);
+    if(header.m_constraints.m_is_custom) {
+      constraints = header.m_constraints;
+    }
+  }
+  auto is_named = !name.empty();
+  if(!is_named) {
+    name = make_node_name(document, get_prefix("Component"));
+  }
+  if(nodes.size() == 1 && is_plain_group(document.get(nodes.front())) &&
+      !has_visual_styles(document.get(nodes.front()))) {
     m_main = renew(document, transaction, nodes.front());
-    name = document.get(m_main).m_header.m_name;
-    if(!document.get(m_main).m_header.m_has_custom_name) {
-      name = make_node_name(document, get_prefix("Component"));
-      auto header = document.get(m_main).m_header;
-      header.m_name = name + std::string(NUMBER_SEPARATOR) + "1";
+  } else {
+    if(constraints) {
+      auto header = document.get(nodes.front()).m_header;
+      header.m_constraints.m_is_custom = false;
       transaction.replace_header(std::move(header));
     }
-  } else {
-    name = make_node_name(document, get_prefix("Component"));
     auto group = GroupCommand(std::move(nodes), name);
     group.apply(document, transaction);
     m_main = group.get_group();
-    auto header = document.get(m_main).m_header;
-    header.m_name = name + std::string(NUMBER_SEPARATOR) + "1";
-    transaction.replace_header(std::move(header));
+    if(constraints) {
+      auto header = document.get(m_main).m_header;
+      header.m_constraints = *constraints;
+      transaction.replace_header(std::move(header));
+    }
+  }
+  auto main_header = document.get(m_main).m_header;
+  main_header.m_has_custom_name = is_named;
+  if(is_named) {
+    main_header.m_name = name;
+  } else {
+    main_header.m_name = name + std::string(NUMBER_SEPARATOR) + "1";
+  }
+  if(main_header != document.get(m_main).m_header) {
+    transaction.replace_header(std::move(main_header));
   }
   auto mapping = std::unordered_map<NodeId, NodeId>();
   auto master = clone_tree(document, transaction, m_main, mapping);
@@ -816,6 +956,11 @@ void MakeComponentCommand::apply(
   component.m_master = master;
   component.m_size = size;
   m_component = transaction.add_component(std::move(component));
+  if(path.empty()) {
+    place_new_assets(document, transaction, COMPONENT_SECTION);
+  } else {
+    file_asset(document, transaction, master, path);
+  }
   auto role = ComponentInstance();
   role.m_component = m_component;
   role.m_size = size;
@@ -926,12 +1071,18 @@ void ResetOverridesCommand::apply(
     }
     if(has_custom_name) {
       auto is_inherited = false;
+      auto name = component.m_name;
       if(auto master = document.find(component.m_master)) {
         is_inherited = master->m_header.m_has_custom_name;
+        name = master->m_header.m_name;
       }
       auto header = document.get(id).m_header;
-      header.m_name = component.m_name;
       header.m_has_custom_name = is_inherited;
+      if(is_inherited) {
+        header.m_name = std::move(name);
+      } else {
+        header.m_name = make_instance_name(document, role.m_component);
+      }
       if(header != document.get(id).m_header) {
         transaction.replace_header(std::move(header));
       }
@@ -1259,28 +1410,10 @@ std::string RenameComponentCommand::get_label() const {
 void RenameComponentCommand::apply(
     const Document& document, Transaction& transaction) {
   check_editable(document, m_component);
-  auto component = get_component(document, m_component);
-  if(component.m_name == m_name) {
+  if(get_component(document, m_component).m_name == m_name) {
     return;
   }
-  component.m_name = m_name;
-  auto master = component.m_master;
-  transaction.replace_component(std::move(component));
-  for(auto& id : {master, find_main_component(document, m_component)}) {
-    if(auto node = id.is_nil() ? nullptr : document.find(id)) {
-      auto header = node->m_header;
-      header.m_name = m_name;
-      header.m_has_custom_name = true;
-      auto group = node->get_group() ? std::optional(*node->get_group()) :
-        std::nullopt;
-      transaction.replace_header(std::move(header));
-      if(group && group->m_component_instance &&
-          !group->m_component_instance->m_is_name_inherited) {
-        group->m_component_instance->m_is_name_inherited = true;
-        transaction.replace_payload(id, std::move(*group));
-      }
-    }
-  }
+  rename_component(document, transaction, m_component, m_name);
 }
 
 bool RenameComponentCommand::merge(const Command& command) {
@@ -1366,6 +1499,599 @@ void UnlinkComponentCommand::apply(
 std::optional<std::vector<NodeId>>
     UnlinkComponentCommand::get_selection() const {
   return m_selection;
+}
+
+void Rellu::rename_component(const Document& document,
+    Transaction& transaction, const ComponentId& component,
+    const std::string& name) {
+  auto definition = get_component(document, component);
+  definition.m_name = name;
+  auto master = definition.m_master;
+  transaction.replace_component(std::move(definition));
+  if(auto node = document.find(master)) {
+    auto header = node->m_header;
+    header.m_name = name;
+    header.m_has_custom_name = true;
+    if(header != node->m_header) {
+      transaction.replace_header(std::move(header));
+    }
+  }
+  for(auto& id : find_instances(document, component)) {
+    inherit_name(document, transaction, id, name);
+  }
+}
+
+bool Rellu::rename_instance(const Document& document,
+    Transaction& transaction, const NodeId& id, std::string_view name) {
+  auto role = find_rendered_role(document, id);
+  if(!role) {
+    return false;
+  }
+  auto entered = get_entered_name(name);
+  auto rendered = find_rendered_header(document, id);
+  if(entered.empty() || !rendered) {
+    return true;
+  }
+  auto component = role->m_component;
+  if(role->m_is_main && !is_linked(document, component)) {
+    auto is_new_name = rendered->m_name != entered;
+    file_asset(document, transaction,
+      get_component(document, component).m_master, get_group_names(name));
+    if(!is_new_name) {
+      return true;
+    }
+    if(get_component(document, component).m_name != entered) {
+      rename_component(document, transaction, component, entered);
+    }
+    take_name(document, transaction, id, entered);
+    return true;
+  }
+  if(rendered->m_name == entered) {
+    return true;
+  }
+  edit_rendered_header(document, transaction, id,
+    [&] (const auto&, auto& header) {
+      header.m_name = entered;
+      header.m_has_custom_name = true;
+    });
+  if(auto node = document.find(id)) {
+    if(auto group = node->get_group(); group && group->m_component_instance &&
+        group->m_component_instance->m_is_name_inherited) {
+      auto payload = *group;
+      payload.m_component_instance->m_is_name_inherited = false;
+      transaction.replace_payload(id, std::move(payload));
+    }
+  }
+  return true;
+}
+
+namespace {
+  using Replacements = std::unordered_map<NodeId, NodeId>;
+  using SyncMaps = std::unordered_map<NodeId, std::map<NodeId, NodeId>>;
+
+  bool is_container(const Node& node) {
+    if(node.get_group()) {
+      return true;
+    }
+    auto shape = node.get_shape();
+    return shape && std::holds_alternative<CompoundShape>(shape->m_geometry);
+  }
+
+  void collect_instances(const Document& document, const NodeId& id,
+      const ComponentId& component, std::vector<NodeId>& instances) {
+    auto node = document.find(id);
+    if(!node) {
+      return;
+    }
+    if(auto role = get_instance_role(*node);
+        role && role->m_component == component) {
+      instances.push_back(id);
+    }
+    for(auto& child : node->m_children) {
+      collect_instances(document, child, component, instances);
+    }
+  }
+
+  std::vector<NodeId> list_instances(
+      const Document& document, const ComponentId& component) {
+    auto instances = std::vector<NodeId>();
+    for(auto& id : document.get_canvas()) {
+      collect_instances(document, id, component, instances);
+    }
+    auto roots = std::vector<NodeId>();
+    document.get_nodes().for_each([&] (const Node& node) {
+      if(node.m_parent.is_nil() && !document.is_on_canvas(node.get_id())) {
+        roots.push_back(node.get_id());
+      }
+    });
+    std::sort(roots.begin(), roots.end());
+    for(auto& id : roots) {
+      collect_instances(document, id, component, instances);
+    }
+    return instances;
+  }
+
+  SyncMaps collect_state_maps(const Document& document) {
+    auto maps = SyncMaps();
+    for(auto& entry : document.get_resources().m_components) {
+      for(auto& state : entry.second.m_states) {
+        maps.emplace(state.m_tree, state.m_sync_map);
+      }
+    }
+    document.get_nodes().for_each([&] (const Node& node) {
+      if(auto role = get_instance_role(node)) {
+        for(auto& state : role->m_states) {
+          maps.emplace(state.m_tree, state.m_sync_map);
+        }
+      }
+    });
+    return maps;
+  }
+
+  NodeId find_sync_source(
+      const Document& document, const SyncMaps& maps, const NodeId& id) {
+    auto root = id;
+    for(auto current = document.get(id).m_parent; !current.is_nil();
+        current = document.get(current).m_parent) {
+      if(auto role = get_instance_role(document.get(current))) {
+        if(auto entry = role->m_sync_map.find(id);
+            entry != role->m_sync_map.end()) {
+          return entry->second;
+        }
+        return NodeId();
+      }
+      root = current;
+    }
+    if(auto map = maps.find(root); map != maps.end()) {
+      if(auto entry = map->second.find(id); entry != map->second.end()) {
+        return entry->second;
+      }
+    }
+    return NodeId();
+  }
+
+  NodeId find_grid(const Document& document, const NodeId& id) {
+    auto grid = NodeId();
+    for(auto current = document.get(id).m_parent; !current.is_nil();
+        current = document.get(current).m_parent) {
+      auto& node = document.get(current);
+      if(get_instance_role(node)) {
+        break;
+      }
+      if(auto group = node.get_group(); group && group->m_repeat_grid) {
+        grid = current;
+      }
+    }
+    return grid;
+  }
+
+  void move_spacing(const Document& document, Transaction& transaction,
+      const NodeId& parent, const NodeId& from, const NodeId& to) {
+    auto node = parent.is_nil() ? nullptr : document.find(parent);
+    auto group = node ? node->get_group() : nullptr;
+    if(!group || !group->m_stack || !group->m_stack->m_spacing.contains(from)) {
+      return;
+    }
+    auto payload = *group;
+    auto margin = payload.m_stack->m_spacing.at(from);
+    payload.m_stack->m_spacing.erase(from);
+    payload.m_stack->m_spacing.emplace(to, margin);
+    transaction.replace_payload(parent, std::move(payload));
+  }
+
+  NodeId convert_instance(const Document& document, Transaction& transaction,
+      const NodeId& id, std::unordered_set<NodeId>& removed) {
+    auto role = *get_instance_role(document.get(id));
+    for(auto& state : role.m_states) {
+      if(document.find(state.m_tree)) {
+        auto nodes = std::vector<NodeId>();
+        collect(document, state.m_tree, nodes);
+        removed.insert(nodes.begin(), nodes.end());
+        transaction.remove(state.m_tree);
+      }
+    }
+    materialize_references(document, transaction, std::vector{id});
+    auto node = document.get(id);
+    auto& old = node.m_header;
+    auto group = *node.get_group();
+    group.m_component_instance = std::nullopt;
+    transaction.replace_payload(id, std::move(group));
+    if(node.m_children.size() == 1 &&
+        is_container(document.get(node.m_children.front()))) {
+      auto child = node.m_children.front();
+      auto header = document.get(child).m_header;
+      header.m_transform = old.m_transform * header.m_transform;
+      header.m_opacity *= old.m_opacity;
+      header.m_is_locked = old.m_is_locked;
+      header.m_is_visible = old.m_is_visible;
+      if(old.m_has_custom_name && !header.m_has_custom_name) {
+        header.m_name = old.m_name;
+        header.m_has_custom_name = true;
+      }
+      header.m_constraints.m_is_custom = false;
+      transaction.move(child, node.m_parent, get_index(document, id));
+      transaction.replace_header(std::move(header));
+      for(auto interaction : document.get_prototype().m_interactions) {
+        if(interaction.m_owner == id) {
+          interaction.m_owner = child;
+          transaction.replace_interaction(std::move(interaction));
+        }
+      }
+      move_spacing(document, transaction, node.m_parent, id, child);
+      transaction.remove(id);
+      removed.insert(id);
+      return child;
+    }
+    auto header = NodeHeader();
+    header.m_id = generate_node_id();
+    header.m_transform = old.m_transform;
+    header.m_transform_3d = old.m_transform_3d;
+    header.m_opacity = old.m_opacity;
+    header.m_is_visible = old.m_is_visible;
+    header.m_is_locked = old.m_is_locked;
+    if(old.m_has_custom_name) {
+      header.m_name = old.m_name;
+      header.m_has_custom_name = true;
+    } else {
+      header.m_name = make_node_name(document, get_prefix("Group"));
+    }
+    auto payload = *document.get(id).get_group();
+    auto replacement = transaction.insert(node.m_parent,
+      get_index(document, id), std::move(header), std::move(payload));
+    for(auto i = std::size_t(0); i != node.m_children.size(); ++i) {
+      transaction.move(node.m_children[i], replacement, i);
+    }
+    for(auto interaction : document.get_prototype().m_interactions) {
+      if(interaction.m_owner == id) {
+        interaction.m_owner = replacement;
+        transaction.replace_interaction(std::move(interaction));
+      }
+    }
+    move_spacing(document, transaction, node.m_parent, id, replacement);
+    transaction.remove(id);
+    removed.insert(id);
+    return replacement;
+  }
+
+  NodeId remap(const Replacements& replacements, const NodeId& id) {
+    if(auto replacement = replacements.find(id);
+        replacement != replacements.end()) {
+      return replacement->second;
+    }
+    return id;
+  }
+
+  template<typename V>
+  std::map<NodeId, V> remap_map(const Replacements& replacements,
+      const std::map<NodeId, V>& map) {
+    auto remapped = std::map<NodeId, V>();
+    for(auto& entry : map) {
+      remapped.insert_or_assign(remap(replacements, entry.first), entry.second);
+    }
+    return remapped;
+  }
+
+  bool clean(std::map<NodeId, NodeId>& sync_map,
+      const Replacements& replacements,
+      const std::unordered_set<NodeId>& removed) {
+    auto cleaned = std::map<NodeId, NodeId>();
+    for(auto& entry : sync_map) {
+      auto key = remap(replacements, entry.first);
+      auto value = remap(replacements, entry.second);
+      if(!removed.contains(key) && !removed.contains(value)) {
+        cleaned.insert_or_assign(key, value);
+      }
+    }
+    if(cleaned == sync_map) {
+      return false;
+    }
+    sync_map = std::move(cleaned);
+    return true;
+  }
+
+  bool clean(Overrides& overrides, const Replacements& replacements,
+      const std::unordered_set<NodeId>& removed,
+      const std::unordered_set<NodeId>& cleared) {
+    auto before = overrides;
+    auto is_removed = [&] (const NodeId& id) {
+      return removed.contains(id);
+    };
+    for(auto ids : {&overrides.m_added, &overrides.m_removed}) {
+      for(auto& id : *ids) {
+        id = remap(replacements, id);
+      }
+      std::erase_if(*ids, is_removed);
+    }
+    auto reordered = std::map<NodeId, NodeId>();
+    for(auto& entry : overrides.m_reordered) {
+      reordered.insert_or_assign(remap(replacements, entry.first),
+        remap(replacements, entry.second));
+    }
+    overrides.m_reordered = std::move(reordered);
+    std::erase_if(overrides.m_reordered, [&] (const auto& entry) {
+      return is_removed(entry.first) || is_removed(entry.second);
+    });
+    std::erase_if(overrides.m_properties, [&] (const auto& entry) {
+      return cleared.contains(entry.first);
+    });
+    overrides.m_properties = remap_map(replacements, overrides.m_properties);
+    std::erase_if(overrides.m_properties, [&] (const auto& entry) {
+      return is_removed(entry.first);
+    });
+    auto owners = std::map<NodeId, NodeId>();
+    for(auto& entry : overrides.m_owners) {
+      owners.insert_or_assign(remap(replacements, entry.first),
+        remap(replacements, entry.second));
+    }
+    overrides.m_owners = std::move(owners);
+    std::erase_if(overrides.m_owners, [&] (const auto& entry) {
+      return is_removed(entry.first) || is_removed(entry.second);
+    });
+    return !(overrides == before);
+  }
+
+  bool is_in_linked_tree(const Document& document, const NodeId& id) {
+    auto& components = document.get_resources().m_components;
+    auto root = id;
+    for(auto current = document.get(id).m_parent; !current.is_nil();
+        current = document.get(current).m_parent) {
+      if(auto role = get_instance_role(document.get(current));
+          role && is_linked(document, role->m_component)) {
+        return true;
+      }
+      root = current;
+    }
+    for(auto& entry : components) {
+      if(!entry.second.m_link) {
+        continue;
+      }
+      if(entry.second.m_master == root) {
+        return true;
+      }
+      for(auto& state : entry.second.m_states) {
+        if(state.m_tree == root) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+}
+
+bool Rellu::can_delete_component(
+    const Document& document, const ComponentId& component) {
+  auto& components = document.get_resources().m_components;
+  if(!components.contains(component) || is_linked(document, component)) {
+    return false;
+  }
+  for(auto& id : find_instances(document, component)) {
+    if(is_in_linked_tree(document, id)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void Rellu::delete_component(const Document& document,
+    Transaction& transaction, const ComponentId& component,
+    std::unordered_map<NodeId, NodeId>* out) {
+  auto definition = get_component(document, component);
+  auto instances = list_instances(document, component);
+  auto members = std::unordered_set<NodeId>(instances.begin(), instances.end());
+  auto maps = collect_state_maps(document);
+  auto roots = std::vector<NodeId>();
+  auto copies = std::vector<std::pair<NodeId, NodeId>>();
+  for(auto& id : instances) {
+    auto source = find_sync_source(document, maps, id);
+    if(!source.is_nil() && members.contains(source)) {
+      copies.emplace_back(id, source);
+    } else {
+      roots.push_back(id);
+    }
+  }
+  auto removed = std::unordered_set<NodeId>();
+  auto cleared = std::unordered_set<NodeId>();
+  auto replacements = Replacements();
+  auto grids = std::unordered_map<NodeId, NodeId>();
+  for(auto& id : roots) {
+    if(!document.find(id)) {
+      continue;
+    }
+    auto grid = find_grid(document, id);
+    if(auto first = grids.find(grid);
+        !grid.is_nil() && first != grids.end()) {
+      auto parent = document.get(id).m_parent;
+      auto index = get_index(document, id);
+      auto nodes = std::vector<NodeId>();
+      collect(document, id, nodes);
+      removed.insert(nodes.begin(), nodes.end());
+      transaction.remove(id);
+      auto mapping = std::unordered_map<NodeId, NodeId>();
+      auto copy =
+        clone_subtree(document, transaction, first->second, parent, index,
+          mapping);
+      move_spacing(document, transaction, parent, id, copy);
+      replacements.insert_or_assign(id, copy);
+      continue;
+    }
+    auto replacement = convert_instance(document, transaction, id, removed);
+    replacements.insert_or_assign(id, replacement);
+    if(!grid.is_nil()) {
+      grids.emplace(grid, replacement);
+    }
+  }
+  for(auto& copy : copies) {
+    auto node = document.find(copy.first);
+    if(!node) {
+      continue;
+    }
+    auto nodes = std::vector<NodeId>();
+    collect(document, copy.first, nodes);
+    removed.insert(nodes.begin() + 1, nodes.end());
+    cleared.insert(copy.first);
+    auto parent = node->m_parent;
+    auto index = get_index(document, copy.first);
+    transaction.remove(copy.first);
+    auto header = NodeHeader();
+    header.m_id = copy.first;
+    transaction.insert(parent, index, std::move(header),
+      Reference(copy.second));
+  }
+  auto states = std::unordered_set<StateId>();
+  states.insert(definition.m_default_state);
+  for(auto& state : definition.m_states) {
+    states.insert(state.m_id);
+  }
+  for(auto& interaction :
+      std::vector<Interaction>(document.get_prototype().m_interactions)) {
+    if(auto transition = std::get_if<StateTransition>(&interaction.m_action);
+        transition && states.contains(transition->m_state)) {
+      transaction.remove_interaction(interaction.m_id);
+    }
+  }
+  auto trees = std::vector<NodeId>({definition.m_master});
+  for(auto& state : definition.m_states) {
+    trees.push_back(state.m_tree);
+  }
+  for(auto& tree : trees) {
+    if(document.find(tree)) {
+      auto nodes = std::vector<NodeId>();
+      collect(document, tree, nodes);
+      removed.insert(nodes.begin(), nodes.end());
+    }
+  }
+  auto groups = document.get_resources().m_asset_groups;
+  auto element = to_string(definition.m_master);
+  for(auto& group : groups) {
+    std::erase(group.m_elements, element);
+  }
+  if(groups != document.get_resources().m_asset_groups) {
+    transaction.set_asset_groups(std::move(groups));
+  }
+  transaction.remove_component(component);
+  auto references = std::vector<std::pair<NodeId, Reference>>();
+  auto roles = std::vector<NodeId>();
+  document.get_nodes().for_each([&] (const Node& node) {
+    if(auto reference = node.get_reference()) {
+      if(auto replacement = replacements.find(reference->m_source);
+          replacement != replacements.end() &&
+            replacement->second != reference->m_source) {
+        auto payload = *reference;
+        payload.m_source = replacement->second;
+        references.emplace_back(node.get_id(), payload);
+      }
+    } else if(get_instance_role(node)) {
+      roles.push_back(node.get_id());
+    }
+  });
+  for(auto& reference : references) {
+    transaction.replace_payload(reference.first, reference.second);
+  }
+  for(auto& id : roles) {
+    auto group = *document.get(id).get_group();
+    auto& role = *group.m_component_instance;
+    auto is_changed = clean(role.m_sync_map, replacements, removed);
+    is_changed |= clean(role.m_overrides, replacements, removed, cleared);
+    for(auto& state : role.m_states) {
+      is_changed |= clean(state.m_sync_map, replacements, removed);
+      is_changed |=
+        clean(state.m_overrides, replacements, removed, cleared);
+    }
+    if(is_changed) {
+      transaction.replace_payload(id, std::move(group));
+    }
+  }
+  for(auto& entry :
+      std::map<ComponentId, Component>(document.get_resources().m_components)) {
+    auto other = entry.second;
+    auto is_changed = false;
+    for(auto& state : other.m_states) {
+      is_changed |= clean(state.m_sync_map, replacements, removed);
+      is_changed |=
+        clean(state.m_overrides, replacements, removed, cleared);
+    }
+    if(is_changed) {
+      transaction.replace_component(std::move(other));
+    }
+  }
+  for(auto interaction :
+      std::vector<Interaction>(document.get_prototype().m_interactions)) {
+    auto is_changed = false;
+    auto update = [&] (NodeId& id) {
+      if(auto replacement = remap(replacements, id); replacement != id) {
+        id = replacement;
+        is_changed = true;
+      }
+    };
+    update(interaction.m_owner);
+    if(auto transition =
+        std::get_if<ArtboardTransition>(&interaction.m_action)) {
+      update(transition->m_destination);
+    } else if(auto overlay = std::get_if<Overlay>(&interaction.m_action)) {
+      update(overlay->m_destination);
+    } else if(auto video = std::get_if<VideoPlayback>(&interaction.m_action)) {
+      update(video->m_target);
+    }
+    if(is_changed) {
+      transaction.replace_interaction(std::move(interaction));
+    }
+  }
+  if(out) {
+    for(auto& entry : replacements) {
+      out->insert_or_assign(entry.first, entry.second);
+    }
+  }
+}
+
+std::vector<NodeId> Rellu::remap_selection(const Document& document,
+    const std::vector<NodeId>& selection,
+    const std::unordered_map<NodeId, NodeId>& replacements) {
+  auto remapped = std::vector<NodeId>();
+  for(auto& id : selection) {
+    auto current = id;
+    for(auto depth = 0; depth != 256; ++depth) {
+      auto replacement = replacements.find(current);
+      if(replacement == replacements.end()) {
+        break;
+      }
+      current = replacement->second;
+    }
+    if(document.find(current) && std::find(remapped.begin(),
+        remapped.end(), current) == remapped.end()) {
+      remapped.push_back(current);
+    }
+  }
+  return remapped;
+}
+
+DeleteComponentsCommand::DeleteComponentsCommand(
+  std::vector<ComponentId> components, std::vector<NodeId> selection) noexcept
+  : m_components(std::move(components)),
+    m_selection(std::move(selection)) {}
+
+std::string DeleteComponentsCommand::get_label() const {
+  return "Delete Components";
+}
+
+void DeleteComponentsCommand::apply(
+    const Document& document, Transaction& transaction) {
+  auto is_deleted = false;
+  auto replacements = std::unordered_map<NodeId, NodeId>();
+  for(auto& component : m_components) {
+    if(can_delete_component(document, component)) {
+      delete_component(document, transaction, component, &replacements);
+      is_deleted = true;
+    }
+  }
+  if(!is_deleted) {
+    throw std::invalid_argument("No component can be deleted.");
+  }
+  m_remapped = remap_selection(document, m_selection, replacements);
+}
+
+std::optional<std::vector<NodeId>>
+    DeleteComponentsCommand::get_selection() const {
+  return m_remapped;
 }
 
 std::unique_ptr<Command> Rellu::make_unlink_component(

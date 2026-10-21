@@ -120,8 +120,6 @@ namespace {
       replacement.m_type = grid.m_type;
       grid = std::move(replacement);
     }
-    assign(grid.m_is_visible, edit.m_is_visible);
-    assign(grid.m_type, edit.m_type);
     if(edit.m_column_count) {
       grid.m_column_count = std::max(*edit.m_column_count, 1);
     }
@@ -159,25 +157,28 @@ namespace {
     }
   }
 
-  CommandFactory make_grid_toggle(GridType type) {
-    return [=] (const auto& document, const auto& nodes) ->
-        std::unique_ptr<Command> {
-      auto artboards = get_target_artboards(document, nodes);
-      if(artboards.empty()) {
-        return nullptr;
+  bool give_initial_grids(
+      Document& document, const std::vector<NodeId>& nodes) {
+    auto artboards = std::vector<NodeId>();
+    for(auto& id : nodes) {
+      if(auto node = document.find(id)) {
+        if(auto artboard = node->get_artboard();
+            artboard && !artboard->m_layout_grid) {
+          artboards.push_back(id);
+        }
       }
-      auto is_shown = std::all_of(artboards.begin(), artboards.end(),
-        [&] (const auto& id) {
-          auto& grid = document.get(id).get_artboard()->m_layout_grid;
-          return grid && grid->m_is_visible && grid->m_type == type;
-        });
-      auto edit = GridEdit();
-      edit.m_is_visible = !is_shown;
-      if(!is_shown) {
-        edit.m_type = type;
-      }
-      return std::make_unique<SetGridCommand>(std::move(artboards), edit);
-    };
+    }
+    if(artboards.empty()) {
+      return false;
+    }
+    auto transaction = Transaction(document);
+    for(auto& id : artboards) {
+      auto artboard = *document.get(id).get_artboard();
+      artboard.m_layout_grid = make_initial_grid(
+        artboard, document.get_resources().m_grid_defaults);
+      transaction.replace_payload(id, std::move(artboard));
+    }
+    return transaction.commit_unrecorded();
   }
 }
 
@@ -219,7 +220,6 @@ void Rellu::fit_layout_grid(LayoutGrid& grid, Size size) {
 LayoutGrid Rellu::make_default_grid(
     const Artboard& artboard, const GridDefaults& defaults) {
   auto grid = LayoutGrid();
-  grid.m_type = GridType::LAYOUT;
   if(auto& base = defaults.m_grid) {
     grid.m_square_size = base->m_square_size;
     grid.m_square_column_color = base->m_square_column_color;
@@ -236,10 +236,27 @@ LayoutGrid Rellu::make_default_grid(
 
 LayoutGrid Rellu::make_initial_grid(
     const Artboard& artboard, const GridDefaults& defaults) {
-  auto grid = make_default_grid(artboard, defaults);
-  grid.m_type = GridType::SQUARE;
-  grid.m_is_visible = false;
-  return grid;
+  return make_default_grid(artboard, defaults);
+}
+
+bool Rellu::initialize_grids(
+    Document& document, const std::vector<NodeId>& selection) {
+  if(selection.empty()) {
+    return false;
+  }
+  auto first = document.find(selection.front());
+  if(!first || !first->get_artboard()) {
+    return false;
+  }
+  return give_initial_grids(document, selection);
+}
+
+bool Rellu::initialize_all_grids(Document& document) {
+  auto artboards = std::vector<NodeId>();
+  for(auto& id : document.get_canvas()) {
+    artboards.push_back(id);
+  }
+  return give_initial_grids(document, artboards);
 }
 
 GridDefaults Rellu::make_grid_defaults(const LayoutGrid& grid, double width,
@@ -323,8 +340,6 @@ bool SetGridCommand::merge(const Command& command) {
     m_edit.m_left = std::nullopt;
   }
   assign(m_edit.m_is_default, edit.m_is_default);
-  assign(m_edit.m_is_visible, edit.m_is_visible);
-  assign(m_edit.m_type, edit.m_type);
   assign(m_edit.m_column_count, edit.m_column_count);
   assign(m_edit.m_gutter, edit.m_gutter);
   assign(m_edit.m_column_width, edit.m_column_width);
@@ -459,31 +474,6 @@ void SetOrientationCommand::apply(
   }
 }
 
-std::vector<NodeId> Rellu::get_target_artboards(
-    const Document& document, const std::vector<NodeId>& nodes) {
-  auto artboards = std::vector<NodeId>();
-  for(auto& id : nodes) {
-    if(!document.find(id)) {
-      continue;
-    }
-    auto artboard = document.get(id).get_artboard() ? id :
-      find_artboard(document, id);
-    if(!artboard.is_nil() && std::find(artboards.begin(), artboards.end(),
-        artboard) == artboards.end()) {
-      artboards.push_back(artboard);
-    }
-  }
-  if(!artboards.empty()) {
-    return artboards;
-  }
-  for(auto& id : document.get_canvas()) {
-    if(document.get(id).get_artboard()) {
-      artboards.push_back(id);
-    }
-  }
-  return artboards;
-}
-
 MakeGridDefaultCommand::MakeGridDefaultCommand(const NodeId& artboard) noexcept
   : m_artboard(artboard) {}
 
@@ -506,9 +496,4 @@ void MakeGridDefaultCommand::apply(
   if(replacement != defaults) {
     transaction.set_grid_defaults(std::move(replacement));
   }
-}
-
-void Rellu::add_artboard_commands(CommandRegistry& registry) {
-  registry.add("view.layout_grid", make_grid_toggle(GridType::LAYOUT));
-  registry.add("view.square_grid", make_grid_toggle(GridType::SQUARE));
 }

@@ -310,6 +310,46 @@ TEST_SUITE("History") {
     REQUIRE(get_x() == 110);
   }
 
+  TEST_CASE("attached_changes") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto history = History(document);
+    auto setting = 0;
+    auto other = 0;
+    auto get_x = [&] {
+      return get_world_transform(document, scene.m_rectangle).m_tx;
+    };
+    REQUIRE(!history.attach([&] {
+      setting = 0;
+    }, [&] {
+      setting = 1;
+    }));
+    history.execute(make_move(scene.m_rectangle, Point(1, 0)));
+    history.mark_clean();
+    setting = 1;
+    REQUIRE(history.attach([&] {
+      setting = 0;
+    }, [&] {
+      setting = 1;
+    }));
+    other = 2;
+    REQUIRE(history.attach([&] {
+      other = 0;
+    }, [&] {
+      other = 2;
+    }));
+    REQUIRE(history.get_undo_count() == 1);
+    REQUIRE(!history.is_dirty());
+    REQUIRE(history.undo());
+    REQUIRE(get_x() == 110);
+    REQUIRE(setting == 0);
+    REQUIRE(other == 0);
+    REQUIRE(history.redo());
+    REQUIRE(get_x() == 111);
+    REQUIRE(setting == 1);
+    REQUIRE(other == 2);
+  }
+
   TEST_CASE("execution_in_observer") {
     auto document = Document();
     auto scene = build_scene(document);

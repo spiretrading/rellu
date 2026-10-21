@@ -88,6 +88,12 @@ namespace Rellu {
        */
       void set_opaque(OpaqueData opaque);
 
+      /**
+       * Returns <code>true</code> iff changes are being published to the
+       * observers.
+       */
+      bool is_publishing() const;
+
       /** Returns <code>true</code> iff there is a change to undo. */
       bool can_undo() const;
 

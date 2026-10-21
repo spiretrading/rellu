@@ -1,13 +1,18 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <string>
+#include <variant>
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Io/XdValues.hpp"
+#include "Rellu/Localization/Localization.hpp"
 
 using namespace Qt::StringLiterals;
 using namespace Rellu;
 
 namespace {
+  constexpr auto MAXIMUM_NAME_LENGTH = 256;
+
   std::optional<BlendMode> to_blend_mode(const QString& name) {
     if(name == "normal"_L1) {
       return BlendMode::NORMAL;
@@ -104,6 +109,16 @@ namespace {
     }
   }
 
+  std::string make_content_name(const std::u16string& content) {
+    auto name = QString::fromStdU16String(content);
+    name.replace("\r\n"_L1, "\n"_L1);
+    name.truncate(MAXIMUM_NAME_LENGTH);
+    if(!name.isEmpty() && name.back().isHighSurrogate()) {
+      name.chop(1);
+    }
+    return to_std_string(name);
+  }
+
   void import_ux(XdObject& ux, NodeHeader& header) {
     header.m_is_locked = ux.get_bool("locked"_L1, false);
     header.m_is_marked_for_export = ux.get_bool("markedForExport"_L1, false);
@@ -117,6 +132,7 @@ namespace {
     constraints.m_width = ux.get_bool("constraintWidth"_L1, false);
     constraints.m_height = ux.get_bool("constraintHeight"_L1, false);
     header.m_is_fixed_position = ux.get_bool("fixed"_L1, false);
+    header.m_rotation = ux.get_number("rotation"_L1, 0);
     if(auto lock = ux.get_json().value("aspectLock"_L1).toObject();
         lock.value("width"_L1).isDouble() &&
         lock.value("height"_L1).isDouble()) {
@@ -125,7 +141,7 @@ namespace {
     }
     ux.ignore({"hasCustomName"_L1, "nameL10N"_L1,
       "hasNameFromExternalSource"_L1, "isCustomNameInherited"_L1,
-      "disableNaming"_L1, "rotation"_L1, "aspectLock"_L1,
+      "disableNaming"_L1, "aspectLock"_L1,
       "assetGroupData"_L1, "modTime"_L1, "listViewPosition"_L1,
       "pluginMetadata"_L1});
   }
@@ -166,10 +182,23 @@ void Rellu::add_header_importer(XdImporter& importer) {
       import_ux(*ux, header);
       if(auto key = ux->get_string("nameL10N"_L1); key && !key->isEmpty()) {
         header.m_has_custom_name = false;
+        if(is_named) {
+          header.m_name = localize_default_name(
+            header.m_name, to_std_string(*key), get_language());
+        }
       }
       if(ux->get_bool("hasCustomName"_L1, false) ||
           ux->get_bool("isCustomNameInherited"_L1, false)) {
         header.m_has_custom_name = true;
+      }
+    }
+    if(header.m_has_custom_name || !node.m_payload) {
+      return;
+    }
+    if(auto text = std::get_if<Box<Text>>(&*node.m_payload)) {
+      if(auto ux = get_ux(json);
+          !ux || !ux->get_bool("disableNaming"_L1, false)) {
+        header.m_name = make_content_name(*(*text)->m_content);
       }
     }
   });

@@ -1,5 +1,6 @@
 #include <array>
 #include <string_view>
+#include <utility>
 #include <QKeyCombination>
 #include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
@@ -289,6 +290,12 @@ namespace {
     Item(ACTION, "help.updates", "Updates...", "", "help", "account")
   });
 
+  constexpr auto KEY_NAMES = std::to_array<std::pair<Qt::Key, const char*>>({
+    std::pair(Qt::Key_Return, "Enter"), std::pair(Qt::Key_Enter, "Enter"),
+    std::pair(Qt::Key_Delete, "Del"), std::pair(Qt::Key_Tab, "Tab"),
+    std::pair(Qt::Key_Up, "Up"), std::pair(Qt::Key_Down, "Down"),
+    std::pair(Qt::Key_Left, "Left"), std::pair(Qt::Key_Right, "Right")});
+
   constexpr auto VIEW_ACTIONS = std::to_array<std::string_view>({
     "view.zoom_in", "view.zoom_out", "view.zoom_actual", "view.zoom_double",
     "view.zoom_fit", "view.libraries", "view.layers", "view.plugins",
@@ -340,30 +347,39 @@ void Rellu::update_document_actions(
   }
 }
 
-QString Rellu::to_xd_shortcut_text(const QKeySequence& shortcut) {
+QString Rellu::to_xd_shortcut_text(
+    const QKeySequence& shortcut, Language language) {
   if(shortcut.isEmpty()) {
     return QString();
   }
+  auto name = [&] (std::string_view key) {
+    auto text = localize("shortcut", key, language);
+    return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+  };
   auto combination = shortcut[0];
   auto modifiers = combination.keyboardModifiers();
   auto text = QString();
   if(modifiers & Qt::ShiftModifier) {
-    text += "Shift+";
+    text += name("Shift") + '+';
   }
   if(modifiers & Qt::ControlModifier) {
-    text += "Ctrl+";
+    text += name("Ctrl") + '+';
   }
   if(modifiers & Qt::AltModifier) {
-    text += "Alt+";
+    text += name("Alt") + '+';
   }
   if(modifiers & Qt::MetaModifier) {
-    text += "Meta+";
+    text += name("Win") + '+';
   }
   auto key = combination.key();
-  if(key == Qt::Key_Return || key == Qt::Key_Enter) {
-    return text + "Enter";
-  } else if(key == Qt::Key_Delete) {
-    return text + "Del";
+  for(auto& entry : KEY_NAMES) {
+    if(entry.first == key) {
+      return text + name(entry.second);
+    }
   }
   return text + QKeySequence(key).toString(QKeySequence::PortableText);
+}
+
+QString Rellu::to_xd_shortcut_text(const QKeySequence& shortcut) {
+  return to_xd_shortcut_text(shortcut, get_language());
 }

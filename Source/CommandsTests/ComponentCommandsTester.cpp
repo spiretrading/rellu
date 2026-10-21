@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <doctest/doctest.h>
+#include "Rellu/Commands/AssetCommands.hpp"
 #include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
@@ -166,6 +167,68 @@ TEST_SUITE("ComponentCommands") {
     REQUIRE(get_role(document, made.get_main()).m_is_main);
     REQUIRE_THROWS_AS(history.execute(std::make_unique<MakeComponentCommand>(
       std::vector{parts.m_artboard})), std::invalid_argument);
+  }
+
+  TEST_CASE("make_component_names") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(parts.m_rectangle).m_header;
+      header.m_name = "Forms / Logo";
+      header.m_constraints.m_is_custom = true;
+      transaction.replace_header(header);
+      header = document.get(parts.m_group).m_header;
+      header.m_transform = make_rotation(0.5);
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    auto history = History(document);
+    auto command = require_undoable(history,
+      std::make_unique<MakeComponentCommand>(std::vector{parts.m_rectangle}));
+    auto& made = static_cast<const MakeComponentCommand&>(*command);
+    auto& main = document.get(made.get_main());
+    REQUIRE(main.m_header.m_name == "Logo");
+    REQUIRE(main.m_header.m_has_custom_name);
+    REQUIRE(main.m_header.m_constraints.m_is_custom);
+    REQUIRE(!document.get(parts.m_rectangle).m_header.m_constraints.
+      m_is_custom);
+    REQUIRE(get_role(document, made.get_main()).m_is_name_inherited);
+    auto& component =
+      document.get_resources().m_components.at(made.get_component());
+    REQUIRE(component.m_name == "Logo");
+    REQUIRE(document.get(component.m_master).m_header.m_name == "Logo");
+    REQUIRE(get_group_path(document.get_resources(), component.m_master) ==
+      std::vector<std::string>({"Forms"}));
+    REQUIRE(document.get(parts.m_rectangle).m_header.m_name ==
+      "Forms / Logo");
+    command = history.execute(
+      std::make_unique<MakeComponentCommand>(std::vector{parts.m_group}));
+    auto& wrapped = static_cast<const MakeComponentCommand&>(*command);
+    REQUIRE(document.find(parts.m_group));
+    REQUIRE(document.get(parts.m_group).m_parent == wrapped.get_main());
+    REQUIRE(document.get(wrapped.get_main()).m_header.m_name == "Button");
+    auto faded = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto header = make_header("Group 1");
+      header.m_has_custom_name = false;
+      header.m_opacity = 0.5;
+      faded = transaction.append(parts.m_artboard, header, Group());
+      transaction.append(faded, make_header("Dot"),
+        make_rectangle_shape(4, 4));
+      transaction.commit();
+    }
+    command = history.execute(
+      std::make_unique<MakeComponentCommand>(std::vector{faded}));
+    auto faded_main =
+      static_cast<const MakeComponentCommand&>(*command).get_main();
+    REQUIRE(document.get(faded_main).m_header.m_name ==
+      "Component 1 \xE2\x80\x93 1");
+    REQUIRE(document.get(faded_main).m_header.m_opacity == 1);
+    REQUIRE(document.get(faded).m_parent == faded_main);
+    REQUIRE(document.get(faded).m_header.m_name == "Group 1");
+    REQUIRE(document.get(faded).m_header.m_opacity == 0.5);
   }
 
   TEST_CASE("insert_instance") {
@@ -410,6 +473,41 @@ TEST_SUITE("ComponentCommands") {
       std::vector{parts.m_group}));
   }
 
+  TEST_CASE("default_instance_names") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(parts.m_group).m_header;
+      header.m_name = "Group 1";
+      header.m_has_custom_name = false;
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    auto history = History(document);
+    auto commands = CommandRegistry();
+    add_component_commands(commands);
+    auto component = make_component(history, parts.m_group);
+    auto get_name = [&] (const NodeId& id) {
+      return document.get(id).m_header.m_name;
+    };
+    REQUIRE(get_name(parts.m_group) == "Component 1 \xE2\x80\x93 1");
+    auto second = add_instance(history, component, parts.m_artboard, 200, 20);
+    REQUIRE(get_name(second) == "Component 1 \xE2\x80\x93 2");
+    REQUIRE(!document.get(second).m_header.m_has_custom_name);
+    history.execute(std::make_unique<RenameCommand>(second, "Renamed"));
+    auto third = add_instance(history, component, parts.m_artboard, 200, 60);
+    REQUIRE(get_name(third) == "Component 1 \xE2\x80\x93 2");
+    auto master_rectangle =
+      get_master_node(document, parts.m_group, parts.m_rectangle);
+    auto copy = find_copy(document, second, master_rectangle);
+    edit(history, copy, make_fill(copy, make_color(0, 255, 0)));
+    history.execute(commands.make("object.reset_main_state", document,
+      std::vector{second}));
+    REQUIRE(get_name(second) == "Component 1 \xE2\x80\x93 3");
+    REQUIRE(!document.get(second).m_header.m_has_custom_name);
+  }
+
   TEST_CASE("reset_nested_in_main") {
     auto document = Document();
     auto parts = build_parts(document);
@@ -573,6 +671,8 @@ TEST_SUITE("ComponentCommands") {
     REQUIRE(node.m_header.m_opacity == 0.5);
     REQUIRE(!node.m_header.m_is_visible);
     REQUIRE(node.m_header.m_name == "Custom");
+    REQUIRE(node.m_header.m_has_custom_name);
+    REQUIRE(get_role(document, swapped).m_is_name_inherited);
   }
 
   TEST_CASE("swap_main_component") {
@@ -649,16 +749,305 @@ TEST_SUITE("ComponentCommands") {
     auto parts = build_parts(document);
     auto history = History(document);
     auto component = make_component(history, parts.m_group);
+    auto plain = add_instance(history, component, parts.m_artboard, 200, 20);
+    auto custom = add_instance(history, component, parts.m_artboard, 200, 60);
+    history.execute(std::make_unique<RenameCommand>(custom, "Custom"));
+    auto nested = add_instance(history, component, parts.m_artboard, 0, 150);
+    auto outer_main = nested;
+    auto outer = make_component(history, outer_main);
+    auto outer_instance =
+      add_instance(history, outer, parts.m_artboard, 0, 250);
+    history.execute(
+      std::make_unique<AddStateCommand>(outer, "Pressed", StateKind::NEW));
+    auto& outer_definition = document.get_resources().m_components.at(outer);
+    auto outer_master = outer_definition.m_master;
+    auto state_tree = outer_definition.m_states.front().m_tree;
     require_undoable(
       history, std::make_unique<RenameComponentCommand>(component, "Primary"));
+    REQUIRE(history.get_undo_label() == "Rename Component");
+    auto get_name = [&] (const NodeId& id) {
+      return find_rendered_header(document, id)->m_name;
+    };
     auto& definition = document.get_resources().m_components.at(component);
     REQUIRE(definition.m_name == "Primary");
     REQUIRE(document.get(definition.m_master).m_header.m_name == "Primary");
-    REQUIRE(document.get(parts.m_group).m_header.m_name == "Primary");
+    REQUIRE(document.get(definition.m_master).m_header.m_has_custom_name);
+    for(auto& id : {parts.m_group, plain}) {
+      REQUIRE(get_name(id) == "Primary");
+      REQUIRE(document.get(id).m_header.m_has_custom_name);
+      REQUIRE(get_role(document, id).m_is_name_inherited);
+    }
+    REQUIRE(get_name(nested) == "Primary");
+    REQUIRE(get_name(custom) == "Custom");
+    REQUIRE(!get_role(document, custom).m_is_name_inherited);
+    REQUIRE(get_name(document.get(outer_master).m_children.front()) ==
+      "Primary");
+    REQUIRE(get_name(document.get(outer_instance).m_children.front()) ==
+      "Primary");
+    REQUIRE(get_name(document.get(state_tree).m_children.front()) ==
+      "Primary");
+    REQUIRE(get_overridden(document, outer_instance,
+      document.get(outer_instance).m_children.front()).empty());
+    REQUIRE(get_name(outer_main) != "Primary");
+    REQUIRE(history.undo());
+    REQUIRE(get_name(plain) == "Button");
+    REQUIRE(get_name(nested) == "Button");
+    REQUIRE(document.get_resources().m_components.at(component).m_name ==
+      "Button");
+  }
+
+  TEST_CASE("rename_main_component") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto component = make_component(history, parts.m_group);
+    auto instance = add_instance(history, component, parts.m_artboard, 200, 20);
     require_undoable(history,
-      std::make_unique<RenameCommand>(parts.m_group, "Secondary"));
+      std::make_unique<RenameCommand>(parts.m_group, " Forms / Secondary "));
+    REQUIRE(history.get_undo_label() == "Rename");
     REQUIRE(document.get_resources().m_components.at(component).m_name ==
       "Secondary");
+    for(auto& id : {parts.m_group, instance}) {
+      REQUIRE(document.get(id).m_header.m_name == "Secondary");
+      REQUIRE(get_role(document, id).m_is_name_inherited);
+    }
+    auto& resources = document.get_resources();
+    auto master = resources.m_components.at(component).m_master;
+    REQUIRE(get_group_path(resources, master) ==
+      std::vector<std::string>({"Forms"}));
+    REQUIRE(!history.execute(std::make_unique<RenameCommand>(
+      parts.m_group, "Forms/Secondary")));
+    REQUIRE(!history.execute(
+      std::make_unique<RenameCommand>(parts.m_group, " / ")));
+    require_undoable(history,
+      std::make_unique<RenameCommand>(parts.m_group, "Secondary"));
+    REQUIRE(get_group_path(resources, master).empty());
+    REQUIRE(resources.m_asset_groups.empty());
+    REQUIRE(document.get(parts.m_group).m_header.m_name == "Secondary");
+  }
+
+  TEST_CASE("rename_instance") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto component = make_component(history, parts.m_group);
+    auto instance = add_instance(history, component, parts.m_artboard, 200, 20);
+    require_undoable(history,
+      std::make_unique<RenameCommand>(instance, "Forms /Label "));
+    auto& header = document.get(instance).m_header;
+    REQUIRE(header.m_name == "Label");
+    REQUIRE(header.m_has_custom_name);
+    REQUIRE(!get_role(document, instance).m_is_name_inherited);
+    REQUIRE(document.get_resources().m_components.at(component).m_name ==
+      "Button");
+    REQUIRE(!history.execute(std::make_unique<RenameCommand>(instance, "")));
+    history.execute(
+      std::make_unique<RenameComponentCommand>(component, "Primary"));
+    REQUIRE(document.get(instance).m_header.m_name == "Label");
+  }
+
+  TEST_CASE("reset_overrides_name") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto command = history.execute(std::make_unique<MakeComponentCommand>(
+      std::vector{parts.m_rectangle, parts.m_label}));
+    auto component =
+      static_cast<const MakeComponentCommand&>(*command).get_component();
+    add_instance(history, component, parts.m_artboard, 200, 20);
+    auto instance = add_instance(history, component, parts.m_artboard, 0, 150);
+    REQUIRE(document.get(instance).m_header.m_name ==
+      "Component 1 \xE2\x80\x93 3");
+    history.execute(std::make_unique<RenameCommand>(instance, "Renamed"));
+    require_undoable(history,
+      std::make_unique<ResetOverridesCommand>(std::vector{instance}));
+    auto& header = document.get(instance).m_header;
+    REQUIRE(header.m_name == "Component 1 \xE2\x80\x93 3");
+    REQUIRE(!header.m_has_custom_name);
+    REQUIRE(!get_role(document, instance).m_is_name_inherited);
+  }
+
+  TEST_CASE("delete_components") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto component = make_component(history, parts.m_group);
+    auto plain = add_instance(history, component, parts.m_artboard, 200, 20);
+    auto nested = add_instance(history, component, parts.m_artboard, 0, 150);
+    auto outer_main = nested;
+    auto outer = make_component(history, outer_main);
+    auto outer_instance =
+      add_instance(history, outer, parts.m_artboard, 0, 250);
+    auto add = history.execute(std::make_unique<AddStateCommand>(
+      component, "Hover", StateKind::HOVER));
+    auto hover = static_cast<const AddStateCommand&>(*add).get_state();
+    history.execute(std::make_unique<AddStateCommand>(
+      outer, "Pressed", StateKind::NEW));
+    auto& resources = document.get_resources();
+    auto master = resources.m_components.at(component).m_master;
+    auto outer_master = resources.m_components.at(outer).m_master;
+    auto state_tree = resources.m_components.at(outer).m_states.front().m_tree;
+    auto nested_master = document.get(outer_master).m_children.front();
+    REQUIRE(can_delete_component(document, component));
+    auto recorded = require_undoable(history,
+      std::make_unique<DeleteComponentsCommand>(std::vector{component},
+        std::vector{plain, parts.m_artboard, parts.m_group}));
+    REQUIRE(history.get_undo_label() == "Delete Components");
+    REQUIRE(!resources.m_components.contains(component));
+    REQUIRE(resources.m_components.contains(outer));
+    REQUIRE(!document.find(master));
+    auto selection = *recorded->get_selection();
+    REQUIRE(selection.size() == 3);
+    REQUIRE(selection[1] == parts.m_artboard);
+    auto nested_group = document.get(outer_master).m_children.front();
+    for(auto& id : {selection[0], selection[2], nested_group}) {
+      auto& node = document.get(id);
+      REQUIRE(!get_instance_role(node));
+      REQUIRE(node.m_header.m_name == "Button");
+      REQUIRE(node.m_children.size() == 2);
+      for(auto& child : node.m_children) {
+        REQUIRE(!document.get(child).get_reference());
+      }
+    }
+    for(auto& id : {plain, parts.m_group, nested_master}) {
+      REQUIRE(!document.find(id));
+    }
+    auto state_copy = document.get(state_tree).m_children.front();
+    REQUIRE(document.get(state_copy).get_reference()->m_source ==
+      nested_group);
+    auto instance_copy = document.get(outer_instance).m_children.front();
+    REQUIRE(resolve_node(document, instance_copy).get_id() == nested_group);
+    REQUIRE(get_role(document, outer_instance).m_sync_map.at(instance_copy) ==
+      nested_group);
+    REQUIRE(std::none_of(document.get_prototype().m_interactions.begin(),
+      document.get_prototype().m_interactions.end(),
+      [&] (const auto& interaction) {
+        auto transition =
+          std::get_if<StateTransition>(&interaction.m_action);
+        return transition && transition->m_state == hover;
+      }));
+    for(auto& interaction : document.get_prototype().m_interactions) {
+      REQUIRE(document.find(interaction.m_owner));
+    }
+    REQUIRE_THROWS_AS(history.execute(std::make_unique<DeleteComponentsCommand>(
+      std::vector{component})), std::invalid_argument);
+    REQUIRE(history.undo());
+    REQUIRE(get_role(document, plain).m_component == component);
+    REQUIRE(get_role(document, nested_master).m_component == component);
+    REQUIRE(!document.find(selection[0]));
+  }
+
+  TEST_CASE("delete_single_group_component") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(parts.m_group).m_header;
+      header.m_opacity = 0.5;
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    auto history = History(document);
+    auto command = history.execute(
+      std::make_unique<MakeComponentCommand>(std::vector{parts.m_group}));
+    auto& made = static_cast<const MakeComponentCommand&>(*command);
+    auto main = made.get_main();
+    auto component = made.get_component();
+    REQUIRE(document.get(parts.m_group).m_parent == main);
+    auto transform = document.get(main).m_header.m_transform *
+      document.get(parts.m_group).m_header.m_transform;
+    require_undoable(history, std::make_unique<DeleteComponentsCommand>(
+      std::vector{component}));
+    REQUIRE(!document.find(main));
+    auto& group = document.get(parts.m_group);
+    REQUIRE(group.m_parent == parts.m_artboard);
+    REQUIRE(group.m_header.m_opacity == 0.5);
+    require_near(group.m_header.m_transform, transform);
+    REQUIRE(group.m_header.m_name == "Button");
+  }
+
+  TEST_CASE("delete_linked_component") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto component = make_component(history, parts.m_group);
+    {
+      auto transaction = Transaction(document);
+      auto definition = document.get_resources().m_components.at(component);
+      definition.m_link = ComponentLink("cloud-asset://library", "Library");
+      transaction.replace_component(definition);
+      transaction.commit();
+    }
+    REQUIRE(!can_delete_component(document, component));
+    REQUIRE_THROWS_AS(history.execute(std::make_unique<DeleteComponentsCommand>(
+      std::vector{component})), std::invalid_argument);
+  }
+
+  TEST_CASE("xd_naming") {
+    auto document = Document();
+    auto parts = build_parts(document);
+    auto history = History(document);
+    auto commands = CommandRegistry();
+    add_component_commands(commands);
+    auto command = history.execute(std::make_unique<MakeComponentCommand>(
+      std::vector{parts.m_rectangle}));
+    auto& made = static_cast<const MakeComponentCommand&>(*command);
+    auto main = made.get_main();
+    REQUIRE(document.get(main).m_header.m_name == "Background");
+    REQUIRE(document.get(parts.m_rectangle).m_header.m_name == "Background");
+    auto duplicate = [&] (const NodeId& id) {
+      return history.execute(std::make_unique<DuplicateCommand>(
+        std::vector{id}))->get_selection()->front();
+    };
+    auto first = duplicate(main);
+    auto second = duplicate(main);
+    REQUIRE(document.get(first).m_header.m_name == "Background");
+    REQUIRE(document.get(second).m_header.m_name == "Background");
+    history.execute(std::make_unique<RenameCommand>(main, "Card"));
+    REQUIRE(document.get(first).m_header.m_name == "Card");
+    REQUIRE(document.get(second).m_header.m_name == "Card");
+    history.execute(std::make_unique<RenameCommand>(first, "Custom"));
+    history.execute(std::make_unique<RenameCommand>(main, "Panel"));
+    REQUIRE(document.get(first).m_header.m_name == "Custom");
+    REQUIRE(document.get(second).m_header.m_name == "Panel");
+    REQUIRE(!commands.make(
+      "object.reset_main_state", document, std::vector{first}));
+    auto copy = document.get(first).m_children.front();
+    edit(history, copy, make_fill(copy, make_color(0, 255, 0)));
+    auto reset = commands.make(
+      "object.reset_main_state", document, std::vector{first});
+    REQUIRE(reset);
+    history.execute(std::move(reset));
+    REQUIRE(document.get(first).m_header.m_name == "Panel");
+    auto unnamed = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto header = make_header("Rectangle 3");
+      header.m_has_custom_name = false;
+      unnamed = transaction.append(
+        parts.m_artboard, header, make_rectangle_shape(10, 10));
+      transaction.commit();
+    }
+    command = history.execute(
+      std::make_unique<MakeComponentCommand>(std::vector{unnamed}));
+    auto default_main =
+      static_cast<const MakeComponentCommand&>(*command).get_main();
+    REQUIRE(document.get(default_main).m_header.m_name ==
+      "Component 1 \xE2\x80\x93 1");
+    auto instance = duplicate(default_main);
+    REQUIRE(document.get(instance).m_header.m_name ==
+      "Component 1 \xE2\x80\x93 2");
+    history.execute(std::make_unique<RenameCommand>(instance, "Foo"));
+    REQUIRE(!commands.make(
+      "object.reset_main_state", document, std::vector{instance}));
+    copy = document.get(instance).m_children.front();
+    edit(history, copy, make_fill(copy, make_color(0, 255, 0)));
+    reset = commands.make(
+      "object.reset_main_state", document, std::vector{instance});
+    REQUIRE(reset);
+    history.execute(std::move(reset));
+    REQUIRE(document.get(instance).m_header.m_name ==
+      "Component 1 \xE2\x80\x93 2");
   }
 
   TEST_CASE("restore_main_component") {

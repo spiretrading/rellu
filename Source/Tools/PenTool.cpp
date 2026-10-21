@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <cmath>
+#include <numbers>
 #include <utility>
 #include <variant>
 #include "Rellu/Commands/Bounds.hpp"
@@ -12,6 +14,9 @@
 using namespace Rellu;
 
 namespace {
+  constexpr auto ANGLE_STEP = 15.0;
+  constexpr auto LINKED_TOLERANCE = 6.0;
+
   bool is_shift(Qt::KeyboardModifiers modifiers) {
     return modifiers.testFlag(Qt::ShiftModifier);
   }
@@ -38,6 +43,31 @@ namespace {
       return inverse->map(point);
     }
     return point;
+  }
+
+  double get_degrees(Point vector) {
+    if(vector == Point(0, 0)) {
+      return 0;
+    }
+    auto degrees = std::atan2(vector.m_y, vector.m_x) * 180 / std::numbers::pi;
+    return std::fmod(degrees + 360, 360);
+  }
+
+  Point snap_handle_angle(Point handle, Point center, double linked) {
+    auto offset = handle - center;
+    if(offset == Point(0, 0)) {
+      return handle;
+    }
+    auto angle = get_degrees(offset);
+    auto snapped = std::round(angle / ANGLE_STEP) * ANGLE_STEP;
+    if(std::abs(angle - linked) < LINKED_TOLERANCE) {
+      snapped = linked;
+    }
+    auto turn = (snapped - angle) * std::numbers::pi / 180;
+    auto cosine = std::cos(turn);
+    auto sine = std::sin(turn);
+    return center + Point(offset.m_x * cosine - offset.m_y * sine,
+      offset.m_x * sine + offset.m_y * cosine);
   }
 
   NodeId get_parent(const Document& document, const NodeId& id) {
@@ -98,13 +128,13 @@ void PenTool::press(ToolContext& context, const PointerEvent& event) {
         ANCHOR_REACH) {
       return;
     }
-    if(is_shift(event.m_modifiers)) {
-      auto previous = path->m_transform.map(anchors.back().m_point);
-      point = previous + constrain_to_45_degrees(point - previous);
-    } else {
-      point = context.get_snap_service().snap_point(
-        point, SnapAxes::BOTH, event.m_modifiers);
+    auto previous = path->m_transform.map(anchors.back().m_point);
+    auto is_constrained = is_shift(event.m_modifiers);
+    if(is_constrained) {
+      point = previous + constrain_drag(point - previous);
     }
+    point = context.get_snap_service().snap_line(
+      previous, point, is_constrained, false, event.m_modifiers).m_end;
     anchors.push_back(make_anchor(to_local(*path, point)));
     m_anchor = anchors.size() - 1;
     apply(context, *path, "Add Anchor Point");
@@ -235,7 +265,7 @@ bool PenTool::is_busy() const {
 }
 
 ToolCursor PenTool::get_cursor() const {
-  return ToolCursor(CursorKind::CROSSHAIR);
+  return ToolCursor(CursorKind::PEN);
 }
 
 void PenTool::draw(const ToolContext& context, CanvasOverlay& overlay) const {
@@ -254,7 +284,7 @@ void PenTool::draw(const ToolContext& context, CanvasOverlay& overlay) const {
     auto& last = view.m_anchors.back();
     auto target = *m_hover;
     if(is_shift(m_modifiers)) {
-      target = last.m_point + constrain_to_45_degrees(target - last.m_point);
+      target = last.m_point + constrain_drag(target - last.m_point);
     }
     auto end = make_anchor(target);
     if(view.m_anchors.size() > 1 && distance(view.m_anchors.front().m_point,
@@ -373,10 +403,12 @@ void PenTool::drag(ToolContext& context, const PointerEvent& event) {
   auto center = path->m_transform.map(anchor.m_point);
   auto handle = context.to_document(event.m_position);
   if(is_shift(event.m_modifiers)) {
-    handle = center + constrain_to_45_degrees(handle - center);
-  } else {
-    handle = context.get_snap_service().snap_point(
-      handle, SnapAxes::BOTH, event.m_modifiers);
+    auto linked =
+      get_degrees(path->m_transform.map(anchor.m_in) - center) + 180;
+    if(linked > 360) {
+      linked -= 360;
+    }
+    handle = snap_handle_angle(handle, center, linked);
   }
   auto local = to_local(*path, handle);
   auto mirror = anchor.m_point * 2 - local;

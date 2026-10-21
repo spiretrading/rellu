@@ -3,8 +3,6 @@
 #include <numbers>
 #include <utility>
 #include <variant>
-#include <QPainter>
-#include <QPainterPath>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/CompositeCommand.hpp"
@@ -21,20 +19,23 @@ using namespace Rellu;
 
 namespace {
   constexpr auto SELECTION_COLOR = make_color(38, 128, 235);
+  constexpr auto GRID_COLOR = make_color(30, 203, 64);
+  constexpr auto OVERFLOW_COLOR = make_color(215, 55, 63);
   constexpr auto HANDLE_FILL = make_color(255, 255, 255);
-  constexpr auto LOCKED_COLOR = make_color(150, 150, 150);
+  constexpr auto LOCKED_COLOR = make_color(162, 162, 162);
   constexpr auto GRIP_COLOR = make_color(255, 255, 255);
   constexpr auto LINE_WIDTH = 1.0;
   constexpr auto DASH_LENGTH = 2.0;
-  constexpr auto RADIUS_DOT_RADIUS = 1.25;
-  constexpr auto BADGE_OFFSET = 3.0;
+  constexpr auto DASH_OFFSET = 0.5;
+  constexpr auto FIT_TOLERANCE = 1e-6;
+  constexpr auto RADIUS_STACKING =
+    std::array<std::size_t, 4>({2, 3, 1, 0});
+  constexpr auto RADIUS_DOT_RADIUS = 1.5;
   constexpr auto MINIMUM_SIZE = 1.0;
-  constexpr auto ANGLE_TOLERANCE = 1e-12;
   constexpr auto MAXIMUM_OUTLINES = std::size_t(1000);
   constexpr auto GRIP_INSET = 5.4;
   constexpr auto GRIP_GAP = 3.0;
   constexpr auto DISTANT_ZOOM = 0.33;
-  constexpr auto DIAGONAL_TOLERANCE = 22.5;
 
   struct Frame {
     Point m_origin;
@@ -90,20 +91,6 @@ namespace {
       const Matrix& view, const std::array<Point, 4>& corners) {
     return std::array<Point, 4>({view.map(corners[0]), view.map(corners[1]),
       view.map(corners[2]), view.map(corners[3])});
-  }
-
-  void add_dashes(
-      CanvasOverlay& overlay, Point start, Point end, Color color) {
-    auto length = distance(start, end);
-    if(length == 0) {
-      return;
-    }
-    auto direction = (end - start) / length;
-    for(auto offset = 0.0; offset < length; offset += 2 * DASH_LENGTH) {
-      overlay.m_shapes.push_back(make_overlay_line(start + direction * offset,
-        start + direction * std::min(offset + DASH_LENGTH, length),
-        LINE_WIDTH, color));
-    }
   }
 
   Size get_size(const std::array<Point, 4>& corners) {
@@ -169,13 +156,93 @@ namespace {
     return text && std::holds_alternative<AreaFrame>(text->m_frame);
   }
 
+  bool is_text_frame(const Document& document, const NodeId& id) {
+    return is_area_text(document, id) || is_auto_height_text(document, id);
+  }
+
+  std::optional<double> get_excess(const Document& document,
+      const NodeId& id, const TextMeasurer& measurer) {
+    auto node = document.find(id);
+    auto text = node ? node->get_text() : nullptr;
+    auto area = text ? std::get_if<AreaFrame>(&text->m_frame) : nullptr;
+    if(!area) {
+      return std::nullopt;
+    }
+    auto payload = *text;
+    payload.m_frame = AutoHeightFrame(area->m_size.m_width);
+    payload.m_layout = std::nullopt;
+    return measurer(payload).m_height - area->m_size.m_height;
+  }
+
+  bool is_overflowing(const Document& document, const NodeId& id,
+      const TextMeasurer& measurer) {
+    auto excess = get_excess(document, id, measurer);
+    return excess && *excess > FIT_TOLERANCE;
+  }
+
+  Handle get_adjust_handle(const Document& document, const NodeId& id) {
+    if(document.get(id).get_text()->m_is_flipped_vertically) {
+      return Handle::TOP;
+    }
+    return Handle::BOTTOM;
+  }
+
   Point get_view_point(
       const ToolContext& context, const SelectionBox& box, Handle handle) {
     return context.to_view(box.m_transform.map(box.get_point(handle)));
   }
 
+  Point get_handle_center(
+      const ToolContext& context, const SelectionBox& box, Handle handle) {
+    auto frame = get_frame(to_view(context.get_view(), box.get_corners()));
+    auto offset = get_handle_offset(handle);
+    return get_view_point(context, box, handle) +
+      frame.m_across * offset.m_x + frame.m_down * offset.m_y;
+  }
+
+  Point snap_radius_handle(const Frame& frame, Point point,
+      std::size_t corner) {
+    auto local = to_frame(frame, point);
+    auto radius = SelectionHandles::RADIUS_HANDLE_RADIUS;
+    auto snap = [&] (double value, bool is_far) {
+      if(is_far) {
+        return std::floor(value - radius) + OUTLINE_INSET + radius;
+      }
+      return std::ceil(value - radius) - OUTLINE_INSET + radius;
+    };
+    return from_frame(frame, Point(snap(local.m_x, corner == 1 || corner == 2),
+      snap(local.m_y, corner == 2 || corner == 3)));
+  }
+
   double get_angle(Point from, Point to) {
     return std::atan2(to.m_y - from.m_y, to.m_x - from.m_x);
+  }
+
+  Point get_direction(Handle handle) {
+    auto x = 0.0;
+    if(handle == Handle::TOP_LEFT || handle == Handle::LEFT ||
+        handle == Handle::BOTTOM_LEFT) {
+      x = -1;
+    } else if(handle == Handle::TOP_RIGHT || handle == Handle::RIGHT ||
+        handle == Handle::BOTTOM_RIGHT) {
+      x = 1;
+    }
+    auto y = 0.0;
+    if(handle == Handle::TOP_LEFT || handle == Handle::TOP ||
+        handle == Handle::TOP_RIGHT) {
+      y = -1;
+    } else if(handle == Handle::BOTTOM_LEFT || handle == Handle::BOTTOM ||
+        handle == Handle::BOTTOM_RIGHT) {
+      y = 1;
+    }
+    return Point(x, y);
+  }
+
+  double get_handle_angle(
+      const ToolContext& context, const SelectionBox& box, Handle handle) {
+    auto center = box.m_rect.get_center();
+    return get_angle(context.to_view(box.m_transform.map(center)),
+      context.to_view(box.m_transform.map(center + get_direction(handle))));
   }
 
   double get_corner_radius(const CornerRadii& radii, std::size_t corner) {
@@ -229,23 +296,6 @@ namespace {
       return SnapAxes::HORIZONTAL;
     }
     return SnapAxes::VERTICAL;
-  }
-
-  Point constrain_drag(Point delta) {
-    auto angle = std::atan2(delta.m_y, delta.m_x) * 180 / std::numbers::pi;
-    if(angle < 0) {
-      angle += 360;
-    }
-    if(std::abs(std::fmod(angle, 90) - 45) < DIAGONAL_TOLERANCE) {
-      auto side = std::sqrt((delta.m_x * delta.m_x + delta.m_y * delta.m_y) /
-        2);
-      auto x = angle < 90 || angle > 270 ? 1 : -1;
-      auto y = angle < 180 ? 1 : -1;
-      return Point(x * side, y * side);
-    } else if(std::abs(delta.m_x) > std::abs(delta.m_y)) {
-      return Point(delta.m_x, 0);
-    }
-    return Point(0, delta.m_y);
   }
 
   bool is_half_pixel_aligned(const Shape& shape) {
@@ -304,33 +354,38 @@ namespace {
     }
   }
 
-  std::shared_ptr<const QImage> make_lock_badge(double scale) {
-    auto side = std::max(1, static_cast<int>(
-      std::lround(SelectionHandles::LOCK_BADGE_SIZE * scale)));
-    auto image = std::make_shared<QImage>(
-      side, side, QImage::Format_RGBA8888_Premultiplied);
-    image->fill(Qt::transparent);
-    auto painter = QPainter(image.get());
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.scale(side / 12.0, side / 12.0);
-    auto grey = QColor::fromRgbF(static_cast<float>(LOCKED_COLOR.m_red),
-      static_cast<float>(LOCKED_COLOR.m_green),
-      static_cast<float>(LOCKED_COLOR.m_blue));
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(255, 255, 255));
-    painter.drawRoundedRect(QRectF(0, 0, 12, 12), 2.5, 2.5);
-    painter.setBrush(grey);
-    painter.drawRoundedRect(QRectF(2.5, 5.5, 7, 5), 1, 1);
-    auto shackle = QPainterPath();
-    shackle.moveTo(4, 5.5);
-    shackle.lineTo(4, 4);
-    shackle.arcTo(QRectF(4, 2, 4, 4), 180, -180);
-    shackle.lineTo(8, 5.5);
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(grey, 1.2));
-    painter.drawPath(shackle);
-    painter.end();
-    return image;
+  void add_radius_handle(
+      CanvasOverlay& overlay, Point center, bool is_highlighted) {
+    auto fill = HANDLE_FILL;
+    auto dot = SELECTION_COLOR;
+    if(is_highlighted) {
+      std::swap(fill, dot);
+    }
+    add_handle(overlay, center, HandleLayout::HANDLE_OUTER_RADIUS, fill,
+      SELECTION_COLOR);
+    add_handle(overlay, center, RADIUS_DOT_RADIUS, dot, Color(0, 0, 0, 0));
+  }
+
+  void add_lock_badge(CanvasOverlay& overlay, Point center) {
+    auto radius = SelectionHandles::LOCK_BADGE_RADIUS;
+    auto origin = center - Point(radius, radius);
+    auto add = [&] (const Rect& rect, double corner, Color fill,
+        Color stroke) {
+      auto shape = OverlayShape();
+      shape.m_center = origin + rect.get_center();
+      shape.m_size = rect.get_size();
+      shape.m_radius = corner;
+      shape.m_fill = fill;
+      if(!(stroke == Color(0, 0, 0, 0))) {
+        shape.m_stroke = stroke;
+        shape.m_stroke_width = LINE_WIDTH;
+      }
+      overlay.m_shapes.push_back(shape);
+    };
+    add(Rect(0, 0, 2 * radius, 2 * radius), radius, LOCKED_COLOR,
+      HANDLE_FILL);
+    add(Rect(6, 4.5, 4, 5), 2, Color(0, 0, 0, 0), HANDLE_FILL);
+    add(Rect(4.5, 7.5, 7, 5), 1, HANDLE_FILL, Color(0, 0, 0, 0));
   }
 }
 
@@ -344,14 +399,14 @@ SelectionHandles::SelectionHandles()
     m_angle(0),
     m_raw_angle(0),
     m_is_applied(false),
+    m_is_moved(false),
     m_corner(0),
     m_radius(0),
-    m_inset(0),
     m_endpoint(0),
     m_fixed(0, 0),
     m_dragged(0, 0),
     m_is_coordinate_snapped(false),
-    m_badge_scale(0) {}
+    m_is_overflowing(false) {}
 
 std::optional<SelectionBox> SelectionHandles::get_box(
     const ToolContext& context) const {
@@ -360,13 +415,12 @@ std::optional<SelectionBox> SelectionHandles::get_box(
 }
 
 std::optional<ToolCursor> SelectionHandles::hover(
-    const ToolContext& context, Point position) const {
+    const ToolContext& context, Point position) {
+  m_hover = position;
   if(find_endpoint(context, position)) {
     return ToolCursor();
   } else if(auto grab = find_grab(context, position)) {
-    auto box = *get_box(context);
-    auto angle = get_angle(context.to_view(box.get_center()),
-      get_view_point(context, box, grab->m_handle));
+    auto angle = get_handle_angle(context, *get_box(context), grab->m_handle);
     if(grab->m_action == HandleAction::RESIZE) {
       return ToolCursor(CursorKind::RESIZE, angle);
     }
@@ -375,6 +429,10 @@ std::optional<ToolCursor> SelectionHandles::hover(
     return ToolCursor();
   }
   return std::nullopt;
+}
+
+void SelectionHandles::leave() {
+  m_hover = std::nullopt;
 }
 
 bool SelectionHandles::press(ToolContext& context, const PointerEvent& event) {
@@ -389,6 +447,7 @@ bool SelectionHandles::press(ToolContext& context, const PointerEvent& event) {
   auto position = event.m_position;
   m_press_document = context.to_document(position);
   m_is_applied = false;
+  m_is_moved = false;
   if(auto endpoint = find_endpoint(context, position)) {
     begin_endpoint(context, *get_line_handles(context), *endpoint);
     return true;
@@ -414,6 +473,15 @@ bool SelectionHandles::press(ToolContext& context, const PointerEvent& event) {
       m_gesture = Gesture::ROTATE;
       m_angle = 0;
       m_raw_angle = 0;
+      auto rotations = std::vector<double>();
+      auto angles = std::vector<double>();
+      for(auto& id : m_nodes) {
+        auto transform = get_transform(document, id);
+        rotations.push_back(
+          fit_rotation(document.get(id).m_header.m_rotation, transform));
+        angles.push_back(get_rotation(transform));
+      }
+      m_rotation_drag.emplace(std::move(rotations), std::move(angles));
     }
     editor.get_history().seal();
     context.get_snap_service().begin(
@@ -424,8 +492,9 @@ bool SelectionHandles::press(ToolContext& context, const PointerEvent& event) {
     m_cursor = ToolCursor();
     m_radius_handles = get_radius_handles(context);
     m_corner = *corner;
-    m_radius = get_corner_radius(m_radius_handles->m_radii, m_corner);
-    m_inset = get_inset(context, position);
+    m_radius = std::max(
+      std::round(get_corner_radius(m_radius_handles->m_radii, m_corner)),
+      m_radius_handles->m_minimum);
     m_gesture = Gesture::RADIUS;
     editor.get_history().seal();
     return true;
@@ -434,6 +503,7 @@ bool SelectionHandles::press(ToolContext& context, const PointerEvent& event) {
 }
 
 void SelectionHandles::move(ToolContext& context, const PointerEvent& event) {
+  m_is_moved = m_gesture != Gesture::NONE;
   if(m_gesture == Gesture::RESIZE) {
     update_resize(context, event);
   } else if(m_gesture == Gesture::ROTATE) {
@@ -457,6 +527,35 @@ void SelectionHandles::cancel(ToolContext& context) {
   finish(context);
 }
 
+bool SelectionHandles::fit_text(ToolContext& context, Point position) {
+  auto& document = context.get_document();
+  auto nodes = get_movable_nodes(context);
+  if(nodes.size() != 1 ||
+      context.get_editor().get_selection().get_nodes().size() != 1 ||
+      !is_area_text(document, nodes.front())) {
+    return false;
+  }
+  auto grab = find_grab(context, position);
+  if(!grab || grab->m_action != HandleAction::RESIZE ||
+      grab->m_handle != get_adjust_handle(document, nodes.front())) {
+    return false;
+  }
+  auto excess =
+    get_excess(document, nodes.front(), context.get_text_measurer());
+  if(!excess || std::abs(*excess) <= FIT_TOLERANCE) {
+    return true;
+  }
+  auto commands = std::vector<std::unique_ptr<Command>>();
+  commands.push_back(std::make_unique<SetTextFrameCommand>(
+    nodes, TextFrameKind::AUTO_HEIGHT, context.get_text_measurer()));
+  auto& editor = context.get_editor();
+  editor.get_history().seal();
+  editor.execute(
+    std::make_unique<CompositeCommand>("Resize", std::move(commands)));
+  editor.get_history().seal();
+  return true;
+}
+
 bool SelectionHandles::is_active() const {
   return m_gesture != Gesture::NONE;
 }
@@ -472,14 +571,24 @@ ToolCursor SelectionHandles::get_cursor() const {
 
 void SelectionHandles::draw(const ToolContext& context,
     CanvasOverlay& overlay, bool has_radius_handles) const {
-  if(m_gesture == Gesture::RESIZE) {
-    draw_box(context, SelectionBox(m_resized, m_box.m_transform), overlay,
-      true);
+  if(m_is_moved &&
+      (m_gesture == Gesture::RESIZE || m_gesture == Gesture::ROTATE)) {
+    auto box = SelectionBox(m_resized, m_box.m_transform);
+    if(m_gesture == Gesture::ROTATE) {
+      box = SelectionBox(m_box.m_rect,
+        make_rotation(m_angle, m_box.get_center()) * m_box.m_transform);
+    }
+    if(m_scroll_handle) {
+      draw_box(context, box, overlay, true);
+    } else if(m_nodes.size() == 1 && is_text_frame(
+        context.get_document(), m_nodes.front())) {
+      draw_outline(context, box, overlay);
+    }
     return;
-  } else if(m_gesture == Gesture::ROTATE) {
-    draw_box(context, SelectionBox(m_box.m_rect,
-      make_rotation(m_angle, m_box.get_center()) * m_box.m_transform),
-      overlay, true);
+  } else if(m_is_moved && m_gesture == Gesture::ENDPOINT) {
+    return;
+  } else if(m_is_moved && m_gesture == Gesture::RADIUS) {
+    draw_dragged_radius(context, overlay);
     return;
   }
   update_cache(context);
@@ -488,7 +597,8 @@ void SelectionHandles::draw(const ToolContext& context,
   if(m_cached_outlines.size() > 1) {
     auto color = is_greyed ? LOCKED_COLOR : SELECTION_COLOR;
     for(auto& outline : m_cached_outlines) {
-      add_box_outline(overlay, to_view(view, outline.get_corners()), color);
+      add_box_outline(
+        overlay, inset_outline(to_view(view, outline.get_corners())), color);
     }
   }
   if(is_greyed) {
@@ -497,10 +607,15 @@ void SelectionHandles::draw(const ToolContext& context,
     }
     return;
   }
+  auto hover = find_hover(context);
   if(auto line = get_line_handles(context)) {
-    for(auto& point : line->m_points) {
-      add_handle(overlay, point, HandleLayout::HANDLE_RADIUS, HANDLE_FILL,
-        SELECTION_COLOR);
+    for(auto i = std::size_t(0); i != line->m_points.size(); ++i) {
+      auto fill = HANDLE_FILL;
+      if(hover.m_gesture == Gesture::ENDPOINT && hover.m_index == i) {
+        fill = SELECTION_COLOR;
+      }
+      add_handle(overlay, line->m_points[i],
+        HandleLayout::HANDLE_OUTER_RADIUS, fill, SELECTION_COLOR);
     }
     return;
   }
@@ -512,21 +627,45 @@ void SelectionHandles::draw(const ToolContext& context,
     return;
   }
   if(auto handles = get_radius_handles(context)) {
-    for(auto& point : handles->m_points) {
-      add_handle(overlay, point, RADIUS_HANDLE_RADIUS, HANDLE_FILL,
-        SELECTION_COLOR);
-      add_handle(overlay, point, RADIUS_DOT_RADIUS, SELECTION_COLOR,
-        Color(0, 0, 0, 0));
+    for(auto i = std::size_t(0); i != handles->m_points.size(); ++i) {
+      if(handles->m_is_shown[i]) {
+        add_radius_handle(overlay, handles->m_points[i],
+          hover.m_gesture == Gesture::RADIUS && hover.m_index == i);
+      }
     }
   }
 }
 
 void SelectionHandles::draw_outline(const ToolContext& context,
     const SelectionBox& box, CanvasOverlay& overlay) const {
+  auto& document = context.get_document();
   auto& nodes = context.get_editor().get_selection().get_nodes();
-  add_box_outline(overlay, to_view(context.get_view(), box.get_corners()),
-    SELECTION_COLOR, nodes.size() == 1 &&
-      is_area_text(context.get_document(), nodes.front()));
+  auto color = SELECTION_COLOR;
+  auto dashes = std::array<bool, 4>();
+  if(nodes.size() == 1) {
+    auto node = find_displayed(document, nodes.front());
+    auto group = node ? node->get_group() : nullptr;
+    if(group && group->m_repeat_grid) {
+      color = GRID_COLOR;
+      dashes.fill(true);
+    } else if(group && group->m_scroll_group) {
+      auto direction = group->m_scroll_group->m_direction;
+      auto is_vertical = direction != ScrollDirection::HORIZONTAL;
+      auto is_horizontal = direction != ScrollDirection::VERTICAL;
+      dashes = {is_vertical, is_horizontal, is_vertical, is_horizontal};
+    } else if(is_area_text(document, nodes.front())) {
+      if(document.get(nodes.front()).get_text()->m_is_flipped_vertically) {
+        dashes[0] = true;
+      } else {
+        dashes[2] = true;
+      }
+    }
+  }
+  auto corners = to_view(context.get_view(), box.get_corners());
+  if(nodes.size() != 1 || !is_area_text(document, nodes.front())) {
+    corners = inset_outline(corners);
+  }
+  add_box_outline(overlay, corners, color, dashes);
 }
 
 void SelectionHandles::update_cache(const ToolContext& context) const {
@@ -539,6 +678,8 @@ void SelectionHandles::update_cache(const ToolContext& context) const {
   auto& document = context.get_document();
   auto& measurer = context.get_text_measurer();
   m_cached_box = get_selection_box(document, nodes, measurer);
+  m_is_overflowing =
+    nodes.size() == 1 && is_overflowing(document, nodes.front(), measurer);
   m_cached_outlines.clear();
   if(nodes.size() > 1) {
     for(auto& id : get_top_level(document, nodes)) {
@@ -558,6 +699,55 @@ bool SelectionHandles::is_locked_selection(const ToolContext& context) const {
     std::any_of(nodes.begin(), nodes.end(), [&] (const auto& id) {
       return is_locked_node(context.get_document(), id);
     });
+}
+
+NodeId SelectionHandles::find_badged(const ToolContext& context) const {
+  if(!is_locked_selection(context)) {
+    return NodeId();
+  }
+  update_cache(context);
+  auto& document = context.get_document();
+  auto& id = context.get_editor().get_selection().get_nodes().front();
+  auto node = document.find(id);
+  if(!m_cached_box || !node || !node->m_header.m_is_locked ||
+      (!node->m_parent.is_nil() && is_locked_node(document, node->m_parent))) {
+    return NodeId();
+  }
+  auto size =
+    get_size(to_view(context.get_view(), m_cached_box->get_corners()));
+  if(size.m_width < LOCK_BADGE_SIDE && size.m_height < LOCK_BADGE_SIDE) {
+    return NodeId();
+  }
+  return id;
+}
+
+NodeId SelectionHandles::find_lock_badge(
+    const ToolContext& context, Point position) const {
+  auto id = find_badged(context);
+  if(id.is_nil() || distance(position,
+      get_view_point(context, *m_cached_box, Handle::TOP_LEFT)) >
+        LOCK_BADGE_RADIUS) {
+    return NodeId();
+  }
+  return id;
+}
+
+SelectionHandles::Hover SelectionHandles::find_hover(
+    const ToolContext& context) const {
+  if(!m_hover) {
+    return Hover(Gesture::NONE, 0);
+  } else if(auto endpoint = find_endpoint(context, *m_hover)) {
+    return Hover(Gesture::ENDPOINT, *endpoint);
+  } else if(auto grab = find_grab(context, *m_hover)) {
+    if(grab->m_action == HandleAction::RESIZE) {
+      return Hover(
+        Gesture::RESIZE, static_cast<std::size_t>(grab->m_handle));
+    }
+    return Hover(Gesture::ROTATE, static_cast<std::size_t>(grab->m_handle));
+  } else if(auto corner = find_radius_handle(context, *m_hover)) {
+    return Hover(Gesture::RADIUS, *corner);
+  }
+  return Hover(Gesture::NONE, 0);
 }
 
 HandleLayout SelectionHandles::get_layout(
@@ -603,14 +793,30 @@ std::optional<SelectionHandles::RadiusHandles>
   }
   auto handles = RadiusHandles(node->get_id(), rect, transform,
     clamp_corner_radii(rectangle->m_radii, rect.get_size()),
-    std::min(rect.m_width, rect.m_height) / 2, std::array<Point, 4>());
-  auto minimum = RADIUS_HANDLE_INSET / scale;
+    std::min(rect.m_width, rect.m_height) / 2, RADIUS_HANDLE_INSET / scale,
+    std::array<Point, 4>(), std::array<bool, 4>({true, true, true, true}));
+  auto frame =
+    get_frame(to_view(view, SelectionBox(rect, transform).get_corners()));
   for(auto i = std::size_t(0); i != handles.m_points.size(); ++i) {
     auto inset = std::min(std::max(get_corner_radius(handles.m_radii, i),
-      minimum), handles.m_limit);
-    handles.m_points[i] = context.to_view(transform.map(
-      get_corner_point(rect, i) + get_inward(i) * inset));
+      handles.m_minimum), handles.m_limit);
+    handles.m_points[i] = snap_radius_handle(frame, context.to_view(
+      transform.map(get_corner_point(rect, i) + get_inward(i) * inset)), i);
   }
+  auto& points = handles.m_points;
+  auto& shown = handles.m_is_shown;
+  auto hide_overlap = [&] (std::size_t kept, std::size_t hidden) {
+    if(shown[kept] && shown[hidden] &&
+        distance(points[kept], points[hidden]) < RADIUS_OVERLAP) {
+      shown[hidden] = false;
+    }
+  };
+  hide_overlap(0, 3);
+  hide_overlap(2, 1);
+  hide_overlap(0, 1);
+  hide_overlap(2, 3);
+  hide_overlap(0, 2);
+  hide_overlap(1, 3);
   return handles;
 }
 
@@ -620,25 +826,13 @@ std::optional<std::size_t> SelectionHandles::find_radius_handle(
   if(!handles) {
     return std::nullopt;
   }
-  for(auto i = std::size_t(0); i != handles->m_points.size(); ++i) {
-    if(distance(handles->m_points[i], position) <=
+  for(auto i : RADIUS_STACKING) {
+    if(handles->m_is_shown[i] && distance(handles->m_points[i], position) <=
         HandleLayout::HANDLE_REACH) {
       return i;
     }
   }
   return std::nullopt;
-}
-
-double SelectionHandles::get_inset(
-    const ToolContext& context, Point position) const {
-  auto inverse = invert(m_radius_handles->m_transform);
-  if(!inverse) {
-    return 0;
-  }
-  auto offset = inverse->map(context.to_document(position)) -
-    get_corner_point(m_radius_handles->m_rect, m_corner);
-  auto inward = get_inward(m_corner);
-  return (offset.m_x * inward.m_x + offset.m_y * inward.m_y) / 2;
 }
 
 std::optional<SelectionHandles::LineHandles>
@@ -773,6 +967,8 @@ void SelectionHandles::update_resize(
 void SelectionHandles::update_rotate(
     ToolContext& context, const PointerEvent& event) {
   auto center = m_box.get_center();
+  m_cursor = ToolCursor(CursorKind::ROTATE,
+    get_angle(context.to_view(center), event.m_position));
   auto start = m_press_document - center;
   auto current = context.to_document(event.m_position) - center;
   if(start == Point(0, 0) || current == Point(0, 0)) {
@@ -781,31 +977,54 @@ void SelectionHandles::update_rotate(
   auto raw = std::atan2(current.m_y, current.m_x) -
     std::atan2(start.m_y, start.m_x);
   m_raw_angle += normalize(raw - m_raw_angle);
-  auto angle = m_raw_angle;
-  if(is_shift(event.m_modifiers)) {
-    auto base = std::atan2(m_box.m_transform.m_b, m_box.m_transform.m_a);
-    angle = std::round((base + angle) / ROTATION_STEP) * ROTATION_STEP - base;
+  auto degrees = std::fmod(m_raw_angle * 180 / std::numbers::pi, 360);
+  if(degrees < 0) {
+    degrees += 360;
   }
-  auto step = angle - m_angle;
-  if(std::abs(step) < ANGLE_TOLERANCE) {
+  if(!m_rotation_drag) {
     return;
   }
+  m_rotation_drag->update(degrees, is_shift(event.m_modifiers));
+  auto angle = m_rotation_drag->get_turn() * std::numbers::pi / 180;
+  auto step = angle - m_angle;
   auto& document = context.get_document();
+  auto command = std::unique_ptr<TransformCommand>();
   if(m_nodes.size() == 1 && is_repeat_grid(document, m_nodes.front())) {
-    context.get_editor().merge(std::make_unique<TransformCommand>(
-      m_nodes, make_rotation(step, center), "Rotate Repeat Grid"));
+    command = std::make_unique<TransformCommand>(m_nodes,
+      make_rotation(step, center), "Rotate Repeat Grid",
+      TransformMode::ROTATE);
+    command->set_rotations(m_rotation_drag->get_rotations());
   } else {
-    context.get_editor().merge(make_rotate_command(m_nodes, step, center));
+    command = make_rotate_command(
+      m_nodes, step, center, m_rotation_drag->get_rotations());
   }
+  auto& fractions = m_rotation_drag->get_fractions();
+  if(!m_is_applied && std::any_of(fractions.begin(), fractions.end(),
+      [] (const auto& fraction) { return fraction != 0; })) {
+    auto adjustments = std::vector<Matrix>();
+    for(auto fraction : fractions) {
+      adjustments.push_back(
+        make_rotation(-fraction * std::numbers::pi / 180, center));
+    }
+    command->set_adjustments(std::move(adjustments));
+  }
+  context.get_editor().merge(std::move(command));
   m_angle = angle;
   m_is_applied = true;
 }
 
 void SelectionHandles::update_radius(
     ToolContext& context, const PointerEvent& event) {
-  auto radius = std::clamp(
-    std::round(m_radius + get_inset(context, event.m_position) - m_inset),
-    0.0, m_radius_handles->m_limit);
+  auto inverse = invert(m_radius_handles->m_transform);
+  if(!inverse) {
+    return;
+  }
+  auto offset = inverse->map(context.to_document(event.m_position)) -
+    inverse->map(m_press_document);
+  auto inward = get_inward(m_corner);
+  auto radius = std::round(std::min(m_radius_handles->m_limit,
+    std::max(m_radius + std::max(offset.m_x * inward.m_x,
+      offset.m_y * inward.m_y), 0.0)));
   auto nodes = std::vector{m_radius_handles->m_id};
   if(is_alt(event.m_modifiers)) {
     context.get_editor().merge(std::make_unique<SetCornerRadiusCommand>(
@@ -844,15 +1063,11 @@ void SelectionHandles::update_endpoint(
   }
   auto is_horizontal = start.m_y == end.m_y;
   auto is_vertical = start.m_x == end.m_x;
-  auto global_start = m_parent_transform.map(start);
-  auto global_end = m_parent_transform.map(end);
-  if(!is_constrained) {
-    global_end = context.get_snap_service().snap_point(
-      global_end, SnapAxes::BOTH, event.m_modifiers);
-    if(is_mirrored) {
-      global_start = 2 * m_parent_transform.map(anchor) - global_end;
-    }
-  }
+  auto ends = context.get_snap_service().snap_line(
+    m_parent_transform.map(start), m_parent_transform.map(end),
+    is_constrained, is_mirrored, event.m_modifiers);
+  auto global_start = ends.m_start;
+  auto global_end = ends.m_end;
   auto is_half_pixel = !m_is_coordinate_snapped &&
     is_half_pixel_aligned(*node->get_shape());
   if(is_mirrored) {
@@ -929,6 +1144,12 @@ void SelectionHandles::draw_box(const ToolContext& context,
   auto corners = to_view(context.get_view(), box.get_corners());
   auto layout = get_layout(context, box);
   auto frame = get_frame(corners);
+  auto hover = find_hover(context);
+  auto filled = std::optional<Handle>();
+  if(m_is_overflowing && m_gesture == Gesture::NONE) {
+    filled = get_adjust_handle(context.get_document(),
+      context.get_editor().get_selection().get_nodes().front());
+  }
   for(auto handle : HANDLES) {
     if(!layout.is_resizer(handle)) {
       continue;
@@ -938,35 +1159,65 @@ void SelectionHandles::draw_box(const ToolContext& context,
         add_scroll_handle(overlay, frame, handle, context.get_zoom());
       }
     } else {
-      add_handle(overlay, get_view_point(context, box, handle),
-        HandleLayout::HANDLE_RADIUS, HANDLE_FILL, SELECTION_COLOR);
+      auto center = get_handle_center(context, box, handle);
+      auto is_hovered = hover.m_gesture == Gesture::RESIZE &&
+        hover.m_index == static_cast<std::size_t>(handle);
+      auto stroke = SELECTION_COLOR;
+      if(handle == filled) {
+        stroke = OVERFLOW_COLOR;
+      }
+      auto fill = HANDLE_FILL;
+      if(is_hovered) {
+        fill = stroke;
+      }
+      add_handle(
+        overlay, center, HandleLayout::HANDLE_OUTER_RADIUS, fill, stroke);
+      if(handle == filled) {
+        auto dot = OVERFLOW_COLOR;
+        if(is_hovered) {
+          dot = HANDLE_FILL;
+        }
+        add_handle(
+          overlay, center, RADIUS_DOT_RADIUS, dot, Color(0, 0, 0, 0));
+      }
     }
   }
+}
+
+void SelectionHandles::draw_dragged_radius(
+    const ToolContext& context, CanvasOverlay& overlay) const {
+  auto node = context.get_document().find(m_radius_handles->m_id);
+  auto shape = node ? node->get_shape() : nullptr;
+  auto rectangle =
+    shape ? std::get_if<RectangleShape>(&shape->m_geometry) : nullptr;
+  if(!rectangle) {
+    return;
+  }
+  auto& rect = rectangle->m_bounds;
+  auto radius = get_corner_radius(
+    clamp_corner_radii(rectangle->m_radii, rect.get_size()), m_corner);
+  auto& transform = m_radius_handles->m_transform;
+  auto frame = get_frame(to_view(context.get_view(),
+    SelectionBox(rect, transform).get_corners()));
+  add_radius_handle(overlay, snap_radius_handle(frame, context.to_view(
+    transform.map(get_corner_point(rect, m_corner) +
+      get_inward(m_corner) * radius)), m_corner), true);
 }
 
 void SelectionHandles::draw_locked(const ToolContext& context,
     const SelectionBox& box, CanvasOverlay& overlay) const {
   auto corners = to_view(context.get_view(), box.get_corners());
-  add_box_outline(overlay, corners, LOCKED_COLOR);
+  add_box_outline(overlay, inset_outline(corners), LOCKED_COLOR);
   auto layout = get_locked_handle_layout(get_size(corners));
   for(auto handle : HANDLES) {
     if(layout.is_resizer(handle)) {
-      add_handle(overlay, get_view_point(context, box, handle),
-        LOCKED_HANDLE_RADIUS, LOCKED_COLOR, Color(0, 0, 0, 0));
+      add_handle(overlay, get_handle_center(context, box, handle),
+        LOCKED_HANDLE_RADIUS, LOCKED_COLOR, HANDLE_FILL);
     }
   }
-  auto scale = context.get_scale();
-  if(!(scale > 0)) {
-    return;
+  if(!find_badged(context).is_nil()) {
+    add_lock_badge(overlay, get_view_point(context, box, Handle::TOP_LEFT));
   }
-  if(!m_badge || m_badge_scale != scale) {
-    m_badge = make_lock_badge(scale);
-    m_badge_scale = scale;
-  }
-  auto corner = get_view_point(context, box, Handle::TOP_LEFT);
-  auto offset = LOCK_BADGE_SIZE + BADGE_OFFSET;
-  overlay.m_images.push_back(
-    OverlayImage(m_badge, corner - Point(offset, offset)));
 }
 
 std::vector<NodeId> Rellu::get_movable_nodes(const ToolContext& context) {
@@ -994,7 +1245,8 @@ bool Rellu::is_locked_node(const Document& document, const NodeId& id) {
 }
 
 void Rellu::add_box_outline(CanvasOverlay& overlay,
-    const std::array<Point, 4>& corners, Color color, bool is_bottom_dashed) {
+    const std::array<Point, 4>& corners, Color color,
+    const std::array<bool, 4>& dashes) {
   for(auto i = std::size_t(0); i != corners.size(); ++i) {
     auto start = corners[i];
     auto end = corners[(i + 1) % corners.size()];
@@ -1002,12 +1254,39 @@ void Rellu::add_box_outline(CanvasOverlay& overlay,
     if(length == 0) {
       continue;
     }
-    if(is_bottom_dashed && i == 2) {
-      add_dashes(overlay, start, end, color);
+    if(dashes[i]) {
+      add_dashed_line(overlay, start, end, color);
       continue;
     }
     auto extension = (end - start) * (LINE_WIDTH / 2 / length);
     overlay.m_shapes.push_back(make_overlay_line(
       start - extension, end + extension, LINE_WIDTH, color));
+  }
+}
+
+std::array<Point, 4> Rellu::inset_outline(
+    const std::array<Point, 4>& corners) {
+  auto frame = get_frame(corners);
+  auto x = std::min(OUTLINE_INSET, frame.m_size.m_width / 2);
+  auto y = std::min(OUTLINE_INSET, frame.m_size.m_height / 2);
+  auto across = frame.m_across * x;
+  auto down = frame.m_down * y;
+  return std::array<Point, 4>({corners[0] + across + down,
+    corners[1] - across + down, corners[2] - across - down,
+    corners[3] + across - down});
+}
+
+void Rellu::add_dashed_line(
+    CanvasOverlay& overlay, Point start, Point end, Color color) {
+  auto length = distance(start, end);
+  if(length == 0) {
+    return;
+  }
+  auto direction = (end - start) / length;
+  for(auto offset = DASH_OFFSET; offset < length;
+      offset += 2 * DASH_LENGTH) {
+    overlay.m_shapes.push_back(make_overlay_line(start + direction * offset,
+      start + direction * std::min(offset + DASH_LENGTH, length),
+      LINE_WIDTH, color));
   }
 }

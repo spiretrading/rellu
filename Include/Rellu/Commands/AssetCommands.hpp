@@ -16,6 +16,12 @@ namespace Rellu {
   inline const auto CHARACTER_STYLE_SECTION =
     std::string("groupCharacterStyles");
 
+  /**
+   * The id of the section of the document's assets listing components, each
+   * listed as the id of its master.
+   */
+  inline const auto COMPONENT_SECTION = std::string("groupComponents");
+
   /** An entry listed within a section or group of the document's assets. */
   struct AssetEntry {
 
@@ -48,9 +54,11 @@ namespace Rellu {
 
   /**
    * Returns the id of the section listing an asset: COLOR_SECTION,
-   * CHARACTER_STYLE_SECTION, or empty if there is no such asset.
+   * CHARACTER_STYLE_SECTION, COMPONENT_SECTION, or empty if there is no
+   * such asset.
    * @param resources The resources holding the asset.
-   * @param asset The id of a color swatch or character style.
+   * @param asset The id of a color swatch, character style or component's
+   *        master.
    */
   std::string find_section(const Resources& resources, const NodeId& asset);
 
@@ -58,10 +66,46 @@ namespace Rellu {
    * Returns the id of the group directly holding an asset, its section's
    * id if it is in no group.
    * @param resources The resources holding the asset.
-   * @param asset The id of a color swatch or character style.
+   * @param asset The id of a color swatch, character style or component's
+   *        master.
    */
   std::string find_asset_group(
     const Resources& resources, const NodeId& asset);
+
+  /**
+   * Returns the names of the groups holding an asset, outermost first, as
+   * Adobe XD's Layers panel shows them before a component's name.
+   * @param resources The resources holding the asset.
+   * @param asset The id of a color swatch, character style or component's
+   *        master.
+   */
+  std::vector<std::string> get_group_path(
+    const Resources& resources, const NodeId& asset);
+
+  /**
+   * Files an asset into the group of its section a path of group names
+   * leads to, creating the groups missing, as Adobe XD does for a component
+   * named with slashes: an asset not already in that group is ordered first
+   * in it, and the groups it leaves that become empty are removed.
+   * @param document The document holding the asset.
+   * @param transaction The open transaction on the <i>document</i>.
+   * @param asset The id of a color swatch, character style or component's
+   *        master.
+   * @param path The names of the groups, outermost first, or empty for the
+   *        section.
+   */
+  void file_asset(const Document& document, Transaction& transaction,
+    const NodeId& asset, const std::vector<std::string>& path);
+
+  /**
+   * Orders the assets of a section that are in no group first in the
+   * section, as Adobe XD does for assets added.
+   * @param document The document holding the assets.
+   * @param transaction The open transaction on the <i>document</i>.
+   * @param section The section's id.
+   */
+  void place_new_assets(const Document& document, Transaction& transaction,
+    const std::string& section);
 
   /**
    * Lists the groups and assets directly within a section or group in the
@@ -100,7 +144,8 @@ namespace Rellu {
 
       /**
        * Constructs a GroupAssetsCommand.
-       * @param assets The ids of the color swatches or character styles.
+       * @param assets The ids of the color swatches, character styles or
+       *        components' masters.
        */
       explicit GroupAssetsCommand(std::vector<NodeId> assets) noexcept;
 
@@ -124,7 +169,8 @@ namespace Rellu {
 
       /**
        * Constructs a MoveAssetsCommand.
-       * @param assets The ids of the color swatches or character styles.
+       * @param assets The ids of the color swatches, character styles or
+       *        components' masters.
        * @param group The id of the group, or of the section.
        */
       MoveAssetsCommand(std::vector<NodeId> assets, std::string group) noexcept;
@@ -186,12 +232,24 @@ namespace Rellu {
       RemoveAssetGroupCommand(
         std::string group, bool is_content_deleted) noexcept;
 
+      /**
+       * Constructs a RemoveAssetGroupCommand deleting the group's content.
+       * @param group The group's id.
+       * @param selection The nodes selected, selected afterwards as
+       *        remap_selection does when components are deleted.
+       */
+      RemoveAssetGroupCommand(
+        std::string group, std::vector<NodeId> selection) noexcept;
+
       std::string get_label() const override;
       void apply(const Document& document, Transaction& transaction) override;
+      std::optional<std::vector<NodeId>> get_selection() const override;
 
     private:
       std::string m_group;
       bool m_is_content_deleted;
+      std::vector<NodeId> m_selection;
+      std::optional<std::vector<NodeId>> m_remapped;
   };
 
   /** Renames a group of assets, labelled Rename Asset Group. */

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Geometry/Rect.hpp"
 #include "Rellu/Tools/ArtboardGrids.hpp"
 
@@ -59,8 +60,12 @@ namespace {
   }
 }
 
-void Rellu::draw_artboard_grids(const Document& document, const Matrix& view,
-    Size size, CanvasOverlay& overlay) {
+void Rellu::draw_artboard_grids(const Document& document,
+    const GridSettings& settings, const Matrix& view, Size size,
+    CanvasOverlay& overlay) {
+  if(!is_grid_visible(settings)) {
+    return;
+  }
   auto bounds = Rect(0, 0, size.m_width, size.m_height);
   for(auto& id : document.get_canvas()) {
     auto node = document.find(id);
@@ -68,15 +73,15 @@ void Rellu::draw_artboard_grids(const Document& document, const Matrix& view,
       continue;
     }
     auto artboard = node->get_artboard();
-    if(!artboard || !artboard->m_layout_grid ||
-        !artboard->m_layout_grid->m_is_visible ||
-        !view.map(artboard->m_frame).intersects(bounds)) {
+    if(!artboard || !view.map(artboard->m_frame).intersects(bounds)) {
       continue;
     }
-    auto& grid = *artboard->m_layout_grid;
-    if(grid.m_type == GridType::LAYOUT) {
+    auto grid = artboard->m_layout_grid.value_or(make_initial_grid(
+      *artboard, document.get_resources().m_grid_defaults));
+    if(settings.m_is_layout_visible) {
       draw_columns(grid, artboard->m_frame, view, overlay);
-    } else {
+    }
+    if(settings.m_is_square_visible) {
       draw_squares(grid, artboard->m_frame, view, overlay);
     }
   }

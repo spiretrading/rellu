@@ -158,25 +158,21 @@ TEST_SUITE("GradientHandles") {
     REQUIRE(image.pixelColor(110, 35).alpha() != 0);
   }
 
-  TEST_CASE("stop_cycling") {
+  TEST_CASE("unhandled_keys") {
     for(auto& geometry : {GradientGeometry(LinearGradient()),
         GradientGeometry(RadialGradient()),
         GradientGeometry(AngularGradient())}) {
       auto fill = make_fill(geometry);
       fill.m_stops.insert(
         fill.m_stops.begin() + 1, GradientStop(0.5, Color(0, 1, 0, 1)));
-      auto edit = press_key(fill, 0, Qt::Key_Tab);
-      REQUIRE(edit.m_is_handled);
-      REQUIRE(edit.m_stop == 1);
-      REQUIRE(!edit.m_fill);
-      REQUIRE(press_key(fill, 2, Qt::Key_Tab).m_stop == 0);
-      REQUIRE(
-        press_key(fill, 0, Qt::Key_Backtab, Qt::ShiftModifier).m_stop == 2);
-      REQUIRE(press_key(fill, 2, Qt::Key_Tab, Qt::ShiftModifier).m_stop == 1);
+      REQUIRE(!press_key(fill, 0, Qt::Key_Tab).m_is_handled);
+      REQUIRE(!press_key(fill, 2, Qt::Key_Tab).m_is_handled);
+      REQUIRE(!press_key(
+        fill, 0, Qt::Key_Backtab, Qt::ShiftModifier).m_is_handled);
       REQUIRE(!press_key(fill, 0, Qt::Key_A).m_is_handled);
     }
     REQUIRE(!press_key(make_fill(RadialGradient(Point(0.5, 0.5), 0.5,
-      Point(0.2, 0.5))), 0, Qt::Key_Tab).m_is_handled);
+      Point(0.2, 0.5))), 0, Qt::Key_Delete).m_is_handled);
   }
 
   TEST_CASE("stop_deletion") {
@@ -255,6 +251,22 @@ TEST_SUITE("GradientHandles") {
     edit = press_key(inner, 0, Qt::Key_Right);
     REQUIRE(edit.m_stop == 1);
     require_offsets(*edit.m_fill, {0, 0.21, 0.8, 1});
+  }
+
+  TEST_CASE("nudge") {
+    auto fill = make_fill(LinearGradient(Point(0, 0.5), Point(1, 0.5)));
+    fill.m_stops.insert(
+      fill.m_stops.begin() + 1, GradientStop(0.5, Color(0, 1, 0, 1)));
+    auto bounds = Rect(0, 0, 100, 50);
+    auto edit = GradientHandles::nudge(fill, bounds, 1, 1, Point(4, 0));
+    REQUIRE(edit.m_is_handled);
+    REQUIRE(edit.m_stop == 1);
+    require_offsets(*edit.m_fill, {0, 0.54, 1});
+    require_offsets(
+      *GradientHandles::nudge(fill, bounds, 2, 1, Point(-6, 0)).m_fill,
+      {0, 0.47, 1});
+    REQUIRE(!GradientHandles::nudge(make_fill(RadialGradient(Point(0.5, 0.5),
+      0.5, Point(0.2, 0.5))), bounds, 1, 0, Point(1, 0)).m_is_handled);
   }
 
   TEST_CASE("radial_nudge") {

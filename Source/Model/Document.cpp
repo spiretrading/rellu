@@ -89,6 +89,10 @@ const Prototype& Document::get_prototype() const {
   return m_prototype;
 }
 
+bool Document::is_publishing() const {
+  return m_is_publishing;
+}
+
 bool Document::can_undo() const {
   return !m_undo.empty();
 }

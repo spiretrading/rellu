@@ -1,6 +1,9 @@
 #include <array>
 #include <vector>
 #include <doctest/doctest.h>
+#include <QCoreApplication>
+#include <QFocusEvent>
+#include <QKeyEvent>
 #include "Rellu/Ui/AppBar.hpp"
 
 using namespace Rellu;
@@ -38,6 +41,41 @@ TEST_SUITE("AppBar") {
     REQUIRE(bar.get_zoom_field().text() == "200%");
     REQUIRE(AppBar::ZOOM_PRESETS ==
       std::to_array({0.25, 0.33, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0}));
+  }
+
+  TEST_CASE("zoom_field_focus") {
+    auto bar = AppBar();
+    auto zooms = std::vector<double>();
+    bar.set_zoom_handler([&] (auto zoom) {
+      zooms.push_back(zoom);
+    });
+    auto releases = 0;
+    bar.set_release_handler([&] {
+      ++releases;
+    });
+    bar.set_zoom(0.306);
+    auto& field = bar.get_zoom_field();
+    auto focus_in = QFocusEvent(QEvent::FocusIn, Qt::MouseFocusReason);
+    QCoreApplication::sendEvent(&field, &focus_in);
+    QCoreApplication::processEvents();
+    REQUIRE(field.text() == "30.6");
+    REQUIRE(field.selectedText() == "30.6");
+    field.setText("50");
+    auto enter = QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(&field, &enter);
+    REQUIRE(!zooms.empty());
+    REQUIRE(zooms.back() == 0.5);
+    REQUIRE(releases == 1);
+    auto focus_out = QFocusEvent(QEvent::FocusOut, Qt::OtherFocusReason);
+    QCoreApplication::sendEvent(&field, &focus_out);
+    QCoreApplication::processEvents();
+    REQUIRE(field.text() == "50%");
+    field.setText("75");
+    auto escape = QKeyEvent(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(&field, &escape);
+    REQUIRE(field.text() == "50%");
+    REQUIRE(zooms.back() == 0.5);
+    REQUIRE(releases == 2);
   }
 
   TEST_CASE("workspaces") {

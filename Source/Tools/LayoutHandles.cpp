@@ -1,22 +1,28 @@
 #include <algorithm>
-#include <array>
 #include <cmath>
+#include <format>
+#include <memory>
 #include <numbers>
+#include <string>
 #include <utility>
 #include <vector>
+#include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/Layouts.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Commands/StackCommands.hpp"
 #include "Rellu/Tools/LayoutHandles.hpp"
+#include "Rellu/Tools/SelectionBox.hpp"
+#include "Rellu/Tools/SmartGuides.hpp"
 
 using namespace Rellu;
 
 namespace {
-  constexpr auto GRID_COLOR = make_color(56, 181, 74);
-  constexpr auto GAP_FILL = make_color(255, 46, 186, 0.3);
-  constexpr auto GAP_STROKE = make_color(255, 46, 186);
+  constexpr auto GRID_COLOR = make_color(30, 203, 64);
+  constexpr auto HANDLE_FILL = make_color(255, 255, 255);
+  constexpr auto GAP_FILL = make_color(255, 74, 225, 0.4);
+  constexpr auto PALE_GAP_FILL = make_color(255, 74, 225, 0.2);
+  constexpr auto GAP_STROKE = make_color(255, 74, 225);
   constexpr auto LINE_WIDTH = 1.0;
-  constexpr auto DASH = 4.0;
   constexpr auto MINIMUM_SIZE = 1.0;
 
   using Slot = std::pair<NodeId, Rect>;
@@ -108,20 +114,119 @@ namespace {
     return shape;
   }
 
-  void add_dashes(CanvasOverlay& overlay, Point start, Point end) {
-    auto length = distance(start, end);
-    if(length == 0) {
+  struct Frame {
+    Point m_scale;
+    Size m_size;
+  };
+
+  Frame get_frame(const Matrix& matrix, Size size) {
+    auto origin = matrix.map(Point(0, 0));
+    auto scale = Point(distance(origin, matrix.map(Point(1, 0))),
+      distance(origin, matrix.map(Point(0, 1))));
+    return Frame(scale,
+      Size(size.m_width * scale.m_x, size.m_height * scale.m_y));
+  }
+
+  Rect to_local(const Frame& frame, const Rect& rect) {
+    if(!(frame.m_scale.m_x > 0) || !(frame.m_scale.m_y > 0)) {
+      return Rect(0, 0, 0, 0);
+    }
+    return Rect(rect.m_x / frame.m_scale.m_x, rect.m_y / frame.m_scale.m_y,
+      rect.m_width / frame.m_scale.m_x, rect.m_height / frame.m_scale.m_y);
+  }
+
+  void add_gap_sides(CanvasOverlay& overlay, const Matrix& matrix,
+      const Rect& gap, bool is_column) {
+    auto frame = get_frame(matrix, gap.get_size());
+    if(!(frame.m_scale.m_x > 0) || !(frame.m_scale.m_y > 0)) {
       return;
     }
-    auto direction = (end - start) * (1 / length);
-    for(auto offset = 0.0; offset < length; offset += 2 * DASH) {
-      auto stop = std::min(offset + DASH, length);
-      overlay.m_shapes.push_back(make_overlay_line(start + direction * offset,
-        start + direction * stop, LINE_WIDTH, GRID_COLOR));
+    auto offset = Point(LINE_WIDTH / 2 / frame.m_scale.m_x,
+      LINE_WIDTH / 2 / frame.m_scale.m_y);
+    auto add = [&] (Point start, Point end) {
+      overlay.m_shapes.push_back(make_overlay_line(
+        matrix.map(start), matrix.map(end), LINE_WIDTH, GAP_STROKE));
+    };
+    if(is_column) {
+      auto left = gap.get_left() - offset.m_x;
+      auto right = gap.get_right() + offset.m_x;
+      add(Point(left, gap.get_top()), Point(left, gap.get_bottom()));
+      add(Point(right, gap.get_top()), Point(right, gap.get_bottom()));
+    } else {
+      auto top = gap.get_top() - offset.m_y;
+      auto bottom = gap.get_bottom() + offset.m_y;
+      add(Point(gap.get_left(), top), Point(gap.get_right(), top));
+      add(Point(gap.get_left(), bottom), Point(gap.get_right(), bottom));
     }
   }
 
+  std::string format_number(double value) {
+    if(value == std::floor(value)) {
+      return std::format("{}", static_cast<long long>(value));
+    }
+    return std::format("{}", value);
+  }
+
+  std::string format_spacing(double spacing) {
+    if(spacing != std::floor(spacing)) {
+      return std::format("{:.2f}", spacing);
+    }
+    return std::format("{}", static_cast<long long>(spacing));
+  }
+
+  int get_gap_count(const RepeatGrid& grid, bool is_column, double scale) {
+    auto count =
+      std::max((is_column ? grid.m_column_count : grid.m_row_count) - 1, 0);
+    auto spacing = is_column ? grid.m_column_spacing : grid.m_row_spacing;
+    auto pitch = (is_column ? grid.m_cell_size.m_width :
+      grid.m_cell_size.m_height) + spacing;
+    auto room = SmartGuides::FONT_SIZE;
+    if(is_column) {
+      room *= static_cast<double>(format_number(spacing).size()) / 2;
+    }
+    if(pitch * scale < room) {
+      return std::min(count, 1);
+    }
+    return count;
+  }
+
+  bool is_activation_key(int key) {
+    return key == Qt::Key_S || key == Qt::Key_QuoteLeft ||
+      key == Qt::Key_AsciiTilde;
+  }
+
+  std::shared_ptr<const QImage> make_label(
+      const ToolContext& context, const std::string& text) {
+    auto scale = context.get_scale();
+    if(!(scale > 0)) {
+      return nullptr;
+    }
+    return make_distance_label(text, scale);
+  }
+
+  void add_label(const ToolContext& context, CanvasOverlay& overlay,
+      const std::shared_ptr<const QImage>& label, const Matrix& matrix,
+      const Rect& gap, bool is_above) {
+    if(!label) {
+      return;
+    }
+    auto size = Point(label->width(), label->height()) / context.get_scale();
+    auto center = Point(0, 0);
+    if(is_above) {
+      center = matrix.map(Point(gap.get_center().m_x, gap.get_top())) -
+        Point(0, SmartGuides::LABEL_OFFSET + SmartGuides::FONT_ASCENT / 2);
+    } else {
+      center = matrix.map(Point(gap.get_left(), gap.get_center().m_y)) -
+        Point(SmartGuides::LABEL_OFFSET + size.m_x / 2 -
+          SmartGuides::LABEL_PADDING, 0);
+    }
+    overlay.m_images.push_back(OverlayImage(label, center - size / 2));
+  }
+
   std::pair<double, double> widen(double start, double end, double reach) {
+    if(start > end) {
+      std::swap(start, end);
+    }
     if(end - start >= reach) {
       return std::pair(start, end);
     }
@@ -131,11 +236,15 @@ namespace {
 }
 
 LayoutHandles::LayoutHandles()
-  : m_target(Part::NONE, 0),
-    m_hover(Part::NONE, 0),
+  : m_target(Part::NONE, 0, NodeId()),
+    m_hover(Part::NONE, 0, NodeId()),
     m_press(0, 0),
     m_initial(0),
-    m_is_applied(false) {}
+    m_spacing(0),
+    m_is_applied(false),
+    m_is_all(false),
+    m_is_activated(false),
+    m_is_shift(false) {}
 
 NodeId LayoutHandles::get_grid(const ToolContext& context) const {
   auto id = get_selected(context);
@@ -145,25 +254,50 @@ NodeId LayoutHandles::get_grid(const ToolContext& context) const {
   return id;
 }
 
-NodeId LayoutHandles::get_stack(const ToolContext& context) const {
-  auto id = get_selected(context);
-  if(id.is_nil() || !find_stack(context.get_document(), id)) {
-    return NodeId();
+std::vector<NodeId> LayoutHandles::get_stacks(
+    const ToolContext& context) const {
+  auto& document = context.get_document();
+  auto stacks = std::vector<NodeId>();
+  auto selected = get_selected(context);
+  if(m_is_activated && !selected.is_nil() && find_stack(document, selected)) {
+    stacks.push_back(selected);
   }
-  return id;
+  auto& container = context.get_editor().get_context().get_container();
+  if(!container.is_nil() && container != selected &&
+      find_stack(document, container) && !is_locked(document, container)) {
+    stacks.push_back(container);
+  }
+  return stacks;
 }
 
-std::optional<ToolCursor> LayoutHandles::hover(
-    const ToolContext& context, Point position) {
-  auto target = find(context, position);
-  m_hover = target.value_or(Target(Part::NONE, 0));
+bool LayoutHandles::key_press(const KeyEvent& event) {
+  if(!is_activation_key(event.m_key) || m_is_activated) {
+    return false;
+  }
+  m_is_activated = true;
+  return true;
+}
+
+bool LayoutHandles::key_release(const KeyEvent& event) {
+  if(!is_activation_key(event.m_key) || event.m_is_repeat ||
+      !m_is_activated) {
+    return false;
+  }
+  m_is_activated = false;
+  return true;
+}
+
+std::optional<ToolCursor> LayoutHandles::hover(const ToolContext& context,
+    Point position, Qt::KeyboardModifiers modifiers, bool is_handle_hit) {
+  m_is_shift = modifiers.testFlag(Qt::ShiftModifier);
+  auto target = find(context, position, is_handle_hit);
+  m_hover = target.value_or(Target(Part::NONE, 0, NodeId()));
   if(!target) {
     return std::nullopt;
   }
-  auto id = get_subject(context);
-  auto matrix = get_view_transform(context, id);
+  auto matrix = get_view_transform(context, target->m_node);
   auto angle = std::atan2(matrix.m_b, matrix.m_a);
-  auto stack = find_stack(context.get_document(), id);
+  auto stack = find_stack(context.get_document(), target->m_node);
   if(target->m_part == Part::BOTTOM || target->m_part == Part::ROW_GAP ||
       (target->m_part == Part::STACK_GAP && stack &&
         stack->m_orientation == Orientation::VERTICAL)) {
@@ -172,23 +306,25 @@ std::optional<ToolCursor> LayoutHandles::hover(
   return ToolCursor(CursorKind::RESIZE, angle);
 }
 
-bool LayoutHandles::press(ToolContext& context, const PointerEvent& event) {
+bool LayoutHandles::press(
+    ToolContext& context, const PointerEvent& event, bool is_handle_hit) {
   if(event.m_button != Qt::LeftButton) {
     return false;
   }
-  auto target = find(context, event.m_position);
+  auto target = find(context, event.m_position, is_handle_hit);
   if(!target) {
     return false;
   }
-  m_node = get_subject(context);
-  auto inverse = invert(get_view_transform(context, m_node));
+  auto inverse = invert(get_view_transform(context, target->m_node));
   if(!inverse) {
     return false;
   }
   auto& document = context.get_document();
+  m_node = target->m_node;
   m_target = *target;
   m_press = inverse->map(event.m_position);
   m_item = NodeId();
+  m_is_all = false;
   if(m_target.m_part == Part::STACK_GAP) {
     auto slots = get_slots(context, m_node);
     m_item = slots[static_cast<std::size_t>(m_target.m_index)].first;
@@ -206,6 +342,7 @@ bool LayoutHandles::press(ToolContext& context, const PointerEvent& event) {
       m_initial = grid.m_row_spacing;
     }
   }
+  m_spacing = m_initial;
   m_is_applied = false;
   context.get_editor().get_history().seal();
   return true;
@@ -217,6 +354,7 @@ void LayoutHandles::move(ToolContext& context, const PointerEvent& event) {
   if(!inverse || m_target.m_part == Part::NONE) {
     return;
   }
+  m_is_shift = event.m_modifiers.testFlag(Qt::ShiftModifier);
   auto delta = inverse->map(event.m_position) - m_press;
   auto& editor = context.get_editor();
   if(m_target.m_part == Part::STACK_GAP) {
@@ -226,13 +364,29 @@ void LayoutHandles::move(ToolContext& context, const PointerEvent& event) {
     }
     auto offset = stack->m_orientation == Orientation::VERTICAL ?
       delta.m_y : delta.m_x;
-    auto margin = std::round(m_initial + offset);
-    if(margin == get_stack_margin(document, *stack, m_item)) {
+    auto spacing =
+      std::clamp(std::round(m_initial + offset), 0.0, MAXIMUM_SPACING);
+    if(spacing == m_spacing && m_is_shift == m_is_all) {
       return;
     }
-    editor.merge(std::make_unique<SetStackSpacingCommand>(
-      m_node, m_item, margin, context.get_text_measurer()));
-    m_is_applied = true;
+    if(m_is_applied) {
+      editor.undo();
+      m_is_applied = false;
+    }
+    m_spacing = spacing;
+    m_is_all = m_is_shift;
+    auto commands = std::vector<std::unique_ptr<Command>>();
+    if(m_is_all) {
+      commands.push_back(std::make_unique<SetStackSpacingCommand>(
+        std::vector{m_node}, spacing, context.get_text_measurer()));
+    } else {
+      commands.push_back(std::make_unique<SetStackSpacingCommand>(
+        m_node, m_item, spacing, context.get_text_measurer()));
+    }
+    if(editor.execute(std::make_unique<CompositeCommand>(
+        "Stack Spacing", std::move(commands)))) {
+      m_is_applied = true;
+    }
     return;
   }
   auto grid = find_grid(document, m_node);
@@ -272,10 +426,11 @@ void LayoutHandles::release(ToolContext& context) {
   if(m_target.m_part != Part::NONE) {
     context.get_editor().get_history().seal();
   }
-  m_target = Target(Part::NONE, 0);
+  m_target = Target(Part::NONE, 0, NodeId());
   m_node = NodeId();
   m_item = NodeId();
   m_is_applied = false;
+  m_is_all = false;
 }
 
 void LayoutHandles::cancel(ToolContext& context) {
@@ -291,130 +446,174 @@ bool LayoutHandles::is_active() const {
 
 void LayoutHandles::draw(
     const ToolContext& context, CanvasOverlay& overlay) const {
-  auto id = is_active() ? m_node : get_subject(context);
-  if(id.is_nil()) {
-    return;
-  }
-  auto matrix = get_view_transform(context, id);
   auto shown = is_active() ? m_target : m_hover;
-  if(auto gap = get_gap(context, id, shown)) {
-    overlay.m_shapes.push_back(
-      make_box(matrix, *gap, GAP_FILL, GAP_STROKE, 0));
+  if(shown.m_part == Part::STACK_GAP) {
+    auto stacks = get_stacks(context);
+    if(is_active() || std::find(stacks.begin(), stacks.end(),
+        shown.m_node) != stacks.end()) {
+      draw_stack(context, overlay, shown);
+    }
+  }
+  auto id = get_grid(context);
+  if(is_active()) {
+    id = NodeId();
+    if(m_target.m_part != Part::STACK_GAP) {
+      id = m_node;
+    }
   }
   auto grid = find_grid(context.get_document(), id);
   if(!grid) {
     return;
   }
-  auto& size = grid->m_size;
-  auto corners = std::array<Point, 4>({matrix.map(Point(0, 0)),
-    matrix.map(Point(size.m_width, 0)),
-    matrix.map(Point(size.m_width, size.m_height)),
-    matrix.map(Point(0, size.m_height))});
-  for(auto i = std::size_t(0); i != corners.size(); ++i) {
-    add_dashes(overlay, corners[i], corners[(i + 1) % corners.size()]);
+  if(shown.m_node != id) {
+    shown = Target(Part::NONE, 0, NodeId());
   }
-  auto scale = get_scale(matrix);
-  if(scale <= 0) {
-    return;
+  auto matrix = get_view_transform(context, id);
+  auto is_gap = [] (Part part) {
+    return part == Part::COLUMN_GAP || part == Part::ROW_GAP;
+  };
+  if(is_active() && is_gap(m_target.m_part)) {
+    auto is_column = m_target.m_part == Part::COLUMN_GAP;
+    auto spacing = is_column ? grid->m_column_spacing : grid->m_row_spacing;
+    auto label = make_label(context, format_spacing(spacing));
+    for(auto i = 1; i <= get_gap_count(*grid, is_column, get_scale(matrix));
+        ++i) {
+      auto gap = get_gap(context, Target(m_target.m_part, i, id), false);
+      if(!gap) {
+        continue;
+      }
+      overlay.m_shapes.push_back(
+        make_box(matrix, *gap, GAP_FILL, Color(0, 0, 0, 0), 0));
+      add_label(context, overlay, label, matrix, *gap, is_column);
+    }
+  } else if(is_gap(shown.m_part)) {
+    if(auto gap = get_gap(context, shown, false)) {
+      overlay.m_shapes.push_back(
+        make_box(matrix, *gap, GAP_FILL, Color(0, 0, 0, 0), 0));
+    }
   }
-  auto length = HANDLE_LENGTH / scale;
-  auto thickness = HANDLE_THICKNESS / scale;
-  overlay.m_shapes.push_back(make_box(matrix,
-    Rect(size.m_width - thickness / 2, size.m_height / 2 - length / 2,
-      thickness, length), GRID_COLOR, Color(0, 0, 0, 0),
-    HANDLE_THICKNESS / 2));
-  overlay.m_shapes.push_back(make_box(matrix,
-    Rect(size.m_width / 2 - length / 2, size.m_height - thickness / 2,
-      length, thickness), GRID_COLOR, Color(0, 0, 0, 0),
-    HANDLE_THICKNESS / 2));
-}
-
-NodeId LayoutHandles::get_subject(const ToolContext& context) const {
-  auto grid = get_grid(context);
-  if(!grid.is_nil()) {
-    return grid;
+  if(is_gap(shown.m_part)) {
+    if(auto gap = get_gap(context, shown, false)) {
+      add_gap_sides(
+        overlay, matrix, *gap, shown.m_part == Part::COLUMN_GAP);
+    }
   }
-  return get_stack(context);
+  auto frame = get_frame(matrix, grid->m_size);
+  for(auto part : {Part::RIGHT, Part::BOTTOM}) {
+    auto handle = part == Part::RIGHT ? Handle::RIGHT : Handle::BOTTOM;
+    auto rect = to_local(frame, get_grid_handle_rect(handle, frame.m_size));
+    auto fill = HANDLE_FILL;
+    if(shown.m_part == part) {
+      fill = GRID_COLOR;
+    }
+    overlay.m_shapes.push_back(
+      make_box(matrix, rect, fill, GRID_COLOR, HANDLE_RADIUS));
+  }
 }
 
 std::optional<LayoutHandles::Target> LayoutHandles::find(
-    const ToolContext& context, Point position) const {
-  auto id = get_subject(context);
-  if(id.is_nil()) {
-    return std::nullopt;
-  }
-  auto matrix = get_view_transform(context, id);
-  auto inverse = invert(matrix);
-  auto scale = get_scale(matrix);
-  if(!inverse || scale <= 0) {
-    return std::nullopt;
-  }
-  auto point = inverse->map(position);
-  auto is_within = [&] (const std::optional<Rect>& gap) {
-    return gap && point.m_x >= gap->get_left() &&
-      point.m_x <= gap->get_right() && point.m_y >= gap->get_top() &&
-      point.m_y <= gap->get_bottom();
-  };
-  auto grid = find_grid(context.get_document(), id);
-  if(!grid) {
-    auto count = static_cast<int>(get_slots(context, id).size());
-    for(auto i = 0; i + 1 < count; ++i) {
-      if(is_within(get_gap(context, id, Target(Part::STACK_GAP, i)))) {
-        return Target(Part::STACK_GAP, i);
+    const ToolContext& context, Point position, bool is_handle_hit) const {
+  auto& document = context.get_document();
+  auto find_in = [&] (const NodeId& id) -> std::optional<Target> {
+    auto matrix = get_view_transform(context, id);
+    auto inverse = invert(matrix);
+    auto scale = get_scale(matrix);
+    if(!inverse || scale <= 0) {
+      return std::nullopt;
+    }
+    auto point = inverse->map(position);
+    auto is_within = [&] (const std::optional<Rect>& gap) {
+      return gap && point.m_x >= gap->get_left() &&
+        point.m_x <= gap->get_right() && point.m_y >= gap->get_top() &&
+        point.m_y <= gap->get_bottom();
+    };
+    auto grid = find_grid(document, id);
+    if(!grid) {
+      auto count = static_cast<int>(get_slots(context, id).size());
+      for(auto i = 0; i + 1 < count; ++i) {
+        if(is_within(get_gap(context, Target(Part::STACK_GAP, i, id)))) {
+          return Target(Part::STACK_GAP, i, id);
+        }
+      }
+      return std::nullopt;
+    }
+    auto frame = get_frame(matrix, grid->m_size);
+    for(auto part : {Part::BOTTOM, Part::RIGHT}) {
+      auto handle = part == Part::RIGHT ? Handle::RIGHT : Handle::BOTTOM;
+      if(is_within(
+          to_local(frame, get_grid_handle_rect(handle, frame.m_size)))) {
+        return Target(part, 0, id);
+      }
+    }
+    for(auto i = 1; i <= get_gap_count(*grid, false, scale); ++i) {
+      if(is_within(get_gap(context, Target(Part::ROW_GAP, i, id)))) {
+        return Target(Part::ROW_GAP, i, id);
+      }
+    }
+    for(auto i = 1; i <= get_gap_count(*grid, true, scale); ++i) {
+      if(is_within(get_gap(context, Target(Part::COLUMN_GAP, i, id)))) {
+        return Target(Part::COLUMN_GAP, i, id);
       }
     }
     return std::nullopt;
-  }
-  auto& size = grid->m_size;
-  auto reach = HANDLE_REACH / scale;
-  auto length = (HANDLE_LENGTH / 2 + HANDLE_REACH) / scale;
-  if(std::abs(point.m_x - size.m_width) <= reach &&
-      std::abs(point.m_y - size.m_height / 2) <= length) {
-    return Target(Part::RIGHT, 0);
-  }
-  if(std::abs(point.m_y - size.m_height) <= reach &&
-      std::abs(point.m_x - size.m_width / 2) <= length) {
-    return Target(Part::BOTTOM, 0);
-  }
-  for(auto i = 1; i < grid->m_column_count; ++i) {
-    if(is_within(get_gap(context, id, Target(Part::COLUMN_GAP, i)))) {
-      return Target(Part::COLUMN_GAP, i);
+  };
+  if(auto grid = get_grid(context); !grid.is_nil()) {
+    if(auto target = find_in(grid)) {
+      return target;
     }
   }
-  for(auto i = 1; i < grid->m_row_count; ++i) {
-    if(is_within(get_gap(context, id, Target(Part::ROW_GAP, i)))) {
-      return Target(Part::ROW_GAP, i);
+  for(auto& stack : get_stacks(context)) {
+    if(is_handle_hit && is_entered(context, stack)) {
+      continue;
+    }
+    if(auto target = find_in(stack)) {
+      return target;
     }
   }
   return std::nullopt;
 }
 
+bool LayoutHandles::is_entered(
+    const ToolContext& context, const NodeId& id) const {
+  return context.get_editor().get_context().get_container() == id;
+}
+
 std::optional<Rect> LayoutHandles::get_gap(const ToolContext& context,
-    const NodeId& id, const Target& target) const {
+    const Target& target, bool is_widened) const {
   auto& document = context.get_document();
+  auto& id = target.m_node;
   auto scale = get_scale(get_view_transform(context, id));
   if(scale <= 0) {
     return std::nullopt;
   }
-  auto reach = GAP_REACH / scale;
+  auto reach = 0.0;
+  if(is_widened) {
+    reach = GAP_REACH / scale;
+  }
   if(target.m_part == Part::STACK_GAP) {
     auto stack = find_stack(document, id);
     auto slots = get_slots(context, id);
     auto index = static_cast<std::size_t>(target.m_index);
-    if(!stack || index + 1 >= slots.size()) {
+    auto bounds = get_local_bounds(
+      document, id, BoundsType::GEOMETRY, context.get_text_measurer());
+    if(!stack || !bounds || index + 1 >= slots.size()) {
       return std::nullopt;
+    }
+    auto padding = Margins();
+    if(is_entered(context, id)) {
+      padding = stack->m_padding;
     }
     auto& before = slots[index].second;
     auto& after = slots[index + 1].second;
     if(stack->m_orientation == Orientation::VERTICAL) {
       auto span = widen(before.get_bottom(), after.get_top(), reach);
-      auto left = std::min(before.get_left(), after.get_left());
-      auto right = std::max(before.get_right(), after.get_right());
+      auto left = bounds->get_left() + std::max(padding.m_left, 0.0);
+      auto right = bounds->get_right() - std::max(padding.m_right, 0.0);
       return Rect(left, span.first, right - left, span.second - span.first);
     }
     auto span = widen(before.get_right(), after.get_left(), reach);
-    auto top = std::min(before.get_top(), after.get_top());
-    auto bottom = std::max(before.get_bottom(), after.get_bottom());
+    auto top = bounds->get_top() + std::max(padding.m_top, 0.0);
+    auto bottom = bounds->get_bottom() - std::max(padding.m_bottom, 0.0);
     return Rect(span.first, top, span.second - span.first, bottom - top);
   }
   auto grid = find_grid(document, id);
@@ -440,4 +639,45 @@ std::optional<Rect> LayoutHandles::get_gap(const ToolContext& context,
     return Rect(0, span.first, size.m_width, span.second - span.first);
   }
   return std::nullopt;
+}
+
+void LayoutHandles::draw_stack(const ToolContext& context,
+    CanvasOverlay& overlay, const Target& shown) const {
+  auto stack = find_stack(context.get_document(), shown.m_node);
+  if(!stack) {
+    return;
+  }
+  auto matrix = get_view_transform(context, shown.m_node);
+  auto is_selection = !is_entered(context, shown.m_node);
+  if(m_is_shift) {
+    auto count = static_cast<int>(get_slots(context, shown.m_node).size());
+    for(auto i = 0; i + 1 < count; ++i) {
+      if(i == shown.m_index) {
+        continue;
+      }
+      if(auto gap = get_gap(
+          context, Target(Part::STACK_GAP, i, shown.m_node), false)) {
+        overlay.m_shapes.push_back(
+          make_box(matrix, *gap, PALE_GAP_FILL, Color(0, 0, 0, 0), 0));
+      }
+    }
+  }
+  auto gap = get_gap(context, shown, false);
+  if(!gap) {
+    return;
+  }
+  auto fill = PALE_GAP_FILL;
+  if(is_selection) {
+    fill = GAP_FILL;
+  }
+  overlay.m_shapes.push_back(
+    make_box(matrix, *gap, fill, Color(0, 0, 0, 0), 0));
+  auto is_horizontal = stack->m_orientation == Orientation::HORIZONTAL;
+  if(is_selection) {
+    add_gap_sides(overlay, matrix, *gap, is_horizontal);
+  }
+  auto size = is_horizontal ? gap->m_width : gap->m_height;
+  add_label(context, overlay,
+    make_label(context, std::format("{}", std::lround(size))), matrix, *gap,
+    is_horizontal);
 }

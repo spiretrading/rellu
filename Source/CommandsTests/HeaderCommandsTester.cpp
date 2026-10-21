@@ -1,3 +1,4 @@
+#include <numbers>
 #include <doctest/doctest.h>
 #include "Rellu/Commands/HeaderCommands.hpp"
 #include "Fixture.hpp"
@@ -221,6 +222,73 @@ TEST_SUITE("HeaderCommands") {
     require_undoable(history, registry.make(
       "object.transform.flip_vertically", document, std::vector{text}));
     REQUIRE(!document.get(text).get_text()->m_is_flipped_vertically);
+  }
+
+  TEST_CASE("flip_rotation") {
+    struct Case {
+      double m_rotation;
+      bool m_is_horizontal;
+      double m_expected;
+    };
+    for(auto& entry : {Case(30, true, 150), Case(-30, true, -150),
+        Case(30, false, 330), Case(90, false, 270), Case(-90, false, -270),
+        Case(-90, true, -90), Case(0, true, 0), Case(360, true, 0)}) {
+      auto document = Document();
+      auto id = NodeId();
+      {
+        auto transaction = Transaction(document);
+        auto header = make_header("Turned", make_translation(100, 100) *
+          make_rotation(entry.m_rotation * std::numbers::pi / 180));
+        header.m_rotation = entry.m_rotation;
+        id = transaction.append(
+          NodeId(), header, make_rectangle_shape(40, 20));
+        transaction.commit();
+      }
+      auto registry = CommandRegistry();
+      add_header_commands(registry, estimate_text_bounds);
+      auto bounds = *get_world_bounds(document, id);
+      auto history = History(document);
+      history.execute(registry.make(entry.m_is_horizontal ?
+        "object.transform.flip_horizontally" :
+        "object.transform.flip_vertically", document, std::vector{id}));
+      auto& header = document.get(id).m_header;
+      REQUIRE(header.m_rotation == doctest::Approx(entry.m_expected));
+      REQUIRE(header.m_transform.get_determinant() > 0);
+      REQUIRE(is_congruent(entry.m_expected, header.m_transform));
+      require_near(*get_world_bounds(document, id), bounds);
+    }
+  }
+
+  TEST_CASE("flip_rotated_text") {
+    auto document = Document();
+    auto text = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto payload = make_text(u"Turn");
+      payload.m_frame = PositionedFrame();
+      auto header = make_header("Turn", make_translation(100, 100) *
+        make_rotation(std::numbers::pi / 6));
+      header.m_rotation = 30;
+      text = transaction.append(NodeId(), header, payload);
+      transaction.commit();
+    }
+    auto registry = CommandRegistry();
+    add_header_commands(registry, estimate_text_bounds);
+    auto bounds = *get_world_bounds(document, text);
+    auto history = History(document);
+    require_undoable(history, registry.make(
+      "object.transform.flip_horizontally", document, std::vector{text}));
+    REQUIRE(document.get(text).m_header.m_rotation == doctest::Approx(150));
+    REQUIRE(document.get(text).get_text()->m_is_flipped_vertically);
+    REQUIRE(get_rotation(document.get(text).m_header.m_transform) ==
+      doctest::Approx(150));
+    require_near(*get_world_bounds(document, text), bounds);
+    require_undoable(history, registry.make(
+      "object.transform.flip_vertically", document, std::vector{text}));
+    REQUIRE(document.get(text).m_header.m_rotation == doctest::Approx(210));
+    REQUIRE(!document.get(text).get_text()->m_is_flipped_vertically);
+    REQUIRE(get_rotation(document.get(text).m_header.m_transform) ==
+      doctest::Approx(-150));
   }
 
   TEST_CASE("flip_mixed") {

@@ -7,13 +7,11 @@
 namespace Rellu {
 
   /**
-   * Places an instance of a component dragged out of the Document Assets
-   * panel where it is dropped on a document view, inside the artboard under
-   * the pointer if there is one. Dropped on an instance of another component,
-   * the outermost one under the pointer within the edit context with no
-   * locked or hidden node or repeat grid above it, which is outlined and
-   * shown with the swap pointer while dragged over, it replaces that
-   * instance instead.
+   * Drops a component dragged out of the Document Assets panel on a
+   * document view as make_component_drop does. The instance it would
+   * replace is outlined, filled with translucent blue and shown with the
+   * swap pointer while dragged over; elsewhere the drag shows the plain
+   * arrow.
    */
   class ComponentDrop : public QObject {
     public:

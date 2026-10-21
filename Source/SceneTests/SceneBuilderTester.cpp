@@ -1,5 +1,6 @@
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -13,6 +14,8 @@
 #include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Geometry/Stroke.hpp"
 #include "Rellu/Model/Transaction.hpp"
+#include "Rellu/Rendering/CanvasRenderer.hpp"
+#include "Rellu/Rendering/OffscreenRenderer.hpp"
 #include "Rellu/Scene/SceneBuilder.hpp"
 
 using namespace Rellu;
@@ -57,6 +60,113 @@ namespace {
     return std::get<SolidPaint>(command.m_paint).m_color;
   }
 
+  struct CornerSample {
+    double m_radius;
+    bool m_is_filled;
+    int m_scale;
+    std::array<int, 32> m_pixels;
+  };
+
+  const auto CORNER_SAMPLES = std::to_array({
+    CornerSample(0.5, true, 1, std::to_array({
+      242, 3, 255, 0, 255, 0, 255, 0, 255, 0, 255, 255, 255, 255, 255, 255,
+      255, 0, 255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255, 255,
+      255})),
+    CornerSample(1, true, 1, std::to_array({
+      141, 7, 255, 0, 255, 0, 255, 0, 255, 0, 255, 255, 255, 255, 255, 255,
+      255, 0, 255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255, 255,
+      255})),
+    CornerSample(1.5, true, 1, std::to_array({
+      77, 0, 214, 18, 255, 0, 255, 0, 218, 22, 255, 255, 255, 255, 255, 255,
+      255, 0, 255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255, 255,
+      255})),
+    CornerSample(2, true, 1, std::to_array({
+      29, 0, 220, 5, 255, 0, 255, 0, 223, 7, 255, 178, 255, 255, 255, 255,
+      255, 0, 255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255, 255,
+      255})),
+    CornerSample(3, true, 1, std::to_array({
+      0, 0, 111, 0, 226, 13, 255, 0, 120, 9, 240, 65, 255, 213, 255, 255,
+      229, 16, 255, 213, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255, 255,
+      255})),
+    CornerSample(0.5, false, 1, std::to_array({
+      239, 0, 255, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0,
+      0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0})),
+    CornerSample(1, false, 1, std::to_array({
+      133, 0, 255, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0,
+      0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0})),
+    CornerSample(1.5, false, 1, std::to_array({
+      77, 0, 196, 0, 255, 0, 255, 0, 195, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0,
+      0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0})),
+    CornerSample(2, false, 1, std::to_array({
+      29, 0, 215, 0, 255, 0, 255, 0, 215, 0, 77, 0, 0, 0, 0, 0, 255, 0, 0, 0,
+      0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0})),
+    CornerSample(3, false, 1, std::to_array({
+      0, 0, 111, 0, 213, 0, 255, 0, 111, 0, 175, 0, 42, 0, 0, 0, 213, 0, 42,
+      0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0})),
+    CornerSample(0.5, true, 2, std::to_array({
+      191, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0,
+      255, 0, 255, 255, 255, 255, 255, 0, 255, 0, 255, 255, 255, 255})),
+    CornerSample(1, true, 2, std::to_array({
+      80, 0, 207, 0, 255, 0, 255, 0, 224, 0, 255, 0, 255, 0, 255, 0, 255, 0,
+      255, 0, 255, 255, 255, 255, 255, 0, 255, 0, 255, 255, 255, 255})),
+    CornerSample(1.5, true, 2, std::to_array({
+      16, 0, 159, 0, 239, 0, 255, 0, 176, 0, 255, 0, 255, 0, 255, 0, 255, 0,
+      255, 0, 255, 191, 255, 255, 255, 0, 255, 0, 255, 255, 255, 255})),
+    CornerSample(2, true, 2, std::to_array({
+      0, 0, 80, 0, 191, 0, 239, 0, 80, 0, 255, 0, 255, 0, 255, 0, 192, 0,
+      255, 0, 255, 79, 255, 207, 255, 0, 255, 0, 255, 223, 255, 255})),
+    CornerSample(3, true, 2, std::to_array({
+      0, 0, 0, 0, 0, 0, 96, 0, 0, 0, 16, 0, 191, 0, 255, 0, 0, 0, 192, 0,
+      255, 0, 247, 23, 96, 0, 255, 0, 248, 24, 255, 239})),
+    CornerSample(0.5, false, 2, std::to_array({
+      191, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0,
+      255, 0, 0, 0, 0, 0, 255, 0, 255, 0, 0, 0, 0, 0})),
+    CornerSample(1, false, 2, std::to_array({
+      80, 0, 207, 0, 255, 0, 255, 0, 224, 0, 255, 0, 255, 0, 255, 0, 255, 0,
+      255, 0, 0, 0, 0, 0, 255, 0, 255, 0, 0, 0, 0, 0})),
+    CornerSample(1.5, false, 2, std::to_array({
+      16, 0, 159, 0, 239, 0, 255, 0, 176, 0, 255, 0, 255, 0, 255, 0, 255, 0,
+      255, 0, 64, 0, 0, 0, 255, 0, 255, 0, 0, 0, 0, 0})),
+    CornerSample(2, false, 2, std::to_array({
+      0, 0, 80, 0, 191, 0, 239, 0, 80, 0, 255, 0, 255, 0, 255, 0, 192, 0,
+      255, 0, 176, 0, 48, 0, 255, 0, 255, 0, 32, 0, 0, 0})),
+    CornerSample(3, false, 2, std::to_array({
+      0, 0, 0, 0, 0, 0, 96, 0, 0, 0, 16, 0, 191, 0, 255, 0, 0, 0, 192, 0,
+      255, 0, 224, 0, 96, 0, 255, 0, 224, 0, 16, 0}))
+  });
+
+  QImage render_corners(int scale) {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    for(auto& sample : CORNER_SAMPLES) {
+      if(sample.m_scale != 1) {
+        continue;
+      }
+      auto index = 0;
+      while(CORNER_SAMPLES[index].m_radius != sample.m_radius) {
+        ++index;
+      }
+      auto shape = Shape();
+      shape.m_geometry = RectangleShape(Rect(0, 0, 14, 14), CornerRadii(
+        sample.m_radius, sample.m_radius, sample.m_radius, sample.m_radius));
+      if(sample.m_is_filled) {
+        shape.m_style.m_fill = SolidFill(make_color(255, 255, 255));
+      }
+      auto stroke = Stroke(make_color(0, 0, 0), 1);
+      stroke.m_alignment = StrokeAlignment::INSIDE;
+      shape.m_style.m_stroke = stroke;
+      transaction.append(NodeId(), make_header(make_translation(
+        10 + 30 * index, sample.m_is_filled ? 20 : 60)), shape);
+    }
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE / scale);
+    builder.set_device_transform(make_scale(scale, scale));
+    auto renderer = CanvasRenderer();
+    renderer.set_background(QColor(0, 0, 0, 0));
+    renderer.set_draw_list(std::make_shared<DrawList>(builder.build()));
+    auto offscreen = OffscreenRenderer(renderer);
+    return offscreen.render(QSize(200 * scale, 100 * scale), scale);
+  }
   bool is_same(const std::vector<std::shared_ptr<const DrawList>>& lists,
       const DrawList& list) {
     auto index = std::size_t(0);
@@ -126,6 +236,124 @@ TEST_SUITE("SceneBuilder") {
     REQUIRE(get_fill(list, 1).m_transform == make_translation(10, 5));
     REQUIRE(get_color(get_fill(list, 2)) == make_color(0, 0, 255));
     REQUIRE(get_fill(list, 2).m_transform == Matrix());
+  }
+
+  TEST_CASE("inside_stroke_corners") {
+    for(auto scale : {1, 2}) {
+      auto image = render_corners(scale).convertToFormat(
+        QImage::Format_RGBA8888_Premultiplied);
+      auto index = 0;
+      for(auto& sample : CORNER_SAMPLES) {
+        if(sample.m_scale != scale) {
+          continue;
+        }
+        auto left = (10 + 30 * (index % 5)) * scale;
+        auto top = (sample.m_is_filled ? 20 : 60) * scale;
+        ++index;
+        auto tolerance = sample.m_is_filled ? 12 : 2;
+        for(auto y = 0; y != 4; ++y) {
+          auto line = image.constScanLine(top + y);
+          for(auto x = 0; x != 4; ++x) {
+            auto pixel = line + 4 * (left + x);
+            CAPTURE(scale);
+            CAPTURE(sample.m_radius);
+            CAPTURE(sample.m_is_filled);
+            CAPTURE(x);
+            CAPTURE(y);
+            REQUIRE(std::abs(pixel[3] - sample.m_pixels[2 * (4 * y + x)]) <=
+              tolerance);
+            REQUIRE(std::abs(pixel[0] -
+              sample.m_pixels[2 * (4 * y + x) + 1]) <= tolerance);
+          }
+        }
+      }
+    }
+  }
+
+  TEST_CASE("rounded_star") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto star = PolygonShape();
+    star.m_corner_count = 5;
+    star.m_size = Size(303, 303);
+    star.m_corner_radius = 40;
+    star.m_star_ratio = 50;
+    auto shape = Shape();
+    shape.m_geometry = star;
+    shape.m_style.m_fill = SolidFill(make_color(255, 255, 255));
+    auto stroke = Stroke(make_color(112, 112, 112), 1);
+    stroke.m_alignment = StrokeAlignment::INSIDE;
+    shape.m_style.m_stroke = stroke;
+    transaction.append(NodeId(), make_header(), shape);
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    builder.set_device_transform(Matrix());
+    auto renderer = CanvasRenderer();
+    renderer.set_background(QColor(0, 0, 0, 0));
+    renderer.set_draw_list(std::make_shared<DrawList>(builder.build()));
+    auto offscreen = OffscreenRenderer(renderer);
+    auto image = offscreen.render(QSize(303, 303), 1).convertToFormat(
+      QImage::Format_RGBA8888_Premultiplied);
+    auto is_opaque = [&] (int x, int y) {
+      return image.constScanLine(y)[4 * x + 3] >= 128;
+    };
+    auto get_span = [&] (int index, bool is_row) {
+      auto first = -1;
+      auto last = -1;
+      for(auto i = 0; i != 303; ++i) {
+        if(is_row ? is_opaque(i, index) : is_opaque(index, i)) {
+          if(first < 0) {
+            first = i;
+          }
+          last = i;
+        }
+      }
+      return std::array<int, 2>({first, last});
+    };
+    auto rows = std::to_array<std::array<int, 3>>({{70, 141, 161},
+      {100, 116, 186}, {130, 60, 242}, {160, 59, 242}, {190, 84, 218},
+      {220, 82, 220}, {250, 97, 205}});
+    for(auto& row : rows) {
+      auto span = get_span(row[0], true);
+      CAPTURE(row[0]);
+      REQUIRE(std::abs(span[0] - row[1]) <= 1);
+      REQUIRE(std::abs(span[1] - row[2]) <= 1);
+    }
+    auto columns = std::to_array<std::array<int, 3>>({{60, 129, 161},
+      {100, 112, 251}, {151, 69, 242}, {200, 111, 252}, {240, 126, 164}});
+    for(auto& column : columns) {
+      auto span = get_span(column[0], false);
+      CAPTURE(column[0]);
+      REQUIRE(std::abs(span[0] - column[1]) <= 1);
+      REQUIRE(std::abs(span[1] - column[2]) <= 1);
+    }
+  }
+
+  TEST_CASE("single_precision") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto group = transaction.append(
+      NodeId(), make_header(make_translation(-11517, 0)), Group());
+    auto shape = transaction.append(group,
+      make_header(make_translation(2021.2215576171875, 0)),
+      make_shape(Rect(0, 0, 1, 1), make_color(255, 0, 0)));
+    auto scroll = Group();
+    scroll.m_scroll_group =
+      ScrollGroup(ScrollDirection::VERTICAL, Size(100, 50), Point(0, 0));
+    auto scrolled = transaction.append(
+      NodeId(), make_header(make_translation(-11517, 0)), scroll);
+    auto clipped = transaction.append(scrolled,
+      make_header(make_translation(2021.2215576171875, 0)),
+      make_shape(Rect(0, 0, 1, 1), make_color(255, 0, 0)));
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    REQUIRE(get_fill(builder.build(shape), 0).m_transform ==
+      make_translation(-9495.7784423828125, 0));
+    builder.set_device_transform(make_translation(9505, 0));
+    REQUIRE(get_fill(builder.build(shape), 0).m_transform ==
+      make_translation(-9495.7783203125, 0));
+    REQUIRE(get_fill(builder.build(clipped), 0).m_transform ==
+      make_translation(-9495.7784423828125, 0));
   }
 
   TEST_CASE("visibility") {

@@ -69,14 +69,15 @@ namespace {
   }
 }
 
-DrawTool::DrawTool(std::string prefix)
+DrawTool::DrawTool(std::string prefix, CursorKind crosshair)
   : m_is_pressed(false),
     m_is_applied(false),
     m_is_held(false),
     m_prefix(std::move(prefix)),
+    m_crosshair(crosshair),
     m_press(0, 0),
     m_start(0, 0),
-    m_cursor(CursorKind::CROSSHAIR) {}
+    m_cursor(crosshair) {}
 
 void DrawTool::press(ToolContext& context, const PointerEvent& event) {
   if(event.m_button != Qt::LeftButton) {
@@ -156,7 +157,8 @@ void DrawTool::release(ToolContext& context, const PointerEvent& event) {
 
 void DrawTool::leave(ToolContext& context) {
   if(!is_busy()) {
-    m_cursor = ToolCursor(CursorKind::CROSSHAIR);
+    m_cursor = ToolCursor(m_crosshair);
+    m_handles.leave();
   }
 }
 
@@ -204,6 +206,11 @@ void DrawTool::draw(const ToolContext& context, CanvasOverlay& overlay) const {
   }
 }
 
+Point DrawTool::snap_end(
+    ToolContext& context, Point end, Qt::KeyboardModifiers modifiers) {
+  return context.get_snap_service().snap_point(end, SnapAxes::BOTH, modifiers);
+}
+
 void DrawTool::click(ToolContext& context, Point point) {}
 
 void DrawTool::complete(ToolContext& context, const NodeId& id) {}
@@ -223,8 +230,8 @@ void DrawTool::update(ToolContext& context, const PointerEvent& event) {
     m_is_held = hold_drawn_layout(
       context, find_parent(context, m_start), m_header->m_id);
   }
-  auto end = context.get_snap_service().snap_point(
-    context.to_document(event.m_position), SnapAxes::BOTH, event.m_modifiers);
+  auto end = snap_end(
+    context, context.to_document(event.m_position), event.m_modifiers);
   auto command =
     make_command(context, *m_header, m_start, end, event.m_modifiers);
   if(!command) {
@@ -236,7 +243,7 @@ void DrawTool::update(ToolContext& context, const PointerEvent& event) {
 }
 
 void DrawTool::update_hover(ToolContext& context, Point position) {
-  m_cursor = ToolCursor(CursorKind::CROSSHAIR);
+  m_cursor = ToolCursor(m_crosshair);
   auto layout = std::optional<ToolCursor>();
   if(!m_layout_handles.get_grid(context).is_nil()) {
     layout = m_layout_handles.hover(context, position);

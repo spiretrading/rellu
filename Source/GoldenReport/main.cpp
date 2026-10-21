@@ -30,6 +30,7 @@
 #include "Rellu/Rendering/StripRasterizer.hpp"
 #include "Rellu/Scene/SceneBuilder.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
+#include "DifferenceCauses.hpp"
 
 Q_IMPORT_PLUGIN(QGifPlugin)
 Q_IMPORT_PLUGIN(QJpegPlugin)
@@ -51,6 +52,7 @@ namespace {
     std::vector<std::filesystem::path> m_fonts;
     std::string m_filter;
     bool m_is_writing_all = false;
+    bool m_is_classifying = false;
     std::string m_dump;
     ImageTolerance m_tolerance;
   };
@@ -455,6 +457,44 @@ namespace {
       to_milliseconds(refined - rebuilt));
   }
 
+  void report_causes(const std::filesystem::path& path,
+      const std::array<int, DIFFERENCE_CAUSE_COUNT>& items,
+      const DifferenceTally& tally) {
+    auto order = std::array<int, DIFFERENCE_CAUSE_COUNT>();
+    for(auto i = 0; i != DIFFERENCE_CAUSE_COUNT; ++i) {
+      order[i] = i;
+    }
+    std::ranges::stable_sort(order, [&] (auto left, auto right) {
+      return tally.m_pixels[left] > tally.m_pixels[right];
+    });
+    auto total = std::int64_t(0);
+    for(auto pixels : tally.m_pixels) {
+      total += pixels;
+    }
+    auto summary = std::ofstream(path);
+    summary << "rank,cause,items,pixels,share,over_2,over_16,"
+      "mean_difference\n";
+    std::cout << "\ndifferences by cause over in-scope items that aren't "
+      "identical:\n";
+    auto rank = 0;
+    for(auto i : order) {
+      ++rank;
+      auto share = total == 0 ? 0.0 :
+        static_cast<double>(tally.m_pixels[i]) / static_cast<double>(total);
+      auto mean = tally.m_pixels[i] == 0 ? 0.0 :
+        static_cast<double>(tally.m_difference[i]) /
+          static_cast<double>(tally.m_pixels[i]);
+      auto name = to_name(static_cast<DifferenceCause>(i));
+      summary << std::format("{},{},{},{},{:.4f},{},{},{:.2f}\n", rank, name,
+        items[i], tally.m_pixels[i], share, tally.m_over_2[i],
+        tally.m_over_16[i], mean);
+      std::cout << std::format("{}. {}: {} pixels ({:.1f}%) in {} items, {} "
+        "over 2, {} over 16, mean difference {:.2f}\n", rank, name,
+        tally.m_pixels[i], 100 * share, items[i], tally.m_over_2[i],
+        tally.m_over_16[i], mean);
+    }
+  }
+
   int run(const Options& options) {
     auto root = to_path(options.m_references);
     auto documents = list_reference_documents(root);
@@ -475,6 +515,19 @@ namespace {
     auto all = std::array<Tally, 3>();
     auto item_counts = std::array<int, 2>();
     auto reasons = std::map<std::string, std::array<int, 2>>();
+    auto causes = std::optional<std::ofstream>();
+    auto cause_items = std::array<int, DIFFERENCE_CAUSE_COUNT>();
+    auto cause_total = DifferenceTally();
+    if(options.m_is_classifying) {
+      causes.emplace(options.m_output / "causes.csv");
+      *causes << "document,index,guid,scale";
+      for(auto i = 0; i != DIFFERENCE_CAUSE_COUNT; ++i) {
+        auto name = to_name(static_cast<DifferenceCause>(i));
+        *causes << ',' << name << ',' << name << "_over_2," << name <<
+          "_over_16";
+      }
+      *causes << '\n';
+    }
     for(auto& path : documents) {
       if(!options.m_filter.empty() &&
           to_string(path).find(options.m_filter) == std::string::npos) {
@@ -546,13 +599,14 @@ namespace {
           auto actual = QImage();
           auto build_time = 0.0;
           auto render_time = 0.0;
+          auto device = make_scale(scale, scale) * make_translation(
+            -item.m_draw_bounds.x(), -item.m_draw_bounds.y());
+          auto list = std::shared_ptr<DrawList>();
           if(id && !size.isEmpty()) {
             auto start = std::chrono::steady_clock::now();
             builder.set_tolerance(StripRasterizer::TOLERANCE / scale);
-            builder.set_device_transform(make_scale(scale, scale) *
-              make_translation(
-                -item.m_draw_bounds.x(), -item.m_draw_bounds.y()));
-            auto list = std::make_shared<DrawList>(builder.build(*id));
+            builder.set_device_transform(device);
+            list = std::make_shared<DrawList>(builder.build(*id));
             auto built = std::chrono::steady_clock::now();
             renderer.set_draw_list(list);
             renderer.set_view(make_translation(
@@ -599,6 +653,22 @@ namespace {
           }
           summary << std::format(",{:.2f},{:.2f}\n", build_time,
             render_time);
+          if(causes && scope != Scope::EXCLUDED && list && is_size_match &&
+              !is_identical) {
+            auto tally = tally_differences(
+              classify_differences(*list, device, size), actual, expected);
+            *causes << std::format("{},{},{},{}", escape(to_string(path)),
+              item.m_index, to_string(item.m_guid), scale);
+            for(auto i = 0; i != DIFFERENCE_CAUSE_COUNT; ++i) {
+              *causes << ',' << tally.m_pixels[i] << ',' <<
+                tally.m_over_2[i] << ',' << tally.m_over_16[i];
+              if(tally.m_pixels[i] != 0) {
+                ++cause_items[i];
+              }
+            }
+            *causes << '\n';
+            cause_total += tally;
+          }
           if(options.m_is_writing_all ||
               (scope != Scope::EXCLUDED && !comparison.m_is_match)) {
             std::filesystem::create_directories(directory);
@@ -628,6 +698,10 @@ namespace {
           tally.m_within_16, tally.m_within_2, tally.m_identical);
       }
     }
+    if(causes) {
+      report_causes(options.m_output / "causes_summary.csv", cause_items,
+        cause_total);
+    }
     return 0;
   }
 }
@@ -656,7 +730,8 @@ int main(int argc, char** argv) {
   if(argc < 3) {
     std::cerr << "Usage: GoldenReport <corpus directory> <output directory> "
       "--references <directory> [--fonts <directory>]... [--filter <text>] "
-      "[--all] [--dump <guid>] [--tolerance <difference> <fraction>]\n"
+      "[--all] [--dump <guid>] [--tolerance <difference> <fraction>] "
+      "[--causes]\n"
       "       GoldenReport --time <xd file>...\n";
     return 2;
   }
@@ -675,6 +750,8 @@ int main(int argc, char** argv) {
       options.m_dump = argv[++i];
     } else if(argument == "--all") {
       options.m_is_writing_all = true;
+    } else if(argument == "--causes") {
+      options.m_is_classifying = true;
     } else if(argument == "--tolerance" && i + 2 < argc) {
       options.m_tolerance = ImageTolerance(
         std::atoi(argv[i + 1]), std::atof(argv[i + 2]));

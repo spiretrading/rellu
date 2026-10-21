@@ -1,10 +1,14 @@
 #ifndef RELLU_UI_GUIDE_ACTIONS_HPP
 #define RELLU_UI_GUIDE_ACTIONS_HPP
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
+#include <QByteArray>
 #include <QMimeData>
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Model/Artboard.hpp"
@@ -20,11 +24,12 @@ namespace Rellu {
    * design workspace: view.guides.copy copies the guides of the single
    * artboard selected or holding the selection, view.guides.paste merges
    * copied guides into the artboards selected or holding the selection,
-   * showing guides if hidden, view.guides.clear removes the guides of those
-   * artboards while guides are shown, view.guides.hide toggles between Hide
-   * All Guides and Show All Guides and view.guides.lock between Lock All
-   * Guides and Unlock All Guides, each toggle being an undoable step of the
-   * editor's history labelled as its menu item was.
+   * showing guides if hidden as part of the same step, view.guides.clear
+   * removes the guides of those artboards while guides are shown,
+   * view.guides.hide toggles between Hide All Guides and Show All Guides
+   * and view.guides.lock between Lock All Guides and Unlock All Guides, each
+   * toggle being an undoable step of the editor's history labelled as its
+   * menu item was.
    */
   class GuideActions {
     public:
@@ -100,6 +105,8 @@ namespace Rellu {
       std::vector<NodeId> get_artboards() const;
       void copy();
       void change(GuideSettings settings, std::string label);
+      std::pair<std::function<void ()>, std::function<void ()>> make_change(
+        GuideSettings settings);
       void publish();
   };
 
@@ -115,6 +122,30 @@ namespace Rellu {
    * @return The guides, or none if the data holds no copied guides.
    */
   std::optional<std::vector<Guide>> read_guides_data(const QMimeData& data);
+
+  /**
+   * Finds the guide settings recorded for a document in a store of them, as
+   * Adobe XD keeps them under guidesGlobalSettings in its preferences.
+   * @param store The store, as find_document_settings reads it.
+   * @param document The uxdesign#id of the document.
+   * @return The settings recorded, or none if the store has none for the
+   *         document.
+   */
+  std::optional<GuideSettings> find_guide_settings(
+    const QByteArray& store, std::string_view document);
+
+  /**
+   * Records the guide settings of a document in a store of them as Adobe XD
+   * does, the default settings removing the document's record.
+   * @param store The store, as record_document_settings writes it.
+   * @param document The uxdesign#id of the document.
+   * @param settings The settings.
+   * @param time The time of the recording, in milliseconds since the epoch.
+   * @return The store with the settings recorded.
+   */
+  QByteArray record_guide_settings(const QByteArray& store,
+    std::string_view document, const GuideSettings& settings,
+    std::int64_t time);
 }
 
 #endif

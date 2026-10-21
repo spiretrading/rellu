@@ -50,9 +50,25 @@ namespace {
     });
   }
 
+  double clamp_rotation(double rotation) {
+    constexpr auto TURN = 360.0;
+    if(std::abs(rotation) == TURN) {
+      return rotation;
+    }
+    auto low = rotation < 0 ? -TURN : 0.0;
+    auto high = low + TURN;
+    rotation = low + std::fmod(rotation - low, TURN);
+    if(rotation < low) {
+      rotation = high - (low - rotation);
+    }
+    if(high - 0.005 <= std::round(rotation * 1000) / 1000 && rotation < high) {
+      return low;
+    }
+    return rotation;
+  }
+
   double get_rotation(const Document& document, const NodeId& id) {
-    auto transform = get_transform(document, id);
-    return std::atan2(transform.m_b, transform.m_a) * 180 / std::numbers::pi;
+    return Rellu::get_rotation(get_transform(document, id));
   }
 
   PropertySetter make_position_setter(bool is_x, TextMeasurer measurer) {
@@ -73,6 +89,10 @@ namespace {
         auto parent = get_parent_transform(document, nodes.front());
         delta = Point(parent.m_a * delta.m_x + parent.m_c * delta.m_y,
           parent.m_b * delta.m_x + parent.m_d * delta.m_y);
+      }
+      if(auto bounds = get_world_bounds(
+          document, targets, BoundsType::GEOMETRY, measurer)) {
+        delta = keep_on_canvas(*bounds, delta);
       }
       return std::make_unique<TranslateCommand>(std::move(targets), delta);
     };
@@ -147,6 +167,7 @@ namespace {
       if(!number || targets.empty() || has_artboard(document, targets)) {
         return nullptr;
       }
+      auto rotation = clamp_rotation(*number);
       auto commands = std::vector<std::unique_ptr<Command>>();
       for(auto& id : targets) {
         auto local =
@@ -157,8 +178,8 @@ namespace {
         auto center = get_world_transform(document, id).map(
           local->get_center());
         commands.push_back(make_rotate_command(std::vector{id},
-          (*number - get_rotation(document, id)) * std::numbers::pi / 180,
-          center));
+          (rotation - get_rotation(document, id)) * std::numbers::pi / 180,
+          center, std::vector{rotation}));
       }
       return combine("Rotate", std::move(commands));
     };
@@ -347,7 +368,7 @@ namespace {
       }
       if(corner) {
         return std::make_unique<SetCornerRadiusCommand>(
-          nodes, *corner, *radius);
+          nodes, *corner, *radius, true);
       }
       return std::make_unique<SetCornerRadiusCommand>(nodes, *radius);
     };
@@ -364,6 +385,36 @@ namespace {
       return nullptr;
     }
     return std::make_unique<SetBlendModeCommand>(nodes, *blend_mode);
+  }
+
+  std::unique_ptr<Command> set_corner_mode(const Document& document,
+      const std::vector<NodeId>& nodes, const PropertyValue& value) {
+    auto choice = std::get_if<Choice>(&value);
+    if(!choice || choice->m_index != 0 || nodes.empty()) {
+      return nullptr;
+    }
+    auto properties = extract_common_properties(document, nodes);
+    auto top_left = find_property(properties, "geometry.radii.top_left");
+    if(!top_left || top_left->m_is_mixed) {
+      return nullptr;
+    }
+    auto radius = get_number(top_left->m_value);
+    if(!radius) {
+      return nullptr;
+    }
+    auto is_uniform = true;
+    for(auto path : {"geometry.radii.top_right", "geometry.radii.bottom_right",
+        "geometry.radii.bottom_left"}) {
+      auto corner = find_property(properties, path);
+      if(!corner || corner->m_is_mixed ||
+          !(corner->m_value == top_left->m_value)) {
+        is_uniform = false;
+      }
+    }
+    if(is_uniform) {
+      return nullptr;
+    }
+    return std::make_unique<SetCornerRadiusCommand>(nodes, *radius);
   }
 
   std::unique_ptr<Command> set_name(const Document& document,
@@ -559,26 +610,6 @@ namespace {
   }
 
   void add_grid_editors(PropertyEditors& editors) {
-    editors.add("grid.visible", make_editor(make_grid_setter(
-      [] (const Document&, const std::vector<NodeId>&, GridEdit& edit,
-          const PropertyValue& value) {
-        if(auto flag = std::get_if<bool>(&value)) {
-          edit.m_is_visible = *flag;
-          return true;
-        }
-        return false;
-      })));
-    editors.add("grid.type", make_editor(make_grid_setter(
-      [] (const Document&, const std::vector<NodeId>&, GridEdit& edit,
-          const PropertyValue& value) {
-        auto choice = std::get_if<Choice>(&value);
-        if(!choice || choice->m_index < 0 || choice->m_index > 1) {
-          return false;
-        }
-        edit.m_type =
-          choice->m_index == 0 ? GridType::LAYOUT : GridType::SQUARE;
-        return true;
-      })));
     editors.add("grid.columns", make_number_editor(make_grid_setter(
       [] (const Document&, const std::vector<NodeId>&, GridEdit& edit,
           const PropertyValue& value) {
@@ -742,6 +773,7 @@ PropertyEditors Rellu::make_standard_property_editors(TextMeasurer measurer) {
   opacity.m_suffix = "%";
   editors.add("appearance.opacity", std::move(opacity));
   editors.add("appearance.blend_mode", make_editor(set_blend_mode));
+  editors.add("geometry.radii", make_editor(set_corner_mode));
   editors.add("geometry.radii.all", make_number_editor(
     make_corner_setter(std::nullopt), 0.0, std::nullopt));
   editors.add("geometry.radii.top_left", make_number_editor(

@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
+#include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Tools/SelectTool.hpp"
 #include "Rellu/Tools/ToolManager.hpp"
 #include "../CommandsTests/Fixture.hpp"
@@ -104,7 +105,8 @@ namespace {
   std::vector<Point> get_handle_centers(const CanvasOverlay& overlay) {
     auto centers = std::vector<Point>();
     for(auto& shape : overlay.m_shapes) {
-      if(shape.m_radius > 0 && shape.m_fill == make_color(255, 255, 255)) {
+      if(shape.m_radius == HandleLayout::HANDLE_OUTER_RADIUS &&
+          shape.m_fill == make_color(255, 255, 255)) {
         centers.push_back(shape.m_center);
       }
     }
@@ -554,6 +556,10 @@ TEST_SUITE("SelectTool") {
     REQUIRE(bounds.m_y == doctest::Approx(125));
     REQUIRE(history.get_undo_count() == 1);
     REQUIRE(history.get_undo_label() == "Rotate");
+    REQUIRE(document.get(board.m_rectangle).m_header.m_rotation == 90);
+    REQUIRE(editor.undo());
+    drag(tools, Point(505, 145), Point(420, 120));
+    REQUIRE(document.get(board.m_rectangle).m_header.m_rotation == -90);
     REQUIRE(editor.undo());
     auto angle = 50 * std::numbers::pi / 180;
     auto start = Point(55, -30);
@@ -563,6 +569,7 @@ TEST_SUITE("SelectTool") {
     transform = get_world_transform(document, board.m_rectangle);
     REQUIRE(std::atan2(transform.m_b, transform.m_a) ==
       doctest::Approx(std::numbers::pi / 4));
+    REQUIRE(document.get(board.m_rectangle).m_header.m_rotation == 45);
   }
 
   TEST_CASE("nudge") {
@@ -578,18 +585,135 @@ TEST_SUITE("SelectTool") {
     REQUIRE(get_bounds(document, board.m_rectangle).m_x == 401);
     type(tools, Qt::Key_Right, Qt::ShiftModifier);
     REQUIRE(get_bounds(document, board.m_rectangle).m_x == 411);
-    REQUIRE(history.get_undo_count() == 2);
-    REQUIRE(history.get_undo_label() == "Nudge");
+    REQUIRE(history.get_undo_count() == 1);
+    REQUIRE(history.get_undo_label() == "Nudge Right");
     tools.key_press(KeyEvent(Qt::Key_Down, Qt::NoModifier));
     type(tools, Qt::Key_Down, Qt::NoModifier, true);
     type(tools, Qt::Key_Down, Qt::NoModifier, true);
     tools.key_release(KeyEvent(Qt::Key_Down, Qt::NoModifier));
     REQUIRE(get_bounds(document, board.m_rectangle).m_y == 153);
+    REQUIRE(history.get_undo_count() == 2);
+    REQUIRE(history.get_undo_label() == "Nudge Down");
+    type(tools, Qt::Key_Down);
+    REQUIRE(history.get_undo_count() == 2);
+    type(tools, Qt::Key_Up);
     REQUIRE(history.get_undo_count() == 3);
+    history.mark_clean();
     type(tools, Qt::Key_Up);
     REQUIRE(history.get_undo_count() == 4);
+    REQUIRE(get_bounds(document, board.m_rectangle).m_y == 152);
     editor.get_selection().select(board.m_locked);
     REQUIRE(!tools.key_press(KeyEvent(Qt::Key_Up, Qt::NoModifier)));
+  }
+
+  TEST_CASE("large_nudge") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto edge = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto artboard = *document.get(board.m_artboard).get_artboard();
+      artboard.m_layout_grid = LayoutGrid();
+      artboard.m_layout_grid->m_is_visible = true;
+      artboard.m_layout_grid->m_square_size = Size(8, 8);
+      transaction.replace_payload(board.m_artboard, artboard);
+      edge = add_rectangle(transaction, NodeId(),
+        Rect(CANVAS_BOUNDS.get_right() - 12, 0, 10, 10));
+      transaction.commit();
+      document.clear_history();
+    }
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    editor.get_selection().select(board.m_rectangle);
+    type(tools, Qt::Key_Right, Qt::ShiftModifier);
+    REQUIRE(get_bounds(document, board.m_rectangle).m_x == 404);
+    type(tools, Qt::Key_Right, Qt::ShiftModifier);
+    REQUIRE(get_bounds(document, board.m_rectangle).m_x == 412);
+    type(tools, Qt::Key_Left, Qt::ShiftModifier);
+    REQUIRE(get_bounds(document, board.m_rectangle).m_x == 404);
+    type(tools, Qt::Key_Up, Qt::ShiftModifier);
+    REQUIRE(get_bounds(document, board.m_rectangle).m_y == 148);
+    editor.get_selection().select(edge);
+    type(tools, Qt::Key_Right, Qt::ShiftModifier);
+    REQUIRE(get_bounds(document, edge).get_right() ==
+      CANVAS_BOUNDS.get_right());
+    type(tools, Qt::Key_Right);
+    REQUIRE(get_bounds(document, edge).get_right() ==
+      CANVAS_BOUNDS.get_right());
+  }
+
+  TEST_CASE("resize_nudge") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto turned = NodeId();
+    auto locked = NodeId();
+    auto label = NodeId();
+    {
+      auto transaction = Transaction(document);
+      turned = transaction.append(board.m_artboard, make_header("Turned",
+        make_translation(150, 300) * make_rotation(std::numbers::pi / 2)),
+        make_rectangle_shape(60, 20));
+      auto header = make_header("Locked", make_translation(250, 300));
+      header.m_aspect_lock = Size(2, 1);
+      locked = transaction.append(
+        board.m_artboard, header, make_rectangle_shape(40, 20));
+      auto text = make_text(u"Label");
+      text.m_frame = PositionedFrame();
+      label = transaction.append(board.m_artboard,
+        make_header("Label", make_translation(350, 300)), text);
+      transaction.commit();
+      document.clear_history();
+    }
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto& history = editor.get_history();
+    editor.get_selection().select(board.m_rectangle);
+    type(tools, Qt::Key_Right, Qt::AltModifier);
+    type(tools, Qt::Key_Right, Qt::AltModifier);
+    require_near(get_bounds(document, board.m_rectangle),
+      Rect(400, 150, 102, 50));
+    REQUIRE(history.get_undo_label() == "Resize Nudge Right");
+    REQUIRE(history.get_undo_count() == 1);
+    type(tools, Qt::Key_Down, Qt::AltModifier);
+    require_near(get_bounds(document, board.m_rectangle),
+      Rect(400, 150, 102, 51));
+    REQUIRE(history.get_undo_label() == "Resize Nudge Down");
+    REQUIRE(history.get_undo_count() == 2);
+    type(tools, Qt::Key_Left, Qt::AltModifier | Qt::ShiftModifier);
+    require_near(get_bounds(document, board.m_rectangle),
+      Rect(400, 150, 92, 51));
+    REQUIRE(history.get_undo_label() == "Resize Nudge Left");
+    type(tools, Qt::Key_Up, Qt::AltModifier);
+    require_near(get_bounds(document, board.m_rectangle),
+      Rect(400, 150, 92, 50));
+    REQUIRE(history.get_undo_label() == "Resize Nudge Up");
+    type(tools, Qt::Key_Left, Qt::AltModifier);
+    require_near(get_bounds(document, board.m_rectangle),
+      Rect(400, 150, 91, 50));
+    type(tools, Qt::Key_Right, Qt::AltModifier | Qt::ShiftModifier);
+    require_near(get_bounds(document, board.m_rectangle),
+      Rect(400, 150, 101, 50));
+    type(tools, Qt::Key_Right, Qt::ControlModifier);
+    require_near(get_bounds(document, board.m_rectangle),
+      Rect(401, 150, 101, 50));
+    REQUIRE(history.get_undo_label() == "Nudge Right");
+    editor.get_selection().select(turned);
+    auto before = get_bounds(document, turned);
+    type(tools, Qt::Key_Right, Qt::AltModifier);
+    auto after = get_bounds(document, turned);
+    REQUIRE(after.m_width == doctest::Approx(before.m_width + 1));
+    REQUIRE(after.m_height == doctest::Approx(before.m_height));
+    editor.get_selection().select(locked);
+    type(tools, Qt::Key_Right, Qt::AltModifier | Qt::ShiftModifier);
+    require_near(get_bounds(document, locked), Rect(350, 400, 50, 25));
+    editor.get_selection().select(label);
+    auto count = history.get_undo_count();
+    before = get_bounds(document, label);
+    REQUIRE(tools.key_press(KeyEvent(Qt::Key_Right, Qt::AltModifier)));
+    REQUIRE(get_bounds(document, label) == before);
+    REQUIRE(history.get_undo_count() == count);
   }
 
   TEST_CASE("cancel") {
@@ -624,16 +748,16 @@ TEST_SUITE("SelectTool") {
         document.get(board.m_rectangle).get_shape()->m_geometry).m_radii;
     };
     click(tools, Point(420, 170));
-    drag(tools, Point(414, 164), Point(424, 174));
-    REQUIRE(get_radii() == CornerRadii(10, 10, 10, 10));
+    drag(tools, Point(414, 164), Point(424, 170));
+    REQUIRE(get_radii() == CornerRadii(24, 24, 24, 24));
     REQUIRE(editor.get_history().get_undo_count() == 1);
     REQUIRE(editor.get_history().get_undo_label() == "Corner Radius");
     REQUIRE(editor.get_selection().get_nodes() ==
       std::vector{board.m_rectangle});
-    drag(tools, Point(486, 186), Point(476, 176), Qt::AltModifier);
-    REQUIRE(get_radii() == CornerRadii(10, 10, 20, 10));
+    drag(tools, Point(476, 176), Point(474, 175), Qt::AltModifier);
+    REQUIRE(get_radii() == CornerRadii(24, 24, 25, 24));
     REQUIRE(editor.get_history().get_undo_count() == 2);
-    drag(tools, Point(410, 160), Point(300, 100));
+    drag(tools, Point(424, 174), Point(300, 100));
     REQUIRE(get_radii() == CornerRadii(0, 0, 0, 0));
     drag(tools, Point(414, 164), Point(600, 400));
     REQUIRE(get_radii() == CornerRadii(25, 25, 25, 25));
@@ -641,6 +765,11 @@ TEST_SUITE("SelectTool") {
       Point(425, 175), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
     drag_to(tools, Point(425, 175), Point(415, 165));
     REQUIRE(get_radii() == CornerRadii(15, 15, 15, 15));
+    auto overlay = tools.draw();
+    REQUIRE(overlay.m_shapes.size() == 2);
+    REQUIRE(overlay.m_shapes[0].m_center == Point(414.5, 164.5));
+    REQUIRE(overlay.m_shapes[0].m_fill == make_color(38, 128, 235));
+    REQUIRE(overlay.m_shapes[1].m_fill == make_color(255, 255, 255));
     REQUIRE(tools.key_press(KeyEvent(Qt::Key_Escape, Qt::NoModifier)));
     REQUIRE(get_radii() == CornerRadii(25, 25, 25, 25));
     editor.get_selection().select(board.m_locked);
@@ -725,25 +854,24 @@ TEST_SUITE("SelectTool") {
     hover(tools, Point(451, 351));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
     auto overlay = tools.draw();
-    REQUIRE(get_handle_centers(overlay).empty());
+    auto grey = make_color(162, 162, 162);
     auto handles = std::size_t(0);
+    auto badges = std::vector<Point>();
     for(auto& shape : overlay.m_shapes) {
-      REQUIRE(shape.m_fill.m_red == shape.m_fill.m_green);
-      REQUIRE(shape.m_fill.m_red == shape.m_fill.m_blue);
-      REQUIRE(shape.m_fill.m_red < 1);
       if(shape.m_radius == SelectionHandles::LOCKED_HANDLE_RADIUS) {
+        REQUIRE(shape.m_fill == grey);
+        REQUIRE(shape.m_stroke == make_color(255, 255, 255));
         ++handles;
-      } else {
-        REQUIRE(shape.m_radius == 0);
+      } else if(shape.m_radius == SelectionHandles::LOCK_BADGE_RADIUS) {
+        REQUIRE(shape.m_fill == grey);
+        badges.push_back(shape.m_center);
+      } else if(shape.m_radius == 0) {
+        REQUIRE(shape.m_fill == grey);
       }
     }
     REQUIRE(handles == 8);
-    REQUIRE(overlay.m_images.size() == 2);
-    auto& badge = overlay.m_images.back();
-    REQUIRE(badge.m_image->width() ==
-      static_cast<int>(SelectionHandles::LOCK_BADGE_SIZE));
-    REQUIRE(badge.m_position.m_x + SelectionHandles::LOCK_BADGE_SIZE < 400);
-    REQUIRE(badge.m_position.m_y + SelectionHandles::LOCK_BADGE_SIZE < 300);
+    REQUIRE(badges == std::vector{Point(400, 300)});
+    REQUIRE(overlay.m_images.size() == 1);
     tools.double_click(make_event(
       Point(420, 320), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
     REQUIRE(tools.get_tool_name() == "select");
@@ -753,6 +881,17 @@ TEST_SUITE("SelectTool") {
       std::vector{board.m_rectangle});
     REQUIRE(tools.get_context().get_hit_tester().hit(
       Point(420, 320), 0) == board.m_artboard);
+    editor.get_selection().select(board.m_locked);
+    tools.press(make_event(
+      Point(405, 305), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
+    tools.release(make_event(
+      Point(430, 330), Qt::LeftButton, Qt::NoButton, Qt::NoModifier));
+    REQUIRE(document.get(board.m_locked).m_header.m_is_locked);
+    click(tools, Point(405, 305));
+    REQUIRE(!document.get(board.m_locked).m_header.m_is_locked);
+    REQUIRE(editor.get_history().get_undo_label() == "Unlock");
+    REQUIRE(editor.get_selection().get_nodes() ==
+      std::vector{board.m_locked});
   }
 
   TEST_CASE("hover_outline") {
@@ -796,20 +935,20 @@ TEST_SUITE("SelectTool") {
     overlay = tools.draw();
     auto centers = get_handle_centers(overlay);
     REQUIRE(centers.size() == 12);
-    require_near(centers[0], Point(400, 150));
-    require_near(centers[1], Point(450, 150));
-    require_near(centers[4], Point(500, 200));
-    require_near(centers[8], Point(414, 164));
-    require_near(centers[10], Point(486, 186));
+    require_near(centers[0], Point(400.5, 150.5));
+    require_near(centers[1], Point(450, 150.5));
+    require_near(centers[4], Point(499.5, 199.5));
+    require_near(centers[8], Point(413.5, 163.5));
+    require_near(centers[10], Point(486.5, 186.5));
     REQUIRE(overlay.m_shapes.size() == 20);
     require_sizes(overlay);
     tools.set_view(make_translation(10, 0) * make_scale(2, 2), 2,
       Size(2000, 1600));
     overlay = tools.draw();
     centers = get_handle_centers(overlay);
-    require_near(centers[0], Point(810, 300));
-    require_near(centers[4], Point(1010, 400));
-    require_near(centers[8], Point(824, 314));
+    require_near(centers[0], Point(810.5, 300.5));
+    require_near(centers[4], Point(1009.5, 399.5));
+    require_near(centers[8], Point(823.5, 313.5));
     require_near(overlay.m_images.front().m_position,
       Point(210, 200 - ArtboardTitles::GAP - ArtboardTitles::HEIGHT));
     REQUIRE(overlay.m_images.front().m_image->height() ==
@@ -826,8 +965,7 @@ TEST_SUITE("SelectTool") {
       Point(160, 160), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
     drag_to(tools, Point(160, 160), Point(170, 160));
     overlay = tools.draw();
-    REQUIRE(get_handle_centers(overlay).empty());
-    REQUIRE(overlay.m_shapes.size() == 4);
+    REQUIRE(overlay.m_shapes.empty());
     tools.release(make_event(
       Point(170, 160), Qt::LeftButton, Qt::NoButton, Qt::NoModifier));
     tools.press(make_event(
@@ -971,16 +1109,20 @@ TEST_SUITE("SelectTool") {
     editor.get_selection().select(row);
     auto centers = get_handle_centers(tools.draw());
     REQUIRE(centers.size() == 2);
-    require_near(centers[0], Point(145, 100));
-    require_near(centers[1], Point(145, 160));
+    require_near(centers[0], Point(145, 100.5));
+    require_near(centers[1], Point(145, 159.5));
     hover(tools, Point(145, 161));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
-    for(auto point : {Point(190, 130), Point(100, 130), Point(101, 101),
-        Point(189, 159)}) {
+    for(auto point : {Point(192, 98), Point(98, 98), Point(192, 162),
+        Point(98, 162)}) {
       hover(tools, point);
       REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
     }
-    drag(tools, Point(190, 130), Point(145, 200));
+    for(auto point : {Point(190, 130), Point(193, 130), Point(101, 101)}) {
+      hover(tools, point);
+      REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
+    }
+    drag(tools, Point(192, 98), Point(177, 177));
     REQUIRE(history.get_undo_label() == "Rotate");
     require_near(*get_local_bounds(document, row), Rect(0, 0, 90, 60));
     REQUIRE(editor.undo());
@@ -991,15 +1133,15 @@ TEST_SUITE("SelectTool") {
     editor.get_selection().select(column);
     centers = get_handle_centers(tools.draw());
     REQUIRE(centers.size() == 2);
-    require_near(centers[0], Point(360, 145));
-    require_near(centers[1], Point(300, 145));
-    hover(tools, Point(330, 100));
+    require_near(centers[0], Point(359.5, 145));
+    require_near(centers[1], Point(300.5, 145));
+    hover(tools, Point(362, 98));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
     editor.get_selection().select(std::vector{first, last});
     centers = get_handle_centers(tools.draw());
     REQUIRE(centers.size() == 2);
-    require_near(centers[0], Point(145, 100));
-    require_near(centers[1], Point(145, 160));
+    require_near(centers[0], Point(145, 100.5));
+    require_near(centers[1], Point(145, 159.5));
     for(auto point : {Point(190, 130), Point(101, 101), Point(95, 95)}) {
       hover(tools, point);
       REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
@@ -1029,7 +1171,7 @@ TEST_SUITE("SelectTool") {
     auto bottom = Point(bounds.get_center().m_x, bounds.get_bottom());
     auto centers = get_handle_centers(tools.draw());
     REQUIRE(centers.size() == 1);
-    require_near(centers[0], bottom);
+    require_near(centers[0], bottom - Point(0, 0.5));
     hover(tools, bounds.get_bottom_right());
     REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
     hover(tools, bottom + Point(0, 8));
@@ -1048,8 +1190,10 @@ TEST_SUITE("SelectTool") {
     bounds = get_bounds(document, automatic);
     centers = get_handle_centers(tools.draw());
     REQUIRE(centers.size() == 4);
-    hover(tools, bounds.get_top_left());
+    hover(tools, bounds.get_top_left() - Point(2, 2));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
+    hover(tools, bounds.get_top_left() + Point(2, 2));
+    REQUIRE(tools.get_cursor().m_kind != CursorKind::ROTATE);
     hover(tools, Point(bounds.get_right(), bounds.get_center().m_y));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
     auto& history = editor.get_history();
@@ -1075,6 +1219,136 @@ TEST_SUITE("SelectTool") {
     REQUIRE(width->m_width == 120);
   }
 
+  TEST_CASE("drag_decoration") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto area = NodeId();
+    {
+      auto transaction = Transaction(document);
+      area = transaction.append(board.m_artboard,
+        make_header("Area", make_translation(100, 300)), make_text(u"Label"));
+      transaction.commit();
+      document.clear_history();
+    }
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto snap = SnapService();
+    tools.get_context().set_snap_service(snap);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    editor.get_selection().select(board.m_rectangle);
+    tools.press(make_event(
+      Point(500, 200), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
+    REQUIRE(get_handle_centers(tools.draw()).size() == 11);
+    drag_to(tools, Point(500, 200), Point(520, 210));
+    REQUIRE(tools.draw().m_shapes.empty());
+    tools.release(make_event(
+      Point(520, 210), Qt::LeftButton, Qt::NoButton, Qt::NoModifier));
+    REQUIRE(get_handle_centers(tools.draw()).size() == 11);
+    tools.leave();
+    REQUIRE(get_handle_centers(tools.draw()).size() == 12);
+    tools.press(make_event(
+      Point(525, 145), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
+    drag_to(tools, Point(525, 145), Point(560, 230));
+    REQUIRE(tools.draw().m_shapes.empty());
+    tools.release(make_event(
+      Point(560, 230), Qt::LeftButton, Qt::NoButton, Qt::NoModifier));
+    REQUIRE(editor.get_history().get_undo_label() == "Rotate");
+    editor.get_selection().select(area);
+    tools.press(make_event(
+      Point(250, 440), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
+    drag_to(tools, Point(250, 440), Point(250, 460));
+    auto overlay = tools.draw();
+    REQUIRE(get_handle_centers(overlay).empty());
+    REQUIRE(overlay.m_shapes.size() > 4);
+    tools.release(make_event(
+      Point(250, 460), Qt::LeftButton, Qt::NoButton, Qt::NoModifier));
+    REQUIRE(get_bounds(document, area) == Rect(200, 400, 100, 60));
+  }
+
+  TEST_CASE("flipped_text_handles") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto payload = make_text(u"Label");
+    payload.m_frame = PositionedFrame();
+    payload.m_is_flipped_vertically = true;
+    auto point = transaction.append(
+      NodeId(), make_header("Point", make_translation(100, 100)), payload);
+    payload.m_frame = AreaFrame(Size(100, 40));
+    auto area = transaction.append(
+      NodeId(), make_header("Area", make_translation(300, 100)), payload);
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    editor.get_selection().select(point);
+    auto bounds = get_bounds(document, point);
+    auto top = Point(bounds.get_center().m_x, bounds.get_top());
+    REQUIRE(get_handle_centers(tools.draw()) ==
+      std::vector{top + Point(0, 0.5)});
+    hover(tools, top - Point(0, 8));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
+    hover(tools, Point(top.m_x, bounds.get_bottom() + 4));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
+    editor.get_selection().select(area);
+    auto count_lines = [&] (double y) {
+      auto count = 0;
+      for(auto& shape : tools.draw().m_shapes) {
+        if(shape.m_radius == 0 && shape.m_size.m_height == 1 &&
+            std::abs(shape.m_center.m_y - y) < 1e-9 &&
+            std::abs(std::sin(shape.m_angle)) < 1e-9) {
+          ++count;
+        }
+      }
+      return count;
+    };
+    REQUIRE(count_lines(100) == 25);
+    REQUIRE(count_lines(140) == 1);
+  }
+
+  TEST_CASE("area_text_fit") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto payload = make_text(u"Label");
+    payload.m_frame = AreaFrame(Size(100, 10));
+    auto area = transaction.append(
+      NodeId(), make_header("Area", make_translation(100, 100)), payload);
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    editor.get_selection().select(area);
+    auto red = make_color(215, 55, 63);
+    auto rings = std::vector<Point>();
+    auto dots = std::vector<Point>();
+    for(auto& shape : tools.draw().m_shapes) {
+      if(shape.m_stroke == red && shape.m_fill == make_color(255, 255, 255)) {
+        rings.push_back(shape.m_center);
+      } else if(shape.m_fill == red) {
+        dots.push_back(shape.m_center);
+      }
+    }
+    REQUIRE(rings == std::vector{Point(150, 109.5)});
+    REQUIRE(dots == std::vector{Point(150, 109.5)});
+    hover(tools, Point(150, 111));
+    auto hovered = std::size_t(0);
+    for(auto& shape : tools.draw().m_shapes) {
+      if(shape.m_fill == red &&
+          shape.m_radius == HandleLayout::HANDLE_OUTER_RADIUS) {
+        ++hovered;
+      }
+    }
+    REQUIRE(hovered == 1);
+    tools.double_click(make_event(
+      Point(150, 111), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
+    REQUIRE(std::get_if<AutoHeightFrame>(
+      &document.get(area).get_text()->m_frame));
+    REQUIRE(editor.get_history().get_undo_label() == "Resize");
+    REQUIRE(editor.get_history().get_undo_count() == 1);
+    REQUIRE(tools.get_tool_name() == "select");
+  }
+
   TEST_CASE("rotation_zones") {
     auto document = Document();
     auto board = build_board(document);
@@ -1082,19 +1356,27 @@ TEST_SUITE("SelectTool") {
     auto tools = ToolManager(editor);
     tools.set_view(Matrix(), 1, Size(1000, 800));
     editor.get_selection().select(board.m_rectangle);
-    hover(tools, Point(450, 145));
+    hover(tools, Point(450, 146.5));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
+    hover(tools, Point(450, 154.5));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
+    hover(tools, Point(450, 146));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
     hover(tools, Point(450, 141));
-    REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
-    hover(tools, Point(450, 140));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
     hover(tools, Point(509, 175));
-    REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
     hover(tools, Point(507, 143));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
+    hover(tools, Point(504, 154));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
+    hover(tools, Point(496, 154));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
+    hover(tools, Point(497, 153));
+    REQUIRE(tools.get_cursor().m_kind == CursorKind::RESIZE);
     hover(tools, Point(508, 142));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
-    drag(tools, Point(450, 141), Point(530, 175));
+    drag(tools, Point(507, 143), Point(482, 232));
     auto transform = get_world_transform(document, board.m_rectangle);
     REQUIRE(std::atan2(transform.m_b, transform.m_a) ==
       doctest::Approx(std::numbers::pi / 2));
@@ -1121,7 +1403,18 @@ TEST_SUITE("SelectTool") {
     auto tools = ToolManager(editor);
     tools.set_view(Matrix(), 1, Size(1000, 800));
     editor.get_selection().select(grid);
-    REQUIRE(get_handle_centers(tools.draw()).empty());
+    auto centers = get_handle_centers(tools.draw());
+    REQUIRE(centers.size() == 2);
+    require_near(centers[0], Point(199.5, 120));
+    require_near(centers[1], Point(150, 139.5));
+    auto dashes = std::size_t(0);
+    for(auto& shape : tools.draw().m_shapes) {
+      REQUIRE(!(shape.m_fill == make_color(38, 128, 235)));
+      if(shape.m_radius == 0 && shape.m_fill == make_color(30, 203, 64)) {
+        ++dashes;
+      }
+    }
+    REQUIRE(dashes == 2 * 25 + 2 * 10);
     hover(tools, Point(208, 120));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::ROTATE);
     hover(tools, Point(200, 120));
@@ -1138,6 +1431,83 @@ TEST_SUITE("SelectTool") {
       doctest::Approx(std::numbers::pi / 2));
     REQUIRE(editor.get_history().get_undo_label() == "Rotate Repeat Grid");
     REQUIRE(editor.get_history().get_undo_count() == 1);
+  }
+
+  TEST_CASE("edit_context_outline") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto grid = NodeId();
+    auto cell = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto group = Group();
+      group.m_repeat_grid =
+        RepeatGrid(Size(40, 40), 20, 20, 1, 1, Size(40, 40));
+      grid = transaction.append(board.m_artboard,
+        make_header("Grid", make_translation(100, 250)), group);
+      cell = transaction.append(grid, make_header(""), Group());
+      add_rectangle(transaction, cell, Rect(0, 0, 40, 40));
+      transaction.commit();
+      document.clear_history();
+    }
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto get_outlines = [&] {
+      auto outlines = std::vector<OverlayShape>();
+      for(auto& shape : tools.draw().m_shapes) {
+        if(shape.m_size.m_height == 4) {
+          outlines.push_back(shape);
+        }
+      }
+      return outlines;
+    };
+    REQUIRE(get_outlines().empty());
+    REQUIRE(editor.get_context().enter(board.m_group));
+    editor.get_selection().select(board.m_first);
+    auto outlines = get_outlines();
+    REQUIRE(outlines.size() == 4);
+    REQUIRE(outlines[0].m_fill == make_color(38, 128, 235, 0.2));
+    require_near(outlines[0].m_center, Point(200, 148));
+    REQUIRE(outlines[0].m_size.m_width == 108);
+    require_near(outlines[1].m_center, Point(252, 170));
+    REQUIRE(outlines[1].m_size.m_width == 40);
+    editor.get_context().exit();
+    REQUIRE(editor.get_context().enter(grid));
+    REQUIRE(editor.get_context().enter(cell));
+    outlines = get_outlines();
+    REQUIRE(outlines.size() == 8);
+    REQUIRE(outlines[0].m_fill == make_color(38, 128, 235, 0.2));
+    REQUIRE(outlines[4].m_fill == make_color(30, 203, 64, 0.2));
+  }
+
+  TEST_CASE("scroll_group_borders") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto group = Group();
+    group.m_scroll_group =
+      ScrollGroup(ScrollDirection::VERTICAL, Size(100, 40), Point(0, 0));
+    auto scroll = transaction.append(
+      NodeId(), make_header("Scroll", make_translation(100, 100)), group);
+    add_rectangle(transaction, scroll, Rect(0, 0, 100, 40));
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    editor.get_selection().select(scroll);
+    auto count_lines = [&] (bool is_horizontal) {
+      auto count = 0;
+      for(auto& shape : tools.draw().m_shapes) {
+        if(shape.m_radius == 0 &&
+            (std::abs(std::sin(shape.m_angle)) < 1e-9) == is_horizontal) {
+          ++count;
+        }
+      }
+      return count;
+    };
+    REQUIRE(count_lines(true) == 2 * 25 + 2 * 2);
+    REQUIRE(count_lines(false) == 2);
   }
 
   TEST_CASE("line_endpoints") {
@@ -1222,7 +1592,7 @@ TEST_SUITE("SelectTool") {
     REQUIRE(pills[0].m_size == Size(10, 18));
     require_near(pills[1].m_center, Point(100.5, 110));
     REQUIRE(get_handle_centers(tools.draw()).empty());
-    REQUIRE(tools.draw().m_shapes.size() == 4 + 2 + 4);
+    REQUIRE(tools.draw().m_shapes.size() == 4 * 5 + 2 + 4);
     hover(tools, Point(97, 97));
     REQUIRE(tools.get_cursor().m_kind == CursorKind::ARROW);
     tools.set_view(make_scale(2, 2), 1, Size(1000, 800));

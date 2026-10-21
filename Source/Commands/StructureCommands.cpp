@@ -1,8 +1,10 @@
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <stdexcept>
 #include <unordered_set>
 #include <variant>
+#include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/ArtboardPlacement.hpp"
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/CopyNames.hpp"
@@ -50,9 +52,36 @@ namespace {
     }
   }
 
+  double get_reparented_rotation(const Document& document, const NodeId& id) {
+    auto& node = document.get(id);
+    auto rotation = node.m_header.m_rotation;
+    if(auto parent = document.find(node.m_parent);
+        parent && !parent->get_artboard()) {
+      rotation += parent->m_header.m_rotation;
+    }
+    if(std::abs(rotation) != 360) {
+      rotation = std::fmod(rotation, 360);
+    }
+    return rotation;
+  }
+
+  void set_rotation(const Document& document, Transaction& transaction,
+      const NodeId& id, double rotation) {
+    auto& node = document.get(id);
+    if(node.get_artboard() || node.get_reference() ||
+        node.m_header.m_transform_3d) {
+      return;
+    }
+    auto header = node.m_header;
+    header.m_rotation = fit_rotation(rotation, header.m_transform);
+    if(header != node.m_header) {
+      transaction.replace_header(std::move(header));
+    }
+  }
+
   void reparent(const Document& document, Transaction& transaction,
       const std::vector<NodeId>& nodes, const NodeId& parent,
-      std::size_t index) {
+      std::size_t index, bool is_rotation_carried) {
     auto inverse = invert(get_world_transform(document, parent));
     if(!inverse) {
       throw std::invalid_argument("The container's transform is singular.");
@@ -77,10 +106,16 @@ namespace {
     }
     for(auto i = std::size_t(0); i != nodes.size(); ++i) {
       auto& id = nodes[i];
+      auto is_moved =
+        is_rotation_carried && document.get(id).m_parent != parent;
+      auto rotation = get_reparented_rotation(document, id);
       place_after(transaction, children, parent, id, predecessor);
       predecessor = id;
       if(get_transform(document, id) != transforms[i]) {
         set_transform(document, transaction, id, transforms[i]);
+      }
+      if(is_moved) {
+        set_rotation(document, transaction, id, rotation);
       }
     }
   }
@@ -282,7 +317,7 @@ void ReparentCommand::apply(
   }
   auto nodes = get_top_level(document, m_nodes);
   sort_by_z_order(document, nodes);
-  reparent(document, transaction, nodes, m_parent, m_index);
+  reparent(document, transaction, nodes, m_parent, m_index, true);
 }
 
 GroupCommand::GroupCommand(std::vector<NodeId> nodes, TextMeasurer measurer)
@@ -345,7 +380,7 @@ void GroupCommand::apply(const Document& document, Transaction& transaction) {
     header.m_transform = make_translation(origin->m_x, origin->m_y);
   }
   m_group = transaction.insert(parent, index, std::move(header), Group());
-  reparent(document, transaction, nodes, m_group, 0);
+  reparent(document, transaction, nodes, m_group, 0, false);
 }
 
 std::optional<std::vector<NodeId>> GroupCommand::get_selection() const {
@@ -385,9 +420,11 @@ void UngroupCommand::apply(const Document& document, Transaction& transaction) {
     for(auto i = std::size_t(0); i != children.size(); ++i) {
       auto& child = children[i];
       auto transform = get_transform(document, child);
+      auto rotation = get_reparented_rotation(document, child);
       transaction.move(child, parent, index + i);
       set_transform(
         document, transaction, child, header.m_transform * transform);
+      set_rotation(document, transaction, child, rotation);
       auto child_header = document.get(child).m_header;
       child_header.m_opacity *= header.m_opacity;
       child_header.m_is_visible =
@@ -530,8 +567,14 @@ void DuplicateCommand::apply(
       name_copy(document, transaction, copy, false);
     }
     auto& node = document.get(copy);
-    if(node.get_artboard()) {
-      auto header = node.m_header;
+    if(auto artboard = node.get_artboard()) {
+      if(!artboard->m_layout_grid && m_mode == DuplicateMode::DESIGN) {
+        auto payload = *artboard;
+        payload.m_layout_grid = make_initial_grid(
+          payload, document.get_resources().m_grid_defaults);
+        transaction.replace_payload(copy, std::move(payload));
+      }
+      auto header = document.get(copy).m_header;
       header.m_name = make_artboard_name(document, header.m_name, false);
       transaction.replace_header(std::move(header));
     }

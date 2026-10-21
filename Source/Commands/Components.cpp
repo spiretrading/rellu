@@ -1370,17 +1370,21 @@ std::string Rellu::make_instance_name(
     return std::string();
   }
   auto& name = entry->second.m_name;
-  auto highest = std::optional<int>();
-  for(auto& instance : find_instances(document, component)) {
-    if(auto number =
-        get_instance_number(document.get(instance).m_header.m_name, name)) {
-      highest = std::max(highest.value_or(0), *number);
-    }
-  }
-  if(!highest) {
+  auto master = document.find(entry->second.m_master);
+  if(!master || master->m_header.m_has_custom_name) {
     return name;
   }
-  return name + std::string(NUMBER_SEPARATOR) + std::to_string(*highest + 1);
+  auto highest = 0;
+  for(auto& instance : find_instances(document, component)) {
+    auto& header = document.get(instance).m_header;
+    if(header.m_has_custom_name) {
+      continue;
+    }
+    if(auto number = get_instance_number(header.m_name, name)) {
+      highest = std::max(highest, *number);
+    }
+  }
+  return name + std::string(NUMBER_SEPARATOR) + std::to_string(highest + 1);
 }
 
 NodeId Rellu::insert_instance(const Document& document,

@@ -73,6 +73,8 @@ namespace Rellu {
    * boolean, component, transform, layout, text, appearance, geometry,
    * fill, stroke, grid, effects and export, each present only for the kinds
    * of node XD shows it for. A reference is described by what it displays.
+   * The grid section describes both kinds of grid, showing neither, since
+   * the window rather than the artboard sets which kind is shown.
    * The text section of text being edited in place describes the
    * characters selected, or at a caret, the text typed there.
    * @param document The document containing the node.
@@ -87,10 +89,12 @@ namespace Rellu {
 
   /**
    * Describes the properties several nodes share, a value that differs
-   * among them being marked mixed. The position in the transform section
-   * of several nodes is that of the frame of them all, while the width,
-   * height and rotation are each node's, marked mixed when they differ to
-   * two decimals.
+   * among them being marked mixed and otherwise taken from the last node,
+   * or for the font size and character spacing from the first: numbers
+   * differ when they differ to two decimals from the first node's, and a
+   * mixed value is the first node's. The position in the transform
+   * section of several nodes is that of the frame of them all, and their
+   * component section is only a heading.
    * @param document The document containing the nodes.
    * @param nodes The nodes' ids.
    * @param measurer The function measuring text.

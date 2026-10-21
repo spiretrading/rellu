@@ -2,6 +2,7 @@
 #define RELLU_UI_XD_MENUS_HPP
 #include <QKeySequence>
 #include <QString>
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Ui/ActionRegistry.hpp"
 #include "Rellu/Ui/AppBar.hpp"
 
@@ -32,8 +33,16 @@ namespace Rellu {
     ActionRegistry& actions, Workspace workspace, bool has_document);
 
   /**
-   * Formats a shortcut the way Adobe XD's menus show it, such as
-   * <code>Shift+Ctrl+Z</code>.
+   * Formats a shortcut the way Adobe XD's menus show it in a language, such
+   * as <code>Shift+Ctrl+Z</code> or <code>Umschalt+Strg+Z</code>.
+   * @param shortcut The shortcut.
+   * @param language The language.
+   */
+  QString to_xd_shortcut_text(const QKeySequence& shortcut, Language language);
+
+  /**
+   * Formats a shortcut the way Adobe XD's menus show it in the language of
+   * the user interface.
    * @param shortcut The shortcut.
    */
   QString to_xd_shortcut_text(const QKeySequence& shortcut);

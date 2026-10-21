@@ -21,6 +21,7 @@ namespace {
   constexpr auto TOLERANCE_MARGIN = 1e-9;
   constexpr auto SEGMENT_SIZE = std::size_t(256);
   constexpr auto POPULATION = 2 * SEGMENT_SIZE;
+  constexpr auto INSIDE_FILL_INSET = 0.5625;
 
   SceneDependencies make_dependencies() {
     return SceneDependencies(
@@ -239,6 +240,12 @@ namespace {
         return std::nullopt;
       }
       auto radii = clamp_corner_radii(rectangle->m_radii, bounds.get_size());
+      for(auto radius : {radii.m_top_left, radii.m_top_right,
+          radii.m_bottom_right, radii.m_bottom_left}) {
+        if(radius > 0 && !(radius > distance)) {
+          return std::nullopt;
+        }
+      }
       auto shrink = [&] (double radius) {
         if(radius > 0) {
           return std::max(0.0, radius - distance);
@@ -251,6 +258,85 @@ namespace {
           shrink(radii.m_bottom_right), shrink(radii.m_bottom_left)));
     }
     return std::nullopt;
+  }
+
+  bool is_rounded(const ShapeGeometry& geometry) {
+    auto rectangle = std::get_if<RectangleShape>(&geometry);
+    if(!rectangle) {
+      return false;
+    }
+    auto& radii = rectangle->m_radii;
+    return radii.m_top_left > 0 || radii.m_top_right > 0 ||
+      radii.m_bottom_right > 0 || radii.m_bottom_left > 0;
+  }
+
+  std::optional<Path> shrink_path(
+      const ShapeGeometry& geometry, double distance) {
+    auto rectangle = std::get_if<RectangleShape>(&geometry);
+    if(!rectangle) {
+      return std::nullopt;
+    }
+    auto& bounds = rectangle->m_bounds;
+    auto width = bounds.m_width - 2 * distance;
+    auto height = bounds.m_height - 2 * distance;
+    if(!(width > 0) || !(height > 0)) {
+      return std::nullopt;
+    }
+    auto center = bounds.get_center();
+    return Rellu::transform(to_path(geometry),
+      make_translation(center.m_x, center.m_y) *
+      make_scale(width / bounds.m_width, height / bounds.m_height) *
+      make_translation(-center.m_x, -center.m_y));
+  }
+
+  void append(Path& target, const Path& source) {
+    auto start = Point();
+    for(auto& segment : source.get_segments()) {
+      auto& points = segment.m_points;
+      if(segment.m_type == SegmentType::MOVE) {
+        target.move_to(points[0]);
+        start = points[0];
+      } else if(segment.m_type == SegmentType::LINE) {
+        target.line_to(points[0]);
+        start = points[0];
+      } else if(segment.m_type == SegmentType::QUADRATIC) {
+        target.quadratic_to(points[0], points[1]);
+        start = points[1];
+      } else if(segment.m_type == SegmentType::CUBIC) {
+        if(segment.m_is_arc) {
+          target.arc_to(start + (points[0] - start) / ARC_CONTROL, points[2]);
+        } else {
+          target.cubic_to(points[0], points[1], points[2]);
+        }
+        start = points[2];
+      } else {
+        target.close();
+        start = points[0];
+      }
+    }
+  }
+
+  std::optional<Path> make_ring(const ShapeGeometry& geometry, double width) {
+    auto rectangle = std::get_if<RectangleShape>(&geometry);
+    if(!rectangle) {
+      return std::nullopt;
+    }
+    auto& bounds = rectangle->m_bounds;
+    auto inner = Rect(bounds.m_x + width, bounds.m_y + width,
+      bounds.m_width - 2 * width, bounds.m_height - 2 * width);
+    if(!(inner.m_width > 0) || !(inner.m_height > 0)) {
+      return std::nullopt;
+    }
+    auto radii = clamp_corner_radii(rectangle->m_radii, bounds.get_size());
+    auto shrink = [&] (double radius) {
+      return std::max(0.0, radius - width);
+    };
+    auto ring = Path(FillRule::EVEN_ODD);
+    append(ring, to_path(geometry));
+    append(ring, make_rectangle(inner, CornerRadii(shrink(radii.m_top_left),
+      shrink(radii.m_top_right), shrink(radii.m_bottom_right),
+      shrink(radii.m_bottom_left))));
+    return ring;
   }
 
   bool is_populous(const Document& document, const NodeId& id) {
@@ -302,6 +388,14 @@ namespace {
     auto& radii = rectangle->m_radii;
     return radii.m_top_left <= 0 && radii.m_top_right <= 0 &&
       radii.m_bottom_right <= 0 && radii.m_bottom_left <= 0;
+  }
+
+  Matrix to_single(const Matrix& matrix) {
+    auto round = [] (double value) {
+      return static_cast<double>(static_cast<float>(value));
+    };
+    return Matrix(round(matrix.m_a), round(matrix.m_b), round(matrix.m_c),
+      round(matrix.m_d), round(matrix.m_tx), round(matrix.m_ty));
   }
 
   bool translate(double& value, double offset) {
@@ -566,7 +660,15 @@ std::optional<SceneBuilder::Entry> SceneBuilder::enter(
     return std::nullopt;
   }
   auto placement = Placement(parent.m_transform * transform,
-    parent.m_opacity, parent.m_clip, parent.m_projection);
+    parent.m_opacity, parent.m_clip, parent.m_projection,
+    to_single(parent.m_single * transform), parent.m_is_clipped);
+  if(auto group = source->get_group();
+      group && (group->m_mask || get_viewport(*group))) {
+    placement.m_is_clipped = true;
+  }
+  if(placement.m_is_clipped) {
+    placement.m_single = placement.m_transform;
+  }
   if(!node.get_reference() && header.m_transform_3d) {
     auto projection = to_projection(*header.m_transform_3d, transform);
     if(parent.m_projection) {
@@ -576,11 +678,13 @@ std::optional<SceneBuilder::Entry> SceneBuilder::enter(
       placement.m_projection = parent.m_transform * projection;
     }
     placement.m_transform = Matrix();
+    placement.m_single = Matrix();
   }
   if(auto artboard = source->get_artboard()) {
     auto& frame = artboard->m_frame;
-    placement.m_transform =
-      parent.m_transform * make_translation(frame.m_x, frame.m_y);
+    auto offset = make_translation(frame.m_x, frame.m_y);
+    placement.m_transform = parent.m_transform * offset;
+    placement.m_single = to_single(parent.m_single * offset);
     auto clip = parent.m_transform.map(frame);
     if(parent.m_clip) {
       clip = intersect(*parent.m_clip, clip);
@@ -1227,16 +1331,18 @@ void SceneBuilder::add_shape(
   auto& paint_fill = poster ? *poster : style.m_fill;
   auto& outline = get_outline(
     node, get_scale(placement.m_transform, placement.m_projection));
+  auto& transform =
+    m_device_transform ? placement.m_single : placement.m_transform;
   auto fill = std::optional<FillCommand>();
   if(!std::holds_alternative<LineShape>(shape.m_geometry)) {
     if(auto paint = convert(paint_fill, *outline.m_path)) {
-      fill.emplace(outline.m_path, placement.m_transform, std::move(*paint),
+      fill.emplace(outline.m_path, transform, std::move(*paint),
         placement.m_clip);
     }
   }
   auto stroke = std::optional<FillCommand>();
   if(is_drawn(style.m_stroke)) {
-    stroke.emplace(outline.m_stroke, placement.m_transform,
+    stroke.emplace(outline.m_stroke, transform,
       make_paint(style.m_stroke->m_color, placement.m_opacity),
       placement.m_clip);
     if(style.m_stroke->m_dashes.empty() && (outline.m_line ||
@@ -1254,6 +1360,11 @@ void SceneBuilder::add_shape(
     if(fill && style.m_stroke->m_color.m_alpha >= 1 &&
         !is_inward(style.m_effects)) {
       fill->m_path = outline.m_line;
+      if(auto inset = is_inside && is_rounded(shape.m_geometry) ?
+          shrink_path(shape.m_geometry,
+            INSIDE_FILL_INSET * style.m_stroke->m_width) : std::nullopt) {
+        fill->m_path = std::make_shared<const Path>(std::move(*inset));
+      }
     }
     add_styled(list, std::move(fill), std::move(stroke), style.m_effects);
     return;
@@ -1311,6 +1422,10 @@ SceneBuilder::Outline& SceneBuilder::get_outline(
     if(outline.m_line) {
       outline.m_stroke = std::make_shared<const Path>(
         outline_stroke(*outline.m_line, geometry, tolerance));
+    } else if(auto ring = stroke->m_dashes.empty() &&
+        stroke->m_alignment == StrokeAlignment::INSIDE ?
+          make_ring(shape.m_geometry, stroke->m_width) : std::nullopt) {
+      outline.m_stroke = std::make_shared<const Path>(std::move(*ring));
     } else {
       outline.m_stroke = std::make_shared<const Path>(
         outline_stroke(*outline.m_path, geometry, tolerance));

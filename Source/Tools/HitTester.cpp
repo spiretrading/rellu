@@ -310,23 +310,49 @@ std::vector<NodeId> HitTester::query(
     if(!node) {
       continue;
     }
-    auto& extent = measure(child, 0);
-    if(!extent.m_local) {
-      continue;
-    }
-    auto placement = place(*node);
-    auto quad = get_corners(*extent.m_local, world * placement->m_transform);
     if(is_enclosed) {
+      auto& extent = measure(child, 0);
+      if(!extent.m_local) {
+        continue;
+      }
+      auto placement = place(*node);
+      auto quad =
+        get_corners(*extent.m_local, world * placement->m_transform);
       if(std::all_of(quad.begin(), quad.end(), [&] (const auto& corner) {
           return is_inside(region, corner);
         })) {
         result.push_back(child);
       }
-    } else if(intersects(quad, region)) {
+    } else if(meets(child, world, region, 0)) {
       result.push_back(child);
     }
   }
   return result;
+}
+
+bool HitTester::meets(const NodeId& id, const Matrix& parent,
+    const Rect& region, int depth) const {
+  auto node = depth <= MAXIMUM_DEPTH ? m_document->find(id) : nullptr;
+  if(!node) {
+    return false;
+  }
+  auto& extent = measure(id, depth);
+  auto placement = place(*node);
+  if(!extent.m_local || !placement) {
+    return false;
+  }
+  auto world = parent * placement->m_transform;
+  if(!intersects(get_corners(*extent.m_local, world), region)) {
+    return false;
+  }
+  auto group = placement->m_source->get_group();
+  if(!group || group->m_mask || get_viewport(*group)) {
+    return true;
+  }
+  return std::any_of(placement->m_children->begin(),
+    placement->m_children->end(), [&] (const auto& child) {
+      return meets(child, world, region, depth + 1);
+    });
 }
 
 std::optional<Rect> HitTester::get_extent(const NodeId& id) const {

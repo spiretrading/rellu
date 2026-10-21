@@ -1,8 +1,11 @@
 #include <cmath>
 #include <utility>
+#include <QEvent>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QMenu>
+#include <QTimer>
 #include "Rellu/Ui/AppBar.hpp"
 #include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
@@ -104,6 +107,7 @@ AppBar::AppBar(QWidget* parent)
   m_zoom_field->setAccessibleName(translate("app_bar", "Zoom"));
   m_zoom_field->setFixedWidth(ZOOM_FIELD_WIDTH);
   m_zoom_field->setFrame(false);
+  m_zoom_field->installEventFilter(this);
   zoom_layout->addWidget(m_zoom_field);
   auto presets = make_icon_button(Glyph::CHEVRON_DOWN, "Zoom");
   presets->setFixedSize(24, 24);
@@ -152,6 +156,13 @@ AppBar::AppBar(QWidget* parent)
   connect(m_zoom_field, &QLineEdit::editingFinished, this, [this] {
     enter_zoom();
   });
+  connect(m_zoom_field, &QLineEdit::returnPressed, this, [this] {
+    enter_zoom();
+    m_zoom_field->clearFocus();
+    if(m_release_handler) {
+      m_release_handler();
+    }
+  });
   update_workspace();
   set_zoom(1);
 }
@@ -198,6 +209,10 @@ void AppBar::set_zoom_handler(ZoomHandler handler) {
   m_zoom_handler = std::move(handler);
 }
 
+void AppBar::set_release_handler(ReleaseHandler handler) {
+  m_release_handler = std::move(handler);
+}
+
 QLineEdit& AppBar::get_zoom_field() {
   return *m_zoom_field;
 }
@@ -209,6 +224,34 @@ QToolButton& AppBar::get_workspace_button(Workspace workspace) {
     return *m_share;
   }
   return *m_design;
+}
+
+bool AppBar::eventFilter(QObject* watched, QEvent* event) {
+  if(watched == m_zoom_field) {
+    if(event->type() == QEvent::FocusIn) {
+      auto text = format_zoom(m_zoom);
+      text.chop(1);
+      m_zoom_field->setText(text);
+      QTimer::singleShot(0, m_zoom_field, [this] {
+        m_zoom_field->selectAll();
+      });
+    } else if(event->type() == QEvent::FocusOut) {
+      QTimer::singleShot(0, m_zoom_field, [this] {
+        if(!m_zoom_field->hasFocus()) {
+          m_zoom_field->setText(format_zoom(m_zoom));
+        }
+      });
+    } else if(event->type() == QEvent::KeyPress &&
+        static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+      m_zoom_field->setText(format_zoom(m_zoom));
+      m_zoom_field->clearFocus();
+      if(m_release_handler) {
+        m_release_handler();
+      }
+      return true;
+    }
+  }
+  return QWidget::eventFilter(watched, event);
 }
 
 void AppBar::update_workspace() {

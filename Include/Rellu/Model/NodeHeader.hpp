@@ -2,6 +2,7 @@
 #define RELLU_MODEL_NODE_HEADER_HPP
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 #include <string>
 #include "Rellu/Geometry/BlendMode.hpp"
@@ -92,6 +93,41 @@ namespace Rellu {
   Projection to_projection(
     const Transform3d& transform, const Matrix& planar);
 
+  /**
+   * Returns the rotation Adobe XD derives from a transform.
+   * @param transform The transform.
+   * @return The angle in degrees the transform turns the x axis by, at
+   *         least 0 and less than 360.
+   */
+  double derive_rotation(const Matrix& transform);
+
+  /**
+   * Tests whether a rotation turns the x axis as a transform does.
+   * @param rotation The rotation in degrees.
+   * @param transform The transform.
+   */
+  bool is_congruent(double rotation, const Matrix& transform);
+
+  /**
+   * Returns the rotation a node takes when its transform is set, as Adobe
+   * XD sets a node's transform.
+   * @param rotation The node's rotation in degrees.
+   * @param transform The node's new transform.
+   * @return <i>rotation</i> while it turns as <i>transform</i> does,
+   *         otherwise the rotation derived from <i>transform</i>.
+   */
+  double fit_rotation(double rotation, const Matrix& transform);
+
+  /**
+   * Returns the rotation a node takes once resized or flipped, as Adobe
+   * XD's resize operations finalize it.
+   * @param rotation The node's rotation in degrees before the operation.
+   * @param transform The node's transform after the operation.
+   * @return The fitted rotation, below zero when <i>rotation</i> is and
+   *         within a turn of zero.
+   */
+  double finalize_rotation(double rotation, const Matrix& transform);
+
   /** The properties shared by every kind of node. */
   struct NodeHeader {
 
@@ -115,6 +151,13 @@ namespace Rellu {
 
     /** The transform from the node's local space to its parent's. */
     Matrix m_transform;
+
+    /**
+     * The rotation in degrees Adobe XD shows and stores for the node, which
+     * turns as the transform does but keeps the value the node was turned
+     * to, such as 270, -90 or 360.
+     */
+    double m_rotation = 0;
 
     /**
      * The transform rotating the node out of its parent's plane, if any, in
@@ -175,12 +218,51 @@ namespace Rellu {
       planar.m_ty + center.m_y * depth, x, y, 1 + depth);
   }
 
+  inline double derive_rotation(const Matrix& transform) {
+    auto rotation = get_rotation(transform);
+    if(rotation < 0) {
+      return rotation + 360;
+    }
+    return rotation;
+  }
+
+  inline bool is_congruent(double rotation, const Matrix& transform) {
+    constexpr auto TOLERANCE = 1e-3;
+    auto difference = std::fmod(rotation - get_rotation(transform), 360);
+    if(difference > 180) {
+      difference -= 360;
+    } else if(difference <= -180) {
+      difference += 360;
+    }
+    return std::abs(difference) < TOLERANCE;
+  }
+
+  inline double fit_rotation(double rotation, const Matrix& transform) {
+    if(is_congruent(rotation, transform)) {
+      return rotation;
+    }
+    return derive_rotation(transform);
+  }
+
+  inline double finalize_rotation(double rotation, const Matrix& transform) {
+    auto fitted = fit_rotation(rotation, transform);
+    if(rotation < 0) {
+      fitted -= 360;
+    }
+    fitted = std::fmod(fitted, 360);
+    if(fitted == 0) {
+      return 0;
+    }
+    return fitted;
+  }
+
   inline bool NodeHeader::operator ==(const NodeHeader& header) const {
     return m_id == header.m_id && m_name == header.m_name &&
       m_has_custom_name == header.m_has_custom_name &&
       m_is_visible == header.m_is_visible &&
       m_is_locked == header.m_is_locked &&
       m_transform == header.m_transform &&
+      equals(m_rotation, header.m_rotation) &&
       m_transform_3d == header.m_transform_3d &&
       equals(m_opacity, header.m_opacity) &&
       m_blend_mode == header.m_blend_mode &&

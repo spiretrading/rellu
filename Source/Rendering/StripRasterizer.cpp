@@ -292,7 +292,13 @@ namespace {
       outline = &m_outline;
       antialiasing = Supersampler::get_antialiasing(m_outline);
     } else {
-      antialiasing = Supersampler::get_antialiasing(path, matrix);
+      auto drawing = PathDrawing::RECTANGLE;
+      if(is_clip) {
+        drawing = PathDrawing::CLIP;
+      } else if(paint >= 0) {
+        drawing = PathDrawing::PATH;
+      }
+      antialiasing = Supersampler::get_antialiasing(path, matrix, drawing);
     }
     if(antialiasing == Antialiasing::SUPERSAMPLED) {
       if(outline) {

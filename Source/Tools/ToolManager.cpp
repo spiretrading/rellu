@@ -1,6 +1,8 @@
+#include <cmath>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Tools/ArtboardGrids.hpp"
 #include "Rellu/Tools/ArtboardGuides.hpp"
@@ -8,6 +10,7 @@
 #include "Rellu/Tools/PathEditTool.hpp"
 #include "Rellu/Tools/PenTool.hpp"
 #include "Rellu/Tools/PrototypeTool.hpp"
+#include "Rellu/Tools/SelectionBox.hpp"
 #include "Rellu/Tools/SelectTool.hpp"
 #include "Rellu/Tools/ShapeTool.hpp"
 #include "Rellu/Tools/TextTool.hpp"
@@ -17,9 +20,32 @@
 using namespace Rellu;
 
 namespace {
+  constexpr auto DROP_FILL = make_color(38, 128, 235, 0.3);
+
   bool is_modifier(int key) {
     return key == Qt::Key_Shift || key == Qt::Key_Alt ||
       key == Qt::Key_Control || key == Qt::Key_Meta;
+  }
+
+  void add_drop_fill(const ToolContext& context, const NodeId& target,
+      CanvasOverlay& overlay) {
+    auto box = get_selection_box(context.get_document(), std::vector{target},
+      context.get_text_measurer());
+    if(!box) {
+      return;
+    }
+    auto corners = box->get_corners();
+    auto top_left = context.to_view(corners[0]);
+    auto top_right = context.to_view(corners[1]);
+    auto bottom_right = context.to_view(corners[2]);
+    auto shape = OverlayShape();
+    shape.m_center = (top_left + bottom_right) * 0.5;
+    shape.m_size = Size(
+      distance(top_left, top_right), distance(top_right, bottom_right));
+    shape.m_angle = std::atan2(
+      top_right.m_y - top_left.m_y, top_right.m_x - top_left.m_x);
+    shape.m_fill = DROP_FILL;
+    overlay.m_shapes.push_back(shape);
   }
 }
 
@@ -187,6 +213,18 @@ ToolCursor ToolManager::get_cursor() const {
   return m_tool->get_cursor();
 }
 
+const NodeId& ToolManager::get_drop_target() const {
+  return m_drop_target;
+}
+
+void ToolManager::set_drop_target(const NodeId& target) {
+  if(m_drop_target == target) {
+    return;
+  }
+  m_drop_target = target;
+  m_signal();
+}
+
 CanvasOverlay ToolManager::draw() {
   auto overlay = CanvasOverlay();
   auto highlights = std::unordered_set<NodeId>();
@@ -200,10 +238,13 @@ CanvasOverlay ToolManager::draw() {
   if(auto node = document.find(hover); node && node->get_artboard()) {
     highlights.insert(hover);
   }
-  draw_artboard_grids(
-    document, m_context.get_view(), m_context.get_size(), overlay);
+  draw_artboard_grids(document, m_context.get_grid_settings(),
+    m_context.get_view(), m_context.get_size(), overlay);
   draw_artboard_guides(m_context, overlay);
   m_titles.draw(overlay, m_context.get_scale(), highlights);
+  if(!m_drop_target.is_nil()) {
+    add_drop_fill(m_context, m_drop_target, overlay);
+  }
   m_tool->draw(m_context, overlay);
   m_context.get_snap_service().draw(m_context.get_view(), overlay);
   return overlay;

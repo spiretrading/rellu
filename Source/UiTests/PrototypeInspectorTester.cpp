@@ -6,6 +6,7 @@
 #include <QLineEdit>
 #include <QStandardItemModel>
 #include <QToolButton>
+#include <QWheelEvent>
 #include <doctest/doctest.h>
 #include "Rellu/Prototype/InteractionCommands.hpp"
 #include "Rellu/Ui/PrototypeInspector.hpp"
@@ -135,6 +136,31 @@ TEST_SUITE("PrototypeInspector") {
     auto interactions = get_interactions(document, scene.m_button);
     REQUIRE(interactions.size() == 2);
     REQUIRE(interactions[1]->m_trigger == Trigger(KeyTrigger()));
+  }
+
+  TEST_CASE("wheel") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    auto editor = Editor(document);
+    auto inspector = PrototypeInspector();
+    inspector.set_editor(&editor);
+    editor.get_selection().select(scene.m_button);
+    QApplication::processEvents();
+    get<QToolButton>(inspector, "add").click();
+    QApplication::processEvents();
+    choose(get<QComboBox>(inspector, "destination"), "Menu");
+    auto count = editor.get_history().get_undo_count();
+    auto& easing = get<QComboBox>(inspector, "easing");
+    REQUIRE(easing.isEnabled());
+    auto index = easing.currentIndex();
+    auto event = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(),
+      QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
+      false);
+    QApplication::sendEvent(&easing, &event);
+    QApplication::processEvents();
+    REQUIRE(!event.isAccepted());
+    REQUIRE(get<QComboBox>(inspector, "easing").currentIndex() == index);
+    REQUIRE(editor.get_history().get_undo_count() == count);
   }
 
   TEST_CASE("triggers") {

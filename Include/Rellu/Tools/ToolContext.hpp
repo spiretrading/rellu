@@ -13,6 +13,7 @@
 #include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/Subscription.hpp"
 #include "Rellu/Tools/ArtboardTitles.hpp"
+#include "Rellu/Tools/GridSettings.hpp"
 #include "Rellu/Tools/GuideSettings.hpp"
 #include "Rellu/Tools/HitTester.hpp"
 #include "Rellu/Tools/SnapService.hpp"
@@ -160,6 +161,15 @@ namespace Rellu {
        */
       void set_guide_settings(GuideSettings settings);
 
+      /** Returns how the design grids of artboards are shown. */
+      const GridSettings& get_grid_settings() const;
+
+      /**
+       * Sets how the design grids of artboards are shown.
+       * @param settings The settings.
+       */
+      void set_grid_settings(GridSettings settings);
+
       /**
        * Returns the guide being dragged, drawn by the tool dragging it in
        * place of where the document has it, or none.
@@ -187,6 +197,7 @@ namespace Rellu {
       std::optional<std::string> m_tool_request;
       std::uint64_t m_revision;
       GuideSettings m_guide_settings;
+      GridSettings m_grid_settings;
       std::optional<GuideReference> m_dragged_guide;
       Subscription m_subscription;
 

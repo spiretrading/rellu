@@ -87,8 +87,8 @@ namespace Rellu {
   /**
    * Makes a closed polygon through a sequence of vertices, rounding each
    * vertex with a circular arc tangent to both of its edges. A radius too
-   * large for an edge is reduced so that no rounding takes up more than half
-   * of either adjacent edge.
+   * large for the edges is reduced for every vertex alike, until the
+   * roundings at both ends of each edge fit within it.
    * @param vertices The vertices in order.
    * @param corner_radius The radius rounding each vertex.
    */

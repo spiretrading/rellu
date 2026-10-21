@@ -143,6 +143,14 @@ void ToolContext::set_guide_settings(GuideSettings settings) {
   m_guide_settings = settings;
 }
 
+const GridSettings& ToolContext::get_grid_settings() const {
+  return m_grid_settings;
+}
+
+void ToolContext::set_grid_settings(GridSettings settings) {
+  m_grid_settings = settings;
+}
+
 const std::optional<GuideReference>& ToolContext::get_dragged_guide() const {
   return m_dragged_guide;
 }

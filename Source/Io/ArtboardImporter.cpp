@@ -1,3 +1,5 @@
+#include <array>
+#include <cstddef>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -52,6 +54,21 @@ namespace {
     grid.m_square_column_color = read_stroke_color(json, "columnStroke"_L1);
     grid.m_square_row_color = read_stroke_color(json, "rowStroke"_L1);
     return grid;
+  }
+
+  std::optional<Matrix> read_local_transform(const QJsonObject& json) {
+    auto values = std::array<double, 6>();
+    auto index = std::size_t(0);
+    for(auto key : {"a"_L1, "b"_L1, "c"_L1, "d"_L1, "tx"_L1, "ty"_L1}) {
+      auto value = json.value(key);
+      if(!value.isDouble()) {
+        return std::nullopt;
+      }
+      values[index] = value.toDouble();
+      ++index;
+    }
+    return Matrix(
+      values[0], values[1], values[2], values[3], values[4], values[5]);
   }
 
   void read_guides(XdObject& json, QLatin1StringView key,
@@ -136,7 +153,15 @@ void Rellu::add_artboard_importer(XdImporter& importer) {
       make_translation(-origin->m_origin.m_x, -origin->m_origin.m_y);
     auto reference = node.m_payload ?
       std::get_if<Reference>(&*node.m_payload) : nullptr;
-    if(!reference) {
+    auto ux = get_ux(*node.m_json);
+    auto local = std::optional<Matrix>();
+    if(ux && !reference && !node.m_header.m_transform_3d) {
+      local = read_local_transform(
+        ux->get_json().value("localTransform"_L1).toObject());
+    }
+    if(local) {
+      node.m_header.m_transform = *local;
+    } else if(!reference) {
       node.m_header.m_transform = offset * node.m_header.m_transform;
       if(auto& transform = node.m_header.m_transform_3d) {
         transform->m_matrix[3] = node.m_header.m_transform.m_tx;
@@ -145,7 +170,7 @@ void Rellu::add_artboard_importer(XdImporter& importer) {
     } else if(reference->m_transform) {
       reference->m_transform = offset * *reference->m_transform;
     }
-    if(auto ux = get_ux(*node.m_json)) {
+    if(ux) {
       ux->ignore({"localTransform"_L1});
     }
   });

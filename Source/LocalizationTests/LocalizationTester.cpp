@@ -62,6 +62,81 @@ TEST_SUITE("Localization") {
       "Debes reiniciar Rellu para aplicar el cambio de idioma.");
   }
 
+  TEST_CASE("xd_terms") {
+    REQUIRE(localize("message",
+      "You must restart Rellu to apply the language change.",
+      Language::JAPANESE) == "\xE8\xA8\x80\xE8\xAA\x9E\xE3\x81\xAE\xE5\xA4\x89"
+      "\xE6\x9B\xB4\xE3\x82\x92\xE9\x81\xA9\xE7\x94\xA8\xE3\x81\x99\xE3\x82"
+      "\x8B\xE3\x81\xAB\xE3\x81\xAF Rellu \xE3\x82\x92\xE5\x86\x8D\xE8\xB5\xB7"
+      "\xE5\x8B\x95\xE3\x81\x99\xE3\x82\x8B\xE5\xBF\x85\xE8\xA6\x81\xE3\x81"
+      "\x8C\xE3\x81\x82\xE3\x82\x8A\xE3\x81\xBE\xE3\x81\x99\xE3\x80\x82");
+    REQUIRE(localize("message",
+      "You must restart Rellu to apply the language change.",
+      Language::ENGLISH) ==
+      "You must restart Rellu to apply the language change.");
+    REQUIRE(localize("layers", "ARTBOARDS", Language::GERMAN) ==
+      "ZEICHENFL\xC3\x84" "CHEN");
+    REQUIRE(localize("layers", "Pasteboard", Language::GERMAN) ==
+      "Montagefl\xC3\xA4" "che");
+    REQUIRE(localize("layers", "Pasteboard", Language::JAPANESE) ==
+      "\xE3\x83\x9A\xE3\x83\xBC\xE3\x82\xB9\xE3\x83\x88\xE3\x83\x9C\xE3\x83"
+      "\xBC\xE3\x83\x89");
+    REQUIRE(localize("layers", "PASTEBOARD", Language::GERMAN) ==
+      "MONTAGEFL\xC3\x84" "CHE");
+    REQUIRE(localize("prototype", " s", Language::GERMAN) == " Sek.");
+    REQUIRE(localize("prototype", "Ease In", Language::GERMAN) == "Ease In");
+    REQUIRE(localize("prototype", "Tap", Language::GERMAN) == "Antippen");
+    REQUIRE(localize("prototype", "Transition", Language::GERMAN) ==
+      "\xC3\x9C" "bergang");
+    REQUIRE(localize("history", "Draw Rectangle", Language::JAPANESE) ==
+      "\xE9\x95\xB7\xE6\x96\xB9\xE5\xBD\xA2\xE3\x82\x92\xE6\x8F\x8F\xE7\x94"
+      "\xBB");
+    REQUIRE(localize("shortcut", "Shift", Language::GERMAN) == "Umschalt");
+    REQUIRE(localize("shortcut", "Del", Language::JAPANESE) == "Delete");
+  }
+
+  TEST_CASE("default_names") {
+    REQUIRE(localize_default_name("Rectangle 3", "SHAPE_RECTANGLE",
+      Language::GERMAN) == "Rechteck 3");
+    REQUIRE(localize_default_name("Rectangle 3", "SHAPE_RECTANGLE",
+      Language::JAPANESE) == "\xE9\x95\xB7\xE6\x96\xB9\xE5\xBD\xA2 3");
+    REQUIRE(localize_default_name("Rechteck 3", "SHAPE_RECTANGLE",
+      Language::ENGLISH) == "Rectangle 3");
+    REQUIRE(localize_default_name("Rectangle 3", "SHAPE_RECTANGLE",
+      Language::ENGLISH) == "Rectangle 3");
+    REQUIRE(localize_default_name("Component 1 \xE2\x80\x93 12",
+      "SHAPE_COMPONENT", Language::GERMAN) ==
+      "Komponente 1 \xE2\x80\x93 12");
+    REQUIRE(localize_default_name("Gruppe maskieren 2", "SHAPE_MASK",
+      Language::ENGLISH) == "Mask Group 2");
+    REQUIRE(localize_default_name("Grupo 2", "SHAPE_GROUP",
+      Language::FRENCH) == "Groupe 2");
+    REQUIRE(localize_default_name("Rectangle", "SHAPE_RECTANGLE",
+      Language::GERMAN) == "Rechteck");
+    REQUIRE(localize_default_name("Box", "SHAPE_RECTANGLE",
+      Language::ENGLISH) == "Rectangle");
+    REQUIRE(localize_default_name("Box 3", "SHAPE_RECTANGLE",
+      Language::GERMAN) == "Rechteck 3");
+    REQUIRE(localize_default_name("Rectangle 1 2", "SHAPE_RECTANGLE",
+      Language::GERMAN) == "Rechteck 2");
+    REQUIRE(localize_default_name("Box 3a", "SHAPE_RECTANGLE",
+      Language::GERMAN) == "Rechteck");
+    REQUIRE(localize_default_name("Artboard \xE2\x80\x93 1",
+      "SHAPE_ARTBOARD", Language::GERMAN) == "Zeichenfl\xC3\xA4" "che 1");
+    REQUIRE(localize_default_name("Image 7", "SHAPE_IMAGE",
+      Language::GERMAN) == "Bild 7");
+    REQUIRE(localize_default_name("Repeat Grid 4", "SHAPE_REPEAT_GRID",
+      Language::GERMAN) == "Wiederholungsraster 4");
+    REQUIRE(localize_default_name("Union 5", "SHAPE_UNION",
+      Language::GERMAN) == "Vereinigungsmenge 5");
+    REQUIRE(localize_default_name("Scroll Group 6", "SHAPE_SCROLLABLE_GROUP",
+      Language::GERMAN) == "Bildlaufgruppe 6");
+    REQUIRE(localize_default_name("Symbol 3", "SHAPE_SYMBOL",
+      Language::GERMAN) == "Symbol 3");
+    REQUIRE(localize_default_name("Flow 3", "FLOW_NAME", Language::GERMAN) ==
+      "Flow 3");
+  }
+
   TEST_CASE("language") {
     REQUIRE(get_language() == Language::ENGLISH);
     REQUIRE(localize("menu", "&Edit") == "&Edit");

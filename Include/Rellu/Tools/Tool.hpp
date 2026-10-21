@@ -52,8 +52,23 @@ namespace Rellu {
     /** A curved arrow rotating about a corner at an angle. */
     ROTATE,
 
-    /** A crosshair placing what a drawing tool draws. */
-    CROSSHAIR,
+    /** A crosshair with a square, drawing a rectangle. */
+    RECTANGLE,
+
+    /** A crosshair with a circle, drawing an ellipse. */
+    ELLIPSE,
+
+    /** A crosshair with a triangle, drawing a polygon. */
+    POLYGON,
+
+    /** A crosshair with a slanted line, drawing a line. */
+    LINE,
+
+    /** A crosshair framing a square, drawing an artboard. */
+    ARTBOARD,
+
+    /** A pen nib placing the points of a path. */
+    PEN,
 
     /** An I-beam placing a text caret. */
     TEXT,
@@ -62,7 +77,19 @@ namespace Rellu {
     ZOOM_IN,
 
     /** A magnifier with a minus sign, zooming out. */
-    ZOOM_OUT
+    ZOOM_OUT,
+
+    /** An open hand, ready to pan. */
+    OPEN_HAND,
+
+    /** A closed hand, panning. */
+    CLOSED_HAND,
+
+    /** Arrows split by a horizontal line, moving a horizontal guide. */
+    HORIZONTAL_GUIDE,
+
+    /** Arrows split by a vertical line, moving a vertical guide. */
+    VERTICAL_GUIDE
   };
 
   /** The pointer a tool shows over the canvas. */

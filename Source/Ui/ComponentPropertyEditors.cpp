@@ -2,7 +2,9 @@
 #include <vector>
 #include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
+#include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Ui/ComponentPropertyEditors.hpp"
+#include "Rellu/Ui/NodeDescription.hpp"
 
 using namespace Rellu;
 
@@ -30,13 +32,19 @@ namespace {
     if(!name || nodes.size() != 1 || name->trimmed().isEmpty()) {
       return nullptr;
     }
-    auto role = find_role(document, nodes.front());
-    if(!role || !role->m_is_main ||
-        is_linked(document, role->m_component)) {
+    auto node = document.find(nodes.front());
+    auto displayed = node ? get_displayed_node(document, *node) : nullptr;
+    if(!displayed) {
       return nullptr;
     }
-    return std::make_unique<RenameComponentCommand>(
-      role->m_component, name->toStdString());
+    auto shown = get_display_name(document, *displayed);
+    shown.replace(QChar('\n'), QChar(' ')).replace(QChar('\r'), QChar(' ')).
+      replace(QChar(0x2028), QChar(' '));
+    if(*name == shown) {
+      return nullptr;
+    }
+    return std::make_unique<RenameCommand>(
+      nodes.front(), name->toStdString());
   }
 
   std::unique_ptr<Command> set_state(const Document& document,

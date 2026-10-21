@@ -88,9 +88,9 @@ namespace Rellu {
         std::function<bool (CanvasEvent event, QPointF position)>;
 
       /**
-       * The type of function handling a key pressed while the picker is
-       * open and none of its fields has focus, such as on a gradient's
-       * handles on the canvas.
+       * The type of function handling a key other than Tab pressed while
+       * the picker is open and none of its fields has focus, such as on a
+       * gradient's handles on the canvas.
        * @param event The key event.
        * @return <code>true</code> iff the key is handled.
        */
@@ -142,8 +142,9 @@ namespace Rellu {
       void set_canvas_handler(CanvasHandler handler);
 
       /**
-       * Sets the function handling keys pressed while none of the picker's
-       * fields has focus, as after a press outside the picker.
+       * Sets the function handling keys other than Tab pressed while none
+       * of the picker's fields has focus, as after a press outside the
+       * picker.
        * @param handler The function.
        */
       void set_key_handler(KeyHandler handler);
@@ -221,7 +222,6 @@ namespace Rellu {
       void popup(const QRect& anchor);
 
     protected:
-      bool event(QEvent* event) override;
       void hideEvent(QHideEvent* event) override;
       void mousePressEvent(QMouseEvent* event) override;
       void mouseMoveEvent(QMouseEvent* event) override;

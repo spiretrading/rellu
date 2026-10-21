@@ -180,7 +180,8 @@ namespace Rellu {
 
     /**
      * Copies named as Adobe XD names duplicates, owning only the
-     * interactions within component instances, as in the design workspace.
+     * interactions within component instances, artboards lacking a grid
+     * given the grid of make_initial_grid, as in the design workspace.
      */
     DESIGN,
 

@@ -100,6 +100,25 @@ TEST_SUITE("ArtboardImporter") {
       make_translation(708, -379));
   }
 
+  TEST_CASE("local_transform") {
+    auto package = make_package();
+    auto artboard = package.m_artboards.front();
+    auto content = artboard.value("artboard").toObject();
+    auto children = content.value("children").toArray();
+    auto child = children.first().toObject();
+    child.insert("meta", parse_json(R"({"ux": {"localTransform": {"a": -1,
+      "b": 0, "c": 0, "d": -1, "tx": 40, "ty": 30}}})"));
+    children.replace(0, child);
+    content.insert("children", children);
+    artboard.insert("artboard", content);
+    package.m_artboards.front() = artboard;
+    auto document = Document();
+    auto report = import_package(package, document);
+    REQUIRE(report.m_unconsumed.empty());
+    REQUIRE(document.get(CHILD_ID).m_header.m_transform ==
+      Matrix(-1, 0, 0, -1, 40, 30));
+  }
+
   TEST_CASE("missing_frame") {
     auto package = make_package();
     package.m_frames = QJsonObject();

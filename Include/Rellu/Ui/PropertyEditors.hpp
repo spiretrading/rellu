@@ -74,8 +74,9 @@ namespace Rellu {
    * position, responsive resize constraints, opacity, blend mode, corner
    * radii, fill, border, effects, export mark, name, visibility and lock of
    * nodes, and of the orientation, scrolling and grid of artboards. Typed
-   * into for several nodes, the position moves them all together while
-   * the width, height and rotation are given to each node on its own.
+   * into for several nodes, the position moves them all together, kept on
+   * the canvas as keep_on_canvas keeps it, while the width, height and
+   * rotation are given to each node on its own.
    * @param measurer The function measuring text.
    */
   PropertyEditors make_standard_property_editors(TextMeasurer measurer);

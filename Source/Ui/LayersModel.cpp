@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstddef>
 #include <span>
 #include <unordered_set>
 #include <utility>
@@ -84,6 +85,15 @@ NodeId LayersModel::get_id(const QModelIndex& index) const {
 QModelIndex LayersModel::find(const NodeId& id, int column) {
   if(!m_document || id.is_nil()) {
     return QModelIndex();
+  } else if(id == PASTEBOARD) {
+    populate(*m_root);
+    auto& rows = m_root->m_child_ids;
+    auto row = std::find(rows.begin(), rows.end(), PASTEBOARD);
+    if(row == rows.end()) {
+      return QModelIndex();
+    }
+    return make_index(
+      get_child(*m_root, static_cast<int>(row - rows.begin())), column);
   }
   auto path = std::vector<NodeId>();
   auto current = id;
@@ -97,6 +107,11 @@ QModelIndex LayersModel::find(const NodeId& id, int column) {
   }
   if(!m_document->is_on_canvas(path.back())) {
     return QModelIndex();
+  }
+  populate(*m_root);
+  if(!m_document->get(path.back()).get_artboard() &&
+      std::ranges::contains(m_root->m_child_ids, PASTEBOARD)) {
+    path.push_back(PASTEBOARD);
   }
   auto item = m_root.get();
   for(auto i = path.rbegin(); i != path.rend(); ++i) {
@@ -154,7 +169,7 @@ bool LayersModel::hasChildren(const QModelIndex& parent) const {
     return !item.m_child_ids.empty();
   } else if(!m_document) {
     return false;
-  } else if(&item == m_root.get()) {
+  } else if(&item == m_root.get() || item.m_id == PASTEBOARD) {
     return !m_document->get_canvas().empty();
   } else if(auto node = m_document->find(item.m_id)) {
     return !node->m_children.empty();
@@ -164,6 +179,21 @@ bool LayersModel::hasChildren(const QModelIndex& parent) const {
 
 QVariant LayersModel::data(const QModelIndex& index, int role) const {
   if(!index.isValid() || !m_document) {
+    return QVariant();
+  }
+  if(get_item(index)->m_id == PASTEBOARD) {
+    if(index.column() != NAME) {
+      return QVariant();
+    } else if(role == Qt::DisplayRole || role == Qt::EditRole ||
+        role == Qt::ToolTipRole) {
+      return translate("layers", "Pasteboard");
+    } else if(role == Qt::DecorationRole) {
+      return get_pasteboard_icon();
+    } else if(role == VISIBLE_ROLE) {
+      return true;
+    } else if(role == LOCKED_ROLE) {
+      return false;
+    }
     return QVariant();
   }
   auto node = m_document->find(get_item(index)->m_id);
@@ -186,6 +216,14 @@ QVariant LayersModel::data(const QModelIndex& index, int role) const {
     return header->m_is_locked;
   } else if(role == ID_ROLE) {
     return QString::fromStdString(to_string(node->get_id()));
+  } else if(role == EXPANDED_ICON_ROLE) {
+    if(index.column() == NAME && displayed && !is_reference) {
+      if(auto group = displayed->get_group();
+          group && !group->m_component_instance) {
+        return get_open_group_icon();
+      }
+    }
+    return QVariant();
   }
   if(index.column() == NAME) {
     if(role == Qt::DisplayRole) {
@@ -253,6 +291,12 @@ Qt::ItemFlags LayersModel::flags(const QModelIndex& index) const {
     return Qt::NoItemFlags;
   }
   auto flags = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+  if(get_id(index) == PASTEBOARD) {
+    if(m_move_handler) {
+      flags |= Qt::ItemIsDropEnabled;
+    }
+    return flags;
+  }
   if(m_rename_handler && index.column() == NAME) {
     flags |= Qt::ItemIsEditable;
   }
@@ -326,22 +370,33 @@ bool LayersModel::dropMimeData(const QMimeData* data, Qt::DropAction action,
     }
   }
   auto parent_id = get_id(parent);
-  auto& children = m_document->get_children(parent_id);
-  auto rows = std::vector<NodeId>(children.rbegin(), children.rend());
   auto is_moved = [&] (const NodeId& id) {
-    return std::find(nodes.begin(), nodes.end(), id) != nodes.end();
+    return id == PASTEBOARD ||
+      std::find(nodes.begin(), nodes.end(), id) != nodes.end();
   };
-  auto above = std::size_t(0);
+  auto rows = get_rows(*get_item(parent));
   auto limit = row < 0 ? std::size_t(0) :
     std::min(static_cast<std::size_t>(row), rows.size());
-  for(auto i = std::size_t(0); i != limit; ++i) {
-    if(!is_moved(rows[i])) {
-      ++above;
-    }
+  auto below = std::find_if(rows.begin() + static_cast<std::ptrdiff_t>(limit),
+    rows.end(), [&] (const auto& id) { return !is_moved(id); });
+  if(parent_id == PASTEBOARD) {
+    parent_id = NodeId();
   }
-  auto others = static_cast<std::size_t>(std::count_if(rows.begin(),
-    rows.end(), [&] (const auto& id) { return !is_moved(id); }));
-  return m_move_handler(nodes, parent_id, others - above);
+  auto children = m_document->get_children(parent_id);
+  std::erase_if(children, is_moved);
+  if(below != rows.end()) {
+    auto position = std::find(children.begin(), children.end(), *below);
+    return m_move_handler(nodes, parent_id,
+      static_cast<std::size_t>(position - children.begin()) + 1);
+  }
+  auto lowest = std::find_if(rows.rbegin(), rows.rend(),
+    [&] (const auto& id) { return !is_moved(id); });
+  if(lowest == rows.rend()) {
+    return m_move_handler(nodes, parent_id, children.size());
+  }
+  auto position = std::find(children.begin(), children.end(), *lowest);
+  return m_move_handler(nodes, parent_id,
+    static_cast<std::size_t>(position - children.begin()));
 }
 
 void LayersModel::set_move_handler(MoveHandler handler) {
@@ -352,6 +407,11 @@ bool LayersModel::is_movable(
     const std::vector<NodeId>& nodes, const NodeId& parent) const {
   if(!m_document || nodes.empty()) {
     return false;
+  } else if(parent == PASTEBOARD) {
+    return std::none_of(nodes.begin(), nodes.end(), [&] (const auto& id) {
+      auto node = m_document->find(id);
+      return !node || node->get_artboard();
+    }) && is_movable(nodes, NodeId());
   }
   auto container = parent.is_nil() ? nullptr : m_document->find(parent);
   if(!parent.is_nil()) {
@@ -395,7 +455,7 @@ bool LayersModel::is_movable(
 bool LayersModel::setData(
     const QModelIndex& index, const QVariant& value, int role) {
   if(!m_rename_handler || role != Qt::EditRole || !index.isValid() ||
-      index.column() != NAME) {
+      index.column() != NAME || get_id(index) == PASTEBOARD) {
     return false;
   }
   auto name = value.toString();
@@ -444,18 +504,38 @@ std::vector<NodeId> LayersModel::get_rows(const Item& item) const {
   if(!m_document) {
     return std::vector<NodeId>();
   }
-  auto children = [&] () -> const std::vector<NodeId>* {
-    if(&item == m_root.get()) {
-      return &m_document->get_canvas();
-    } else if(auto node = m_document->find(item.m_id)) {
-      return &node->m_children;
+  if(&item == m_root.get() || item.m_id == PASTEBOARD) {
+    auto& canvas = m_document->get_canvas();
+    auto rows = std::vector<NodeId>(canvas.rbegin(), canvas.rend());
+    if(!has_pasteboard()) {
+      if(item.m_id == PASTEBOARD) {
+        rows.clear();
+      }
+      return rows;
     }
-    return nullptr;
-  }();
-  if(!children) {
-    return std::vector<NodeId>();
+    auto is_artboard = item.m_id != PASTEBOARD;
+    std::erase_if(rows, [&] (const auto& id) {
+      return static_cast<bool>(m_document->get(id).get_artboard()) !=
+        is_artboard;
+    });
+    if(is_artboard) {
+      rows.push_back(PASTEBOARD);
+    }
+    return rows;
+  } else if(auto node = m_document->find(item.m_id)) {
+    return std::vector<NodeId>(
+      node->m_children.rbegin(), node->m_children.rend());
   }
-  return std::vector<NodeId>(children->rbegin(), children->rend());
+  return std::vector<NodeId>();
+}
+
+bool LayersModel::has_pasteboard() const {
+  auto& canvas = m_document->get_canvas();
+  auto is_artboard = [&] (const auto& id) {
+    return static_cast<bool>(m_document->get(id).get_artboard());
+  };
+  return std::any_of(canvas.begin(), canvas.end(), is_artboard) &&
+    !std::all_of(canvas.begin(), canvas.end(), is_artboard);
 }
 
 LayersModel::Item& LayersModel::get_child(Item& item, int row) const {
@@ -617,6 +697,9 @@ void LayersModel::on_change(const ChangeSet& changes) {
     if(visited.insert(id).second) {
       parents.push_back(id);
     }
+    if(id.is_nil() && visited.insert(PASTEBOARD).second) {
+      parents.push_back(PASTEBOARD);
+    }
   };
   if(!changes.m_inserted.empty() || !changes.m_removed.empty() ||
       !changes.m_moved.empty()) {
@@ -625,6 +708,10 @@ void LayersModel::on_change(const ChangeSet& changes) {
   for(auto& change : changes.m_modified) {
     if(is_set(change.m_mask, ChangeMask::CHILDREN)) {
       add(change.m_id);
+    }
+    if(auto node = m_document->find(change.m_id);
+        node && node->m_parent.is_nil()) {
+      add(NodeId());
     }
   }
   for(auto ids : {std::span(changes.m_removed), std::span(changes.m_moved)}) {
@@ -645,7 +732,7 @@ void LayersModel::on_change(const ChangeSet& changes) {
     for(auto& id : parents) {
       auto item = find_item(id);
       if(item && item->m_is_populated &&
-          (id.is_nil() || m_document->find(id))) {
+          (id.is_nil() || id == PASTEBOARD || m_document->find(id))) {
         (this->*operation)(*item);
       }
     }
@@ -659,4 +746,16 @@ void LayersModel::on_change(const ChangeSet& changes) {
         make_index(*item, COLUMN_COUNT - 1));
     }
   }
+  if(!changes.m_is_asset_group_changed && changes.m_components.empty()) {
+    return;
+  }
+  auto rename = [&] (const auto& self, Item& item) -> void {
+    for(auto child : item.m_children) {
+      if(child) {
+        Q_EMIT dataChanged(make_index(*child, NAME), make_index(*child, NAME));
+        self(self, *child);
+      }
+    }
+  };
+  rename(rename, *m_root);
 }

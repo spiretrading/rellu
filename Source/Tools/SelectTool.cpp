@@ -1,11 +1,14 @@
 #include <algorithm>
 #include <cmath>
+#include <numbers>
+#include <string>
 #include <unordered_set>
 #include <variant>
 #include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/Layouts.hpp"
+#include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/RepeatGridCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
@@ -20,7 +23,11 @@ using namespace Rellu;
 
 namespace {
   constexpr auto SELECTION_COLOR = make_color(38, 128, 235);
-  constexpr auto CONTEXT_COLOR = make_color(38, 128, 235, 0.45);
+  constexpr auto CONTEXT_COLOR = make_color(38, 128, 235, 0.2);
+  constexpr auto GRID_CONTEXT_COLOR = make_color(30, 203, 64, 0.2);
+  constexpr auto LOCKED_CONTEXT_COLOR = make_color(162, 162, 162, 0.3);
+  constexpr auto CONTEXT_WIDTH = 4.0;
+  constexpr auto MINIMUM_NUDGED_SIZE = 0.5;
   constexpr auto MARQUEE_FILL = make_color(38, 128, 235, 0.08);
   constexpr auto LINE_WIDTH = 1.0;
   constexpr auto OUTLINE_FLATNESS = 0.2;
@@ -77,6 +84,149 @@ namespace {
   bool is_artboard(const Document& document, const NodeId& id) {
     auto node = document.find(id);
     return node && node->get_artboard();
+  }
+
+  bool is_scroll_group(const Document& document, const NodeId& id) {
+    auto node = document.find(id);
+    auto group = node ? node->get_group() : nullptr;
+    return group && group->m_scroll_group;
+  }
+
+  bool has_visible_leaf(const Document& document, const NodeId& id) {
+    for(auto& child : document.get(id).m_children) {
+      auto& node = document.get(child);
+      if(!node.m_header.m_is_visible) {
+        continue;
+      } else if(!node.get_group() || has_visible_leaf(document, child)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void add_context_outline(CanvasOverlay& overlay,
+      const std::array<Point, 4>& corners, Color color) {
+    auto orientation = 1.0;
+    if(cross(corners[1] - corners[0], corners[3] - corners[0]) < 0) {
+      orientation = -1;
+    }
+    for(auto i = std::size_t(0); i != corners.size(); ++i) {
+      auto start = corners[i];
+      auto end = corners[(i + 1) % corners.size()];
+      auto length = distance(start, end);
+      if(length == 0) {
+        continue;
+      }
+      auto along = (end - start) / length;
+      if(i % 2 == 0) {
+        start = start - along * CONTEXT_WIDTH;
+        end = end + along * CONTEXT_WIDTH;
+      }
+      auto offset =
+        Point(along.m_y, -along.m_x) * (orientation * CONTEXT_WIDTH / 2);
+      overlay.m_shapes.push_back(make_overlay_line(
+        start + offset, end + offset, CONTEXT_WIDTH, color));
+    }
+  }
+
+  std::string get_resize_nudge_label(Point direction) {
+    if(direction.m_x < 0) {
+      return "Resize Nudge Left";
+    } else if(direction.m_x > 0) {
+      return "Resize Nudge Right";
+    } else if(direction.m_y < 0) {
+      return "Resize Nudge Up";
+    }
+    return "Resize Nudge Down";
+  }
+
+  double get_sign(double value) {
+    if(value < 0) {
+      return -1;
+    } else if(value > 0) {
+      return 1;
+    }
+    return 0;
+  }
+
+  std::unique_ptr<Command> make_nudge_resize(const Document& document,
+      const NodeId& id, Point step, const std::string& label,
+      const TextMeasurer& measurer) {
+    auto node = document.find(id);
+    auto local =
+      get_local_bounds(document, id, BoundsType::GEOMETRY, measurer);
+    auto world = get_world_transform(document, id);
+    auto inverse = invert(world);
+    if(!node || !local || !inverse) {
+      return nullptr;
+    }
+    auto sign = get_sign(step.m_x + step.m_y);
+    auto magnitude = std::abs(step.m_x + step.m_y);
+    auto& lock = node->m_header.m_aspect_lock;
+    auto is_locked = lock && lock->m_width > 0 && lock->m_height > 0;
+    auto angle = std::atan2(world.m_b, world.m_a);
+    auto diff = Point(0, 0);
+    if(is_locked) {
+      auto ratio = lock->m_width / lock->m_height;
+      auto turned = step;
+      if(std::abs(std::cos(angle)) <= std::abs(std::sin(angle))) {
+        std::swap(turned.m_x, turned.m_y);
+      }
+      auto width = local->m_width + turned.m_x;
+      auto height = width / ratio;
+      if(turned.m_x == 0) {
+        height = local->m_height + turned.m_y;
+        width = height * ratio;
+      }
+      diff = Point(std::round(width - local->m_width),
+        std::round(height - local->m_height));
+    } else {
+      auto moved = inverse->map(step) - inverse->map(Point(0, 0));
+      if(std::abs(moved.m_x) > std::abs(moved.m_y)) {
+        diff = Point(get_sign(moved.m_x) * magnitude, 0);
+      } else {
+        diff = Point(0, get_sign(moved.m_y) * magnitude);
+      }
+    }
+    auto minimum = MINIMUM_NUDGED_SIZE;
+    if(auto shape = node->get_shape();
+        shape && std::holds_alternative<LineShape>(shape->m_geometry)) {
+      minimum = 0;
+    }
+    auto resized = Rect(local->m_x, local->m_y,
+      std::max(local->m_width + sign * std::abs(diff.m_x), minimum),
+      std::max(local->m_height + sign * std::abs(diff.m_y), minimum));
+    if(is_locked) {
+      auto degrees = angle * 180 / std::numbers::pi;
+      if(degrees < 0) {
+        degrees += 360;
+      }
+      if(degrees >= 45 && degrees < 135) {
+        resized.m_y -= diff.m_y;
+      } else if(degrees >= 135 && degrees < 225) {
+        resized.m_x -= diff.m_x;
+        resized.m_y -= diff.m_y;
+      } else if(degrees >= 225 && degrees < 315) {
+        resized.m_x -= diff.m_x;
+      }
+    } else if(get_sign(diff.m_x + diff.m_y) != sign) {
+      resized.m_x += diff.m_x;
+      resized.m_y += diff.m_y;
+    }
+    return std::make_unique<TransformCommand>(std::vector{id},
+      world * make_rect_mapping(*local, resized) * *inverse, label,
+      TransformMode::RESIZE, ResizeRule::RESPONSIVE, measurer);
+  }
+
+  std::string get_nudge_label(Point direction) {
+    if(direction.m_x < 0) {
+      return "Nudge Left";
+    } else if(direction.m_x > 0) {
+      return "Nudge Right";
+    } else if(direction.m_y < 0) {
+      return "Nudge Up";
+    }
+    return "Nudge Down";
   }
 
   NodeId find_selected_ancestor(
@@ -293,12 +443,12 @@ SelectTool::SelectTool()
   : m_gesture(Gesture::NONE),
     m_press(0, 0),
     m_press_document(0, 0),
+    m_pointer(0, 0),
     m_is_marquee_pending(false),
     m_delta(0, 0),
     m_is_applied(false),
     m_is_copied(false),
-    m_marquee(0, 0, 0, 0),
-    m_nudge_key(0) {}
+    m_marquee(0, 0, 0, 0) {}
 
 void SelectTool::press(ToolContext& context, const PointerEvent& event) {
   if(event.m_button != Qt::LeftButton) {
@@ -319,12 +469,18 @@ void SelectTool::press(ToolContext& context, const PointerEvent& event) {
   m_is_marquee_pending = false;
   m_is_applied = false;
   context.get_snap_service().measure(std::nullopt, Rect());
+  m_badge = m_handles.find_lock_badge(context, m_press);
+  if(!m_badge.is_nil()) {
+    m_gesture = Gesture::BADGE;
+    return;
+  }
   if(!is_control(modifiers)) {
     auto is_grid = !m_layout_handles.get_grid(context).is_nil();
     if(is_grid && m_handles.press(context, event)) {
       m_gesture = Gesture::HANDLE;
       return;
-    } else if(m_layout_handles.press(context, event)) {
+    } else if(m_layout_handles.press(context, event,
+        static_cast<bool>(m_handles.hover(context, event.m_position)))) {
       m_gesture = Gesture::LAYOUT;
       return;
     } else if(!is_grid && m_handles.press(context, event)) {
@@ -384,17 +540,6 @@ void SelectTool::press(ToolContext& context, const PointerEvent& event) {
     if(!target.is_nil()) {
       select(target, hit);
       return;
-    }
-  }
-  if(!is_shift(modifiers)) {
-    if(auto box = m_handles.get_box(context)) {
-      auto& nodes = selection.get_nodes();
-      if(std::none_of(nodes.begin(), nodes.end(), [&] (const auto& id) {
-          return is_artboard(document, id);
-        }) && is_inside(box->get_corners(), m_press_document)) {
-        m_gesture = Gesture::PENDING;
-        return;
-      }
     }
   }
   m_gesture = Gesture::PENDING;
@@ -473,6 +618,13 @@ void SelectTool::release(ToolContext& context, const PointerEvent& event) {
     selection.select(m_clicked);
   } else if(m_gesture == Gesture::GUIDE) {
     m_guides.release(context, event);
+  } else if(m_gesture == Gesture::BADGE &&
+      m_handles.find_lock_badge(context, event.m_position) == m_badge) {
+    auto& editor = context.get_editor();
+    editor.get_history().seal();
+    editor.execute(
+      std::make_unique<SetLockCommand>(std::vector{m_badge}, false));
+    editor.get_history().seal();
   }
   finish(context);
   update_hover(context, event);
@@ -481,6 +633,9 @@ void SelectTool::release(ToolContext& context, const PointerEvent& event) {
 void SelectTool::double_click(
     ToolContext& context, const PointerEvent& event) {
   if(event.m_button != Qt::LeftButton) {
+    return;
+  }
+  if(m_handles.fit_text(context, event.m_position)) {
     return;
   }
   auto& editor = context.get_editor();
@@ -533,12 +688,20 @@ void SelectTool::leave(ToolContext& context) {
     context.get_snap_service().measure(std::nullopt, Rect());
     context.get_editor().get_context().set_hover(NodeId());
     m_guides.cancel(context);
+    m_handles.leave();
     m_cursor = ToolCursor();
   }
 }
 
 bool SelectTool::key_press(ToolContext& context, const KeyEvent& event) {
   auto& editor = context.get_editor();
+  if(m_layout_handles.key_press(event)) {
+    if(m_gesture == Gesture::NONE) {
+      update_hover(context, PointerEvent(
+        m_pointer, Qt::NoButton, Qt::NoButton, event.m_modifiers));
+    }
+    return true;
+  }
   if(event.m_key == Qt::Key_Escape) {
     if(m_gesture != Gesture::NONE) {
       cancel(context);
@@ -585,31 +748,119 @@ bool SelectTool::key_press(ToolContext& context, const KeyEvent& event) {
   if(nodes.empty()) {
     return false;
   }
+  if(is_alt(event.m_modifiers)) {
+    resize_nudge(context, std::move(nodes), delta, event.m_modifiers);
+    return true;
+  }
   std::erase_if(nodes, [&] (const auto& id) {
     return is_stacked(context.get_document(), id, delta);
   });
   if(nodes.empty()) {
     return true;
   }
-  if(!event.m_is_repeat || m_nudge_key != event.m_key) {
+  auto& document = context.get_document();
+  auto& measurer = context.get_text_measurer();
+  auto step = delta * NUDGE;
+  if(is_shift(event.m_modifiers)) {
+    step = delta * LARGE_NUDGE;
+    auto artboard = editor.get_context().get_artboard();
+    auto nudged = std::vector<NodeId>();
+    for(auto& id : editor.get_selection().get_nodes()) {
+      if(find_artboard(document, id) == artboard) {
+        nudged.push_back(id);
+      }
+    }
+    if(auto bounds = get_world_bounds(
+        document, nudged, BoundsType::GEOMETRY, measurer)) {
+      step =
+        get_large_nudge(document, artboard, bounds->get_top_left(), delta);
+    }
+  }
+  if(auto bounds =
+      get_world_bounds(document, nodes, BoundsType::GEOMETRY, measurer)) {
+    step = keep_on_canvas(*bounds, step);
+  }
+  if(!editor.get_history().is_dirty()) {
     editor.get_history().seal();
   }
-  m_nudge_key = event.m_key;
-  auto distance = is_shift(event.m_modifiers) ? LARGE_NUDGE : NUDGE;
-  editor.merge(make_nudge_command(std::move(nodes), delta * distance));
+  editor.merge(std::make_unique<TranslateCommand>(
+    std::move(nodes), step, get_nudge_label(delta)));
   return true;
 }
 
 bool SelectTool::key_release(ToolContext& context, const KeyEvent& event) {
-  if(event.m_key != Qt::Key_Left && event.m_key != Qt::Key_Right &&
-      event.m_key != Qt::Key_Up && event.m_key != Qt::Key_Down) {
-    return false;
+  if(m_layout_handles.key_release(event)) {
+    if(m_gesture == Gesture::NONE) {
+      update_hover(context, PointerEvent(
+        m_pointer, Qt::NoButton, Qt::NoButton, event.m_modifiers));
+    }
+    return true;
   }
-  if(!event.m_is_repeat && event.m_key == m_nudge_key) {
-    context.get_editor().get_history().seal();
-    m_nudge_key = 0;
+  return event.m_key == Qt::Key_Left || event.m_key == Qt::Key_Right ||
+    event.m_key == Qt::Key_Up || event.m_key == Qt::Key_Down;
+}
+
+void SelectTool::resize_nudge(ToolContext& context, std::vector<NodeId> nodes,
+    Point direction, Qt::KeyboardModifiers modifiers) {
+  auto& document = context.get_document();
+  auto& editor = context.get_editor();
+  auto& measurer = context.get_text_measurer();
+  if(nodes.size() == 1) {
+    auto node = document.find(nodes.front());
+    auto text = node ? node->get_text() : nullptr;
+    if(text && std::holds_alternative<PositionedFrame>(text->m_frame)) {
+      return;
+    }
   }
-  return true;
+  auto bounds =
+    get_world_bounds(document, nodes, BoundsType::GEOMETRY, measurer);
+  if(!bounds) {
+    return;
+  }
+  auto step = direction * NUDGE;
+  if(is_shift(modifiers)) {
+    step = direction * LARGE_NUDGE;
+    auto axis = Point(std::abs(direction.m_x), std::abs(direction.m_y));
+    auto farthest = std::optional<Rect>();
+    auto artboard = NodeId();
+    for(auto& id : nodes) {
+      auto box =
+        get_world_bounds(document, id, BoundsType::GEOMETRY, measurer);
+      if(box && (!farthest || dot(axis, box->get_bottom_right()) >
+          dot(axis, farthest->get_bottom_right()))) {
+        farthest = box;
+        artboard = find_artboard(document, id);
+      }
+    }
+    if(farthest) {
+      step = get_large_nudge(
+        document, artboard, farthest->get_bottom_right(), direction);
+    }
+  }
+  if(!is_within_canvas(Rect(bounds->m_x, bounds->m_y,
+      bounds->m_width + step.m_x, bounds->m_height + step.m_y))) {
+    return;
+  }
+  auto label = get_resize_nudge_label(direction);
+  auto command = std::unique_ptr<Command>();
+  if(nodes.size() == 1) {
+    command =
+      make_nudge_resize(document, nodes.front(), step, label, measurer);
+  } else {
+    auto resized = Rect(bounds->m_x, bounds->m_y,
+      std::max(bounds->m_width + step.m_x, MINIMUM_NUDGED_SIZE),
+      std::max(bounds->m_height + step.m_y, MINIMUM_NUDGED_SIZE));
+    command = std::make_unique<TransformCommand>(std::move(nodes),
+      make_rect_mapping(*bounds, resized), label, TransformMode::RESIZE,
+      ResizeRule::RESPONSIVE, measurer);
+  }
+  if(!command) {
+    return;
+  }
+  if(!editor.get_history().is_dirty()) {
+    editor.get_history().seal();
+  }
+  editor.merge(std::move(command));
 }
 
 void SelectTool::cancel(ToolContext& context) {
@@ -650,12 +901,7 @@ void SelectTool::draw(
   auto& document = context.get_document();
   auto& view = context.get_view();
   auto& edit = editor.get_context();
-  if(!edit.get_container().is_nil()) {
-    if(auto& box = get_box(context, edit.get_container(), m_container_box)) {
-      add_box_outline(
-        overlay, to_view(view, box->get_corners()), CONTEXT_COLOR);
-    }
-  }
+  draw_context(context, overlay);
   auto is_dragging = m_gesture == Gesture::MOVE ||
     (m_gesture == Gesture::HANDLE && m_handles.is_transforming());
   auto& hover = edit.get_hover();
@@ -663,11 +909,7 @@ void SelectTool::draw(
       !selection.contains(hover) && !is_artboard(document, hover)) {
     draw_hover(context, hover, overlay);
   }
-  if(m_gesture == Gesture::MOVE) {
-    m_handles.draw_outline(context, SelectionBox(m_box.m_rect,
-      make_translation(m_delta.m_x, m_delta.m_y) * m_box.m_transform),
-      overlay);
-  } else {
+  if(m_gesture != Gesture::MOVE && m_gesture != Gesture::GUIDE) {
     m_handles.draw(context, overlay, m_gesture != Gesture::MARQUEE);
   }
   if(!is_dragging && m_gesture != Gesture::MARQUEE) {
@@ -809,6 +1051,7 @@ void SelectTool::update_move(ToolContext& context, const PointerEvent& event) {
   if(raw.m_y == 0) {
     delta.m_y = 0;
   }
+  delta = keep_on_canvas(bounds, delta);
   auto step = delta - m_delta;
   if(step == Point(0, 0)) {
     return;
@@ -855,10 +1098,12 @@ void SelectTool::update_marquee(
 void SelectTool::update_hover(
     ToolContext& context, const PointerEvent& event) {
   auto& edit = context.get_editor().get_context();
+  m_pointer = event.m_position;
   m_cursor = ToolCursor();
   auto is_grid = !m_layout_handles.get_grid(context).is_nil();
   auto handle = m_handles.hover(context, event.m_position);
-  auto layout = m_layout_handles.hover(context, event.m_position);
+  auto layout = m_layout_handles.hover(
+    context, event.m_position, event.m_modifiers, static_cast<bool>(handle));
   if(is_grid && handle) {
     m_cursor = *handle;
   } else if(layout) {
@@ -900,6 +1145,87 @@ void SelectTool::finish(ToolContext& context) {
   m_base.clear();
 }
 
+void SelectTool::draw_context(
+    const ToolContext& context, CanvasOverlay& overlay) const {
+  auto& document = context.get_document();
+  auto& container = context.get_editor().get_context().get_container();
+  auto chain = std::vector<NodeId>();
+  for(auto node = document.find(container); node && !node->get_artboard();
+      node = document.find(node->m_parent)) {
+    chain.push_back(node->get_id());
+    if(node->m_parent.is_nil()) {
+      break;
+    }
+  }
+  if(chain.empty()) {
+    return;
+  }
+  auto get_color = [&] (const NodeId& id) {
+    if(is_locked_node(document, id)) {
+      return LOCKED_CONTEXT_COLOR;
+    } else if(is_repeat_grid(document, id) ||
+        get_instance_role(document.get(id))) {
+      return GRID_CONTEXT_COLOR;
+    }
+    return CONTEXT_COLOR;
+  };
+  auto& view = context.get_view();
+  auto outline = [&] (const NodeId& id, std::size_t slot) ->
+      const std::optional<SelectionBox>& {
+    auto& box = get_box(context, id, m_context_boxes[slot]);
+    if(box) {
+      add_context_outline(
+        overlay, to_view(view, box->get_corners()), get_color(id));
+    }
+    return box;
+  };
+  auto& inner = document.get(container);
+  if(!get_instance_role(inner) && !is_scroll_group(document, container) &&
+      has_visible_leaf(document, container)) {
+    outline(container, 0);
+  }
+  auto find = [&] (auto is_kind) {
+    auto i = std::find_if(chain.begin(), chain.end(), is_kind);
+    if(i == chain.end()) {
+      return NodeId();
+    }
+    return *i;
+  };
+  auto grid = find([&] (const auto& id) {
+    return is_repeat_grid(document, id);
+  });
+  if(!grid.is_nil()) {
+    outline(grid, 1);
+  }
+  auto component = find([&] (const auto& id) {
+    return get_instance_role(document.get(id)) != nullptr;
+  });
+  if(!component.is_nil()) {
+    outline(component, 2);
+  }
+  auto scroll = find([&] (const auto& id) {
+    return is_scroll_group(document, id);
+  });
+  if(scroll.is_nil()) {
+    return;
+  }
+  auto& box = outline(scroll, 3);
+  if(!box) {
+    return;
+  }
+  auto direction =
+    document.get(scroll).get_group()->m_scroll_group->m_direction;
+  auto corners = to_view(view, box->get_corners());
+  for(auto i = std::size_t(0); i != corners.size(); ++i) {
+    auto is_shown = i % 2 == 0 ? direction != ScrollDirection::HORIZONTAL :
+      direction != ScrollDirection::VERTICAL;
+    if(is_shown) {
+      add_dashed_line(overlay, corners[i], corners[(i + 1) % corners.size()],
+        SELECTION_COLOR);
+    }
+  }
+}
+
 void SelectTool::draw_hover(const ToolContext& context, const NodeId& hover,
     CanvasOverlay& overlay) const {
   auto& box = get_box(context, hover, m_hover_box);
@@ -910,6 +1236,7 @@ void SelectTool::draw_hover(const ToolContext& context, const NodeId& hover,
   }
   if(box) {
     add_box_outline(
-      overlay, to_view(view, box->get_corners()), SELECTION_COLOR);
+      overlay, inset_outline(to_view(view, box->get_corners())),
+      SELECTION_COLOR);
   }
 }

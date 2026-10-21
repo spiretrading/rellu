@@ -311,6 +311,69 @@ TEST_SUITE("PathCommands") {
       std::vector{board.m_top}));
   }
 
+  TEST_CASE("outline_stroke_flipped_text") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto flip = Matrix(-1, 0, 0, -1, 499, 409);
+    {
+      auto header = document.get(board.m_text).m_header;
+      header.m_name = "Hi";
+      header.m_has_custom_name = false;
+      header.m_transform = flip;
+      auto text = *document.get(board.m_text).get_text();
+      text.m_is_flipped_vertically = true;
+      text.m_style.m_fill = SolidFill(make_color(112, 112, 112));
+      auto transaction = Transaction(document);
+      transaction.replace_header(header);
+      transaction.replace_payload(board.m_text, text);
+      transaction.commit();
+      document.clear_history();
+    }
+    auto registry = CommandRegistry();
+    add_path_commands(registry, [] (const auto&) {
+      return make_rectangle(Rect(0, 0, 20, 10));
+    });
+    REQUIRE(!is_outline_strokable(document, board.m_text));
+    REQUIRE(!registry.make(
+      "object.path.outline_stroke", document, std::vector{board.m_text}));
+    {
+      auto text = *document.get(board.m_text).get_text();
+      text.m_style.m_stroke = Stroke(make_color(1, 2, 3), 1);
+      auto transaction = Transaction(document);
+      transaction.replace_payload(board.m_text, text);
+      transaction.commit();
+      document.clear_history();
+    }
+    REQUIRE(is_outline_strokable(document, board.m_text));
+    auto history = History(document);
+    auto recorded = require_undoable(history, registry.make(
+      "object.path.outline_stroke", document, std::vector{board.m_text}));
+    auto selection = *recorded->get_selection();
+    REQUIRE(selection.size() == 2);
+    auto& text = document.get(board.m_text);
+    REQUIRE(text.m_header.m_name == "Hi");
+    REQUIRE(!text.m_header.m_has_custom_name);
+    REQUIRE(text.m_header.m_transform == flip);
+    auto& payload = *text.get_text();
+    REQUIRE(payload.m_is_flipped_vertically);
+    REQUIRE(payload.m_style.m_fill ==
+      Fill(SolidFill(make_color(112, 112, 112))));
+    REQUIRE(!payload.m_style.m_stroke->m_is_enabled);
+    REQUIRE(payload.m_style.m_stroke->m_color == make_color(1, 2, 3));
+    auto& outline = document.get(selection[1]);
+    REQUIRE(get_index(document, selection[1]) ==
+      get_index(document, board.m_text) + 1);
+    REQUIRE(outline.m_header.m_name == "Hi - Outline");
+    REQUIRE(outline.m_header.m_has_custom_name);
+    REQUIRE(outline.m_header.m_transform == flip);
+    REQUIRE(get_rotation(outline.m_header.m_transform) == 180);
+    auto& style = outline.get_shape()->m_style;
+    REQUIRE(style.m_fill == Fill(SolidFill(make_color(1, 2, 3))));
+    REQUIRE(!style.m_stroke->m_is_enabled);
+    REQUIRE(style.m_stroke->m_color == make_color(1, 2, 3));
+    REQUIRE(style.m_stroke->m_width == 1);
+  }
+
   TEST_CASE("outline_stroke_compound") {
     auto document = Document();
     auto board = build_board(document);

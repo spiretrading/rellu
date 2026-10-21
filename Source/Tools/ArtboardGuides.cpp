@@ -2,7 +2,6 @@
 #include <cmath>
 #include <limits>
 #include <memory>
-#include <numbers>
 #include <string>
 #include <vector>
 #include <QFont>
@@ -210,7 +209,10 @@ bool ArtboardGuides::press(ToolContext& context, const PointerEvent& event) {
   } else {
     m_position = 0;
   }
-  context.get_editor().get_history().seal();
+  auto& editor = context.get_editor();
+  editor.get_history().seal();
+  m_selection = editor.get_selection().get_nodes();
+  editor.get_selection().select(grip->m_artboard);
   return true;
 }
 
@@ -328,6 +330,14 @@ void ArtboardGuides::release(ToolContext& context, const PointerEvent& event) {
 }
 
 void ArtboardGuides::cancel(ToolContext& context) {
+  if(m_grip) {
+    auto& document = context.get_document();
+    std::erase_if(m_selection, [&] (const auto& id) {
+      return !document.find(id);
+    });
+    context.get_editor().get_selection().select(std::move(m_selection));
+    m_selection.clear();
+  }
   m_grip = std::nullopt;
   m_hover = std::nullopt;
   m_is_shown_once = false;
@@ -351,9 +361,9 @@ std::optional<ToolCursor> ArtboardGuides::hover(
     return ToolCursor();
   }
   if(grip->m_orientation == Orientation::VERTICAL) {
-    return ToolCursor(CursorKind::RESIZE, 0);
+    return ToolCursor(CursorKind::VERTICAL_GUIDE);
   }
-  return ToolCursor(CursorKind::RESIZE, std::numbers::pi / 2);
+  return ToolCursor(CursorKind::HORIZONTAL_GUIDE);
 }
 
 void ArtboardGuides::draw(

@@ -83,11 +83,22 @@ namespace Rellu {
        * that text is rasterized for, in which case text whose transform to
        * device pixels is supported by TextRasterizer is drawn as pixel
        * aligned coverage the way Adobe XD draws it, and other text as
-       * outlines.
+       * outlines, and shapes outside of masks and scroll groups are placed
+       * in single precision as Adobe XD places them.
        * @param transform The transform to device pixels, or none to draw all
-       *        text as outlines.
+       *        text as outlines and place shapes exactly.
        */
       void set_device_transform(const std::optional<Matrix>& transform);
+
+      /** Returns the text node drawn as it is while edited, or nil. */
+      const NodeId& get_edited_text() const;
+
+      /**
+       * Sets the text node drawn as Adobe XD draws text while it is edited,
+       * without its vertical flip.
+       * @param id The text node, or nil for none.
+       */
+      void set_edited_text(const NodeId& id);
 
       /**
        * Converts every node on the canvas, in z order, discarding what is
@@ -155,6 +166,8 @@ namespace Rellu {
         double m_opacity;
         std::optional<Rect> m_clip;
         std::optional<Projection> m_projection;
+        Matrix m_single;
+        bool m_is_clipped = false;
 
         bool operator ==(const Placement&) const = default;
       };
@@ -223,6 +236,7 @@ namespace Rellu {
       const Document* m_document;
       double m_tolerance;
       std::optional<Matrix> m_device_transform;
+      NodeId m_edited_text;
       std::uint64_t m_generation;
       std::unordered_map<NodeId, Outline> m_outlines;
       std::unordered_map<NodeId, Background> m_backgrounds;

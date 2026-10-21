@@ -779,14 +779,12 @@ namespace {
   }
 
   bool has_default_name(std::string_view name, std::string_view prefix) {
-    if(name.empty() || name.back() < '0' || name.back() > '9') {
-      return false;
-    }
     auto kind = prefix.substr(0, prefix.size() - 1);
     return std::any_of(LANGUAGES.begin(), LANGUAGES.end(),
       [&] (const auto& language) {
-        return has_number(
-          name, std::string(localize("name", kind, language)) + ' ');
+        auto localized = localize("name", kind, language);
+        return name == localized ||
+          has_number(name, std::string(localized) + ' ');
       });
   }
 
@@ -828,6 +826,8 @@ namespace {
       return get_shape_name_key(*shape, name);
     } else if(node.get_text()) {
       return "SHAPE_GROUP";
+    } else if(node.get_artboard()) {
+      return "SHAPE_RECTANGLE";
     } else if(auto group = node.get_group()) {
       if(group->m_repeat_grid) {
         return "SHAPE_REPEAT_GRID";
@@ -1059,8 +1059,15 @@ XdValue XdGenerator::make_node(const Node& node) const {
   }
   if(auto artboard = node.get_artboard()) {
     json.set("type", "artboard");
-    json.set("id", to_id(header.m_id));
-    json.set("meta", XdValue::make_object()).set("ux", make_ux(node));
+    auto ux = make_ux(node);
+    auto is_localized = static_cast<bool>(ux.find("nameL10N"));
+    if(!is_localized) {
+      json.set("id", to_id(header.m_id));
+    }
+    json.set("meta", XdValue::make_object()).set("ux", std::move(ux));
+    if(is_localized) {
+      json.set("id", to_id(header.m_id));
+    }
     auto style = make_style(node, nullptr);
     style.set("fill", make_fill(artboard->m_background));
     json.set("style", std::move(style));
@@ -1091,7 +1098,14 @@ XdValue XdGenerator::make_node(const Node& node) const {
   } else if(!transform.is_identity()) {
     json.set("transform", make_matrix(transform));
   }
-  json.set("meta", XdValue::make_object()).set("ux", make_ux(node));
+  auto& ux = json.set("meta", XdValue::make_object()).set("ux", make_ux(node));
+  if(origin) {
+    if(auto& transform = header.m_transform_3d) {
+      ux.set("localTransform", make_matrix(*transform, header.m_transform));
+    } else {
+      ux.set("localTransform", make_matrix(header.m_transform));
+    }
+  }
   if(auto shape = node.get_shape()) {
     if(shape->m_video) {
       if(auto style = make_style(node, nullptr);
@@ -1410,6 +1424,10 @@ XdValue XdGenerator::make_ux(const Node& node) const {
       !key.empty()) {
     ux.set("nameL10N", key);
   }
+  if(!node.get_reference() && !node.get_artboard() &&
+      header.m_rotation != 0) {
+    ux.set("rotation", header.m_rotation);
+  }
   add_constraints(header,
     node.get_reference() && header.m_constraints == Constraints(), ux);
   if(auto& transform = header.m_transform_3d) {
@@ -1638,6 +1656,13 @@ XdValue XdGenerator::make_ux(const Node& node) const {
     auto& list = ux.set("interactions", XdValue::make_array());
     for(auto interaction : interactions->second) {
       list.append(make_node_interaction(*interaction));
+    }
+  }
+  if(auto master = m_masters.find(id);
+      master != m_masters.end() && !master->second->m_placements.empty()) {
+    auto& data = ux.set("assetGroupData", XdValue::make_object());
+    for(auto& placement : master->second->m_placements) {
+      data.set(placement.m_group, placement.m_order);
     }
   }
   return ux;

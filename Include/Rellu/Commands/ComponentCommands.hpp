@@ -3,6 +3,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Command.hpp"
@@ -14,7 +16,10 @@ namespace Rellu {
 
   /**
    * Makes a component of nodes, labelled Make Component: a single group
-   * becomes the main component, other nodes are grouped into one first.
+   * becomes the main component, other nodes are grouped into one first. A
+   * single node named with slashes files the component into the group of
+   * assets the parts before the last lead to, as file_asset does, and the
+   * other new components are ordered first among the components.
    */
   class MakeComponentCommand : public Command {
     public:
@@ -317,8 +322,8 @@ namespace Rellu {
   };
 
   /**
-   * Renames a component along with its master and main component, labelled
-   * Rename Component.
+   * Renames a component along with its master and its instances not renamed
+   * by hand, the main component among them, labelled Rename Component.
    */
   class RenameComponentCommand : public Command {
     public:
@@ -361,6 +366,105 @@ namespace Rellu {
     private:
       std::vector<NodeId> m_nodes;
       std::vector<NodeId> m_selection;
+  };
+
+  /**
+   * Renames a component as Adobe XD does: its master takes the name, as do
+   * its instances, the main component and nested instances among them,
+   * except those renamed by hand.
+   * @param document The document holding the component.
+   * @param transaction The open transaction on the <i>document</i>.
+   * @param component The component.
+   * @param name The new name.
+   */
+  void rename_component(const Document& document, Transaction& transaction,
+    const ComponentId& component, const std::string& name);
+
+  /**
+   * Renames a component instance as Adobe XD's Rename does: the name given
+   * is the last of its parts separated by slashes, trimmed, and leaves the
+   * instance unchanged if it is empty or the instance's name; renaming a
+   * main component files its component into the group of assets the parts
+   * before the last lead to, as file_asset does, and renames the
+   * component, whose name the main component then takes, and renaming
+   * another instance gives it a custom name.
+   * @param document The document holding the instance.
+   * @param transaction The open transaction on the <i>document</i>.
+   * @param id The instance, or a reference inside an instance rendering
+   *        one.
+   * @param name The name entered.
+   * @return <code>true</code> iff the node renders a component instance.
+   */
+  bool rename_instance(const Document& document, Transaction& transaction,
+    const NodeId& id, std::string_view name);
+
+  /**
+   * Tests whether Adobe XD's Document Assets panel can delete a component:
+   * it is not linked, and none of its instances is within a linked
+   * component.
+   * @param document The document holding the component.
+   * @param component The component.
+   */
+  bool can_delete_component(
+    const Document& document, const ComponentId& component);
+
+  /**
+   * Deletes a component as Adobe XD does: each of its instances, the main
+   * component among them, is replaced by a new ordinary group holding its
+   * children, or by its only child when that child is a group or boolean
+   * group, keeping its interactions, and everything referring to the
+   * instance then refers to its replacement; an instance mirroring another
+   * instance of the component within a component instance or state becomes
+   * a reference to what that other instance became, and the instances
+   * within a repeat grid copies of the first one's replacement. The
+   * interactions changing to the component's states are removed, along
+   * with its master and states.
+   * @param document The document holding the component.
+   * @param transaction The open transaction on the <i>document</i>.
+   * @param component The component.
+   * @param replacements The map receiving each instance replaced with the
+   *        node replacing it, or <code>nullptr</code>.
+   */
+  void delete_component(const Document& document, Transaction& transaction,
+    const ComponentId& component,
+    std::unordered_map<NodeId, NodeId>* replacements = nullptr);
+
+  /**
+   * Returns the selection Adobe XD keeps after nodes are replaced: each
+   * node selected that still exists, or the node replacing it.
+   * @param document The document after the replacements.
+   * @param selection The nodes selected before.
+   * @param replacements Each node replaced with the node replacing it.
+   */
+  std::vector<NodeId> remap_selection(const Document& document,
+    const std::vector<NodeId>& selection,
+    const std::unordered_map<NodeId, NodeId>& replacements);
+
+  /**
+   * Deletes components from the document's assets, as delete_component does,
+   * labelled Delete Components.
+   */
+  class DeleteComponentsCommand : public Command {
+    public:
+
+      /**
+       * Constructs a DeleteComponentsCommand.
+       * @param components The components, those that can not be deleted
+       *        being skipped.
+       * @param selection The nodes selected, which are selected afterwards
+       *        as remap_selection does.
+       */
+      explicit DeleteComponentsCommand(std::vector<ComponentId> components,
+        std::vector<NodeId> selection = {}) noexcept;
+
+      std::string get_label() const override;
+      void apply(const Document& document, Transaction& transaction) override;
+      std::optional<std::vector<NodeId>> get_selection() const override;
+
+    private:
+      std::vector<ComponentId> m_components;
+      std::vector<NodeId> m_selection;
+      std::vector<NodeId> m_remapped;
   };
 
   /**

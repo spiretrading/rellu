@@ -233,8 +233,25 @@ ARTBOARDS (artboard icon and name). With a selection inside an artboard it
 shows a back chevron and the artboard name in capitals, then the artboard's
 children topmost first, one 32 dip row each with a kind icon (rectangle,
 ellipse, polygon, line, path, boolean group, text "T", group folder) and the
-layer name. Selected rows are highlighted `#E0F0FA`. Rows of containers have
-an expand/collapse chevron (`expandCollapseFolder`).
+layer name. Selected rows are highlighted `#E0F0FA`. No disclosure chevron
+is drawn: clicking a container's icon selects it and expands or collapses it
+in place (`expandCollapseFolder`), a group's folder icon showing open while
+expanded; clicking the name only selects. Search results are flat: the
+matching layers of each artboard, topmost first, under a heading naming the
+artboard in capitals, then those of the PASTEBOARD (or of the CANVAS without
+artboards), with no back chevron and no expanding. Only a selection coming to
+include a layer outside the results (Ctrl+A among them) ends the search,
+showing the tree drilled into that layer's artboard; deselecting keeps it,
+Esc in the field only leaves the field and clicking into the field selects
+its text (LayersPane.js `_searchFromRoot`, `_canvasSelectionChange`; VM:
+mb2.png, ma7.png, check 32).
+While the canvas holds both artboards and other layers, the artboards are
+followed by a last Pasteboard row (`PASTEBOARD_NAME`) with a pasteboard icon;
+a click only selects it, and double-clicking it, or selecting a layer outside
+the artboards, lists those layers under the heading PASTEBOARD with a back
+chevron (LayersPane.js `_getArtboardLayers`, `PASTEBOARD_DRILLDOWN`).
+Without artboards it lists every layer, expandable, under the heading CANVAS
+with no back chevron (`CANVAS_DRILLDOWN`, VM: canvas_layers.png).
 
 ## Document Assets panel
 
@@ -277,8 +294,11 @@ with an underline; units are implicit pixels except opacity (%) and rotation
    Exclude Overlap (enabled for two or more shapes; on a boolean group the
    active operation is toggled on, `run4/sel-compound-inspector.txt`).
 3. **COMPONENT**: `+` (Make Component, Ctrl+K). For an instance the header
-   reads COMPONENT (INSTANCE) with the component name, a Default State
-   dropdown and Edit Main Component (`run4/sel-instance-inspector.txt`).
+   reads COMPONENT (INSTANCE) with the instance's layer name, which
+   double-clicking renames as the Layers panel does (ComponentPane.js
+   `renameComponent`), a Default State dropdown and Edit Main Component
+   (`run4/sel-instance-inspector.txt`). For several nodes it is only the
+   COMPONENT heading with its `+`.
 4. **TRANSFORM**: 3D Transforms button; W, H with a Lock Aspect toggle
    between them; X, Y; Rotation (degrees); Flip Horizontal, Flip Vertical;
    scroll buttons Horizontal Scroll, Vertical Scroll, Horizontal & Vertical

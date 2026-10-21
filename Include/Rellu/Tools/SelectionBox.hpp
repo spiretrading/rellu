@@ -112,11 +112,20 @@ namespace Rellu {
   /** The handles Adobe XD shows on a selection box. */
   struct HandleLayout {
 
-    /** The radius in logical units of a resize handle. */
+    /** The radius in logical units of a resize handle's geometry. */
     static constexpr auto HANDLE_RADIUS = 4.0;
 
-    /** The distance in logical units within which a resize handle is hit. */
-    static constexpr auto HANDLE_REACH = 6.0;
+    /**
+     * The radius in logical units a resize handle is drawn at, its
+     * geometry with the half of its one unit outline lying outside it.
+     */
+    static constexpr auto HANDLE_OUTER_RADIUS = HANDLE_RADIUS + 0.5;
+
+    /**
+     * The distance in logical units from a resize handle's center within
+     * which it is hit, as measured in Adobe XD.
+     */
+    static constexpr auto HANDLE_REACH = 4.25;
 
     /** The radius in logical units of a rotate handle. */
     static constexpr auto ROTATION_RADIUS = 7.0;
@@ -163,8 +172,23 @@ namespace Rellu {
     bool operator ==(const HandleLayout&) const = default;
   };
 
+  /**
+   * The distance in logical units inside a selection box's edges along
+   * which Adobe XD centers its one unit outline and its resize handles.
+   */
+  inline constexpr auto OUTLINE_INSET = 0.5;
+
   /** Returns <code>true</code> iff a handle lies at a corner. */
   bool is_corner(Handle handle);
+
+  /**
+   * Returns the offset from a handle's point on a selection box to the
+   * center of its resize handle, OUTLINE_INSET inside each edge it lies on.
+   * @param handle The handle.
+   * @return The offset in logical units along the box's top and left
+   *         sides.
+   */
+  Point get_handle_offset(Handle handle);
 
   /**
    * Returns the handle on the opposite side of the box.
@@ -209,6 +233,19 @@ namespace Rellu {
   Rect get_scroll_handle_rect(Handle handle, Size size, double zoom);
 
   /**
+   * Returns the rect of the handle Adobe XD shows on a repeat grid's box to
+   * add columns or rows, including its one unit outline: eight units thick
+   * and a third of the side it lies on long, between eight and 38 units,
+   * with half a unit of outline around it.
+   * @param handle Handle::RIGHT for the columns' handle or Handle::BOTTOM
+   *        for the rows'.
+   * @param size The width and height of the box in logical units.
+   * @return The rect in logical units, measured from the box's top left
+   *         corner along its top and left sides.
+   */
+  Rect get_grid_handle_rect(Handle handle, Size size);
+
+  /**
    * Returns the handles Adobe XD shows on the box of a locked selection.
    * @param size The width and height of the box in logical units.
    */
@@ -232,6 +269,14 @@ namespace Rellu {
   Rect resize(const Rect& rect, Handle handle, Point point,
     bool is_proportional, bool is_centered, bool is_flippable,
     double minimum);
+
+  /**
+   * Constrains the displacement of a drag as Adobe XD does while Shift is
+   * held: within 22.5 degrees of a diagonal it follows the diagonal keeping
+   * its length, otherwise it keeps only its longer axis.
+   * @param delta The displacement.
+   */
+  Point constrain_drag(Point delta);
 }
 
 #endif

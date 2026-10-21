@@ -79,7 +79,8 @@ namespace Rellu {
 
       /**
        * Lists the visible children of a container, locked ones included,
-       * whose drawing meets a region.
+       * whose drawing meets a region, a group's being the drawing of its
+       * children unless it masks or scrolls them.
        * @param container The container, or nil for the canvas.
        * @param region The region in document space.
        * @param is_enclosed Whether a child must lie entirely within the
@@ -131,6 +132,8 @@ namespace Rellu {
       HitTester& operator =(const HitTester&) = delete;
       std::optional<Placement> place(const Node& node) const;
       const Extent& measure(const NodeId& id, int depth) const;
+      bool meets(const NodeId& id, const Matrix& parent, const Rect& region,
+        int depth) const;
       NodeId hit(const NodeId& id, Point point, const Matrix& parent,
         double tolerance, bool is_locked_hit, int depth) const;
       NodeId hit_children(const std::vector<NodeId>& children, Point point,
