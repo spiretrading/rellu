@@ -161,12 +161,6 @@ namespace Rellu {
   std::vector<std::filesystem::path> get_system_font_directories();
 
   /**
-   * Returns the Fonts directory next to the application's executable, or an
-   * empty path if there is no QCoreApplication.
-   */
-  std::filesystem::path get_bundled_font_directory();
-
-  /**
    * Sets the directories the default FontLibrary searches before the
    * system's font directories, which must be done before the first call to
    * get_default_font_library.
@@ -177,9 +171,8 @@ namespace Rellu {
 
   /**
    * Returns the FontLibrary shared by default, created when first called. It
-   * searches the directories given to set_default_font_directories, or the
-   * bundled font directory if it exists and none were given, followed by the
-   * system's font directories.
+   * searches the directories given to set_default_font_directories, if any,
+   * followed by the system's font directories.
    */
   const FontLibrary& get_default_font_library();
 

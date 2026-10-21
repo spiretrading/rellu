@@ -6,7 +6,6 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
-#include <QCoreApplication>
 #include <QDir>
 #include <QStandardPaths>
 #include "Rellu/Text/FontLibrary.hpp"
@@ -417,13 +416,6 @@ std::vector<std::filesystem::path> Rellu::get_system_font_directories() {
   return directories;
 }
 
-std::filesystem::path Rellu::get_bundled_font_directory() {
-  if(!QCoreApplication::instance()) {
-    return std::filesystem::path();
-  }
-  return to_path(QCoreApplication::applicationDirPath() + "/Fonts");
-}
-
 void Rellu::set_default_font_directories(
     std::vector<std::filesystem::path> directories) {
   get_default_directories() = std::move(directories);
@@ -434,12 +426,6 @@ const FontLibrary& Rellu::get_default_font_library() {
     auto directories = std::vector<std::filesystem::path>();
     if(auto& defaults = get_default_directories()) {
       directories = *defaults;
-    } else {
-      auto bundled = get_bundled_font_directory();
-      auto error = std::error_code();
-      if(std::filesystem::is_directory(bundled, error)) {
-        directories.push_back(std::move(bundled));
-      }
     }
     for(auto& directory : get_system_font_directories()) {
       if(std::find(directories.begin(), directories.end(), directory) ==

@@ -85,7 +85,7 @@ TEST_SUITE("FontLibrary") {
     REQUIRE(!resolution.m_typeface);
   }
 
-  TEST_CASE("bundled_fonts") {
+  TEST_CASE("default_directories") {
     auto resolution = get_default_font_library().resolve(
       make_font("Roboto", "Regular", "Roboto-Regular"));
     REQUIRE(resolution.m_match == FontMatch::POSTSCRIPT_NAME);

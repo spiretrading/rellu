@@ -6,4 +6,3 @@ rellu_link_dependencies(
   rellu PRIVATE QT_ENTRY_POINT QT_IMAGE_FORMATS QT_MODERN_WINDOWS_STYLE
   QT_WINDOWS)
 rellu_install_target(rellu "${APPLICATION_INSTALL_DIRECTORY}")
-rellu_install_files("${APPLICATION_INSTALL_DIRECTORY}/Fonts" ${FONT_FILES})

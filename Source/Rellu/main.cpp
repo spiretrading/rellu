@@ -1,7 +1,6 @@
 #include <QApplication>
 #include <QStringList>
 #include <QtPlugin>
-#include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/Theme.hpp"
 #include "MainWindow.hpp"
@@ -15,7 +14,6 @@ using namespace Rellu;
 
 int main(int argc, char** argv) {
   auto application = QApplication(argc, argv);
-  set_default_font_directories({get_bundled_font_directory()});
   application.setOrganizationName("Rellu");
   application.setApplicationName("Rellu");
   set_language(load_language());
