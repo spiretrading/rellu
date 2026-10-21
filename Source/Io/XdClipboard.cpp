@@ -1,6 +1,10 @@
+#include <algorithm>
+#include <filesystem>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 #include <QBuffer>
 #include <QFile>
 #include <QJsonArray>
@@ -63,24 +67,91 @@ namespace {
     return text;
   }
 
-  QJsonValue strip_ids(const QJsonValue& value) {
+  QJsonObject get_ux(const QJsonObject& object) {
+    return object.value("meta").toObject().value("ux").toObject();
+  }
+
+  void set_ux(QJsonObject& object, const QJsonObject& ux) {
+    auto meta = object.value("meta").toObject();
+    if(ux.isEmpty()) {
+      meta.remove("ux");
+    } else {
+      meta.insert("ux", ux);
+    }
+    if(meta.isEmpty()) {
+      object.remove("meta");
+    } else {
+      object.insert("meta", meta);
+    }
+  }
+
+  template<typename F>
+  QJsonValue transform_objects(const QJsonValue& value, F& transform) {
     if(value.isArray()) {
       auto array = QJsonArray();
       for(auto element : value.toArray()) {
-        array.append(strip_ids(element));
+        array.append(transform_objects(element, transform));
       }
       return array;
     } else if(!value.isObject()) {
       return value;
     }
     auto object = value.toObject();
-    if(object.contains("type")) {
-      object.remove("id");
-    }
+    transform(object);
     for(auto entry = object.begin(); entry != object.end(); ++entry) {
-      *entry = strip_ids(*entry);
+      *entry = transform_objects(*entry, transform);
     }
     return object;
+  }
+
+  QJsonValue strip_ids(const QJsonValue& value) {
+    auto strip = [] (QJsonObject& object) {
+      if(!object.contains("type")) {
+        return;
+      }
+      if(auto id = object.take("id"); id.isString()) {
+        auto ux = get_ux(object);
+        ux.insert("sourceGuid", id);
+        set_ux(object, ux);
+      }
+    };
+    return transform_objects(value, strip);
+  }
+
+  QJsonValue restore_ids(const QJsonValue& value) {
+    auto restore = [] (QJsonObject& object) {
+      if(!object.contains("type")) {
+        return;
+      }
+      auto ux = get_ux(object);
+      if(auto id = ux.take("sourceGuid"); id.isString() &&
+          !object.contains("id")) {
+        object.insert("id", id);
+      }
+      ux.remove("symbolOnClipboard");
+      ux.remove("definitionModTime");
+      if(object.contains("meta")) {
+        set_ux(object, ux);
+      }
+    };
+    return transform_objects(value, restore);
+  }
+
+  QJsonValue mark_instances(
+      const QJsonValue& value, const QJsonObject& times) {
+    auto mark = [&] (QJsonObject& object) {
+      auto ux = get_ux(object);
+      auto symbol = ux.value("symbolId").toString();
+      if(symbol.isEmpty()) {
+        return;
+      }
+      ux.insert("symbolOnClipboard", true);
+      if(auto time = times.value(symbol); time.isDouble()) {
+        ux.insert("definitionModTime", time);
+      }
+      set_ux(object, ux);
+    };
+    return transform_objects(value, mark);
   }
 
   void collect_images(const QJsonValue& value,
@@ -108,6 +179,104 @@ namespace {
     }
   }
 
+  const Component* find_master(
+      const Document& document, const NodeId& id) {
+    for(auto& entry : document.get_resources().m_components) {
+      if(entry.second.m_master == id) {
+        return &entry.second;
+      }
+    }
+    return nullptr;
+  }
+
+  void collect_components(const Document& document, const NodeId& id,
+      std::vector<ComponentId>& components) {
+    auto node = document.find(id);
+    if(!node) {
+      return;
+    }
+    if(auto component = find_master(document, id)) {
+      if(std::ranges::contains(components, component->m_id)) {
+        return;
+      }
+      components.push_back(component->m_id);
+    }
+    for(auto& child : node->m_children) {
+      collect_components(document, child, components);
+    }
+    auto group = node->get_group();
+    if(!group || !group->m_component_instance) {
+      return;
+    }
+    auto& instance = *group->m_component_instance;
+    for(auto& state : instance.m_states) {
+      collect_components(document, state.m_tree, components);
+    }
+    auto& resources = document.get_resources().m_components;
+    if(auto component = resources.find(instance.m_component);
+        component != resources.end() &&
+        !std::ranges::contains(components, component->first)) {
+      collect_components(document, component->second.m_master, components);
+    }
+  }
+
+  std::vector<ComponentId> collect_components(
+      const Document& document, const std::vector<NodeId>& roots) {
+    auto components = std::vector<ComponentId>();
+    for(auto& root : roots) {
+      auto found = std::vector<ComponentId>();
+      collect_components(document, root, found);
+      for(auto& id : found | std::views::reverse) {
+        if(!std::ranges::contains(components, id)) {
+          components.push_back(id);
+        }
+      }
+    }
+    return components;
+  }
+
+  QJsonValue link_images(const QJsonValue& value, const Document& document,
+      const std::filesystem::path& directory) {
+    if(value.isArray()) {
+      auto array = QJsonArray();
+      for(auto element : value.toArray()) {
+        array.append(link_images(element, document, directory));
+      }
+      return array;
+    } else if(!value.isObject()) {
+      return value;
+    }
+    auto object = value.toObject();
+    for(auto entry = object.begin(); entry != object.end(); ++entry) {
+      *entry = link_images(*entry, document, directory);
+    }
+    if(!object.contains("href") || !object.value("meta").isObject()) {
+      return object;
+    }
+    auto uid = object.value("meta").toObject().value("ux").toObject().value(
+      "uid").toString().toStdString();
+    if(uid.empty()) {
+      return object;
+    }
+    for(auto& entry : document.get_resources().m_images) {
+      if(to_uid(entry.first) != uid) {
+        continue;
+      }
+      auto path = directory / uid;
+      auto file = QFile(QString::fromStdU16String(path.u16string()));
+      auto& data = *entry.second.m_data;
+      if(file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+          file.write(reinterpret_cast<const char*>(data.data()),
+            static_cast<qsizetype>(data.size())) ==
+          static_cast<qsizetype>(data.size())) {
+        object.insert("href", QString::fromStdU16String(
+          path.make_preferred().u16string()));
+      }
+      break;
+    }
+    return object;
+  }
+
   QByteArray make_archive(
       const std::vector<std::pair<QString, QByteArray>>& entries) {
     auto bytes = QByteArray();
@@ -124,7 +293,7 @@ namespace {
 
 QByteArray Rellu::write_xd_clipboard(const Document& document,
     const std::vector<XdClipboardItem>& items, const Rect& bounds,
-    const XdTextLayout& layout) {
+    const XdTextLayout& layout, const std::filesystem::path& directory) {
   auto ids = std::vector<NodeId>();
   for(auto& item : items) {
     ids.push_back(item.m_id);
@@ -175,6 +344,34 @@ QByteArray Rellu::write_xd_clipboard(const Document& document,
   resources.insert("gradients", QJsonObject());
   resources.insert("clipPaths", QJsonObject());
   resources.insert("patterns", QJsonObject());
+  auto components = collect_components(document, ids);
+  if(!components.empty()) {
+    auto masters = std::vector<NodeId>();
+    auto& definitions = document.get_resources().m_components;
+    for(auto& id : components) {
+      masters.push_back(definitions.at(id).m_master);
+    }
+    auto serialized = write_xd_nodes(document, masters, options);
+    auto symbols = QJsonDocument::fromJson(QByteArray(serialized.data(),
+      static_cast<qsizetype>(serialized.size()))).array();
+    auto times = QJsonObject();
+    for(auto symbol : symbols) {
+      auto ux = get_ux(symbol.toObject());
+      if(auto time = ux.value("modTime"); time.isDouble()) {
+        times.insert(ux.value("symbolId").toString(), time);
+      }
+    }
+    children = mark_instances(children, times).toArray();
+    auto ux = QJsonObject();
+    ux.insert("symbols", mark_instances(symbols, times));
+    auto meta = QJsonObject();
+    meta.insert("ux", ux);
+    resources.insert("meta", meta);
+  }
+  if(!directory.empty()) {
+    children = link_images(children, document, directory).toArray();
+    resources = link_images(resources, document, directory).toObject();
+  }
   auto ux = QJsonObject();
   if(!offsets.isEmpty()) {
     ux.insert("artboardOffset", offsets);
@@ -203,6 +400,8 @@ XdClipboardContent Rellu::read_xd_clipboard(
     throw std::invalid_argument("The clipboard data is not Adobe XD's.");
   }
   auto root = parsed.object();
+  root.insert("children", restore_ids(root.value("children")));
+  root.insert("resources", restore_ids(root.value("resources")));
   auto offsets = root.value("meta").toObject().value("ux").toObject().value(
     "artboardOffset").toArray();
   auto content = XdClipboardContent();
@@ -254,6 +453,7 @@ XdClipboardContent Rellu::read_xd_clipboard(
   entries.insert(
     entries.end(), artboard_entries.begin(), artboard_entries.end());
   collect_images(children, entries);
+  collect_images(root.value("resources"), entries);
   import_xd(XdPackage(make_archive(entries)), document);
   auto source = root.value("viewSource").toObject();
   if(source.contains("width") && source.contains("height")) {

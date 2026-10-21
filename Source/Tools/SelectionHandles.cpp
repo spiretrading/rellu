@@ -13,6 +13,8 @@
 #include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
+#include "Rellu/Text/FontLibrary.hpp"
+#include "Rellu/Text/TextLayout.hpp"
 #include "Rellu/Tools/SelectionHandles.hpp"
 
 using namespace Rellu;
@@ -174,10 +176,10 @@ namespace {
     return measurer(payload).m_height - area->m_size.m_height;
   }
 
-  bool is_overflowing(const Document& document, const NodeId& id,
-      const TextMeasurer& measurer) {
-    auto excess = get_excess(document, id, measurer);
-    return excess && *excess > FIT_TOLERANCE;
+  bool has_hidden_lines(const Document& document, const NodeId& id) {
+    auto node = document.find(id);
+    auto text = node ? node->get_text() : nullptr;
+    return text && is_overflowing(*text, get_default_font_library());
   }
 
   Handle get_adjust_handle(const Document& document, const NodeId& id) {
@@ -679,7 +681,7 @@ void SelectionHandles::update_cache(const ToolContext& context) const {
   auto& measurer = context.get_text_measurer();
   m_cached_box = get_selection_box(document, nodes, measurer);
   m_is_overflowing =
-    nodes.size() == 1 && is_overflowing(document, nodes.front(), measurer);
+    nodes.size() == 1 && has_hidden_lines(document, nodes.front());
   m_cached_outlines.clear();
   if(nodes.size() > 1) {
     for(auto& id : get_top_level(document, nodes)) {

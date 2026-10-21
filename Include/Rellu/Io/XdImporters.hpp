@@ -169,8 +169,8 @@ namespace Rellu {
   std::optional<Stroke> read_stroke(XdObject& stroke);
 
   /**
-   * Reads a list of filters, each drop and inner shadow becoming its own
-   * effect.
+   * Reads a list of filters, keeping only the first drop shadow and making
+   * each inner shadow its own effect.
    * @param filters The filters' JSON.
    * @return The effects in order, skipping malformed filters.
    */

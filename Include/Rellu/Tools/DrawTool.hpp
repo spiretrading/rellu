@@ -7,6 +7,7 @@
 #include "Rellu/Commands/Command.hpp"
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
+#include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/NodeHeader.hpp"
 #include "Rellu/Tools/LayoutHandles.hpp"
 #include "Rellu/Tools/SelectionHandles.hpp"
@@ -123,13 +124,26 @@ namespace Rellu {
 
   /**
    * Returns the box Adobe XD draws from a drag: from the start to the end in
-   * whole document units, made square while Shift is held and centered on
-   * the start while Alt is held.
+   * whole document units, made a square on the drag's shorter side while
+   * Shift is held and centered on the start while Alt is held.
    * @param start The point in document space the drag started at.
    * @param end The point in document space the drag reached.
    * @param modifiers The modifier keys held.
    */
   Rect make_drawn_box(Point start, Point end, Qt::KeyboardModifiers modifiers);
+
+  /**
+   * Returns the box Adobe XD draws from a drag for a shape with a fixed
+   * aspect: from the start to the end in whole document units, fitted
+   * within the drag to the aspect and rounded to whole units while Shift is
+   * held, and centered on the start while Alt is held.
+   * @param start The point in document space the drag started at.
+   * @param end The point in document space the drag reached.
+   * @param modifiers The modifier keys held.
+   * @param aspect The aspect Shift constrains the box to.
+   */
+  Rect make_drawn_box(Point start, Point end, Qt::KeyboardModifiers modifiers,
+    Size aspect);
 
   /**
    * Finds the artboard a node drawn from a point belongs to.

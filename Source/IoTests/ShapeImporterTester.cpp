@@ -50,15 +50,20 @@ TEST_SUITE("ShapeImporter") {
   TEST_CASE("polygon") {
     auto geometry = import_geometry(R"({"type": "polygon",
       "uxdesign#cornerCount": 3, "uxdesign#width": 5, "uxdesign#height": 6,
-      "uxdesign#cornerRadius": 1, "points": [{"x": 2.5, "y": 0},
+      "uxdesign#cornerRadius": 1, "points": [{"x": 2, "y": 0},
       {"x": 5, "y": 6}, {"x": 0, "y": 6}]})");
     auto& polygon = std::get<PolygonShape>(geometry);
     REQUIRE(polygon.m_corner_count == 3);
     REQUIRE(polygon.m_size == Size(5, 6));
     REQUIRE(polygon.m_corner_radius == 1);
     REQUIRE(polygon.m_vertices ==
-      std::vector<Point>({Point(2.5, 0), Point(5, 6), Point(0, 6)}));
+      std::vector<Point>({Point(2, 0), Point(5, 6), Point(0, 6)}));
     REQUIRE(polygon.m_star_ratio == 100);
+    auto derived = std::get<PolygonShape>(import_geometry(R"({
+      "type": "polygon", "uxdesign#cornerCount": 3, "uxdesign#width": 5,
+      "uxdesign#height": 6, "points": [{"x": 2.5, "y": 0},
+      {"x": 5, "y": 6}, {"x": 0, "y": 6}]})"));
+    REQUIRE(derived.m_vertices.empty());
   }
 
   TEST_CASE("star") {

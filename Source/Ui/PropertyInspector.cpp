@@ -7,6 +7,7 @@
 #include <tuple>
 #include <utility>
 #include <QAbstractButton>
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QConicalGradient>
@@ -33,9 +34,11 @@
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
+#include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
 #include "Rellu/Ui/Translation.hpp"
 #include "Colors.hpp"
+#include "FieldKeys.hpp"
 #include "HyperlinkStatus.hpp"
 #include "Icons.hpp"
 
@@ -332,11 +335,42 @@ namespace {
 
   using Updater = std::function<void (const PropertyDescriptor&)>;
 
+  void collect_nodes(
+      const Document& document, const NodeId& id, std::vector<Node>& nodes) {
+    auto node = document.find(id);
+    if(!node) {
+      return;
+    }
+    nodes.push_back(*node);
+    for(auto& child : node->m_children) {
+      collect_nodes(document, child, nodes);
+    }
+  }
+
+  void restore_nodes(const Document& document, Transaction& transaction,
+      const std::vector<Node>& nodes) {
+    for(auto& node : nodes) {
+      auto current = document.find(node.m_header.m_id);
+      if(!current) {
+        continue;
+      }
+      if(current->m_header != node.m_header) {
+        transaction.replace_header(node.m_header);
+      }
+      if(current->m_payload != node.m_payload) {
+        transaction.replace_payload(node.m_header.m_id, node.m_payload);
+      }
+    }
+  }
+
   struct Binding {
     std::function<const PropertyDescriptor* (std::string_view)> m_find;
     std::function<const PropertyEditor* (const PropertyDescriptor&)> m_editor;
     std::function<void (const std::string&, const PropertyValue&)> m_commit;
     std::function<void (const std::string&)> m_finish;
+    std::function<void (const std::string&, const PropertyValue&)> m_preview;
+    std::function<void (const std::string&)> m_cancel;
+    std::function<void ()> m_release;
     std::function<void (const std::string&, QWidget*, bool, Updater)>
       m_register;
     std::function<void (QWidget&, const std::string&)> m_pick;
@@ -556,24 +590,38 @@ namespace {
       }
       return number;
     };
-    auto commit = [=, commit = binding.m_commit] (double number) {
+    auto to_value = [=] (double number) -> PropertyValue {
       if(is_integer) {
-        commit(path, static_cast<int>(std::lround(number)));
-      } else {
-        commit(path, number);
+        return static_cast<int>(std::lround(number));
       }
+      return number;
+    };
+    auto commit = [=, commit = binding.m_commit] (double number) {
+      commit(path, to_value(number));
     };
     if(editor) {
+      auto cancel = [=, cancel = binding.m_cancel] {
+        cancel(path);
+        line->setText(*shown);
+      };
       QObject::connect(line, &QLineEdit::editingFinished, line, [=] {
         if(line->text() == *shown) {
-          return;
-        }
-        if(auto number = parse(line->text())) {
+          cancel();
+        } else if(auto number = parse(line->text())) {
           commit(*number);
         } else {
-          line->setText(*shown);
+          cancel();
         }
       });
+      if(editor->m_is_live) {
+        QObject::connect(line, &QLineEdit::textEdited, line,
+          [=, preview = binding.m_preview] (const QString& text) {
+            if(auto number = parse(text)) {
+              preview(path, to_value(*number));
+            }
+          });
+      }
+      bind_field_keys(*line, cancel, binding.m_release);
       line->m_step = [=] (int steps) {
         auto base = parse(line->text()).value_or(0);
         if(auto number = parse(QString::number(base * scale + steps))) {
@@ -618,6 +666,12 @@ namespace {
     line->setPlaceholderText(placeholder);
     line->setEnabled(binding.m_is_enabled);
     line->setReadOnly(!editor);
+    auto shown = std::make_shared<QString>();
+    if(editor) {
+      bind_field_keys(*line, [=] {
+        line->setText(*shown);
+      }, binding.m_release);
+    }
     if(editor && is_entered) {
       QObject::connect(line, &QLineEdit::editingFinished, line,
         [=, commit = binding.m_commit, finish = binding.m_finish] {
@@ -641,6 +695,7 @@ namespace {
       [=] (const PropertyDescriptor& property) {
         auto text = property.m_is_mixed ? QString() : to_text(property.m_value);
         line->setPlaceholderText(property.m_is_mixed ? EM_DASH : placeholder);
+        *shown = text;
         if(line->text() != text) {
           line->setText(text);
         }
@@ -1913,9 +1968,12 @@ PropertyInspector::PropertyInspector(QWidget* parent)
   rebuild();
 }
 
-PropertyInspector::~PropertyInspector() = default;
+PropertyInspector::~PropertyInspector() {
+  discard_preview();
+}
 
 void PropertyInspector::set_document(Document* document) {
+  discard_preview();
   m_selection_subscription.release();
   m_text_selection_subscription.release();
   m_history_subscription.release();
@@ -1929,6 +1987,7 @@ Editor* PropertyInspector::get_editor() const {
 }
 
 void PropertyInspector::set_editor(Editor* editor) {
+  discard_preview();
   m_selection_subscription.release();
   m_text_selection_subscription.release();
   m_history_subscription.release();
@@ -2174,6 +2233,12 @@ void PropertyInspector::refresh() {
 void PropertyInspector::rebuild() {
   m_is_rebuild_pending = false;
   ++m_generation;
+  discard_preview();
+  if(auto focus = QApplication::focusWidget();
+      focus && m_content && m_content->isAncestorOf(focus)) {
+    focus->clearFocus();
+    release();
+  }
   if(!m_document) {
     m_properties.clear();
   }
@@ -2251,6 +2316,16 @@ void PropertyInspector::rebuild() {
     };
     binding.m_finish = [this, generation] (const std::string& path) {
       finish(generation, path);
+    };
+    binding.m_preview = [this, generation] (
+        const std::string& path, const PropertyValue& value) {
+      preview(generation, path, value);
+    };
+    binding.m_cancel = [this, generation] (const std::string& path) {
+      cancel(generation, path);
+    };
+    binding.m_release = [this] {
+      release();
     };
     binding.m_register = [this] (const std::string& path, QWidget* input,
         bool is_editable, Updater update) {
@@ -2337,6 +2412,9 @@ void PropertyInspector::update_fields() {
     if(!property) {
       continue;
     }
+    if(field->m_path == m_preview_path && field->m_input->hasFocus()) {
+      continue;
+    }
     if(m_is_committing || !field->m_input->hasFocus()) {
       field->m_update(*property);
     }
@@ -2365,10 +2443,17 @@ bool PropertyInspector::is_locked() const {
   return m_is_locked;
 }
 
+void PropertyInspector::set_release_handler(ReleaseHandler handler) {
+  m_release_handler = std::move(handler);
+}
+
 void PropertyInspector::commit(
     int generation, const std::string& path, const PropertyValue& value) {
   if(generation != m_generation) {
     return;
+  }
+  if(path == m_preview_path) {
+    discard_preview();
   }
   apply(path, value);
 }
@@ -2429,7 +2514,72 @@ void PropertyInspector::finish(int generation, const std::string& path) {
   if(generation != m_generation) {
     return;
   }
+  if(path == m_preview_path) {
+    discard_preview();
+  }
   seal(path);
+}
+
+void PropertyInspector::preview(
+    int generation, const std::string& path, const PropertyValue& value) {
+  if(generation != m_generation || !m_editor) {
+    return;
+  }
+  auto editor = m_property_editors.find(path);
+  if(!editor) {
+    return;
+  }
+  auto& document = m_editor->get_document();
+  if(path != m_preview_path) {
+    discard_preview();
+    m_editor->get_history().seal();
+    m_edited_path.clear();
+    m_preview_path = path;
+    for(auto& id : m_nodes) {
+      collect_nodes(document, id, m_preview_nodes);
+    }
+  }
+  auto is_committing = std::exchange(m_is_committing, true);
+  try {
+    auto transaction = Transaction(document);
+    restore_nodes(document, transaction, m_preview_nodes);
+    if(auto command = editor->m_setter(document, m_nodes, value)) {
+      command->apply(document, transaction);
+    }
+    transaction.commit_unrecorded();
+  } catch(const std::exception&) {}
+  m_is_committing = is_committing;
+}
+
+void PropertyInspector::cancel(int generation, const std::string& path) {
+  if(generation == m_generation && path == m_preview_path) {
+    discard_preview();
+  }
+}
+
+void PropertyInspector::discard_preview() {
+  if(m_preview_path.empty()) {
+    return;
+  }
+  m_preview_path.clear();
+  auto nodes = std::exchange(m_preview_nodes, std::vector<Node>());
+  if(!m_editor) {
+    return;
+  }
+  auto& document = m_editor->get_document();
+  auto is_committing = std::exchange(m_is_committing, true);
+  try {
+    auto transaction = Transaction(document);
+    restore_nodes(document, transaction, nodes);
+    transaction.commit_unrecorded();
+  } catch(const std::exception&) {}
+  m_is_committing = is_committing;
+}
+
+void PropertyInspector::release() {
+  if(m_release_handler) {
+    m_release_handler();
+  }
 }
 
 void PropertyInspector::seal(const std::string& path) {

@@ -33,11 +33,22 @@ namespace Rellu {
    * offered depend on the node as in Adobe XD: Time only for an artboard,
    * Hover only within a component with several states, Tap, Drag, Hover
    * and Time once per node, the other states of a component with states
-   * before the artboards other than the node's own. Voice triggers, second
-   * actions and the Scroll To, Audio Playback and Speech Playback actions
-   * are listed but unavailable. Each change is one undoable step. Without
-   * an interaction to edit, the fields show Adobe XD's placeholder values,
-   * disabled.
+   * before the artboards other than the node's own, and the layers of the
+   * node's artboard after them for Scroll To or in a document with one
+   * artboard; a trigger or destination the action does not allow changes
+   * the action as Adobe XD does. Voice triggers, second actions and the
+   * Audio Playback and Speech Playback actions are listed but unavailable,
+   * as is Scroll To for an artboard or a trigger other than Tap or Keys &
+   * Gamepad. Selecting a node edits the interaction Adobe XD selects, and
+   * the one being edited is the edit context's interaction. Easing and
+   * Duration are disabled without an animation, and Duration hidden for a
+   * drag. Each change is one undoable step. Without an interaction to edit,
+   * the fields show Adobe XD's placeholder values, disabled. As in Adobe XD,
+   * Enter and Tab apply a field's value and Escape restores it, each giving
+   * up the keyboard focus, as does choosing from a menu, and the Y-Offset
+   * of a scroll shows as it is typed without recording a step, Escape
+   * restoring the offset from before and entering it recording one step
+   * from the offset before.
    */
   class PrototypeInspector : public QWidget {
     public:
@@ -48,6 +59,13 @@ namespace Rellu {
        */
       using FixedPositionFactory = std::function<
         std::unique_ptr<Command> (const NodeId& node, bool is_fixed)>;
+
+      /**
+       * The type of function called when a field gives up the keyboard
+       * focus after Enter, Tab or Escape, a choice from its menu, or as the
+       * fields are rebuilt.
+       */
+      using ReleaseHandler = std::function<void ()>;
 
       /** The labels of the triggers, in Adobe XD's order. */
       static const std::vector<std::string>& get_trigger_labels();
@@ -81,6 +99,14 @@ namespace Rellu {
        */
       void set_fixed_position_factory(FixedPositionFactory factory);
 
+      /**
+       * Sets the function called when a field gives up the keyboard focus
+       * after Enter, Tab or Escape, a choice from its menu, or as the
+       * fields are rebuilt.
+       * @param handler The function to call.
+       */
+      void set_release_handler(ReleaseHandler handler);
+
       /** Returns the node inspected, or nil if there is none. */
       const NodeId& get_node() const;
 
@@ -110,12 +136,14 @@ namespace Rellu {
     private:
       Editor* m_editor;
       FixedPositionFactory m_fixed_position_factory;
+      ReleaseHandler m_release_handler;
       Subscription m_subscription;
       Subscription m_selection_subscription;
       NodeId m_node;
       InteractionId m_current;
       std::optional<Interaction> m_last;
       bool m_is_pending;
+      std::optional<Interaction> m_preview;
       QScrollArea* m_scroll;
       QWidget* m_content;
       QVBoxLayout* m_layout;
@@ -124,6 +152,10 @@ namespace Rellu {
       void schedule();
       void rebuild();
       void apply(Interaction interaction);
+      void preview(const Interaction& base, Interaction interaction);
+      void discard_preview();
+      void release();
+      void bind_keys();
   };
 }
 

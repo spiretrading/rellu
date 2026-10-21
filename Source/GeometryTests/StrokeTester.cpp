@@ -325,6 +325,20 @@ TEST_SUITE("StrokeGeometry") {
     REQUIRE(get_area(outline_stroke(rectangle,
       make_dashed_stroke(2, StrokeCap::BUTT, {100, 10}, 0), 0.01)) ==
         doctest::Approx(79));
+    auto joined = outline_stroke(rectangle,
+      make_dashed_stroke(2, StrokeCap::BUTT, {4, 2}, 0), 0.01);
+    REQUIRE(count_subpaths(joined) == 6);
+    REQUIRE(contains(joined, Point(-0.5, -0.5)));
+    REQUIRE(!contains(outline_stroke(rectangle,
+      make_dashed_stroke(2, StrokeCap::BUTT, {8, 8}, 0), 0.01),
+        Point(-0.5, -0.5)));
+    auto gap = outline_stroke(rectangle,
+      make_dashed_stroke(2, StrokeCap::BUTT, {5, 5}, 0), 0.01);
+    REQUIRE(contains(gap, Point(-0.5, -0.5)));
+    REQUIRE(!contains(gap, Point(-0.5, 2)));
+    REQUIRE(get_area(outline_stroke(rectangle,
+      make_dashed_stroke(2, StrokeCap::BUTT, {40, 10}, 0), 0.01)) ==
+        doctest::Approx(80));
     auto inside = make_dashed_stroke(2, StrokeCap::BUTT, {10, 10}, 5);
     inside.m_alignment = StrokeAlignment::INSIDE;
     auto inside_outline = outline_stroke(rectangle, inside, 0.01);

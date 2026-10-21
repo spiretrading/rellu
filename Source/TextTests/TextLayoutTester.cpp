@@ -78,7 +78,6 @@ TEST_SUITE("TextLayout") {
     REQUIRE(layout.m_glyphs.front().m_origin.m_x == 0);
     REQUIRE(layout.m_glyphs.front().m_size == FONT.m_size);
     REQUIRE(layout.m_decorations.empty());
-    REQUIRE(!layout.m_clip);
   }
 
   TEST_CASE("stored_layout") {
@@ -98,7 +97,40 @@ TEST_SUITE("TextLayout") {
     layout = lay_out(text, get_library());
     REQUIRE(get_baselines(layout) == std::set<double>(
       {get_ascent(), 2 * get_ascent() + get_descent()}));
-    REQUIRE(layout.m_clip == Rect(0, 0, 200, 100));
+  }
+
+  TEST_CASE("overflowing_lines") {
+    auto text = make_text(u"ab\ncd\nef");
+    text.m_paragraph_style.m_line_height = 18;
+    auto top = std::floor(get_metrics().m_clipping_ascent * FONT.m_size + 0.5);
+    auto bottom =
+      std::floor(get_metrics().m_clipping_descent * FONT.m_size + 0.5);
+    auto count_lines = [&] (double height, bool is_edited) {
+      text.m_frame = AreaFrame(Size(300, height));
+      return get_baselines(lay_out(text, get_library(), is_edited)).size();
+    };
+    REQUIRE(count_lines(1, false) == 1);
+    REQUIRE(count_lines(top + 18 + bottom - 0.5, false) == 1);
+    REQUIRE(count_lines(top + 18 + bottom, false) == 2);
+    REQUIRE(count_lines(top + 36 + bottom - 0.01, false) == 2);
+    REQUIRE(count_lines(top + 36 + bottom, false) == 3);
+    REQUIRE(count_lines(1, true) == 3);
+    text.m_frame = AreaFrame(Size(300, top + 18 + bottom));
+    REQUIRE(lay_out(text, get_library()).m_glyphs.size() == 4);
+    REQUIRE(is_overflowing(text, get_library()));
+    auto stored = store_layout(text, get_library());
+    REQUIRE(stored.m_paragraphs.size() == 2);
+    text.m_layout = Shared(stored);
+    REQUIRE(lay_out(text, get_library()).m_glyphs.size() == 4);
+    REQUIRE(lay_out(text, get_library(), true).m_glyphs.size() == 6);
+    REQUIRE(measure_lines(text, get_library()).size() == 3);
+    REQUIRE(is_overflowing(text, get_library()));
+    text.m_layout = std::nullopt;
+    text.m_frame = AreaFrame(Size(300, top + 36 + bottom));
+    REQUIRE(!is_overflowing(text, get_library()));
+    text.m_frame = AutoHeightFrame(300);
+    REQUIRE(!is_overflowing(text, get_library()));
+    REQUIRE(lay_out(text, get_library()).m_glyphs.size() == 6);
   }
 
   TEST_CASE("stored_line_breaks") {

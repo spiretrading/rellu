@@ -11,9 +11,9 @@ namespace Rellu {
 
   /**
    * Where the user is working in a document: the container entered for
-   * editing, the active artboard and the node under the pointer. A removed
-   * container gives way to its nearest remaining ancestor, and a removed
-   * artboard or hovered node to none.
+   * editing, the active artboard, the node under the pointer and the
+   * interaction being edited. A removed container gives way to its nearest
+   * remaining ancestor, and a removed artboard or hovered node to none.
    */
   class EditContext {
     public:
@@ -32,6 +32,9 @@ namespace Rellu {
 
       /** Returns the node under the pointer, or nil if there is none. */
       const NodeId& get_hover() const;
+
+      /** Returns the interaction being edited, or nil if there is none. */
+      const InteractionId& get_interaction() const;
 
       /**
        * Returns the container whose children select all applies to: the
@@ -64,6 +67,12 @@ namespace Rellu {
       void set_hover(const NodeId& hover);
 
       /**
+       * Sets the interaction being edited.
+       * @param interaction The interaction's id, or nil for none.
+       */
+      void set_interaction(const InteractionId& interaction);
+
+      /**
        * Finds the node that clicking on a node selects: its ancestor within
        * the container entered, or at the top level its ancestor directly
        * within an artboard or on the canvas. A locked node is selected like
@@ -74,8 +83,8 @@ namespace Rellu {
       NodeId resolve(const NodeId& hit) const;
 
       /**
-       * Subscribes an observer to every change of the container, artboard or
-       * hovered node.
+       * Subscribes an observer to every change of the container, artboard,
+       * hovered node or interaction being edited.
        * @param observer The function called after each change.
        * @return The handle ending the subscription when released.
        */
@@ -87,6 +96,7 @@ namespace Rellu {
       std::vector<NodeId> m_ancestors;
       NodeId m_artboard;
       NodeId m_hover;
+      InteractionId m_interaction;
       Signal m_signal;
       Subscription m_subscription;
 

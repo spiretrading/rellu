@@ -54,9 +54,6 @@ namespace Rellu {
 
     /** The underlines and strikethroughs in drawing order. */
     std::vector<TextDecoration> m_decorations;
-
-    /** The region outside of which nothing is drawn, or none. */
-    std::optional<Rect> m_clip;
   };
 
   /** A region of a text node's drawing filled with one color. */
@@ -111,12 +108,33 @@ namespace Rellu {
 
   /**
    * Lays out a text node the way Adobe XD does, keeping the line breaks of
-   * its stored layout, or breaking lines itself when it has none.
+   * its stored layout, or breaking lines itself when it has none, in which
+   * case area text leaves out the lines after the first that do not fit its
+   * frame.
    * @param text The text node's payload.
    * @param library The fonts to resolve the text's fonts with.
    * @return The glyphs and decorations of the <i>text</i>.
    */
   TextLayout lay_out(const Text& text, const FontLibrary& library);
+
+  /**
+   * Lays out a text node as the other lay_out does, or as Adobe XD lays it
+   * out while it is edited, with every line.
+   * @param text The text node's payload.
+   * @param library The fonts to resolve the text's fonts with.
+   * @param is_edited <code>true</code> iff the text is laid out as while it
+   *        is edited.
+   * @return The glyphs and decorations of the <i>text</i>.
+   */
+  TextLayout lay_out(
+    const Text& text, const FontLibrary& library, bool is_edited);
+
+  /**
+   * Tests whether area text leaves out lines that do not fit its frame.
+   * @param text The text node's payload.
+   * @param library The fonts to resolve the text's fonts with.
+   */
+  bool is_overflowing(const Text& text, const FontLibrary& library);
 
   /**
    * Measures a text node laid out as by lay_out: the frame of area text,
@@ -139,7 +157,7 @@ namespace Rellu {
   StoredLayout store_layout(const Text& text, const FontLibrary& library);
 
   /**
-   * Measures the lines of a text node laid out as by lay_out.
+   * Measures the lines of a text node laid out as while it is edited.
    * @param text The text node's payload.
    * @param library The fonts to resolve the text's fonts with.
    * @return The lines in order, at least one.

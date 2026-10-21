@@ -50,3 +50,12 @@ Rect Rellu::center_window(Size size, const Rect& area) {
   return Rect(area.m_x + std::floor((area.m_width - width) / 2),
     area.m_y + std::floor((area.m_height - height) / 2), width, height);
 }
+
+Rect Rellu::fit_window(const Rect& bounds, const Rect& area) {
+  auto width = std::min(bounds.m_width, area.m_width);
+  auto height = std::min(bounds.m_height, area.m_height);
+  return Rect(
+    std::clamp(bounds.m_x, area.m_x, area.get_right() - width),
+    std::clamp(bounds.m_y, area.m_y, area.get_bottom() - height), width,
+    height);
+}

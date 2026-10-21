@@ -1,6 +1,8 @@
 #include <QApplication>
+#include <QClipboard>
 #include <QStringList>
 #include <QtPlugin>
+#include "Rellu/Ui/Clipboard.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/Theme.hpp"
 #include "MainWindow.hpp"
@@ -18,6 +20,8 @@ int main(int argc, char** argv) {
   application.setApplicationName("Rellu");
   set_language(load_language());
   apply_theme(application);
+  Clipboard::remove_stale_images(Clipboard::get_default_image_directory(),
+    QApplication::clipboard()->mimeData());
   auto window = MainWindow();
   window.show();
   open_launched_document(QApplication::arguments(),

@@ -33,12 +33,14 @@ namespace {
   constexpr auto FIT_MARGIN = 24.0;
   constexpr auto MAXIMUM_FRAMES = 2000;
   constexpr auto DRAG_FRAMES = 60;
+  constexpr auto SCENE_BUDGET = std::chrono::milliseconds(8);
 
   struct Options {
     std::vector<std::filesystem::path> m_paths;
     int m_frames = 30;
     QSize m_size = QSize(1920, 1080);
     bool m_is_software = false;
+    bool m_is_text = false;
   };
 
   struct Frame {
@@ -419,6 +421,284 @@ namespace {
       }
     }
   }
+  void collect_texts(const Document& document, const NodeId& id, int depth,
+      std::vector<NodeId>& texts) {
+    auto node = document.find(id);
+    if(!node || depth > 64 || !node->m_header.m_is_visible) {
+      return;
+    }
+    if(node->get_text()) {
+      texts.push_back(id);
+      return;
+    }
+    for(auto& child : node->m_children) {
+      collect_texts(document, child, depth + 1, texts);
+    }
+  }
+
+  std::shared_ptr<const Drawing> draw_texts(
+      SceneBuilder& builder, const std::vector<NodeId>& texts) {
+    auto lists = std::vector<std::shared_ptr<const DrawList>>();
+    for(auto& id : texts) {
+      auto list = builder.build(id);
+      if(!list.empty()) {
+        lists.push_back(std::make_shared<const DrawList>(std::move(list)));
+      }
+    }
+    auto drawing = std::make_shared<Drawing>();
+    drawing->set_lists(std::move(lists));
+    return drawing;
+  }
+
+  std::size_t count_commands(const Drawing& drawing) {
+    auto count = std::size_t(0);
+    for(auto& list : drawing.get_lists()) {
+      count += list->size();
+    }
+    return count;
+  }
+
+  double time_update(Scene& scene) {
+    auto start = Clock::now();
+    scene.update();
+    return to_milliseconds(Clock::now() - start);
+  }
+
+  struct Settling {
+    double m_total;
+    double m_maximum;
+    int m_updates;
+  };
+
+  Rect get_view_region(const Matrix& view, QSize size) {
+    return Rect(-view.m_tx / view.m_a, -view.m_ty / view.m_a,
+      size.width() / view.m_a, size.height() / view.m_a);
+  }
+
+  Settling settle_scene(Scene& scene, const Rect& region) {
+    auto settling = Settling(0, 0, 0);
+    while((!scene.is_current() || !scene.is_rasterized()) &&
+        settling.m_updates != MAXIMUM_FRAMES) {
+      auto start = Clock::now();
+      if(!scene.is_current()) {
+        scene.update(region, SCENE_BUDGET);
+      } else {
+        scene.rasterize(region, SCENE_BUDGET);
+      }
+      auto time = to_milliseconds(Clock::now() - start);
+      settling.m_total += time;
+      settling.m_maximum = std::max(settling.m_maximum, time);
+      ++settling.m_updates;
+    }
+    return settling;
+  }
+
+  void pan_scene(const Options& options, Harness& harness,
+      CanvasRenderer& renderer, Scene& scene, Matrix view,
+      const std::string& name) {
+    renderer.set_view(view);
+    harness.render();
+    settle(harness, renderer);
+    auto updates = std::vector<double>();
+    auto cpu = std::vector<double>();
+    auto gpu = std::vector<double>();
+    for(auto i = 0; i != options.m_frames; ++i) {
+      view = make_translation(23, 13) * view;
+      renderer.set_view(view);
+      auto visible = get_view_region(view, options.m_size);
+      scene.set_text_region(
+        inflate(visible, visible.m_width, visible.m_height));
+      auto start = Clock::now();
+      if(!scene.is_current()) {
+        renderer.invalidate(scene.update(visible, SCENE_BUDGET));
+      } else if(!scene.is_rasterized()) {
+        renderer.invalidate(scene.rasterize(visible, SCENE_BUDGET));
+      }
+      updates.push_back(to_milliseconds(Clock::now() - start));
+      auto frame = harness.render();
+      cpu.push_back(frame.m_cpu);
+      gpu.push_back(frame.m_gpu);
+    }
+    std::printf("    %-8s pan frame: scene update %.2f ms (max %.2f), "
+      "render %.2f ms CPU (max %.2f), %.2f ms GPU\n", name.c_str(),
+      get_median(updates), get_maximum(updates), get_median(cpu),
+      get_maximum(cpu), get_median(gpu));
+  }
+
+  void drag_text(Document& document, Scene& scene, const NodeId& id,
+      double step) {
+    auto bounds = scene.get_drawing()->get_bounds();
+    auto header = document.get(id).m_header;
+    auto times = std::vector<double>();
+    for(auto i = 0; i != DRAG_FRAMES; ++i) {
+      header.m_transform = make_translation(step, 2) * header.m_transform;
+      auto transaction = Transaction(document);
+      transaction.replace_header(header);
+      if(i == 0) {
+        transaction.commit();
+      } else {
+        transaction.amend();
+      }
+      auto start = Clock::now();
+      while(!scene.is_current()) {
+        scene.update(bounds, SCENE_BUDGET);
+      }
+      times.push_back(to_milliseconds(Clock::now() - start));
+    }
+    auto settling = settle_scene(scene, bounds);
+    std::printf("    drag by %.2f (%zu nodes): frame median %.2f ms, max "
+      "%.2f ms; then %.1f ms in %d steps (max %.1f ms)\n", step,
+      count_nodes(document, id), get_median(times), get_maximum(times),
+      settling.m_total, settling.m_updates, settling.m_maximum);
+    document.undo();
+    scene.update();
+  }
+
+  void drag_text(Document& document, Scene& scene) {
+    auto largest = NodeId();
+    auto largest_size = std::size_t(0);
+    for(auto& id : document.get_canvas()) {
+      if(auto size = count_nodes(document, id); size > largest_size) {
+        largest = id;
+        largest_size = size;
+      }
+    }
+    auto child = NodeId();
+    auto child_size = std::size_t(0);
+    for(auto& id : document.get(largest).m_children) {
+      if(auto size = count_nodes(document, id); size > child_size) {
+        child = id;
+        child_size = size;
+      }
+    }
+    if(child.is_nil()) {
+      return;
+    }
+    drag_text(document, scene, child, 3);
+    drag_text(document, scene, child, 0.3);
+  }
+
+  void run_text(const Options& options, const std::filesystem::path& path) {
+    auto document = Document();
+    import_xd(path, document);
+    auto texts = std::vector<NodeId>();
+    for(auto& id : document.get_canvas()) {
+      collect_texts(document, id, 0, texts);
+    }
+    std::printf("%s: %zu nodes, %zu text nodes\n",
+      path.filename().string().c_str(), document.get_nodes().get_size(),
+      texts.size());
+    auto scene = Scene(document, StripRasterizer::TOLERANCE);
+    scene.update();
+    auto bounds = scene.get_drawing()->get_bounds();
+    if(bounds.is_empty() || texts.empty()) {
+      return;
+    }
+    auto fit = get_fit(bounds, options.m_size);
+    auto focus = Point(0, 0);
+    {
+      auto builder = SceneBuilder(document, StripRasterizer::TOLERANCE);
+      auto drawing = draw_texts(builder, texts);
+      focus = drawing->get_region(
+        drawing->get_lists().size() / 2).m_bounds.get_center();
+    }
+    struct View {
+      std::string m_name;
+      Point m_center;
+      double m_zoom;
+    };
+    auto views = std::vector<View>({View("fit", bounds.get_center(), fit),
+      View("100%", focus, 1), View("400%", focus, 4)});
+    for(auto& view : views) {
+      auto tolerance = StripRasterizer::TOLERANCE / get_level(view.m_zoom);
+      auto device = make_scale(view.m_zoom, view.m_zoom);
+      auto outlines = SceneBuilder(document, tolerance);
+      auto start = Clock::now();
+      auto outlined = draw_texts(outlines, texts);
+      auto outlined_time = to_milliseconds(Clock::now() - start);
+      auto cold = SceneBuilder(document, tolerance);
+      cold.set_text_transform(device);
+      start = Clock::now();
+      draw_texts(cold, texts);
+      auto cold_time = to_milliseconds(Clock::now() - start);
+      auto warm = SceneBuilder(document, tolerance);
+      warm.set_text_transform(device);
+      start = Clock::now();
+      auto rasterized = draw_texts(warm, texts);
+      auto warm_time = to_milliseconds(Clock::now() - start);
+      std::printf("  view %s (zoom %.4f): text build outlines %.1f ms "
+        "(%zu commands), rasters %.1f ms cold, %.1f ms warm (%zu "
+        "commands)\n", view.m_name.c_str(), view.m_zoom, outlined_time,
+        count_commands(*outlined), cold_time, warm_time,
+        count_commands(*rasterized));
+      {
+        auto builder = SceneBuilder(document, tolerance);
+        builder.set_text_transform(device);
+        auto times = std::vector<double>();
+        for(auto& id : document.get_canvas()) {
+          auto dependencies = SceneDependencies();
+          auto start = Clock::now();
+          builder.build_lists(id, dependencies);
+          times.push_back(to_milliseconds(Clock::now() - start));
+        }
+        std::printf("  top-level rasterize: %zu nodes, median %.2f ms, "
+          "max %.2f ms\n", times.size(), get_median(times),
+          get_maximum(times));
+      }
+      auto matrix = make_view(view.m_center, view.m_zoom, options.m_size);
+      auto drawings = std::vector<
+        std::pair<std::string, std::shared_ptr<const Drawing>>>({
+          std::pair("outlines", outlined), std::pair("rasters", rasterized)});
+      for(auto& drawing : drawings) {
+        auto renderer = CanvasRenderer();
+        renderer.set_drawing(drawing.second);
+        auto harness = Harness(renderer, options);
+        pan(options, harness, renderer, matrix, drawing.first);
+        zoom(harness, renderer, matrix, 1.25, options.m_size, drawing.first);
+      }
+      auto visible = get_view_region(matrix, options.m_size);
+      scene.set_tolerance(tolerance);
+      scene.set_text_region(
+        inflate(visible, visible.m_width, visible.m_height));
+      scene.set_text_transform(std::nullopt);
+      settle_scene(scene, visible);
+      scene.set_text_transform(device);
+      auto rasterize = settle_scene(scene, visible);
+      scene.set_text_transform(std::nullopt);
+      auto fallback = settle_scene(scene, visible);
+      std::printf("  scene near the view: rasterize %.1f ms in %d updates "
+        "(max %.1f ms), fall back to outlines %.1f ms in %d updates (max "
+        "%.1f ms)\n", rasterize.m_total, rasterize.m_updates,
+        rasterize.m_maximum, fallback.m_total, fallback.m_updates,
+        fallback.m_maximum);
+      for(auto is_rasterized : {false, true}) {
+        if(is_rasterized) {
+          scene.set_text_transform(device);
+        } else {
+          scene.set_text_transform(std::nullopt);
+        }
+        settle_scene(scene, visible);
+        auto renderer = CanvasRenderer();
+        renderer.set_drawing(scene.get_drawing());
+        auto harness = Harness(renderer, options);
+        pan_scene(options, harness, renderer, scene, matrix,
+          is_rasterized ? "scene r" : "scene o");
+      }
+    }
+    scene.set_tolerance(StripRasterizer::TOLERANCE);
+    scene.set_text_region(std::nullopt);
+    for(auto is_rasterized : {false, true}) {
+      if(is_rasterized) {
+        scene.set_text_transform(Matrix());
+      } else {
+        scene.set_text_transform(std::nullopt);
+      }
+      scene.update();
+      std::printf("  drag with text %s at 100%%:\n",
+        is_rasterized ? "rasterized" : "outlined");
+      drag_text(document, scene);
+    }
+  }
 }
 
 int main(int argc, char** argv) {
@@ -440,18 +720,24 @@ int main(int argc, char** argv) {
       i += 2;
     } else if(argument == "--software") {
       options.m_is_software = true;
+    } else if(argument == "--text") {
+      options.m_is_text = true;
     } else {
       options.m_paths.push_back(std::filesystem::path(argv[i]));
     }
   }
   if(options.m_paths.empty()) {
     std::fprintf(stderr, "Usage: SceneBenchmarks [--frames <count>] "
-      "[--size <width> <height>] [--software] <xd file>...\n");
+      "[--size <width> <height>] [--software] [--text] <xd file>...\n");
     return 2;
   }
   try {
     for(auto& path : options.m_paths) {
-      run(options, path);
+      if(options.m_is_text) {
+        run_text(options, path);
+      } else {
+        run(options, path);
+      }
     }
   } catch(const std::exception& error) {
     std::fprintf(stderr, "%s\n", error.what());

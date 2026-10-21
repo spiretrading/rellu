@@ -7,7 +7,8 @@
 namespace Rellu {
 
   /**
-   * Sets the number of corners of polygons, deriving their vertices anew,
+   * Sets the number of corners of polygons, deriving their vertices anew
+   * and keeping equilateral polygons equilateral about their centers,
    * labelled Corner Count.
    */
   class SetCornerCountCommand : public Command {

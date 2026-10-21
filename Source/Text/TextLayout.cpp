@@ -41,6 +41,8 @@ namespace {
   struct LineMetrics {
     double m_ascent;
     double m_descent;
+    double m_clipping_ascent;
+    double m_clipping_descent;
   };
 
   struct CaretSink {
@@ -519,13 +521,19 @@ namespace {
 
   LineMetrics measure_line(const Line& line, const std::vector<Span>& spans,
       const Text& text, const FontLibrary& library) {
-    auto metrics = LineMetrics(0, 0);
+    auto metrics = LineMetrics(0, 0, 0, 0);
     auto add_face = [&] (const Typeface& typeface, double size) {
       auto& face = typeface.get_metrics();
-      auto ascent = std::floor(face.m_line_ascent * size + 0.5);
-      auto descent = std::floor(face.m_line_descent * size + 0.5);
-      metrics.m_ascent = std::max(metrics.m_ascent, ascent);
-      metrics.m_descent = std::max(metrics.m_descent, descent);
+      auto round = [&] (double value) {
+        return std::floor(value * size + 0.5);
+      };
+      metrics.m_ascent = std::max(metrics.m_ascent, round(face.m_line_ascent));
+      metrics.m_descent =
+        std::max(metrics.m_descent, round(face.m_line_descent));
+      metrics.m_clipping_ascent =
+        std::max(metrics.m_clipping_ascent, round(face.m_clipping_ascent));
+      metrics.m_clipping_descent =
+        std::max(metrics.m_clipping_descent, round(face.m_clipping_descent));
     };
     auto add = [&] (const Font& font, std::size_t start, std::size_t end) {
       auto resolution = library.resolve(font);
@@ -619,6 +627,55 @@ namespace {
     }
     return break_lines(text, spans, library);
   }
+
+  std::vector<Line> get_all_lines(const Text& text,
+      const std::vector<Span>& spans, const FontLibrary& library) {
+    auto lines = get_lines(text, spans, library);
+    if(!text.m_layout) {
+      return lines;
+    }
+    auto& content = *text.m_content;
+    auto end = std::size_t(0);
+    for(auto& line : lines) {
+      for(auto& segment : line.m_segments) {
+        end = std::max(end, segment.m_end);
+      }
+    }
+    for(auto i = end; i < content.size(); ++i) {
+      if(!is_line_separator(content[i])) {
+        return break_lines(text, spans, library);
+      }
+    }
+    return lines;
+  }
+
+  std::vector<Line> fit_lines(const Text& text, std::vector<Line> lines,
+      const std::vector<Span>& spans, const FontLibrary& library) {
+    auto area = std::get_if<AreaFrame>(&text.m_frame);
+    if(!area || lines.size() < 2) {
+      return lines;
+    }
+    auto count = std::size_t(0);
+    auto is_full = false;
+    auto top = 0.0;
+    auto first = 0.0;
+    visit_lines(text, lines, spans, library,
+      [&] (const Line&, Point origin, const LineMetrics& metrics) {
+        if(is_full) {
+          return;
+        } else if(count == 0) {
+          top = metrics.m_clipping_ascent;
+          first = origin.m_y;
+        } else if(top + origin.m_y - first + metrics.m_clipping_descent >
+            area->m_size.m_height) {
+          is_full = true;
+          return;
+        }
+        ++count;
+      });
+    lines.resize(count);
+    return lines;
+  }
 }
 
 std::u16string Rellu::apply_transform(
@@ -659,14 +716,34 @@ std::u16string Rellu::apply_transform(
 }
 
 TextLayout Rellu::lay_out(const Text& text, const FontLibrary& library) {
+  return lay_out(text, library, false);
+}
+
+TextLayout Rellu::lay_out(
+    const Text& text, const FontLibrary& library, bool is_edited) {
   auto layout = TextLayout();
   auto spans = make_spans(text);
-  place_lines(text, get_lines(text, spans, library), spans, library, layout);
-  if(auto area = std::get_if<AreaFrame>(&text.m_frame)) {
-    layout.m_clip =
-      Rect(0, 0, area->m_size.m_width, area->m_size.m_height);
+  auto lines = std::vector<Line>();
+  if(is_edited) {
+    lines = get_all_lines(text, spans, library);
+  } else {
+    lines = get_lines(text, spans, library);
+    if(!text.m_layout) {
+      lines = fit_lines(text, std::move(lines), spans, library);
+    }
   }
+  place_lines(text, lines, spans, library, layout);
   return layout;
+}
+
+bool Rellu::is_overflowing(const Text& text, const FontLibrary& library) {
+  if(!std::holds_alternative<AreaFrame>(text.m_frame)) {
+    return false;
+  }
+  auto spans = make_spans(text);
+  auto lines = get_all_lines(text, spans, library);
+  auto count = lines.size();
+  return fit_lines(text, std::move(lines), spans, library).size() != count;
 }
 
 Rect Rellu::measure_text(const Text& text, const FontLibrary& library) {
@@ -708,7 +785,8 @@ StoredLayout Rellu::store_layout(const Text& text, const FontLibrary& library) {
   auto spans = make_spans(text);
   auto layout = StoredLayout();
   auto is_paragraph_start = true;
-  visit_lines(text, break_lines(text, spans, library), spans, library,
+  visit_lines(text, fit_lines(text, break_lines(text, spans, library), spans,
+      library), spans, library,
     [&] (const Line& line, Point origin, const LineMetrics&) {
       if(is_paragraph_start) {
         layout.m_paragraphs.emplace_back();
@@ -752,7 +830,7 @@ std::vector<LineGeometry> Rellu::measure_lines(
   auto& content = *text.m_content;
   auto spans = make_spans(text);
   auto lines = std::vector<LineGeometry>();
-  visit_lines(text, get_lines(text, spans, library), spans, library,
+  visit_lines(text, get_all_lines(text, spans, library), spans, library,
     [&] (const Line& line, Point origin, const LineMetrics& metrics) {
       auto start = std::size_t(0);
       if(!lines.empty()) {

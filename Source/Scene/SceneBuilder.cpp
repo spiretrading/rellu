@@ -41,10 +41,26 @@ namespace {
       std::max(target.m_minimum_tolerance, source.m_minimum_tolerance);
     target.m_maximum_tolerance =
       std::min(target.m_maximum_tolerance, source.m_maximum_tolerance);
+    if(source.m_is_device_dependent) {
+      if(target.m_is_device_dependent &&
+          target.m_device_transform != source.m_device_transform) {
+        target.m_is_device_mixed = true;
+      }
+      target.m_is_device_dependent = true;
+      target.m_device_transform = source.m_device_transform;
+    }
+    target.m_is_device_mixed |= source.m_is_device_mixed;
+    target.m_is_rasterized |= source.m_is_rasterized;
   }
 
   bool is_reusable(const SceneDependencies& dependencies, double built,
-      double tolerance) {
+      double tolerance, const std::optional<Matrix>& device,
+      bool is_lenient) {
+    if(!is_lenient && dependencies.m_is_device_dependent &&
+        (dependencies.m_is_device_mixed ||
+          dependencies.m_device_transform != device)) {
+      return false;
+    }
     return tolerance == built ||
       (tolerance >= dependencies.m_minimum_tolerance &&
         tolerance <= dependencies.m_maximum_tolerance);
@@ -217,6 +233,37 @@ namespace {
         Rect(0, 0, grid->m_size.m_width, grid->m_size.m_height));
     }
     return viewport;
+  }
+
+  std::optional<Path> make_dash_path(
+      const ShapeGeometry& geometry, StrokeAlignment alignment) {
+    if(auto ellipse = std::get_if<EllipseShape>(&geometry)) {
+      auto x = Point(ellipse->m_x_radius, 0);
+      auto y = Point(0, ellipse->m_y_radius);
+      auto& center = ellipse->m_center;
+      auto path = Path();
+      path.move_to(center - y);
+      path.arc_to(center + x - y, center + x);
+      path.arc_to(center + x + y, center + y);
+      path.arc_to(center - x + y, center - x);
+      path.arc_to(center - x - y, center - y);
+      path.close();
+      return path;
+    } else if(auto polygon = std::get_if<PolygonShape>(&geometry);
+        polygon && alignment != StrokeAlignment::CENTER) {
+      auto vertices = polygon->m_vertices;
+      if(vertices.empty()) {
+        vertices = make_polygon_vertices(polygon->m_corner_count,
+          Rect(0, 0, polygon->m_size.m_width, polygon->m_size.m_height),
+          polygon->m_star_ratio);
+      }
+      if(vertices.empty()) {
+        return std::nullopt;
+      }
+      std::rotate(vertices.rbegin(), vertices.rbegin() + 1, vertices.rend());
+      return make_polygon(vertices, polygon->m_corner_radius);
+    }
+    return std::nullopt;
   }
 
   StrokeGeometry to_geometry(const Stroke& stroke) {
@@ -503,6 +550,8 @@ namespace {
 SceneBuilder::SceneBuilder(const Document& document, double tolerance)
   : m_document(&document),
     m_tolerance(tolerance),
+    m_raster_epoch(0),
+    m_is_text_deferred(false),
     m_generation(0),
     m_paints(document),
     m_dependencies(nullptr),
@@ -549,6 +598,10 @@ DrawList SceneBuilder::build(
   dependencies.m_keys.clear();
   dependencies.m_minimum_tolerance = 0;
   dependencies.m_maximum_tolerance = std::numeric_limits<double>::infinity();
+  dependencies.m_is_device_dependent = false;
+  dependencies.m_device_transform = std::nullopt;
+  dependencies.m_is_rasterized = false;
+  dependencies.m_is_device_mixed = false;
   m_dependencies = &dependencies;
   m_roots.clear();
   auto list = DrawList();
@@ -590,6 +643,20 @@ std::vector<std::shared_ptr<const DrawList>> SceneBuilder::build_lists(
   merge(dependencies, segment.m_dependencies);
   normalize(dependencies);
   return std::move(segment.m_lists);
+}
+
+std::vector<std::shared_ptr<const DrawList>> SceneBuilder::build_lists(
+    const NodeId& id, SceneDependencies& dependencies,
+    std::chrono::steady_clock::time_point deadline) {
+  m_deadline = deadline;
+  try {
+    auto lists = build_lists(id, dependencies);
+    m_deadline = std::nullopt;
+    return lists;
+  } catch(...) {
+    m_deadline = std::nullopt;
+    throw;
+  }
 }
 
 void SceneBuilder::invalidate(const NodeId& id) {
@@ -661,7 +728,8 @@ std::optional<SceneBuilder::Entry> SceneBuilder::enter(
   }
   auto placement = Placement(parent.m_transform * transform,
     parent.m_opacity, parent.m_clip, parent.m_projection,
-    to_single(parent.m_single * transform), parent.m_is_clipped);
+    to_single(parent.m_single * transform), parent.m_is_clipped,
+    parent.m_is_referenced || static_cast<bool>(node.get_reference()));
   if(auto group = source->get_group();
       group && (group->m_mask || get_viewport(*group))) {
     placement.m_is_clipped = true;
@@ -797,7 +865,8 @@ void SceneBuilder::retain(const NodeId& id, const Placement& parent,
         (tree.m_is_moved && !replace(id, tree, parent))) {
       forget(id);
     } else if(!tree.m_is_stale &&
-        is_reusable(tree.m_total, tree.m_tolerance, m_tolerance)) {
+        is_reusable(tree.m_total, tree.m_tolerance, m_tolerance,
+          get_text_device(), is_late())) {
       segment.m_lists = tree.m_lists;
       segment.m_size = tree.m_size;
       segment.m_dependencies = tree.m_total;
@@ -850,8 +919,8 @@ void SceneBuilder::retain(const NodeId& id, const Placement& parent,
     auto segments = std::vector<Segment>();
     segments.reserve(tree.m_segments.size());
     for(auto& previous : tree.m_segments) {
-      if(!previous.m_is_stale && is_reusable(
-          previous.m_dependencies, previous.m_tolerance, m_tolerance)) {
+      if(!previous.m_is_stale && is_reusable(previous.m_dependencies,
+          previous.m_tolerance, m_tolerance, get_text_device(), is_late())) {
         segments.push_back(std::move(previous));
       } else if(previous.m_is_retained) {
         auto& refreshed = segments.emplace_back(previous.m_begin,
@@ -919,7 +988,8 @@ void SceneBuilder::retain(const NodeId& id, const Placement& parent,
 bool SceneBuilder::replace(
     const NodeId& id, Subtree& tree, const Placement& parent) {
   if(tree.m_is_stale || m_device_transform ||
-      !is_reusable(tree.m_total, tree.m_tolerance, m_tolerance)) {
+      tree.m_total.m_is_rasterized || !is_reusable(tree.m_total,
+        tree.m_tolerance, m_tolerance, get_text_device(), false)) {
     return false;
   }
   auto node = m_document->find(id);
@@ -1206,6 +1276,17 @@ void SceneBuilder::invalidate_dependents(const NodeId& key) {
   }
 }
 
+bool SceneBuilder::is_late() const {
+  return m_deadline && std::chrono::steady_clock::now() >= *m_deadline;
+}
+
+const std::optional<Matrix>& SceneBuilder::get_text_device() const {
+  if(m_device_transform) {
+    return m_device_transform;
+  }
+  return m_text_transform;
+}
+
 void SceneBuilder::clear_retained() {
   m_subtrees.clear();
   m_dependents.clear();
@@ -1426,6 +1507,10 @@ SceneBuilder::Outline& SceneBuilder::get_outline(
         stroke->m_alignment == StrokeAlignment::INSIDE ?
           make_ring(shape.m_geometry, stroke->m_width) : std::nullopt) {
       outline.m_stroke = std::make_shared<const Path>(std::move(*ring));
+    } else if(auto dashed = stroke->m_dashes.empty() ? std::nullopt :
+        make_dash_path(shape.m_geometry, stroke->m_alignment)) {
+      outline.m_stroke = std::make_shared<const Path>(
+        outline_stroke(*dashed, geometry, tolerance));
     } else {
       outline.m_stroke = std::make_shared<const Path>(
         outline_stroke(*outline.m_path, geometry, tolerance));

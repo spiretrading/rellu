@@ -136,6 +136,10 @@ double PreviewPlayer::get_scroll() const {
   return m_screen->m_scroll;
 }
 
+void PreviewPlayer::set_window_height(double height) {
+  m_window_height = height;
+}
+
 std::vector<NodeId> PreviewPlayer::get_history() const {
   auto history = std::vector<NodeId>();
   for(auto& screen : m_history) {
@@ -255,8 +259,8 @@ std::vector<PreviewLayer> PreviewPlayer::get_layers() const {
     }
     position = Point(start.m_x + (position.m_x - start.m_x) * progress,
       start.m_y + (position.m_y - start.m_y) * progress);
-    layers.push_back(PreviewLayer(
-      overlay.m_artboard, NodeId(), position, size, 0, opacity));
+    layers.push_back(PreviewLayer(overlay.m_artboard, NodeId(), position,
+      size, overlay.m_scroll, opacity));
   };
   auto get_progress = [&] (const Animating& animating) {
     auto progress = ease(animating.m_animation.m_easing,
@@ -463,7 +467,7 @@ bool PreviewPlayer::scroll(double delta) {
     return false;
   }
   std::erase_if(m_animations, [] (const auto& animating) {
-    return animating.m_kind == Kind::SCROLL;
+    return animating.m_kind == Kind::SCROLL && !animating.m_overlay;
   });
   auto scroll = std::clamp(m_screen->m_scroll + delta, 0.0,
     get_maximum_scroll(m_screen->m_artboard));
@@ -665,6 +669,15 @@ double PreviewPlayer::get_maximum_scroll(const NodeId& artboard) const {
     node->get_artboard()->m_frame.m_height - get_size(artboard).m_height);
 }
 
+double PreviewPlayer::get_overlay_scroll(const NodeId& overlay) const {
+  auto node = m_stage->find(overlay);
+  if(!node || !node->get_artboard()) {
+    return 0;
+  }
+  auto window = m_window_height.value_or(get_viewport().m_height);
+  return std::max(0.0, node->get_artboard()->m_frame.m_height - window);
+}
+
 std::vector<NodeId> PreviewPlayer::get_roots() const {
   auto roots = std::vector<NodeId>();
   if(!m_screen) {
@@ -734,8 +747,8 @@ std::vector<std::pair<NodeId, Point>> PreviewPlayer::get_targets(
     if(local.m_x >= 0 && local.m_y >= 0 && local.m_x < size.m_width &&
         local.m_y < size.m_height) {
       auto corner = origin(top.m_artboard);
-      targets.emplace_back(top.m_artboard,
-        Point(corner.m_x + local.m_x, corner.m_y + local.m_y));
+      targets.emplace_back(top.m_artboard, Point(corner.m_x + local.m_x,
+        corner.m_y + local.m_y + top.m_scroll));
     }
     return targets;
   }
@@ -829,6 +842,12 @@ void PreviewPlayer::finish(Animating& animating) {
   }
   if(animating.m_kind == Kind::SCREEN && m_screen) {
     schedule(m_screen->m_artboard);
+  } else if(animating.m_kind == Kind::SCROLL && animating.m_overlay) {
+    for(auto& overlay : m_overlays) {
+      if(overlay.m_artboard == animating.m_overlay->m_artboard) {
+        overlay.m_scroll = animating.m_to.m_scroll;
+      }
+    }
   } else if(animating.m_kind == Kind::SCROLL && m_screen) {
     if(m_screen->m_artboard == animating.m_to.m_artboard) {
       m_screen->m_scroll = animating.m_to.m_scroll;
@@ -977,8 +996,27 @@ bool PreviewPlayer::go_back() {
 
 bool PreviewPlayer::scroll_to(const ScrollTransition& transition) {
   auto& artboard = m_screen->m_artboard;
-  auto target = get_scroll_target(*m_stage, artboard, transition,
-    get_maximum_scroll(artboard), m_measurer);
+  auto owner = m_stage->find(transition.m_destination) ?
+    find_artboard(*m_stage, transition.m_destination) : NodeId();
+  auto overlay = std::ranges::find_if(m_overlays, [&] (const auto& shown) {
+    return shown.m_artboard == owner;
+  });
+  auto target = std::optional<double>();
+  auto current = 0.0;
+  if(overlay != m_overlays.end()) {
+    target = get_scroll_target(*m_stage, owner, transition,
+      get_overlay_scroll(owner), m_measurer);
+    current = overlay->m_scroll;
+  } else {
+    auto container = artboard;
+    if(auto fixed = m_fixed_layers.find(artboard);
+        fixed != m_fixed_layers.end() && fixed->second == owner) {
+      container = owner;
+    }
+    target = get_scroll_target(*m_stage, container, transition,
+      get_maximum_scroll(artboard), m_measurer);
+    current = m_screen->m_scroll;
+  }
   if(!target) {
     report("Scroll target not found: " + describe(transition.m_destination));
     return false;
@@ -986,18 +1024,27 @@ bool PreviewPlayer::scroll_to(const ScrollTransition& transition) {
   std::erase_if(m_animations, [] (const auto& animating) {
     return animating.m_kind == Kind::SCROLL;
   });
-  if(*target == m_screen->m_scroll) {
+  if(*target == current) {
     return false;
   }
   if(!(transition.m_animation.m_duration > 0)) {
-    m_screen->m_scroll = *target;
+    if(overlay != m_overlays.end()) {
+      overlay->m_scroll = *target;
+    } else {
+      m_screen->m_scroll = *target;
+    }
     return true;
   }
   auto from = *m_screen;
+  from.m_scroll = current;
   auto to = from;
   to.m_scroll = *target;
+  auto shown = std::optional<PreviewOverlay>();
+  if(overlay != m_overlays.end()) {
+    shown = *overlay;
+  }
   m_animations.push_back(Animating(Kind::SCROLL, transition.m_animation,
-    m_time, false, from, to, std::nullopt, nullptr));
+    m_time, false, from, to, std::move(shown), nullptr));
   return true;
 }
 
@@ -1013,9 +1060,18 @@ void PreviewPlayer::update_scrolls() {
     auto progress = ease(animating.m_animation.m_easing,
       (m_time - animating.m_start) / animating.m_animation.m_duration);
     auto start = animating.m_from.m_scroll;
-    m_screen->m_scroll = std::clamp(
-      start + (animating.m_to.m_scroll - start) * progress, 0.0,
-      get_maximum_scroll(m_screen->m_artboard));
+    auto scroll = start + (animating.m_to.m_scroll - start) * progress;
+    if(animating.m_overlay) {
+      for(auto& overlay : m_overlays) {
+        if(overlay.m_artboard == animating.m_overlay->m_artboard) {
+          overlay.m_scroll = std::clamp(
+            scroll, 0.0, get_overlay_scroll(overlay.m_artboard));
+        }
+      }
+    } else {
+      m_screen->m_scroll = std::clamp(
+        scroll, 0.0, get_maximum_scroll(m_screen->m_artboard));
+    }
   }
 }
 

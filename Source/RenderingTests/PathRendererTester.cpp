@@ -911,10 +911,30 @@ TEST_SUITE("PathRenderer") {
       share(make_rectangle(Rect(16, 8, 32, 16))), Matrix(), 4, 0.2,
       std::nullopt));
     auto image = render(renderer, QSize(64, 32));
-    for(auto x = 20; x != 44; ++x) {
-      require_pixel(image, x, 16, Pixel({0.7, 0.7, 0.7, 1}), 3);
+    for(auto x = 28; x != 36; ++x) {
+      require_pixel(image, x, 16, Pixel({0.6, 0.6, 0.6, 1}), 3);
     }
     require_pixel(image, 10, 16, Pixel({1, 1, 1, 1}), 0);
     require_pixel(image, 11, 4, Pixel({0, 0, 0, 1}), 0);
+  }
+
+  TEST_CASE("backdrop_blur_edges") {
+    for(auto radius : {3.0, 40.0}) {
+      auto renderer = TestRenderer();
+      renderer.m_list.push_back(fill(
+        make_rectangle(Rect(0, 0, 128, 32)), make_color(255, 255, 255)));
+      renderer.m_list.push_back(fill(
+        make_rectangle(Rect(32, 0, 64, 32)), make_color(0, 0, 0)));
+      renderer.m_list.push_back(BackdropBlurCommand(
+        share(make_rectangle(Rect(32, 8, 64, 16))), Matrix(), radius, 0,
+        std::nullopt));
+      auto image = render(renderer, QSize(128, 32));
+      CAPTURE(radius);
+      for(auto x = 32; x < 96; x += 7) {
+        require_pixel(image, x, 16, Pixel({0, 0, 0, 1}), 1);
+      }
+      require_pixel(image, 95, 16, Pixel({0, 0, 0, 1}), 1);
+      require_pixel(image, 31, 16, Pixel({1, 1, 1, 1}), 0);
+    }
   }
 }

@@ -1,7 +1,10 @@
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <numbers>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -13,10 +16,14 @@ namespace {
   constexpr auto MINIMUM_RADIUS = 0.25;
   constexpr auto MAXIMUM_DOWNSAMPLING = 32;
   constexpr auto MAXIMUM_TAPS = 32;
+  constexpr auto MAXIMUM_BOX_SIZE = 2 * MAXIMUM_TAPS;
   constexpr auto TEXTURE_GRANULARITY = 32;
   constexpr auto SOLID_RUN = 256u;
   constexpr auto MAXIMUM_COORDINATE = 1 << 24;
   constexpr auto INNER_SHADOW_MODE = 16.0f;
+  constexpr auto ATLAS_SIZE = 2048;
+  constexpr auto MAXIMUM_CELL = 1024;
+  constexpr auto MAXIMUM_PIECES = std::size_t(16);
   constexpr auto NONE = std::numeric_limits<std::size_t>::max();
 
   using Texel = std::array<float, 4>;
@@ -35,11 +42,23 @@ namespace {
     std::size_t m_index;
   };
 
+  struct Range {
+    std::uint32_t m_first;
+    std::uint32_t m_count;
+  };
+
+  struct Piece {
+    QRect m_bounds;
+    std::vector<Range> m_ranges;
+  };
+
   struct Surface {
     std::size_t m_command;
     QRect m_bounds;
     QRect m_region;
     std::vector<Operation> m_operations;
+    std::vector<Piece> m_pieces;
+    bool m_is_whole = false;
   };
 
   struct Target {
@@ -47,10 +66,73 @@ namespace {
     QPoint m_origin;
     int m_scale;
     QSize m_size;
+    QRect m_cell;
 
     QSize get_extent() const {
       return m_size * m_scale;
     }
+
+    QRect get_area() const {
+      if(m_cell.isEmpty()) {
+        return QRect(m_origin, get_extent());
+      }
+      return QRect(
+        m_origin + m_cell.topLeft() * m_scale, m_cell.size() * m_scale);
+    }
+  };
+
+  struct Prepared {
+    QRect m_region;
+    Target m_target;
+  };
+
+  struct Cell {
+    std::size_t m_layer;
+    QRect m_region;
+    std::vector<Range> m_ranges;
+  };
+
+  struct BlurTask {
+    Target m_source;
+    QRect m_region;
+    double m_radius;
+    Target m_result;
+  };
+
+  class Packer {
+    public:
+      Packer(int width, int height)
+        : m_width(width),
+          m_height(height),
+          m_shelf(0),
+          m_size(0, 0) {}
+
+      std::optional<QPoint> add(QSize size) {
+        if(m_cursor.x() + size.width() > m_width) {
+          m_cursor = QPoint(0, m_cursor.y() + m_shelf);
+          m_shelf = 0;
+        }
+        if(m_cursor.y() + size.height() > m_height) {
+          return std::nullopt;
+        }
+        auto position = m_cursor;
+        m_cursor.rx() += size.width();
+        m_shelf = std::max(m_shelf, size.height());
+        m_size = m_size.expandedTo(
+          QSize(m_cursor.x(), m_cursor.y() + m_shelf));
+        return position;
+      }
+
+      QSize get_size() const {
+        return m_size;
+      }
+
+    private:
+      int m_width;
+      int m_height;
+      QPoint m_cursor;
+      int m_shelf;
+      QSize m_size;
   };
 
   QRect to_rect(const Strip& strip) {
@@ -78,6 +160,11 @@ namespace {
   Point map_vector(const Matrix& matrix, Point vector) {
     return Point(matrix.m_a * vector.m_x + matrix.m_c * vector.m_y,
       matrix.m_b * vector.m_x + matrix.m_d * vector.m_y);
+  }
+
+  int get_box_size(double radius) {
+    return static_cast<int>(std::floor(
+      radius * 3 * std::sqrt(2 * std::numbers::pi) / 4 + 0.5));
   }
 
   int get_margin(double radius) {
@@ -144,8 +231,10 @@ namespace {
       std::vector<int> m_command_slots;
       std::vector<int> m_slot_images;
       std::vector<int> m_free;
+      std::vector<std::vector<Prepared>> m_prepared;
 
       const DrawCommand& get_command(std::size_t index) const;
+      const BeginLayerCommand& get_layer(std::size_t surface) const;
       void add_paints();
       void add_gradient(int slot, const FillCommand& command,
         const GradientPaint& paint);
@@ -155,34 +244,60 @@ namespace {
       void add_surfaces();
       void add_strips(Surface& surface, std::uint32_t first,
         std::uint32_t count);
+      void add_piece(Surface& surface, const QRect& bounds,
+        std::uint32_t first, std::uint32_t count);
       void close(std::vector<std::size_t>& stack);
       QRect get_region(const Surface& surface,
         const BeginLayerCommand& layer) const;
+      QRect get_open_region(const QRect& region) const;
       QRect get_bounds(std::uint32_t first, std::uint32_t count) const;
       std::uint32_t get_first(std::size_t command) const;
       std::uint32_t get_count(std::size_t command) const;
+      int round(int value) const;
+      QSize get_bucket(QSize size) const;
       Target allocate(QSize size, QPoint origin, int scale);
+      Target allocate_texture(QSize size, QPoint origin, int scale);
+      Target allocate_cells(const std::vector<QRect>& regions, int scale,
+        std::vector<Target>& cells);
       void release(const Target& target);
+      PlanUniforms make_uniforms(const Target& target) const;
+      int add_uniforms(const Target& target);
       std::size_t add_pass(const Target& target, PlanClear clear);
       PlanPass& get_pass(std::size_t index);
       void draw(std::size_t pass, PlanPipeline pipeline, std::uint32_t first,
-        std::uint32_t count, PlanSource source, int backdrop = -1);
+        std::uint32_t count, PlanSource source, int backdrop = -1,
+        int uniforms = -1, const QRect& scissor = QRect());
       void draw_strips(std::size_t pass, std::uint32_t first,
-        std::uint32_t count);
+        std::uint32_t count, int uniforms = -1,
+        const QRect& scissor = QRect());
       std::uint32_t add_span(
         const QRect& rect, const std::array<qfloat16, 4>& color, int slot);
       int add_paint();
+      Texel get_limits(const Target& target) const;
       void set_texture_paint(int slot, const Target& target, Point offset,
         PaintKind kind, const Target* backdrop = nullptr,
         float mode = 0);
+      void set_shadow_paint(int slot, const Target& source,
+        const QRect& region, Point offset);
       void emit_content(std::size_t surface, const Target& target,
         PlanClear clear);
       Target emit_layer(std::size_t surface);
+      bool is_piecewise(std::size_t surface) const;
+      std::vector<Cell> get_cells(std::size_t surface) const;
+      bool is_batchable(std::size_t surface) const;
+      void prepare_batch(std::size_t surface, std::size_t start,
+        std::vector<Target>& atlases);
       Target blur(const Target& source, const QRect& region, double radius,
         bool is_inverted, double brightness);
+      void blur(std::vector<BlurTask>& tasks, std::vector<Target>& atlases);
+      Target blur_boxes(
+        const Target& source, const QRect& region, double radius);
       void add_blur_pass(const Target& source, QSize texels,
         const Target& destination, Point step, double radius,
         bool is_inverted, double brightness);
+      void add_blur_draw(std::size_t pass, int uniforms,
+        const Target& source, QSize texels, const Target& destination,
+        Point step, double radius, bool is_inverted, double brightness);
       void add_copy(const Target& source, const QRect& region,
         const Target& destination);
   };
@@ -202,6 +317,7 @@ namespace {
   void Planner::run() {
     add_paints();
     add_surfaces();
+    m_prepared.assign(m_surfaces.size(), std::vector<Prepared>());
     if(m_region) {
       auto target = allocate(m_region->size(), m_region->topLeft(), 1);
       emit_content(0, target, PlanClear::BACKGROUND);
@@ -234,6 +350,11 @@ namespace {
 
   const DrawCommand& Planner::get_command(std::size_t index) const {
     return *(*m_commands)[index];
+  }
+
+  const BeginLayerCommand& Planner::get_layer(std::size_t surface) const {
+    return std::get<BeginLayerCommand>(
+      get_command(m_surfaces[surface].m_command));
   }
 
   void Planner::add_paints() {
@@ -406,6 +527,8 @@ namespace {
           Operation(OperationType::BACKDROP, get_first(i), count, i));
         if(stack.back() != 0) {
           surface.m_bounds |= get_bounds(get_first(i), count);
+          surface.m_pieces.clear();
+          surface.m_is_whole = true;
         }
       }
     }
@@ -429,7 +552,42 @@ namespace {
         Operation(OperationType::STRIPS, first, count, NONE));
     }
     if(&surface != &m_surfaces.front()) {
-      surface.m_bounds |= get_bounds(first, count);
+      auto bounds = get_bounds(first, count);
+      surface.m_bounds |= bounds;
+      add_piece(surface, bounds, first, count);
+    }
+  }
+
+  void Planner::add_piece(Surface& surface, const QRect& bounds,
+      std::uint32_t first, std::uint32_t count) {
+    if(surface.m_is_whole) {
+      return;
+    }
+    auto piece = Piece(bounds, std::vector<Range>({Range(first, count)}));
+    auto& pieces = surface.m_pieces;
+    auto is_merged = true;
+    while(is_merged) {
+      is_merged = false;
+      auto area = piece.m_bounds.adjusted(-1, -1, 1, 1);
+      for(auto i = pieces.begin(); i != pieces.end(); ++i) {
+        if(area.intersects(i->m_bounds.adjusted(-1, -1, 1, 1))) {
+          piece.m_bounds |= i->m_bounds;
+          piece.m_ranges.insert(piece.m_ranges.end(), i->m_ranges.begin(),
+            i->m_ranges.end());
+          pieces.erase(i);
+          is_merged = true;
+          break;
+        }
+      }
+    }
+    std::sort(piece.m_ranges.begin(), piece.m_ranges.end(),
+      [] (const auto& left, const auto& right) {
+        return left.m_first < right.m_first;
+      });
+    pieces.push_back(std::move(piece));
+    if(pieces.size() > MAXIMUM_PIECES) {
+      pieces.clear();
+      surface.m_is_whole = true;
     }
   }
 
@@ -458,6 +616,8 @@ namespace {
       Operation(OperationType::LAYER, 0, 0, index));
     if(parent != 0) {
       m_surfaces[parent].m_bounds |= composite;
+      m_surfaces[parent].m_pieces.clear();
+      m_surfaces[parent].m_is_whole = true;
     }
   }
 
@@ -474,6 +634,7 @@ namespace {
       region |= round_out(Rect(bounds.x() + offset.m_x,
         bounds.y() + offset.m_y, bounds.width(), bounds.height())).adjusted(
           -margin, -margin, margin, margin);
+      region |= bounds.adjusted(-margin, -margin, margin, margin);
     }
     for(auto& shadow : layer.m_inner_shadows) {
       auto offset = map_vector(m_view, shadow.m_offset);
@@ -492,6 +653,24 @@ namespace {
     return region & QRect(QPoint(0, 0), m_size);
   }
 
+  QRect Planner::get_open_region(const QRect& region) const {
+    constexpr auto OPEN = MAXIMUM_COORDINATE;
+    auto open = region;
+    if(region.left() <= 0) {
+      open.setLeft(-OPEN);
+    }
+    if(region.top() <= 0) {
+      open.setTop(-OPEN);
+    }
+    if(region.right() >= m_size.width() - 1) {
+      open.setRight(OPEN);
+    }
+    if(region.bottom() >= m_size.height() - 1) {
+      open.setBottom(OPEN);
+    }
+    return open;
+  }
+
   QRect Planner::get_bounds(std::uint32_t first, std::uint32_t count) const {
     auto bounds = QRect();
     for(auto i = first; i != first + count; ++i) {
@@ -508,25 +687,33 @@ namespace {
     return m_scene->m_offsets[command + 1] - m_scene->m_offsets[command];
   }
 
-  Target Planner::allocate(QSize size, QPoint origin, int scale) {
-    auto round = [&] (int value) {
-      if(m_region) {
-        auto bucket = TEXTURE_GRANULARITY;
-        while(bucket < value) {
-          if(bucket + bucket / 2 >= value) {
-            return bucket + bucket / 2;
-          }
-          bucket *= 2;
+  int Planner::round(int value) const {
+    if(m_region) {
+      auto bucket = TEXTURE_GRANULARITY;
+      while(bucket < value) {
+        if(bucket + bucket / 2 >= value) {
+          return bucket + bucket / 2;
         }
-        return bucket;
+        bucket *= 2;
       }
-      return std::max(1, (value + TEXTURE_GRANULARITY - 1) /
-        TEXTURE_GRANULARITY) * TEXTURE_GRANULARITY;
-    };
-    auto bucket = QSize(round(size.width()), round(size.height()));
+      return bucket;
+    }
+    return std::max(1, (value + TEXTURE_GRANULARITY - 1) /
+      TEXTURE_GRANULARITY) * TEXTURE_GRANULARITY;
+  }
+
+  QSize Planner::get_bucket(QSize size) const {
+    return QSize(round(size.width()), round(size.height()));
+  }
+
+  Target Planner::allocate(QSize size, QPoint origin, int scale) {
+    return allocate_texture(get_bucket(size), origin, scale);
+  }
+
+  Target Planner::allocate_texture(QSize size, QPoint origin, int scale) {
     auto& textures = m_plan->m_textures;
     auto match = std::find_if(m_free.begin(), m_free.end(), [&] (auto index) {
-      return textures[index] == bucket;
+      return textures[index] == size;
     });
     auto texture = 0;
     if(match != m_free.end()) {
@@ -534,9 +721,34 @@ namespace {
       m_free.erase(match);
     } else {
       texture = static_cast<int>(textures.size());
-      textures.push_back(bucket);
+      textures.push_back(size);
     }
-    return Target(texture, origin, scale, bucket);
+    return Target(texture, origin, scale, size);
+  }
+
+  Target Planner::allocate_cells(const std::vector<QRect>& regions,
+      int scale, std::vector<Target>& cells) {
+    auto packer = Packer(ATLAS_SIZE, std::numeric_limits<int>::max());
+    auto placements = std::vector<QRect>();
+    for(auto& region : regions) {
+      auto size = get_bucket(QSize((region.width() + scale - 1) / scale,
+        (region.height() + scale - 1) / scale));
+      placements.push_back(QRect(*packer.add(size), size));
+    }
+    auto to_power = [] (int value) {
+      return static_cast<int>(std::bit_ceil(static_cast<unsigned int>(
+        std::max(value, TEXTURE_GRANULARITY))));
+    };
+    auto atlas = allocate_texture(QSize(to_power(packer.get_size().width()),
+      to_power(packer.get_size().height())), QPoint(0, 0), scale);
+    cells.clear();
+    for(auto i = std::size_t(0); i != regions.size(); ++i) {
+      auto& placement = placements[i];
+      cells.push_back(Target(atlas.m_texture,
+        regions[i].topLeft() - placement.topLeft() * scale, scale,
+        atlas.m_size, placement));
+    }
+    return atlas;
   }
 
   void Planner::release(const Target& target) {
@@ -545,8 +757,7 @@ namespace {
     }
   }
 
-  std::size_t Planner::add_pass(const Target& target, PlanClear clear) {
-    auto& steps = m_plan->m_steps;
+  PlanUniforms Planner::make_uniforms(const Target& target) const {
     auto uniforms = PlanUniforms();
     uniforms.fill(0);
     auto extent = target.get_extent();
@@ -565,6 +776,17 @@ namespace {
       }
       uniforms[35] = 1;
     }
+    return uniforms;
+  }
+
+  int Planner::add_uniforms(const Target& target) {
+    m_plan->m_uniforms.push_back(make_uniforms(target));
+    return static_cast<int>(m_plan->m_uniforms.size() - 1);
+  }
+
+  std::size_t Planner::add_pass(const Target& target, PlanClear clear) {
+    auto& steps = m_plan->m_steps;
+    auto uniforms = make_uniforms(target);
     if(clear == PlanClear::KEEP && !steps.empty()) {
       if(auto pass = std::get_if<PlanPass>(&steps.back())) {
         if(pass->m_target == target.m_texture &&
@@ -586,7 +808,7 @@ namespace {
 
   void Planner::draw(std::size_t pass, PlanPipeline pipeline,
       std::uint32_t first, std::uint32_t count, PlanSource source,
-      int backdrop) {
+      int backdrop, int uniforms, const QRect& scissor) {
     if(count == 0) {
       return;
     }
@@ -594,16 +816,18 @@ namespace {
     if(!draws.empty()) {
       auto& last = draws.back();
       if(last.m_pipeline == pipeline && last.m_source == source &&
-          last.m_backdrop == backdrop && last.m_first + last.m_count == first) {
+          last.m_backdrop == backdrop && last.m_uniforms == uniforms &&
+          last.m_scissor == scissor && last.m_first + last.m_count == first) {
         last.m_count += count;
         return;
       }
     }
-    draws.push_back(PlanDraw(pipeline, first, count, source, backdrop));
+    draws.push_back(PlanDraw(
+      pipeline, first, count, source, backdrop, uniforms, scissor));
   }
 
-  void Planner::draw_strips(
-      std::size_t pass, std::uint32_t first, std::uint32_t count) {
+  void Planner::draw_strips(std::size_t pass, std::uint32_t first,
+      std::uint32_t count, int uniforms, const QRect& scissor) {
     auto& strips = m_scene->m_strips;
     auto last = first + count;
     auto start = first;
@@ -615,7 +839,7 @@ namespace {
       if(paint < 0) {
         if(pipeline == PlanPipeline::OVER && i - painted > SOLID_RUN) {
           draw(pass, pipeline, start, painted + 1 - start,
-            PlanSource(image, -1));
+            PlanSource(image, -1), -1, uniforms, scissor);
           start = painted + 1;
           pipeline = PlanPipeline::SOLID;
           image = -1;
@@ -625,12 +849,14 @@ namespace {
       auto needed = m_slot_images[static_cast<std::size_t>(paint)];
       if(pipeline == PlanPipeline::SOLID) {
         if(i - start > SOLID_RUN) {
-          draw(pass, pipeline, start, i - start, PlanSource());
+          draw(pass, pipeline, start, i - start, PlanSource(), -1, uniforms,
+            scissor);
           start = i;
         }
         pipeline = PlanPipeline::OVER;
       } else if(needed >= 0 && image >= 0 && needed != image) {
-        draw(pass, pipeline, start, i - start, PlanSource(image, -1));
+        draw(pass, pipeline, start, i - start, PlanSource(image, -1), -1,
+          uniforms, scissor);
         start = i;
       }
       if(needed >= 0) {
@@ -638,7 +864,8 @@ namespace {
       }
       painted = i;
     }
-    draw(pass, pipeline, start, last - start, PlanSource(image, -1));
+    draw(pass, pipeline, start, last - start, PlanSource(image, -1), -1,
+      uniforms, scissor);
   }
 
   std::uint32_t Planner::add_span(
@@ -656,6 +883,26 @@ namespace {
     m_plan->m_paints.resize(
       m_plan->m_paints.size() + PAINT_TEXELS, Texel());
     return slot;
+  }
+
+  Texel Planner::get_limits(const Target& target) const {
+    if(target.m_cell.isEmpty()) {
+      return Texel();
+    }
+    auto width = static_cast<double>(target.m_size.width());
+    auto height = static_cast<double>(target.m_size.height());
+    auto& cell = target.m_cell;
+    auto left = (cell.x() + 0.5) / width;
+    auto right = (cell.x() + cell.width() - 0.5) / width;
+    auto top = (cell.y() + 0.5) / height;
+    auto bottom = (cell.y() + cell.height() - 0.5) / height;
+    if(m_options->m_is_y_up) {
+      auto flipped = 1 - bottom;
+      bottom = 1 - top;
+      top = flipped;
+    }
+    return Texel({static_cast<float>(left), static_cast<float>(top),
+      static_cast<float>(right), static_cast<float>(bottom)});
   }
 
   void Planner::set_texture_paint(int slot, const Target& target,
@@ -684,21 +931,92 @@ namespace {
     }
     record[3] = Texel({static_cast<float>(target.m_size.width()),
       static_cast<float>(target.m_size.height()), 0, 0});
+    record[5] = get_limits(target);
     std::copy(record.begin(), record.end(),
       m_plan->m_paints.begin() + PAINT_TEXELS * slot);
   }
 
+  void Planner::set_shadow_paint(int slot, const Target& source,
+      const QRect& region, Point offset) {
+    auto open = get_open_region(region);
+    auto bounds = Target(-1, open.topLeft() + QPoint(
+      static_cast<int>(std::lround(offset.m_x)),
+      static_cast<int>(std::lround(offset.m_y))), 1, open.size());
+    set_texture_paint(
+      slot, source, offset, PaintKind::TEXTURE_ALPHA, &bounds);
+  }
+
   void Planner::emit_content(
       std::size_t index, const Target& target, PlanClear clear) {
-    auto pass = add_pass(target, clear);
-    for(auto& operation : m_surfaces[index].m_operations) {
+    auto pass = std::optional<std::size_t>();
+    auto open = [&] {
+      pass = add_pass(target, pass ? PlanClear::KEEP : clear);
+      return *pass;
+    };
+    auto atlases = std::vector<Target>();
+    auto release_atlases = [&] {
+      for(auto& atlas : atlases) {
+        release(atlas);
+      }
+      atlases.clear();
+    };
+    auto& operations = m_surfaces[index].m_operations;
+    for(auto i = std::size_t(0); i != operations.size(); ++i) {
+      auto& operation = operations[i];
       if(operation.m_type == OperationType::STRIPS) {
-        draw_strips(pass, operation.m_first, operation.m_count);
+        draw_strips(open(), operation.m_first, operation.m_count);
       } else if(operation.m_type == OperationType::LAYER) {
         auto& child = m_surfaces[operation.m_index];
-        auto& layer =
-          std::get<BeginLayerCommand>(get_command(child.m_command));
-        auto source = emit_layer(operation.m_index);
+        auto& layer = get_layer(operation.m_index);
+        auto is_batched = is_batchable(operation.m_index);
+        if(is_batched && m_prepared[operation.m_index].empty()) {
+          release_atlases();
+          prepare_batch(index, i, atlases);
+        }
+        if(is_batched && is_piecewise(operation.m_index)) {
+          auto& pieces = m_prepared[operation.m_index];
+          auto backdrops = std::vector<Target>();
+          if(layer.m_blend_mode != BlendMode::NORMAL) {
+            if(!pass) {
+              open();
+            }
+            for(auto& piece : pieces) {
+              auto& region = piece.m_region;
+              backdrops.push_back(
+                allocate(region.size(), region.topLeft(), 1));
+              add_copy(target, region, backdrops.back());
+            }
+          }
+          for(auto j = std::size_t(0); j != pieces.size(); ++j) {
+            auto& piece = pieces[j];
+            auto slot = add_paint();
+            auto span = add_span(piece.m_region,
+              to_premultiplied(Color(1, 1, 1, layer.m_opacity)), slot);
+            if(backdrops.empty()) {
+              set_texture_paint(
+                slot, piece.m_target, Point(0, 0), PaintKind::TEXTURE);
+              draw(open(), PlanPipeline::OVER, span, 1,
+                PlanSource(-1, piece.m_target.m_texture));
+            } else {
+              set_texture_paint(slot, piece.m_target, Point(0, 0),
+                PaintKind::TEXTURE, &backdrops[j],
+                static_cast<float>(layer.m_blend_mode));
+              draw(open(), PlanPipeline::BLEND, span, 1,
+                PlanSource(-1, piece.m_target.m_texture),
+                backdrops[j].m_texture);
+            }
+          }
+          for(auto& backdrop : backdrops) {
+            release(backdrop);
+          }
+          continue;
+        }
+        auto source = Target();
+        if(is_batched) {
+          source = m_prepared[operation.m_index].front().m_target;
+        } else {
+          source = emit_layer(operation.m_index);
+        }
         auto slot = m_command_slots[child.m_command];
         auto first = std::uint32_t(0);
         auto count = std::uint32_t(1);
@@ -711,28 +1029,31 @@ namespace {
         }
         if(layer.m_blend_mode == BlendMode::NORMAL) {
           set_texture_paint(slot, source, Point(0, 0), PaintKind::TEXTURE);
-          pass = add_pass(target, PlanClear::KEEP);
-          draw(pass, PlanPipeline::OVER, first, count,
+          draw(open(), PlanPipeline::OVER, first, count,
             PlanSource(-1, source.m_texture));
         } else {
+          if(!pass) {
+            open();
+          }
           auto& region = child.m_region;
           auto backdrop = allocate(region.size(), region.topLeft(), 1);
           add_copy(target, region, backdrop);
           set_texture_paint(slot, source, Point(0, 0), PaintKind::TEXTURE,
             &backdrop, static_cast<float>(layer.m_blend_mode));
-          pass = add_pass(target, PlanClear::KEEP);
-          draw(pass, PlanPipeline::BLEND, first, count,
+          draw(open(), PlanPipeline::BLEND, first, count,
             PlanSource(-1, source.m_texture), backdrop.m_texture);
           release(backdrop);
         }
-        release(source);
+        if(!is_batched) {
+          release(source);
+        }
       } else {
         auto& command =
           std::get<BackdropBlurCommand>(get_command(operation.m_index));
         auto radius = command.m_radius * m_scale;
-        auto margin = get_margin(radius);
-        auto region = get_bounds(operation.m_first, operation.m_count).adjusted(
-          -margin, -margin, margin, margin) &
+        auto region = round_out(Rellu::get_bounds(
+          *command.m_path, m_view * command.m_transform)) &
+          get_bounds(operation.m_first, operation.m_count) &
           QRect(target.m_origin, target.get_extent());
         if(index == 0) {
           region &= QRect(QPoint(0, 0), m_size);
@@ -740,19 +1061,31 @@ namespace {
         if(region.isEmpty()) {
           continue;
         }
+        if(!pass) {
+          open();
+        }
         auto backdrop = allocate(region.size(), region.topLeft(), 1);
         add_copy(target, region, backdrop);
-        auto blurred =
-          blur(backdrop, region, radius, false, command.m_brightness);
+        if(command.m_brightness != 0) {
+          auto brightened = allocate(region.size(), region.topLeft(), 1);
+          add_blur_pass(backdrop, region.size(), brightened, Point(0, 0), 0,
+            false, command.m_brightness);
+          release(backdrop);
+          backdrop = brightened;
+        }
+        auto blurred = blur_boxes(backdrop, region, radius);
         release(backdrop);
         auto slot = m_command_slots[operation.m_index];
         set_texture_paint(slot, blurred, Point(0, 0), PaintKind::TEXTURE);
-        pass = add_pass(target, PlanClear::KEEP);
-        draw(pass, PlanPipeline::OVER, operation.m_first, operation.m_count,
+        draw(open(), PlanPipeline::OVER, operation.m_first, operation.m_count,
           PlanSource(-1, blurred.m_texture));
         release(blurred);
       }
     }
+    if(!pass) {
+      open();
+    }
+    release_atlases();
   }
 
   Target Planner::emit_layer(std::size_t index) {
@@ -786,8 +1119,8 @@ namespace {
           source = blur(target, region, radius, false, 0);
         }
         auto slot = add_paint();
-        set_texture_paint(slot, source, map_vector(m_view, shadow.m_offset),
-          PaintKind::TEXTURE_ALPHA);
+        set_shadow_paint(
+          slot, source, region, map_vector(m_view, shadow.m_offset));
         auto span = add_span(region, to_premultiplied(shadow.m_color), slot);
         auto pass = add_pass(composite, clear);
         clear = PlanClear::KEEP;
@@ -813,6 +1146,183 @@ namespace {
       target = blurred;
     }
     return target;
+  }
+
+  bool Planner::is_piecewise(std::size_t index) const {
+    auto& surface = m_surfaces[index];
+    auto& layer = get_layer(index);
+    return !surface.m_is_whole && surface.m_pieces.size() > 1 &&
+      layer.m_drop_shadows.empty() && layer.m_inner_shadows.empty() &&
+      !(layer.m_blur * m_scale >= MINIMUM_RADIUS) && !layer.m_mask;
+  }
+
+  std::vector<Cell> Planner::get_cells(std::size_t index) const {
+    auto& surface = m_surfaces[index];
+    auto cells = std::vector<Cell>();
+    if(is_piecewise(index)) {
+      for(auto& piece : surface.m_pieces) {
+        auto region =
+          piece.m_bounds.adjusted(-1, -1, 1, 1) & surface.m_region;
+        if(!region.isEmpty()) {
+          cells.push_back(Cell(index, region, piece.m_ranges));
+        }
+      }
+      return cells;
+    }
+    auto ranges = std::vector<Range>();
+    for(auto& operation : surface.m_operations) {
+      ranges.push_back(Range(operation.m_first, operation.m_count));
+    }
+    cells.push_back(Cell(index, surface.m_region, std::move(ranges)));
+    return cells;
+  }
+
+  bool Planner::is_batchable(std::size_t index) const {
+    auto& surface = m_surfaces[index];
+    if(!get_layer(index).m_inner_shadows.empty() ||
+        !std::all_of(surface.m_operations.begin(),
+          surface.m_operations.end(), [] (const auto& operation) {
+            return operation.m_type == OperationType::STRIPS;
+          })) {
+      return false;
+    }
+    auto is_small = [&] (const QRect& region) {
+      auto bucket = get_bucket(region.size());
+      return bucket.width() <= MAXIMUM_CELL && bucket.height() <= MAXIMUM_CELL;
+    };
+    if(is_piecewise(index)) {
+      auto cells = get_cells(index);
+      auto packer = Packer(ATLAS_SIZE, ATLAS_SIZE);
+      return !cells.empty() && std::all_of(cells.begin(), cells.end(),
+        [&] (const auto& cell) {
+          return is_small(cell.m_region) &&
+            packer.add(get_bucket(cell.m_region.size()));
+        });
+    }
+    return is_small(surface.m_region);
+  }
+
+  void Planner::prepare_batch(std::size_t index, std::size_t start,
+      std::vector<Target>& atlases) {
+    auto& operations = m_surfaces[index].m_operations;
+    auto packer = Packer(ATLAS_SIZE, ATLAS_SIZE);
+    auto cells = std::vector<Cell>();
+    for(auto i = start; i != operations.size(); ++i) {
+      auto& operation = operations[i];
+      if(operation.m_type != OperationType::LAYER ||
+          !is_batchable(operation.m_index)) {
+        continue;
+      }
+      auto layer_cells = get_cells(operation.m_index);
+      auto is_full = false;
+      for(auto& cell : layer_cells) {
+        if(!packer.add(get_bucket(cell.m_region.size()))) {
+          is_full = true;
+          break;
+        }
+      }
+      if(is_full) {
+        break;
+      }
+      cells.insert(cells.end(), layer_cells.begin(), layer_cells.end());
+    }
+    auto cell_regions = std::vector<QRect>();
+    for(auto& cell : cells) {
+      cell_regions.push_back(cell.m_region);
+    }
+    auto cell_targets = std::vector<Target>();
+    atlases.push_back(allocate_cells(cell_regions, 1, cell_targets));
+    auto pass = add_pass(atlases.back(), PlanClear::CLEAR);
+    for(auto i = std::size_t(0); i != cells.size(); ++i) {
+      auto uniforms = add_uniforms(cell_targets[i]);
+      for(auto& range : cells[i].m_ranges) {
+        draw_strips(pass, range.m_first, range.m_count, uniforms,
+          cell_targets[i].m_cell);
+      }
+    }
+    auto layers = std::vector<std::size_t>();
+    auto regions = std::vector<QRect>();
+    auto targets = std::vector<Target>();
+    for(auto i = std::size_t(0); i != cells.size(); ++i) {
+      auto& prepared = m_prepared[cells[i].m_layer];
+      prepared.push_back(Prepared(cells[i].m_region, cell_targets[i]));
+      if(!is_piecewise(cells[i].m_layer)) {
+        layers.push_back(cells[i].m_layer);
+        regions.push_back(cells[i].m_region);
+        targets.push_back(cell_targets[i]);
+      }
+    }
+    auto tasks = std::vector<BlurTask>();
+    auto shadowed = std::vector<std::size_t>();
+    for(auto i = std::size_t(0); i != layers.size(); ++i) {
+      auto& shadows = get_layer(layers[i]).m_drop_shadows;
+      if(shadows.empty()) {
+        continue;
+      }
+      shadowed.push_back(i);
+      for(auto& shadow : shadows) {
+        auto radius = shadow.m_radius * m_scale;
+        if(radius >= MINIMUM_RADIUS) {
+          tasks.push_back(BlurTask(targets[i], regions[i], radius, Target()));
+        }
+      }
+    }
+    if(!shadowed.empty()) {
+      auto blurred = std::vector<Target>();
+      blur(tasks, blurred);
+      auto composite_regions = std::vector<QRect>();
+      for(auto i : shadowed) {
+        composite_regions.push_back(regions[i]);
+      }
+      auto composites = std::vector<Target>();
+      atlases.push_back(allocate_cells(composite_regions, 1, composites));
+      auto composite_pass = add_pass(atlases.back(), PlanClear::CLEAR);
+      auto task = tasks.begin();
+      for(auto j = std::size_t(0); j != shadowed.size(); ++j) {
+        auto i = shadowed[j];
+        auto uniforms = add_uniforms(composites[j]);
+        for(auto& shadow : get_layer(layers[i]).m_drop_shadows) {
+          auto source = targets[i];
+          if(shadow.m_radius * m_scale >= MINIMUM_RADIUS) {
+            source = task->m_result;
+            ++task;
+          }
+          auto slot = add_paint();
+          set_shadow_paint(
+            slot, source, regions[i], map_vector(m_view, shadow.m_offset));
+          auto span =
+            add_span(regions[i], to_premultiplied(shadow.m_color), slot);
+          draw(composite_pass, PlanPipeline::OVER, span, 1,
+            PlanSource(-1, source.m_texture), -1, uniforms);
+        }
+        auto slot = add_paint();
+        set_texture_paint(slot, targets[i], Point(0, 0), PaintKind::TEXTURE);
+        auto span =
+          add_span(regions[i], to_premultiplied(Color(1, 1, 1, 1)), slot);
+        draw(composite_pass, PlanPipeline::OVER, span, 1,
+          PlanSource(-1, targets[i].m_texture), -1, uniforms);
+        targets[i] = composites[j];
+      }
+      for(auto& atlas : blurred) {
+        release(atlas);
+      }
+    }
+    tasks.clear();
+    auto blurred_layers = std::vector<std::size_t>();
+    for(auto i = std::size_t(0); i != layers.size(); ++i) {
+      auto radius = get_layer(layers[i]).m_blur * m_scale;
+      if(radius >= MINIMUM_RADIUS) {
+        tasks.push_back(BlurTask(targets[i], regions[i], radius, Target()));
+        blurred_layers.push_back(i);
+      }
+    }
+    blur(tasks, atlases);
+    for(auto j = std::size_t(0); j != tasks.size(); ++j) {
+      targets[blurred_layers[j]] = tasks[j].m_result;
+    }
+    for(auto i = std::size_t(0); i != layers.size(); ++i) {
+      m_prepared[layers[i]].front().m_target = targets[i];
+    }
   }
 
   Target Planner::blur(const Target& source, const QRect& region,
@@ -857,11 +1367,158 @@ namespace {
     return vertical;
   }
 
+  void Planner::blur(
+      std::vector<BlurTask>& tasks, std::vector<Target>& atlases) {
+    auto get_size = [] (const QRect& region, int scale) {
+      return QSize((region.width() + scale - 1) / scale,
+        (region.height() + scale - 1) / scale);
+    };
+    auto factors = std::vector<int>();
+    for(auto& task : tasks) {
+      auto factor = get_blur_downsampling(task.m_radius);
+      if(std::find(factors.begin(), factors.end(), factor) == factors.end()) {
+        factors.push_back(factor);
+      }
+    }
+    for(auto factor : factors) {
+      auto group = std::vector<std::size_t>();
+      auto regions = std::vector<QRect>();
+      auto current = std::vector<Target>();
+      for(auto i = std::size_t(0); i != tasks.size(); ++i) {
+        if(get_blur_downsampling(tasks[i].m_radius) == factor) {
+          group.push_back(i);
+          regions.push_back(tasks[i].m_region);
+          current.push_back(tasks[i].m_source);
+        }
+      }
+      auto intermediate = std::optional<Target>();
+      auto level = 1;
+      while(level < factor) {
+        level *= 2;
+        auto destinations = std::vector<Target>();
+        auto atlas = allocate_cells(regions, level, destinations);
+        auto pass = add_pass(atlas, PlanClear::CLEAR);
+        for(auto k = std::size_t(0); k != group.size(); ++k) {
+          add_blur_draw(pass, add_uniforms(destinations[k]), current[k],
+            get_size(regions[k], level / 2), destinations[k], Point(0, 0), 0,
+            false, 0);
+        }
+        if(intermediate) {
+          release(*intermediate);
+        }
+        intermediate = atlas;
+        current = std::move(destinations);
+      }
+      auto deviations = std::vector<double>();
+      for(auto i : group) {
+        auto deviation = tasks[i].m_radius / level;
+        if(level > 1) {
+          deviation = std::sqrt(
+            std::max(0.0, deviation * deviation - 1.0 / 12 - 1.0 / 6));
+        }
+        deviations.push_back(deviation);
+      }
+      auto horizontals = std::vector<Target>();
+      auto horizontal = allocate_cells(regions, level, horizontals);
+      auto pass = add_pass(horizontal, PlanClear::CLEAR);
+      for(auto k = std::size_t(0); k != group.size(); ++k) {
+        add_blur_draw(pass, add_uniforms(horizontals[k]), current[k],
+          get_size(regions[k], level), horizontals[k],
+          Point(1.0 / current[k].m_size.width(), 0), deviations[k], false, 0);
+      }
+      if(intermediate) {
+        release(*intermediate);
+      }
+      auto verticals = std::vector<Target>();
+      atlases.push_back(allocate_cells(regions, level, verticals));
+      pass = add_pass(atlases.back(), PlanClear::CLEAR);
+      for(auto k = std::size_t(0); k != group.size(); ++k) {
+        add_blur_draw(pass, add_uniforms(verticals[k]), horizontals[k],
+          get_size(regions[k], level), verticals[k],
+          Point(0, 1.0 / horizontals[k].m_size.height()), deviations[k],
+          false, 0);
+        tasks[group[k]].m_result = verticals[k];
+      }
+      release(horizontal);
+    }
+  }
+
+  Target Planner::blur_boxes(
+      const Target& source, const QRect& region, double radius) {
+    auto factor = 1;
+    while(factor < MAXIMUM_DOWNSAMPLING && (2 * factor <= m_scale + 1e-6 ||
+        get_box_size(radius / factor) > MAXIMUM_BOX_SIZE)) {
+      factor *= 2;
+    }
+    auto get_size = [] (const QRect& area, int scale) {
+      return QSize((area.width() + scale - 1) / scale,
+        (area.height() + scale - 1) / scale);
+    };
+    auto current = source;
+    auto texels = region.size();
+    auto level = 1;
+    while(level < factor) {
+      level *= 2;
+      auto destination =
+        allocate(get_size(region, level), region.topLeft(), level);
+      add_blur_pass(current, texels, destination, Point(0, 0), 0, false, 0);
+      if(current.m_texture != source.m_texture) {
+        release(current);
+      }
+      current = destination;
+      texels = get_size(region, level);
+    }
+    auto size = std::max(1, get_box_size(radius / factor));
+    auto half = size / 2;
+    auto windows = std::array<std::pair<int, int>, 3>();
+    if(size % 2 == 1) {
+      windows.fill(std::pair(-half, half));
+    } else {
+      windows = {std::pair(-half, half - 1), std::pair(-half + 1, half),
+        std::pair(-half, half)};
+    }
+    auto margin = (3 * half + 1) * factor;
+    auto padding = region.adjusted(-margin, -margin, margin, margin);
+    for(auto axis = 0; axis != 2; ++axis) {
+      for(auto i = std::size_t(0); i != windows.size(); ++i) {
+        auto destination =
+          allocate(get_size(padding, factor), padding.topLeft(), factor);
+        auto step = Point(1.0 / current.m_size.width(), 0);
+        if(axis == 1) {
+          step = Point(0, 1.0 / current.m_size.height());
+        }
+        auto pass = add_pass(destination, PlanClear::CLEAR);
+        add_blur_draw(
+          pass, -1, current, texels, destination, step, 0, false, 0);
+        auto& uniforms = m_plan->m_uniforms[get_pass(pass).m_uniforms];
+        uniforms[26] = static_cast<float>(windows[i].first - 0.5);
+        uniforms[27] = static_cast<float>(windows[i].second);
+        if(current.m_texture != source.m_texture) {
+          release(current);
+        }
+        current = destination;
+        texels = get_size(padding, factor);
+      }
+    }
+    return current;
+  }
+
   void Planner::add_blur_pass(const Target& source, QSize texels,
       const Target& destination, Point step, double radius, bool is_inverted,
       double brightness) {
     auto pass = add_pass(destination, PlanClear::CLEAR);
-    auto& uniforms = m_plan->m_uniforms[get_pass(pass).m_uniforms];
+    add_blur_draw(pass, -1, source, texels, destination, step, radius,
+      is_inverted, brightness);
+  }
+
+  void Planner::add_blur_draw(std::size_t pass, int index,
+      const Target& source, QSize texels, const Target& destination,
+      Point step, double radius, bool is_inverted, double brightness) {
+    auto block = index;
+    if(block < 0) {
+      block = get_pass(pass).m_uniforms;
+    }
+    auto& uniforms = m_plan->m_uniforms[block];
     auto extent = source.get_extent();
     uniforms[20] = static_cast<float>(source.m_origin.x());
     uniforms[21] = static_cast<float>(source.m_origin.y());
@@ -877,20 +1534,23 @@ namespace {
     uniforms[30] = m_options->m_is_y_up ? 1.0f : 0.0f;
     auto width = static_cast<double>(source.m_size.width());
     auto height = static_cast<double>(source.m_size.height());
-    auto top = 0.5 / height;
-    auto bottom = (texels.height() - 0.5) / height;
+    auto cell = source.m_cell.topLeft();
+    auto top = (cell.y() + 0.5) / height;
+    auto bottom = (cell.y() + texels.height() - 0.5) / height;
     if(m_options->m_is_y_up) {
-      top = 1 - bottom;
-      bottom = 1 - 0.5 / height;
+      auto flipped = 1 - bottom;
+      bottom = 1 - top;
+      top = flipped;
     }
-    uniforms[32] = static_cast<float>(0.5 / width);
+    uniforms[32] = static_cast<float>((cell.x() + 0.5) / width);
     uniforms[33] = static_cast<float>(top);
-    uniforms[34] = static_cast<float>((texels.width() - 0.5) / width);
+    uniforms[34] =
+      static_cast<float>((cell.x() + texels.width() - 0.5) / width);
     uniforms[35] = static_cast<float>(bottom);
-    auto span = add_span(QRect(destination.m_origin, destination.get_extent()),
+    auto span = add_span(destination.get_area(),
       to_premultiplied(Color(1, 1, 1, 1)), -1);
     draw(pass, PlanPipeline::BLUR, span, 1,
-      PlanSource(-1, source.m_texture));
+      PlanSource(-1, source.m_texture), -1, index);
   }
 
   void Planner::add_copy(

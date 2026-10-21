@@ -129,6 +129,12 @@ namespace Rellu {
      * the region is not a stroke drawn along a line.
      */
     std::optional<StrokeLine> m_stroke;
+
+    /**
+     * The bounds of the path in its own coordinates, or
+     * <code>std::nullopt</code> if they are found from the path.
+     */
+    std::optional<Rect> m_bounds;
   };
 
   /** A shadow cast by the content of a layer. */
@@ -218,7 +224,7 @@ namespace Rellu {
 
     /**
      * The amount in the range [-1, 1] added to each color component of the
-     * blurred pixels.
+     * pixels beneath the region before they are blurred.
      */
     double m_brightness = 0;
 

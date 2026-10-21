@@ -9,6 +9,11 @@
 using namespace Rellu;
 
 namespace {
+  double to_brightness(double amount) {
+    auto clamped = std::clamp(amount, -50.0, 50.0);
+    return std::floor(clamped * 2.55 + 0.5) / 255;
+  }
+
   double get_scale(const Matrix& matrix) {
     return std::sqrt(std::abs(matrix.get_determinant()));
   }
@@ -113,7 +118,7 @@ void Rellu::add_styled(DrawList& list, std::optional<FillCommand> fill,
         if(fill) {
           backdrop.emplace(fill->m_path, transform,
             blur->m_amount * get_scale(transform),
-            std::clamp(blur->m_brightness / 100, -1.0, 1.0), fill->m_clip);
+            to_brightness(blur->m_brightness), fill->m_clip);
           fill_opacity = std::clamp(blur->m_fill_opacity, 0.0, 1.0);
         }
       } else {

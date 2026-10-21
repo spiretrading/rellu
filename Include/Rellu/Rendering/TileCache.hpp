@@ -70,7 +70,8 @@ namespace Rellu {
       /**
        * Sets the processor time a frame spends rendering tiles, beyond which
        * the remaining tiles are left to later frames. Every frame renders at
-       * least one group of tiles.
+       * least one group of tiles, and a frame with no earlier tiles to stand
+       * in for the missing ones spends four times as long.
        * @param budget The time per frame.
        */
       void set_budget(std::chrono::nanoseconds budget);

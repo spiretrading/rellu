@@ -1,5 +1,7 @@
 #ifndef RELLU_TEXT_TEXT_RASTERIZER_HPP
 #define RELLU_TEXT_TEXT_RASTERIZER_HPP
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -66,6 +68,9 @@ namespace Rellu {
   class TextRasterizer {
     public:
 
+      /** The default number of bytes of glyph coverage kept for reuse. */
+      static constexpr auto DEFAULT_CAPACITY = std::size_t(32) << 20;
+
       /**
        * Constructs a TextRasterizer using DIRECT_WRITE on Windows and
        * FREE_TYPE elsewhere.
@@ -79,10 +84,29 @@ namespace Rellu {
        */
       explicit TextRasterizer(GlyphRasterization rasterization);
 
+      /**
+       * Constructs a TextRasterizer.
+       * @param rasterization The method of rasterizing glyphs, replaced by
+       *        FREE_TYPE where it is unavailable.
+       * @param capacity The number of bytes of glyph coverage kept for
+       *        reuse, beyond which the glyphs least recently used are
+       *        discarded.
+       */
+      TextRasterizer(GlyphRasterization rasterization, std::size_t capacity);
+
       ~TextRasterizer();
 
       /** Returns the method of rasterizing glyphs. */
       GlyphRasterization get_rasterization() const;
+
+      /** Returns the number of bytes of glyph coverage kept for reuse. */
+      std::size_t get_capacity() const;
+
+      /**
+       * Returns the number of bytes of glyph coverage kept, which is at most
+       * the capacity between calls to rasterize.
+       */
+      std::size_t get_cache_size() const;
 
       /**
        * Tests whether text can be rasterized through a transform, which must
@@ -109,6 +133,20 @@ namespace Rellu {
        *        device pixels.
        */
       static Point get_origin(const PlacedGlyph& glyph, const Matrix& transform);
+
+      /**
+       * Rasterizes the glyphs of a layout that rasterize would rasterize and
+       * keep for reuse but has not, so that rasterizing the layout takes
+       * less time, stopping once a deadline passes.
+       * @param layout The layout whose glyphs are rasterized.
+       * @param transform The transform from the layout's space to device
+       *        pixels.
+       * @param deadline The time past which no further glyph is rasterized,
+       *        after at least one.
+       * @return <code>true</code> iff every such glyph is kept for reuse.
+       */
+      bool prepare(const TextLayout& layout, const Matrix& transform,
+        std::chrono::steady_clock::time_point deadline) const;
 
       /**
        * Rasterizes a layout's decorations and the glyphs that are neither

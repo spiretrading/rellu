@@ -1,3 +1,7 @@
+#include <chrono>
+#include <cstddef>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -7,10 +11,12 @@
 #include <doctest/doctest.h>
 #include <QImage>
 #include <QMimeData>
+#include <QTemporaryDir>
 #include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Editor/Editor.hpp"
+#include "Rellu/Io/XdGenerator.hpp"
 #include "Rellu/Ui/Clipboard.hpp"
 #include "TestDocument.hpp"
 
@@ -526,6 +532,158 @@ TEST_SUITE("Clipboard") {
     REQUIRE(copy.m_parent == ids.m_artboard);
     REQUIRE(*get_world_bounds(document, copy.get_id()) ==
       Rect(383, 497, 10, 6));
+  }
+
+  TEST_CASE("xd_components_and_images") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto image = ImageResource();
+    image.m_id = generate_node_id();
+    image.m_media_type = "image/png";
+    image.m_data = Shared(std::vector<std::byte>(
+      {std::byte(1), std::byte(2), std::byte(3)}));
+    {
+      auto transaction = Transaction(document);
+      transaction.add_image(image);
+      auto shape = *document.get(ids.m_master_shape).get_shape();
+      auto fill = ImageFill();
+      fill.m_image = image.m_id;
+      fill.m_size = Size(8, 8);
+      shape.m_style.m_fill = fill;
+      transaction.replace_payload(ids.m_master_shape, Box<Shape>(shape));
+      transaction.commit();
+    }
+    auto clipboard = Clipboard();
+    REQUIRE(clipboard.copy(document, {ids.m_instance}));
+    auto data = clipboard.make_mime_data();
+    auto xd = std::make_unique<QMimeData>();
+    for(auto& format : data->formats()) {
+      if(format.contains("com.adobe.xd")) {
+        xd->setData(format, data->data(format));
+      }
+    }
+    auto foreign = Clipboard();
+    REQUIRE(foreign.load(*xd));
+    auto other = Document();
+    auto editor = Editor(other);
+    REQUIRE(editor.execute(foreign.make_paste_command()));
+    auto& copy = other.get(editor.get_selection().get_primary());
+    auto& instance = *copy.get_group()->m_component_instance;
+    REQUIRE(instance.m_component == ids.m_component);
+    auto& components = other.get_resources().m_components;
+    REQUIRE(components.contains(ids.m_component));
+    auto& master = other.get(components.at(ids.m_component).m_master);
+    REQUIRE(master.m_children.size() == 1);
+    auto& fill = std::get<ImageFill>(
+      other.get(master.m_children.front()).get_shape()->m_style.m_fill);
+    REQUIRE(fill.m_image == image.m_id);
+    REQUIRE(other.get_resources().m_images.at(image.m_id).m_data ==
+      image.m_data);
+  }
+
+  TEST_CASE("image_files") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto image = ImageResource();
+    image.m_id = generate_node_id();
+    image.m_media_type = "image/png";
+    image.m_data = Shared(std::vector<std::byte>({std::byte(9)}));
+    {
+      auto transaction = Transaction(document);
+      transaction.add_image(image);
+      auto shape = *document.get(ids.m_background).get_shape();
+      auto fill = ImageFill();
+      fill.m_image = image.m_id;
+      fill.m_size = Size(1, 1);
+      shape.m_style.m_fill = fill;
+      transaction.replace_payload(ids.m_background, Box<Shape>(shape));
+      transaction.commit();
+    }
+    auto temporary = QTemporaryDir();
+    REQUIRE(temporary.isValid());
+    auto directory = std::filesystem::path(temporary.path().toStdU16String());
+    auto list = [&] {
+      auto paths = std::vector<std::filesystem::path>();
+      for(auto& entry : std::filesystem::directory_iterator(directory)) {
+        paths.push_back(entry.path());
+      }
+      return paths;
+    };
+    auto clipboard = Clipboard(directory);
+    REQUIRE(clipboard.copy(document, {ids.m_card}));
+    auto first = list();
+    REQUIRE(first.size() == 1);
+    REQUIRE(std::filesystem::is_regular_file(
+      first.front() / to_uid(image.m_id)));
+    auto other = Clipboard(directory);
+    REQUIRE(other.copy(document, {ids.m_card}));
+    auto second = list();
+    REQUIRE(second.size() == 1);
+    REQUIRE(second.front() != first.front());
+    REQUIRE(clipboard.copy(document, {ids.m_loose}));
+    REQUIRE(list().empty());
+    REQUIRE(clipboard.copy(document, {ids.m_card}));
+    auto current = list().front();
+    auto data = clipboard.make_mime_data();
+    auto now = std::filesystem::last_write_time(current);
+    auto older = directory / "older";
+    std::filesystem::create_directory(older);
+    std::filesystem::last_write_time(older, now - std::chrono::hours(1));
+    auto stray = directory / "stray";
+    std::ofstream(stray).put('x');
+    std::filesystem::last_write_time(stray, now - std::chrono::hours(1));
+    auto later = directory / "later";
+    std::filesystem::create_directory(later);
+    std::filesystem::last_write_time(later, now + std::chrono::hours(1));
+    Clipboard::remove_stale_images(directory, data.get());
+    REQUIRE(std::filesystem::exists(current));
+    REQUIRE(std::filesystem::exists(later));
+    REQUIRE(!std::filesystem::exists(older));
+    REQUIRE(!std::filesystem::exists(stray));
+    auto foreign = QMimeData();
+    foreign.setText("Other");
+    Clipboard::remove_stale_images(directory, &foreign);
+    REQUIRE(list().empty());
+  }
+
+  TEST_CASE("svg") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto clipboard = Clipboard();
+    auto text = QMimeData();
+    text.setText(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><rect
+      width="40" height="20" fill="#0f0"/><circle cx="5" cy="5"
+      r="5"/></svg>)svg");
+    REQUIRE(Clipboard::is_loadable(text));
+    REQUIRE(clipboard.load(text));
+    auto view = Rect(0, 0, 600, 600);
+    REQUIRE(editor.execute(
+      clipboard.make_paste_command(make_target({}, view))));
+    auto& group = document.get(editor.get_selection().get_primary());
+    REQUIRE(group.m_parent == ids.m_artboard);
+    REQUIRE(group.get_group());
+    REQUIRE(group.m_children.size() == 2);
+    REQUIRE(group.m_header.m_name == "Group 1");
+    auto& box = document.get(group.m_children.front());
+    REQUIRE(box.m_header.m_name == "Rectangle 1");
+    REQUIRE(box.get_shape()->m_style.m_fill ==
+      Fill(SolidFill(make_color(0, 255, 0))));
+    REQUIRE(document.get(group.m_children.back()).m_header.m_name ==
+      "Ellipse 1");
+    auto markup = QMimeData();
+    markup.setData(
+      "application/x-qt-windows-mime;value=\"Scalable Vector Graphics\"",
+      R"svg(<svg
+      xmlns="http://www.w3.org/2000/svg"><path id="Mark"
+      d="M0 0L5 5"/></svg>)svg");
+    REQUIRE(clipboard.load(markup));
+    REQUIRE(editor.execute(
+      clipboard.make_paste_command(make_target({}, view))));
+    auto& mark = document.get(editor.get_selection().get_primary());
+    REQUIRE(mark.m_header.m_name == "Mark");
+    REQUIRE(std::holds_alternative<PathShape>(
+      mark.get_shape()->m_geometry));
   }
 
   TEST_CASE("image_on_pasteboard") {

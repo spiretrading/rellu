@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <initializer_list>
 #include <numbers>
 #include <optional>
@@ -230,6 +231,7 @@ namespace {
     }
     auto remaining = pattern[index] - phase;
     auto is_on = index % 2 == 0;
+    auto is_first_on = is_on;
     auto is_split = false;
     auto& vertices = contour.m_vertices;
     auto dashes = std::vector<Contour>();
@@ -246,7 +248,9 @@ namespace {
       auto& end = vertices[(i + 1) % vertices.size()];
       auto span = distance(start, end.m_point);
       auto position = 0.0;
-      while(span - position >= remaining) {
+      auto is_closing = contour.m_is_closed && i + 1 == count;
+      while(span - position > remaining ||
+          (span - position == remaining && !is_closing)) {
         position += remaining;
         auto point =
           snap(interpolate(start, end.m_point, position / span));
@@ -269,14 +273,34 @@ namespace {
         add_vertex(current, end.m_point, end.m_continuity);
       }
     }
-    if(!is_split && !contour.m_is_closed) {
+    auto is_joined = contour.m_is_closed && remaining <= 0 &&
+      std::adjacent_find(pattern.begin(), pattern.end(),
+        std::not_equal_to<>()) != pattern.end();
+    if(!is_split && (!contour.m_is_closed || is_joined)) {
       if(is_on) {
         return std::vector{contour};
       }
       return std::vector<Contour>();
     }
-    if(is_on && current.m_vertices.size() > 1) {
+    if(is_on && is_joined && is_first_on && !dashes.empty()) {
+      auto& first = dashes.front().m_vertices;
+      current.m_vertices.insert(
+        current.m_vertices.end(), first.begin() + 1, first.end());
+      current.m_direction = dashes.front().m_direction;
+      dashes.front() = std::move(current);
+    } else if(is_on && current.m_vertices.size() > 1) {
       dashes.push_back(std::move(current));
+    } else if(!is_on && contour.m_is_closed && remaining <= 0 &&
+        is_first_on && !dashes.empty()) {
+      auto& first = dashes.front().m_vertices;
+      auto start = first.front().m_point;
+      auto direction = start - vertices.back().m_point;
+      auto length = std::sqrt(
+        direction.m_x * direction.m_x + direction.m_y * direction.m_y);
+      if(length > 0) {
+        first.insert(first.begin(),
+          Vertex(snap(start - direction * (1 / length)), 1));
+      }
     }
     return dashes;
   }

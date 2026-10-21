@@ -117,8 +117,15 @@ TEST_SUITE("ShapeTool") {
     tools.set_view(Matrix(), 1, Size(1000, 800));
     tools.set_tool("rectangle");
     drag(tools, Point(150, 150), Point(250, 190), Qt::ShiftModifier);
+    REQUIRE(get_drawn(editor).m_header.m_transform ==
+      make_translation(50, 50));
     REQUIRE(get_geometry(get_drawn(editor)) ==
-      ShapeGeometry(RectangleShape(Rect(0, 0, 100, 100))));
+      ShapeGeometry(RectangleShape(Rect(0, 0, 40, 40))));
+    drag(tools, Point(500, 300), Point(460, 200), Qt::ShiftModifier);
+    REQUIRE(get_drawn(editor).m_header.m_transform ==
+      make_translation(360, 160));
+    REQUIRE(get_geometry(get_drawn(editor)) ==
+      ShapeGeometry(RectangleShape(Rect(0, 0, 40, 40))));
     drag(tools, Point(300, 300), Point(340, 320), Qt::AltModifier);
     REQUIRE(get_drawn(editor).m_header.m_transform ==
       make_translation(160, 180));
@@ -127,21 +134,21 @@ TEST_SUITE("ShapeTool") {
     drag(tools, Point(300, 300), Point(260, 290),
       Qt::ShiftModifier | Qt::AltModifier);
     REQUIRE(get_drawn(editor).m_header.m_transform ==
-      make_translation(160, 160));
+      make_translation(190, 190));
     REQUIRE(get_geometry(get_drawn(editor)) ==
-      ShapeGeometry(RectangleShape(Rect(0, 0, 80, 80))));
+      ShapeGeometry(RectangleShape(Rect(0, 0, 20, 20))));
     tools.press(make_event(Point(150, 150), Qt::LeftButton, Qt::LeftButton));
     tools.move(make_event(Point(250, 190), Qt::NoButton, Qt::LeftButton));
     REQUIRE(get_geometry(get_drawn(editor)) ==
       ShapeGeometry(RectangleShape(Rect(0, 0, 100, 40))));
     tools.key_press(KeyEvent(Qt::Key_Shift, Qt::ShiftModifier));
     REQUIRE(get_geometry(get_drawn(editor)) ==
-      ShapeGeometry(RectangleShape(Rect(0, 0, 100, 100))));
+      ShapeGeometry(RectangleShape(Rect(0, 0, 40, 40))));
     tools.key_release(KeyEvent(Qt::Key_Shift, Qt::NoModifier));
     tools.release(make_event(Point(250, 190), Qt::LeftButton, Qt::NoButton));
     REQUIRE(get_geometry(get_drawn(editor)) ==
       ShapeGeometry(RectangleShape(Rect(0, 0, 100, 40))));
-    REQUIRE(editor.get_history().get_undo_count() == 4);
+    REQUIRE(editor.get_history().get_undo_count() == 5);
   }
 
   TEST_CASE("ellipse") {
@@ -162,7 +169,7 @@ TEST_SUITE("ShapeTool") {
     REQUIRE(editor.get_history().get_undo_label() == "Draw Ellipse");
     drag(tools, Point(300, 300), Point(340, 310), Qt::ShiftModifier);
     REQUIRE(get_geometry(get_drawn(editor)) ==
-      ShapeGeometry(EllipseShape(Point(20, 20), 20, 20)));
+      ShapeGeometry(EllipseShape(Point(5, 5), 5, 5)));
     REQUIRE(get_drawn(editor).m_header.m_name == "Ellipse 2");
   }
 
@@ -180,6 +187,22 @@ TEST_SUITE("ShapeTool") {
       ShapeGeometry(PolygonShape(3, Size(60, 50))));
     REQUIRE(node.get_shape()->m_style == make_default_style());
     REQUIRE(editor.get_history().get_undo_label() == "Draw Polygon");
+    drag(tools, Point(300, 300), Point(400, 390), Qt::ShiftModifier);
+    REQUIRE(get_drawn(editor).m_header.m_transform ==
+      make_translation(200, 200));
+    REQUIRE(get_geometry(get_drawn(editor)) ==
+      ShapeGeometry(PolygonShape(3, Size(100, 87))));
+    drag(tools, Point(600, 150), Point(550, 250), Qt::ShiftModifier);
+    REQUIRE(get_drawn(editor).m_header.m_transform ==
+      make_translation(450, 50));
+    REQUIRE(get_geometry(get_drawn(editor)) ==
+      ShapeGeometry(PolygonShape(3, Size(50, 43))));
+    drag(tools, Point(500, 420), Point(550, 470),
+      Qt::ShiftModifier | Qt::AltModifier);
+    REQUIRE(get_drawn(editor).m_header.m_transform ==
+      make_translation(350, 277));
+    REQUIRE(get_geometry(get_drawn(editor)) ==
+      ShapeGeometry(PolygonShape(3, Size(100, 86))));
   }
 
   TEST_CASE("line") {

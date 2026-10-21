@@ -599,7 +599,6 @@ const TextTool::Geometry& TextTool::get_geometry(
   m_geometry.m_id = id;
   m_geometry.m_revision = context.get_revision();
   m_geometry.m_fills = std::nullopt;
-  m_geometry.m_clip = std::nullopt;
   if(auto text = find_text(context)) {
     m_geometry.m_lines = measure_lines(*text, *m_library);
     m_geometry.m_bounds = measure_text(*text, *m_library);
@@ -696,21 +695,13 @@ std::optional<OverlayImage> TextTool::get_highlight(
     return std::nullopt;
   }
   if(!geometry.m_fills) {
-    auto layout = lay_out(*text, *m_library);
-    m_geometry.m_fills = outline(layout);
-    m_geometry.m_clip = layout.m_clip;
+    m_geometry.m_fills = outline(lay_out(*text, *m_library, true));
   }
   auto area = QPainterPath();
   area.setFillRule(Qt::WindingFill);
   for(auto& rect :
       get_selection_rects(geometry.m_lines, range.m_start, range.m_end)) {
     area.addRect(QRectF(rect.m_x, rect.m_y, rect.m_width, rect.m_height));
-  }
-  if(auto& clip = geometry.m_clip) {
-    auto frame = QPainterPath();
-    frame.addRect(
-      QRectF(clip->m_x, clip->m_y, clip->m_width, clip->m_height));
-    area = area.intersected(frame);
   }
   auto mapping = to_qtransform(transform);
   auto bounds = mapping.map(area).boundingRect().intersected(

@@ -15,6 +15,8 @@ namespace {
   constexpr auto UNIFORMS_SIZE = 24 * sizeof(float);
   constexpr auto MINIMUM_UNIFORM_COUNT = std::size_t(64);
   constexpr auto MAXIMUM_RENDERERS = std::size_t(2);
+  constexpr auto MAXIMUM_BLANK_RENDERERS = std::size_t(6);
+  constexpr auto BLANK_BUDGET_FACTOR = 4;
   constexpr auto PAGE_SLOTS = 8;
   constexpr auto MINIMUM_MARGIN = 512;
   constexpr auto DEFAULT_BUDGET = std::chrono::milliseconds(10);
@@ -61,6 +63,22 @@ namespace {
     return QRect(QPoint(divide(pixels.left(), size),
       divide(pixels.top(), size)), QPoint(divide(pixels.right(), size),
       divide(pixels.bottom(), size)));
+  }
+
+  double estimate_density(const Drawing& drawing, const Matrix& view,
+      QSize size, int tile_size) {
+    auto pixels = to_pixels(DrawRegion(drawing.get_bounds(), 0), view) &
+      QRect(QPoint(0, 0), size);
+    if(pixels.isEmpty()) {
+      return 0;
+    }
+    auto count = std::size_t(0);
+    for(auto& list : drawing.get_lists()) {
+      count += list->size();
+    }
+    auto tiles = to_tiles(pixels, tile_size);
+    return static_cast<double>(count) /
+      (static_cast<double>(tiles.width()) * tiles.height());
   }
 }
 
@@ -329,6 +347,16 @@ void TileCache::render(QRhiCommandBuffer& buffer, QRhiRenderTarget& target,
   auto used = std::size_t(0);
   auto commands = DrawSequence();
   auto is_prefetching = merged.empty() || merged.front().m_priority >= 2;
+  auto budget = m_budget;
+  auto renderers = MAXIMUM_RENDERERS;
+  if(!m_placeholder && !is_prefetching) {
+    budget *= BLANK_BUDGET_FACTOR;
+    renderers = MAXIMUM_BLANK_RENDERERS;
+  }
+  if(!(epoch.m_density > 0)) {
+    epoch.m_density =
+      estimate_density(drawing, get_view(), epoch.m_size, m_tile_size);
+  }
   auto split = [&] (std::size_t count) {
     auto need = merged[index];
     auto& tiles = need.m_tiles;
@@ -354,10 +382,10 @@ void TileCache::render(QRhiCommandBuffer& buffer, QRhiRenderTarget& target,
     merged.insert(
       merged.begin() + index + 1, pieces.begin() + 1, pieces.end());
   };
-  while(index != merged.size() && used != MAXIMUM_RENDERERS &&
+  while(index != merged.size() && used != renderers &&
       (is_prefetching || merged[index].m_priority < 2) &&
       (used == 0 ||
-        std::chrono::steady_clock::now() - start_time < m_budget)) {
+        std::chrono::steady_clock::now() - start_time < budget)) {
     auto tiles = trim(drawing, merged[index].m_tiles);
     if(tiles.isEmpty()) {
       ++index;

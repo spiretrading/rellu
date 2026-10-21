@@ -1,5 +1,6 @@
 #ifndef RELLU_UI_CLIPBOARD_HPP
 #define RELLU_UI_CLIPBOARD_HPP
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -48,10 +49,36 @@ namespace Rellu {
   class Clipboard {
     public:
 
-      /** Constructs an empty Clipboard. */
+      /**
+       * Constructs an empty Clipboard keeping the files of copied images in
+       * get_default_image_directory.
+       */
       Clipboard();
 
+      /**
+       * Constructs an empty Clipboard.
+       * @param directory The folder keeping the files of copied images, which
+       *        other applications read, or empty to keep none.
+       */
+      explicit Clipboard(std::filesystem::path directory);
+
       ~Clipboard();
+
+      /**
+       * Returns the folder in the temporary directory keeping the files of
+       * copied images.
+       */
+      static std::filesystem::path get_default_image_directory();
+
+      /**
+       * Deletes the files of copied images from a folder, except those of
+       * what system clipboard data holds and of later copies.
+       * @param directory The folder keeping the files of copied images.
+       * @param data The system clipboard data, or <code>nullptr</code> if
+       *        there is none.
+       */
+      static void remove_stale_images(
+        const std::filesystem::path& directory, const QMimeData* data);
 
       /** Returns <code>true</code> iff nothing is held. */
       bool is_empty() const;
@@ -67,7 +94,8 @@ namespace Rellu {
 
       /**
        * Replaces what is held with copies of nodes, keeping the clipboard
-       * unchanged if none of them can be copied.
+       * unchanged if none of them can be copied, and deletes the files of
+       * the images this application copied before.
        * @param document The document holding the nodes.
        * @param nodes The nodes to copy.
        * @param measurer The function measuring text.
@@ -97,9 +125,9 @@ namespace Rellu {
 
       /**
        * Replaces what is held with the content of system clipboard data,
-       * unless the data marks what is held: Adobe XD's clipboard format, an
-       * image as an image filled rectangle, or text as a text object, as
-       * Adobe XD pastes them.
+       * unless the data marks what is held: Adobe XD's clipboard format, SVG
+       * markup as shapes, an image as an image filled rectangle, or text as
+       * a text object, as Adobe XD pastes them.
        * @param data The clipboard data.
        * @param measurer The function measuring text.
        * @return <code>true</code> iff something is held afterwards.
@@ -134,6 +162,7 @@ namespace Rellu {
       struct Content;
       class PasteCommand;
       class AppearanceCommand;
+      std::filesystem::path m_directory;
       std::shared_ptr<const Content> m_content;
 
       Clipboard(const Clipboard&) = delete;

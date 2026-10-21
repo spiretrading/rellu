@@ -1309,26 +1309,40 @@ TEST_SUITE("SelectTool") {
   TEST_CASE("area_text_fit") {
     auto document = Document();
     auto transaction = Transaction(document);
-    auto payload = make_text(u"Label");
+    auto payload = make_text(u"Label\nLabel");
     payload.m_frame = AreaFrame(Size(100, 10));
     auto area = transaction.append(
       NodeId(), make_header("Area", make_translation(100, 100)), payload);
+    auto single = make_text(u"Label");
+    single.m_frame = AreaFrame(Size(100, 10));
+    auto line = transaction.append(
+      NodeId(), make_header("Line", make_translation(300, 100)), single);
     transaction.commit();
     document.clear_history();
     auto editor = Editor(document);
     auto tools = ToolManager(editor);
     tools.set_view(Matrix(), 1, Size(1000, 800));
-    editor.get_selection().select(area);
     auto red = make_color(215, 55, 63);
     auto rings = std::vector<Point>();
     auto dots = std::vector<Point>();
-    for(auto& shape : tools.draw().m_shapes) {
-      if(shape.m_stroke == red && shape.m_fill == make_color(255, 255, 255)) {
-        rings.push_back(shape.m_center);
-      } else if(shape.m_fill == red) {
-        dots.push_back(shape.m_center);
+    auto find_overflow = [&] {
+      rings.clear();
+      dots.clear();
+      for(auto& shape : tools.draw().m_shapes) {
+        if(shape.m_stroke == red &&
+            shape.m_fill == make_color(255, 255, 255)) {
+          rings.push_back(shape.m_center);
+        } else if(shape.m_fill == red) {
+          dots.push_back(shape.m_center);
+        }
       }
-    }
+    };
+    editor.get_selection().select(line);
+    find_overflow();
+    REQUIRE(rings.empty());
+    REQUIRE(dots.empty());
+    editor.get_selection().select(area);
+    find_overflow();
     REQUIRE(rings == std::vector{Point(150, 109.5)});
     REQUIRE(dots == std::vector{Point(150, 109.5)});
     hover(tools, Point(150, 111));

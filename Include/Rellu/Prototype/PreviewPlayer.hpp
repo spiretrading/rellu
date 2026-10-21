@@ -57,6 +57,9 @@ namespace Rellu {
     /** How the overlay was shown, played in reverse to hide it. */
     Animation m_animation;
 
+    /** The distance the overlay's content is scrolled up. */
+    double m_scroll = 0;
+
     bool operator ==(const PreviewOverlay&) const = default;
   };
 
@@ -98,8 +101,10 @@ namespace Rellu {
    * innermost first. Transitions slide, push or dissolve between artboards,
    * auto-animate interpolates the matched layers of two artboards or two
    * states, overlays show over the current artboard until a tap outside
-   * them, Scroll To scrolls the current artboard to one of its layers,
-   * previous returns through the history, and component instances
+   * them, Scroll To scrolls the current artboard, or the overlay holding
+   * the layer, to a layer's design position, an overlay by no more than
+   * its height beyond the window's, previous returns through the
+   * history, and component instances
    * switch states, hover states reverting when the pointer leaves. Every
    * destination that does not resolve, and every action the preview does
    * not play, is reported.
@@ -161,6 +166,14 @@ namespace Rellu {
 
       /** Returns the distance the artboard shown is scrolled. */
       double get_scroll() const;
+
+      /**
+       * Sets the height in viewport units of the window showing the
+       * viewport, which bounds how far an overlay scrolls, the viewport's
+       * height until set.
+       * @param height The height.
+       */
+      void set_window_height(double height);
 
       /** Returns the artboards navigated from, the most recent last. */
       std::vector<NodeId> get_history() const;
@@ -348,6 +361,7 @@ namespace Rellu {
       std::vector<Hover> m_hovers;
       std::vector<std::string> m_reports;
       double m_time;
+      std::optional<double> m_window_height;
       std::optional<Point> m_press;
       bool m_is_dragging;
       std::optional<Point> m_drag_point;
@@ -362,6 +376,7 @@ namespace Rellu {
       void report(std::string message);
       Size get_size(const NodeId& artboard) const;
       double get_maximum_scroll(const NodeId& artboard) const;
+      double get_overlay_scroll(const NodeId& overlay) const;
       std::vector<NodeId> get_roots() const;
       std::vector<const Interaction*> get_effective(const NodeId& id) const;
       void collect(const NodeId& root, std::vector<NodeId>& nodes) const;

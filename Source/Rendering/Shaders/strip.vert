@@ -50,7 +50,7 @@ void main() {
   v_gradient = vec4(0.0);
   v_divisor = 1.0;
   if(origin.z >= 0.0) {
-    float base = 5.0 * origin.z;
+    float base = 6.0 * origin.z;
     vec4 first = fetch(base);
     vec4 second = fetch(base + 1.0);
     vec3 point = vec3(position, 1.0);

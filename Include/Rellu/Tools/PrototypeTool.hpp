@@ -8,6 +8,7 @@
 #include <QImage>
 #include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Geometry/Rect.hpp"
+#include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Tools/Tool.hpp"
 
@@ -19,12 +20,16 @@ namespace Rellu {
    * edit context, an artboard's title selects the artboard, a double click
    * enters a group and Shift toggles. A selected node shows a blue wire
    * handle on the middle of its right edge and the wires of its
-   * interactions to their destinations; dragging the handle onto an
+   * interactions to their destinations, the wire of the interaction being
+   * edited thick and the others light; dragging the handle onto an
    * artboard wires the node to it, rewiring its tap transition if it has
    * one and otherwise adding XD's default interaction, which also starts a
    * flow on the node's artboard when the document has none. Each artboard
    * shows a home marker at its top left, blue on the start of a flow, which
-   * a click turns on or off. Each edit is one undoable step.
+   * a click turns on or off. The Scroll To being edited shows a line
+   * across its node's artboard at its layer's top moved by its offset, the
+   * offset shaded, and a handle on the artboard's left edge dragging the
+   * offset. Each edit is one undoable step.
    */
   class PrototypeTool : public Tool {
     public:
@@ -40,6 +45,15 @@ namespace Rellu {
 
       /** The distance in logical units within which an outline is hit. */
       static constexpr auto HIT_TOLERANCE = 3.0;
+
+      /** The size in logical units of a Scroll To's offset handle. */
+      static constexpr auto OFFSET_HANDLE_SIZE = Size(20, 14);
+
+      /** The size in logical units of the offset handle zoomed out. */
+      static constexpr auto SMALL_OFFSET_HANDLE_SIZE = Size(14, 8);
+
+      /** The zoom below which the offset handle is small. */
+      static constexpr auto SMALL_OFFSET_HANDLE_ZOOM = 0.33;
 
       /** Constructs a PrototypeTool. */
       PrototypeTool();
@@ -60,6 +74,14 @@ namespace Rellu {
        */
       std::optional<Rect> get_marker(
         const ToolContext& context, const NodeId& artboard) const;
+
+      /**
+       * Returns the region in logical units of the handle dragging the
+       * offset of the Scroll To being edited, or <code>std::nullopt</code>
+       * if it shows none.
+       * @param context The context worked in.
+       */
+      std::optional<Rect> get_offset_handle(const ToolContext& context) const;
 
       /**
        * Finds the artboard a wire dropped at a point connects to.
@@ -87,6 +109,11 @@ namespace Rellu {
       NodeId m_source;
       std::optional<Point> m_wire_end;
       NodeId m_target;
+      InteractionId m_offset_interaction;
+      double m_initial_offset;
+      double m_offset_start;
+      bool m_is_offset_applied;
+      bool m_is_over_offset;
       mutable std::unordered_map<std::string, std::shared_ptr<const QImage>>
         m_images;
 
@@ -97,6 +124,10 @@ namespace Rellu {
         bool is_flow, double scale) const;
       std::shared_ptr<const QImage> get_label_image(
         const std::string& name, double scale) const;
+      std::shared_ptr<const QImage> get_offset_handle_image(
+        bool is_small, double scale) const;
+      std::shared_ptr<const QImage> get_offset_label_image(
+        const QString& text, double scale) const;
   };
 }
 

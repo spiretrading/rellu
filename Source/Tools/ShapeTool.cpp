@@ -2,6 +2,7 @@
 #include <string>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/CreationCommands.hpp"
+#include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Tools/SelectionBox.hpp"
 #include "Rellu/Tools/ShapeTool.hpp"
@@ -114,7 +115,13 @@ std::unique_ptr<Command> ShapeTool::make_command(ToolContext& context,
       std::min(first.m_y, last.m_y));
     shape.m_geometry = LineShape(first - origin, last - origin);
   } else {
-    auto box = make_drawn_box(start, end, modifiers);
+    auto box = Rect(0, 0, 0, 0);
+    if(m_kind == ShapeKind::POLYGON) {
+      box = make_drawn_box(start, end, modifiers,
+        get_equilateral_aspect(POLYGON_CORNER_COUNT));
+    } else {
+      box = make_drawn_box(start, end, modifiers);
+    }
     if(!(box.m_width > 0) || !(box.m_height > 0)) {
       return nullptr;
     }

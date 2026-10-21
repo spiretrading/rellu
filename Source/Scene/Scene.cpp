@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <utility>
 #include "Rellu/Scene/Scene.hpp"
 
@@ -18,9 +20,12 @@ Scene::Scene(Document& document, double tolerance)
     m_drawing(std::make_shared<Drawing>()),
     m_view(m_drawing),
     m_is_changed(true),
+    m_index_rate(0),
     m_subscription(document.subscribe([this] (const auto& changes) {
       on_change(changes);
-    })) {}
+    })) {
+  m_builder.set_text_deferred(true);
+}
 
 Scene::~Scene() = default;
 
@@ -41,6 +46,30 @@ void Scene::set_tolerance(double tolerance) {
       m_is_changed = true;
     }
   }
+}
+
+const std::optional<Matrix>& Scene::get_text_transform() const {
+  return m_text_transform;
+}
+
+void Scene::set_text_transform(const std::optional<Matrix>& transform) {
+  if(transform == m_text_transform) {
+    return;
+  }
+  m_text_transform = transform;
+  mark_text();
+}
+
+const std::optional<Rect>& Scene::get_text_region() const {
+  return m_text_region;
+}
+
+void Scene::set_text_region(const std::optional<Rect>& region) {
+  if(region == m_text_region) {
+    return;
+  }
+  m_text_region = region;
+  mark_text();
 }
 
 void Scene::set_edited_text(const NodeId& id) {
@@ -65,13 +94,47 @@ bool Scene::is_current() const {
   return !m_is_changed;
 }
 
+bool Scene::is_rasterized() const {
+  return !m_builder.has_pending_text() && m_rasterized.empty();
+}
+
 std::vector<DrawRegion> Scene::update() {
-  return update(nullptr, std::chrono::nanoseconds::max());
+  m_builder.set_text_deferred(false);
+  auto regions = std::vector<DrawRegion>();
+  do {
+    mark_rasterized(std::chrono::nanoseconds::max());
+    auto changed = update(nullptr, std::chrono::nanoseconds::max());
+    regions.insert(regions.end(), changed.begin(), changed.end());
+  } while(m_is_changed || !is_rasterized());
+  m_builder.set_text_deferred(true);
+  return regions;
 }
 
 std::vector<DrawRegion> Scene::update(
     const Rect& region, std::chrono::nanoseconds budget) {
   return update(&region, budget);
+}
+
+std::vector<DrawRegion> Scene::rasterize(
+    const Rect& region, std::chrono::nanoseconds budget) {
+  auto start = std::chrono::steady_clock::now();
+  mark_rasterized(budget / 2);
+  auto remaining = budget - (std::chrono::steady_clock::now() - start);
+  return update(&region, std::max(remaining, std::chrono::nanoseconds(0)));
+}
+
+void Scene::mark_rasterized(std::chrono::nanoseconds budget) {
+  auto start = std::chrono::steady_clock::now();
+  auto ids = m_builder.rasterize_text(budget / 2);
+  m_rasterized.insert(m_rasterized.end(), ids.begin(), ids.end());
+  auto is_started = false;
+  while(!m_rasterized.empty() && (!is_started ||
+      std::chrono::steady_clock::now() - start < budget)) {
+    mark(m_rasterized.front(), false);
+    m_rasterized.pop_front();
+    m_is_changed = true;
+    is_started = true;
+  }
 }
 
 void Scene::on_change(const ChangeSet& changes) {
@@ -153,6 +216,40 @@ void Scene::forget(const NodeId& id, Fragment& fragment) {
   fragment.m_dependencies.m_keys.clear();
 }
 
+const std::optional<Matrix>& Scene::get_text_transform(
+    const Fragment& fragment) const {
+  static const auto NONE = std::optional<Matrix>();
+  if(!m_text_region) {
+    return m_text_transform;
+  } else if(!fragment.m_bounds) {
+    return NONE;
+  }
+  auto region = *m_text_region;
+  if(fragment.m_dependencies.m_device_transform) {
+    region = inflate(region, region.m_width / 4, region.m_height / 4);
+  }
+  if(fragment.m_bounds->intersects(region)) {
+    return m_text_transform;
+  }
+  return NONE;
+}
+
+bool Scene::is_text_stale(const Fragment& fragment) const {
+  auto& dependencies = fragment.m_dependencies;
+  return dependencies.m_is_device_dependent &&
+    (dependencies.m_is_device_mixed ||
+      dependencies.m_device_transform != get_text_transform(fragment));
+}
+
+void Scene::mark_text() {
+  for(auto& entry : m_fragments) {
+    if(!entry.second.m_is_dirty && is_text_stale(entry.second)) {
+      entry.second.m_is_dirty = true;
+      m_is_changed = true;
+    }
+  }
+}
+
 std::vector<DrawRegion> Scene::update(
     const Rect* region, std::chrono::nanoseconds budget) {
   for(auto& id : m_removed) {
@@ -210,15 +307,36 @@ std::vector<DrawRegion> Scene::update(
       });
   }
   auto start = std::chrono::steady_clock::now();
+  auto is_bounded = budget != std::chrono::nanoseconds::max();
+  auto deadline = start;
+  if(is_bounded) {
+    deadline += budget / 2;
+  }
   auto count = std::size_t(0);
+  auto commands = std::size_t(0);
   for(auto& entry : dirty) {
-    if(count != 0 && std::chrono::steady_clock::now() - start >= budget) {
+    if(count != 0 && is_bounded && std::chrono::steady_clock::now() +
+        std::chrono::nanoseconds(static_cast<std::int64_t>(
+          m_index_rate * static_cast<double>(commands))) >= deadline) {
       break;
     }
     auto& id = entry.second;
     auto& fragment = m_fragments.at(id);
     forget(id, fragment);
-    fragment.m_lists = m_builder.build_lists(id, fragment.m_dependencies);
+    m_builder.set_text_transform(get_text_transform(fragment));
+    auto previous = std::move(fragment.m_lists);
+    if(is_bounded) {
+      fragment.m_lists =
+        m_builder.build_lists(id, fragment.m_dependencies, deadline);
+    } else {
+      fragment.m_lists = m_builder.build_lists(id, fragment.m_dependencies);
+    }
+    for(auto& list : fragment.m_lists) {
+      if(std::find(previous.begin(), previous.end(), list) ==
+          previous.end()) {
+        commands += list->size();
+      }
+    }
     fragment.m_is_dirty = false;
     for(auto& key : fragment.m_dependencies.m_keys) {
       m_dependents[key].insert(id);
@@ -229,12 +347,45 @@ std::vector<DrawRegion> Scene::update(
   if(count == 0 && !is_reordered) {
     return {};
   }
+  auto built = std::unordered_set<NodeId>();
+  for(auto i = std::size_t(0); i != count; ++i) {
+    built.insert(dirty[i].second);
+  }
   auto lists = std::vector<std::shared_ptr<const DrawList>>();
   lists.reserve(m_drawing->get_lists().size() + count);
+  auto ranges = std::vector<std::pair<NodeId, std::size_t>>();
   for(auto& id : canvas) {
     auto& fragment = m_fragments.at(id).m_lists;
+    if(built.contains(id)) {
+      ranges.emplace_back(id, lists.size());
+    }
     lists.insert(lists.end(), fragment.begin(), fragment.end());
   }
   m_canvas = canvas;
-  return m_drawing->set_lists(std::move(lists));
+  auto indexing = std::chrono::steady_clock::now();
+  auto regions = m_drawing->set_lists(std::move(lists));
+  if(commands != 0) {
+    auto rate = std::chrono::duration<double, std::nano>(
+      std::chrono::steady_clock::now() - indexing).count() /
+      static_cast<double>(commands);
+    m_index_rate = (m_index_rate + rate) / 2;
+  }
+  for(auto& range : ranges) {
+    auto& fragment = m_fragments.at(range.first);
+    fragment.m_bounds = std::nullopt;
+    for(auto i = range.second; i != range.second + fragment.m_lists.size();
+        ++i) {
+      auto bounds = m_drawing->get_region(i).m_bounds;
+      if(fragment.m_bounds) {
+        fragment.m_bounds = unite(*fragment.m_bounds, bounds);
+      } else {
+        fragment.m_bounds = bounds;
+      }
+    }
+    if(is_text_stale(fragment)) {
+      fragment.m_is_dirty = true;
+      m_is_changed = true;
+    }
+  }
+  return regions;
 }

@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <numbers>
 #include <doctest/doctest.h>
 #include "Rellu/Prototype/InteractionCommands.hpp"
 #include "Rellu/Tools/PrototypeTool.hpp"
@@ -12,6 +14,7 @@ namespace {
     NodeId m_first;
     NodeId m_second;
     NodeId m_button;
+    NodeId m_target;
   };
 
   Boards build_boards(Document& document) {
@@ -27,6 +30,9 @@ namespace {
       transaction.append(NodeId(), make_header("Second"), second);
     boards.m_button = transaction.append(boards.m_first,
       make_header("Button", make_translation(50, 50)),
+      make_rectangle_shape(100, 50));
+    boards.m_target = transaction.append(boards.m_first,
+      make_header("Target", make_translation(0, 200)),
       make_rectangle_shape(100, 50));
     transaction.commit();
     document.clear_history();
@@ -181,8 +187,77 @@ TEST_SUITE("PrototypeTool") {
     }
     REQUIRE(handles == 1);
     REQUIRE(overlay.m_shapes.size() > 24);
+    REQUIRE(std::ranges::any_of(overlay.m_shapes, [] (const auto& shape) {
+      return shape.m_size.m_height == 4;
+    }));
     REQUIRE(get_tool(tools).find_destination(
       tools.get_context(), Point(700, 200)) == setup.m_boards.m_second);
+  }
+
+  TEST_CASE("scroll_offset") {
+    auto setup = Setup();
+    auto& tools = *setup.m_tools;
+    auto& document = setup.m_document;
+    auto& boards = setup.m_boards;
+    auto& editor = *setup.m_editor;
+    auto& target = boards.m_target;
+    auto command = std::make_unique<AddInteractionCommand>(Interaction(
+      NodeId(), boards.m_button, TapTrigger(),
+      ScrollTransition(target, -40, make_default_animation())));
+    auto id = command->get_interaction().m_id;
+    REQUIRE(editor.execute(std::move(command)));
+    auto get_offset = [&] {
+      return std::get<ScrollTransition>(
+        get_interactions(document, boards.m_button).front()->m_action).
+          m_offset;
+    };
+    auto& tool = get_tool(tools);
+    REQUIRE(!tool.get_offset_handle(tools.get_context()));
+    click(tools, Point(200, 175));
+    REQUIRE(tool.get_offset_handle(tools.get_context()) ==
+      Rect(80, 253, 20, 14));
+    auto idle = tools.draw();
+    auto& history = editor.get_history();
+    auto count = history.get_undo_count();
+    tools.press(make_event(Point(90, 260), Qt::LeftButton, Qt::LeftButton));
+    REQUIRE(tools.is_busy());
+    REQUIRE(tools.get_cursor() ==
+      ToolCursor(CursorKind::RESIZE, std::numbers::pi / 2));
+    tools.move(make_event(Point(90, 230), Qt::NoButton, Qt::LeftButton));
+    REQUIRE(get_offset() == -70);
+    tools.move(make_event(Point(90, 200), Qt::NoButton, Qt::LeftButton));
+    REQUIRE(get_offset() == -100);
+    REQUIRE(tools.draw().m_images.size() == idle.m_images.size() + 1);
+    tools.release(make_event(Point(90, 200), Qt::LeftButton, Qt::NoButton));
+    REQUIRE(!tools.is_busy());
+    REQUIRE(history.get_undo_count() == count + 1);
+    REQUIRE(history.get_undo_label() == "Y-Offset");
+    REQUIRE(tool.get_offset_handle(tools.get_context()) ==
+      Rect(80, 193, 20, 14));
+    drag(tools, Point(90, 200), Point(90, -500));
+    REQUIRE(get_offset() == -200);
+    REQUIRE(history.get_undo_count() == count + 2);
+    REQUIRE(editor.undo());
+    REQUIRE(get_offset() == -100);
+    tools.press(make_event(Point(90, 200), Qt::LeftButton, Qt::LeftButton));
+    tools.move(make_event(Point(90, 250), Qt::NoButton, Qt::LeftButton));
+    REQUIRE(get_offset() == -50);
+    REQUIRE(tools.key_press(
+      KeyEvent(Qt::Key_Escape, Qt::KeyboardModifiers(), false)));
+    REQUIRE(get_offset() == -100);
+    tools.release(make_event(Point(90, 250), Qt::LeftButton, Qt::NoButton));
+    REQUIRE(history.get_undo_count() == count + 1);
+    auto other = std::make_unique<AddInteractionCommand>(Interaction(
+      NodeId(), boards.m_button, KeyTrigger(),
+      ArtboardTransition(boards.m_second, make_default_animation())));
+    auto other_id = other->get_interaction().m_id;
+    REQUIRE(editor.execute(std::move(other)));
+    editor.get_selection().select(boards.m_button);
+    REQUIRE(!tool.get_offset_handle(tools.get_context()));
+    editor.get_context().set_interaction(id);
+    REQUIRE(tool.get_offset_handle(tools.get_context()));
+    editor.get_context().set_interaction(other_id);
+    REQUIRE(!tool.get_offset_handle(tools.get_context()));
   }
 
   TEST_CASE("wire_to_empty_interaction") {

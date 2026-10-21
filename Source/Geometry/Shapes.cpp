@@ -243,3 +243,44 @@ Path Rellu::make_polygon(int corner_count, const Rect& bounds,
   return make_polygon(
     make_polygon_vertices(corner_count, bounds, star_ratio), corner_radius);
 }
+
+std::vector<Point> Rellu::make_polygon_points(int corner_count, Size size) {
+  auto points = make_polygon_vertices(
+    corner_count, Rect(0, 0, size.m_width, size.m_height));
+  for(auto& point : points) {
+    point = Point(static_cast<float>(point.m_x),
+      static_cast<float>(point.m_y));
+  }
+  return points;
+}
+
+Size Rellu::get_equilateral_aspect(int corner_count) {
+  if(corner_count < 3) {
+    return Size(1, 1);
+  }
+  auto angle = std::numbers::pi / corner_count;
+  auto side = 2 * std::sin(angle);
+  auto width = 0.0;
+  auto height = 0.0;
+  if(corner_count % 2 == 0) {
+    height = side / std::tan(angle);
+    if(corner_count % 4 == 0) {
+      width = side / std::tan(angle);
+    } else {
+      width = side / std::sin(angle);
+    }
+  } else {
+    height = side / (2 * std::tan(angle / 2));
+    width = side / (2 * std::sin(angle / 2));
+  }
+  auto extent = std::max(width, height);
+  return Size(width / extent, height / extent);
+}
+
+bool Rellu::is_equilateral(int corner_count, Size size) {
+  auto aspect = get_equilateral_aspect(corner_count);
+  auto height = std::trunc(size.m_width * aspect.m_height / aspect.m_width);
+  auto width = std::trunc(size.m_height * aspect.m_width / aspect.m_height);
+  return width * height != 0 && (width == std::trunc(size.m_width) ||
+    height == std::trunc(size.m_height));
+}

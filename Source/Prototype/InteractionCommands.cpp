@@ -294,6 +294,90 @@ double Rellu::clamp_scroll_offset(
   return std::round(std::min(maximum, std::max(minimum, offset)));
 }
 
+Interaction Rellu::change_trigger(Interaction interaction, Trigger trigger) {
+  auto& action = interaction.m_action;
+  auto animation = get_animation(action);
+  if(std::holds_alternative<TimeTrigger>(trigger)) {
+    if(std::holds_alternative<ScrollTransition>(action)) {
+      trigger = TapTrigger();
+    } else if(std::holds_alternative<StateTransition>(action)) {
+      action = ArtboardTransition(NodeId(), animation);
+    }
+  } else if(std::holds_alternative<DragTrigger>(trigger)) {
+    animation.m_transition = Transition::AUTO_ANIMATE;
+    animation.m_easing = Easing::LINEAR;
+    if(auto transition = std::get_if<ArtboardTransition>(&action)) {
+      transition->m_animation = animation;
+    } else if(auto overlay = std::get_if<Overlay>(&action)) {
+      action = ArtboardTransition(overlay->m_destination, animation);
+    } else {
+      action = ArtboardTransition(NodeId(), animation);
+    }
+  } else if(std::holds_alternative<HoverTrigger>(trigger) &&
+      !std::holds_alternative<StateTransition>(action)) {
+    animation.m_transition = Transition::AUTO_ANIMATE;
+    action = StateTransition(StateId(), animation);
+  }
+  interaction.m_trigger = std::move(trigger);
+  return interaction;
+}
+
+InteractionId Rellu::find_default_interaction(
+    const Document& document, const NodeId& owner) {
+  auto interactions = get_interactions(document, owner);
+  if(interactions.empty()) {
+    return InteractionId();
+  }
+  auto get_wire = [] (const Interaction& interaction) {
+    auto& action = interaction.m_action;
+    if(auto transition = std::get_if<ArtboardTransition>(&action)) {
+      return transition->m_destination;
+    } else if(auto overlay = std::get_if<Overlay>(&action)) {
+      return overlay->m_destination;
+    } else if(auto scroll = std::get_if<ScrollTransition>(&action)) {
+      return scroll->m_destination;
+    }
+    return NodeId();
+  };
+  auto wire = get_wire(*interactions.front());
+  for(auto interaction : interactions) {
+    if(get_wire(*interaction) != wire) {
+      return InteractionId();
+    }
+  }
+  auto get_rank = [] (const Trigger& trigger) {
+    if(std::holds_alternative<DragTrigger>(trigger)) {
+      return 1;
+    } else if(std::holds_alternative<HoverTrigger>(trigger)) {
+      return 2;
+    } else if(std::holds_alternative<TimeTrigger>(trigger)) {
+      return 3;
+    } else if(std::holds_alternative<KeyTrigger>(trigger)) {
+      return 4;
+    }
+    return 0;
+  };
+  std::ranges::stable_sort(interactions, [&] (auto left, auto right) {
+    auto& first = left->m_trigger;
+    auto& second = right->m_trigger;
+    if(get_rank(first) != get_rank(second)) {
+      return get_rank(first) < get_rank(second);
+    }
+    if(auto time = std::get_if<TimeTrigger>(&first)) {
+      return time->m_delay < std::get<TimeTrigger>(second).m_delay;
+    }
+    if(auto key = std::get_if<KeyTrigger>(&first)) {
+      auto& other = std::get<KeyTrigger>(second);
+      if(key->m_device != other.m_device) {
+        return key->m_device < other.m_device;
+      }
+      return key->m_keys < other.m_keys;
+    }
+    return false;
+  });
+  return interactions.front()->m_id;
+}
+
 AddInteractionCommand::AddInteractionCommand(Interaction interaction)
     : m_interaction(std::move(interaction)) {
   if(m_interaction.m_id.is_nil()) {
@@ -333,6 +417,40 @@ void SetInteractionCommand::apply(
   if(*current != m_interaction) {
     transaction.replace_interaction(m_interaction);
   }
+}
+
+SetScrollOffsetCommand::SetScrollOffsetCommand(
+  const InteractionId& id, double offset) noexcept
+  : m_id(id),
+    m_offset(offset) {}
+
+std::string SetScrollOffsetCommand::get_label() const {
+  return "Y-Offset";
+}
+
+void SetScrollOffsetCommand::apply(
+    const Document& document, Transaction& transaction) {
+  auto current = find_interaction(document, m_id);
+  if(!current ||
+      !std::holds_alternative<ScrollTransition>(current->m_action)) {
+    throw std::invalid_argument("Not a Scroll To.");
+  }
+  auto changed = *current;
+  auto& scroll = std::get<ScrollTransition>(changed.m_action);
+  if(equals(scroll.m_offset, m_offset)) {
+    return;
+  }
+  scroll.m_offset = m_offset;
+  transaction.replace_interaction(std::move(changed));
+}
+
+bool SetScrollOffsetCommand::merge(const Command& command) {
+  auto offset = dynamic_cast<const SetScrollOffsetCommand*>(&command);
+  if(!offset || offset->m_id != m_id) {
+    return false;
+  }
+  m_offset = offset->m_offset;
+  return true;
 }
 
 RemoveInteractionCommand::RemoveInteractionCommand(

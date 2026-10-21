@@ -41,6 +41,13 @@ namespace Rellu {
 
     /** The unit shown after a numeric value, such as %. */
     QString m_suffix;
+
+    /**
+     * Whether the value shows as it is typed, before it is entered, which
+     * requires the setter to change only the nodes it is given and their
+     * descendants.
+     */
+    bool m_is_live = false;
   };
 
   /** Keeps the editors of properties by property path. */
@@ -76,7 +83,7 @@ namespace Rellu {
    * nodes, and of the orientation, scrolling and grid of artboards. Typed
    * into for several nodes, the position moves them all together, kept on
    * the canvas as keep_on_canvas keeps it, while the width, height and
-   * rotation are given to each node on its own.
+   * rotation are given to each node on its own. The rotation is live.
    * @param measurer The function measuring text.
    */
   PropertyEditors make_standard_property_editors(TextMeasurer measurer);

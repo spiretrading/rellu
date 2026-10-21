@@ -98,6 +98,120 @@ TEST_SUITE("InteractionCommands") {
       std::invalid_argument);
   }
 
+  TEST_CASE("change_trigger") {
+    auto owner = generate_node_id();
+    auto layer = generate_node_id();
+    auto scroll = Interaction(NodeId(), owner, TapTrigger(), ScrollTransition(
+      layer, -20, Animation(Transition::DISSOLVE, Easing::EASE_IN, 0.6)));
+    auto dragged = change_trigger(scroll, DragTrigger());
+    REQUIRE(dragged.m_trigger == Trigger(DragTrigger()));
+    REQUIRE(dragged.m_action == Action(ArtboardTransition(NodeId(),
+      Animation(Transition::AUTO_ANIMATE, Easing::LINEAR, 0.6))));
+    auto hovered = change_trigger(scroll, HoverTrigger());
+    REQUIRE(hovered.m_trigger == Trigger(HoverTrigger()));
+    REQUIRE(hovered.m_action == Action(StateTransition(StateId(),
+      Animation(Transition::AUTO_ANIMATE, Easing::EASE_IN, 0.6))));
+    auto timed = change_trigger(scroll, TimeTrigger(1));
+    REQUIRE(timed.m_trigger == Trigger(TapTrigger()));
+    REQUIRE(timed.m_action == scroll.m_action);
+    auto keyed = change_trigger(scroll, KeyTrigger());
+    REQUIRE(keyed.m_trigger == Trigger(KeyTrigger()));
+    REQUIRE(keyed.m_action == scroll.m_action);
+    auto artboard = generate_node_id();
+    auto transition = Interaction(NodeId(), owner, TapTrigger(),
+      ArtboardTransition(artboard,
+        Animation(Transition::SLIDE_LEFT, Easing::EASE_IN, 0.6), true));
+    REQUIRE(change_trigger(transition, DragTrigger()).m_action ==
+      Action(ArtboardTransition(artboard,
+        Animation(Transition::AUTO_ANIMATE, Easing::LINEAR, 0.6), true)));
+    REQUIRE(change_trigger(transition, HoverTrigger()).m_action ==
+      Action(StateTransition(StateId(),
+        Animation(Transition::AUTO_ANIMATE, Easing::EASE_IN, 0.6))));
+    REQUIRE(change_trigger(transition, KeyTrigger()).m_action ==
+      transition.m_action);
+    auto overlay = Interaction(NodeId(), owner, TapTrigger(), Overlay(artboard,
+      Point(10, 20), Animation(Transition::DISSOLVE, Easing::EASE_OUT, 0.4)));
+    REQUIRE(change_trigger(overlay, DragTrigger()).m_action ==
+      Action(ArtboardTransition(artboard,
+        Animation(Transition::AUTO_ANIMATE, Easing::LINEAR, 0.4))));
+    auto link = Interaction(NodeId(), owner, TapTrigger(), Hyperlink("x"));
+    REQUIRE(change_trigger(link, DragTrigger()).m_action ==
+      Action(ArtboardTransition(NodeId(), Animation(Transition::AUTO_ANIMATE,
+        Easing::LINEAR, DEFAULT_DURATION))));
+    auto state = Interaction(NodeId(), owner, TapTrigger(), StateTransition(
+      generate_node_id(), Animation(Transition::DISSOLVE, Easing::SNAP, 1)));
+    REQUIRE(change_trigger(state, HoverTrigger()).m_action == state.m_action);
+    REQUIRE(change_trigger(state, TimeTrigger(2)).m_action ==
+      Action(ArtboardTransition(NodeId(),
+        Animation(Transition::DISSOLVE, Easing::SNAP, 1))));
+  }
+
+  TEST_CASE("default_interaction_selection") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto second = add_artboard(document, "Second");
+    REQUIRE(find_default_interaction(document, scene.m_rectangle) ==
+      scene.m_interaction);
+    REQUIRE(find_default_interaction(document, scene.m_ellipse).is_nil());
+    auto history = History(document);
+    auto destination = std::get<ArtboardTransition>(get_interactions(
+      document, scene.m_rectangle).front()->m_action).m_destination;
+    auto keys = Interaction(NodeId(), scene.m_rectangle, KeyTrigger("B"),
+      ArtboardTransition(destination, make_default_animation()));
+    auto drag = Interaction(NodeId(), scene.m_rectangle, DragTrigger(),
+      ArtboardTransition(destination, make_default_animation()));
+    auto add = [&] (Interaction interaction) {
+      auto command = std::make_unique<AddInteractionCommand>(
+        std::move(interaction));
+      auto id = command->get_interaction().m_id;
+      REQUIRE(history.execute(std::move(command)));
+      return id;
+    };
+    add(keys);
+    auto dragged = add(drag);
+    REQUIRE(find_default_interaction(document, scene.m_rectangle) ==
+      scene.m_interaction);
+    REQUIRE(history.execute(
+      std::make_unique<RemoveInteractionCommand>(scene.m_interaction)));
+    REQUIRE(find_default_interaction(document, scene.m_rectangle) == dragged);
+    add(Interaction(NodeId(), scene.m_rectangle, TapTrigger(),
+      ArtboardTransition(second, make_default_animation())));
+    REQUIRE(find_default_interaction(document, scene.m_rectangle).is_nil());
+  }
+
+  TEST_CASE("scroll_offset") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto history = History(document);
+    auto interaction = *get_interactions(document, scene.m_rectangle).front();
+    interaction.m_action =
+      ScrollTransition(scene.m_ellipse, 0, make_default_animation());
+    REQUIRE(history.execute(
+      std::make_unique<SetInteractionCommand>(interaction)));
+    auto get_offset = [&] {
+      return std::get<ScrollTransition>(
+        get_interactions(document, scene.m_rectangle).front()->m_action).
+          m_offset;
+    };
+    require_undoable(history,
+      std::make_unique<SetScrollOffsetCommand>(interaction.m_id, -10));
+    REQUIRE(get_offset() == -10);
+    REQUIRE(history.get_undo_label() == "Y-Offset");
+    history.seal();
+    REQUIRE(history.execute(
+      std::make_unique<SetScrollOffsetCommand>(interaction.m_id, -15)));
+    REQUIRE(history.merge(
+      std::make_unique<SetScrollOffsetCommand>(interaction.m_id, -20)));
+    REQUIRE(get_offset() == -20);
+    REQUIRE(history.get_undo_count() == 3);
+    REQUIRE(history.undo());
+    REQUIRE(get_offset() == -10);
+    REQUIRE(!history.execute(
+      std::make_unique<SetScrollOffsetCommand>(interaction.m_id, -10)));
+    REQUIRE_THROWS_AS(history.execute(std::make_unique<SetScrollOffsetCommand>(
+      generate_node_id(), 5)), std::invalid_argument);
+  }
+
   TEST_CASE("remove") {
     auto document = Document();
     auto scene = build_scene(document);

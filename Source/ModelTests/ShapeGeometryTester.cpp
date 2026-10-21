@@ -1,9 +1,34 @@
+#include <cmath>
+#include <cstddef>
 #include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Geometry/SvgPath.hpp"
 #include "Rellu/Model/ShapeGeometry.hpp"
 
 using namespace Rellu;
+
+namespace {
+  bool is_near(const Path& left, const Path& right) {
+    auto& first = left.get_segments();
+    auto& second = right.get_segments();
+    if(first.size() != second.size()) {
+      return false;
+    }
+    for(auto i = std::size_t(0); i != first.size(); ++i) {
+      if(first[i].m_type != second[i].m_type) {
+        return false;
+      }
+      for(auto j = 0; j != 3; ++j) {
+        if(std::abs(first[i].m_points[j].m_x - second[i].m_points[j].m_x) >
+            1e-9 || std::abs(first[i].m_points[j].m_y -
+              second[i].m_points[j].m_y) > 1e-9) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+}
 
 TEST_SUITE("ShapeGeometry") {
   TEST_CASE("rectangle") {
@@ -33,6 +58,23 @@ TEST_SUITE("ShapeGeometry") {
       make_polygon(vertices, 2));
     REQUIRE(to_path(PolygonShape(5, Size(20, 10), 1, 40)) ==
       make_polygon(5, Rect(0, 0, 20, 10), 1, 40));
+  }
+
+  TEST_CASE("loaded_star") {
+    auto bounds = Rect(0, 0, 100, 100);
+    auto star = make_polygon_vertices(5, bounds, 40);
+    auto corners = make_polygon_vertices(5, bounds);
+    auto path = to_path(PolygonShape(5, Size(100, 100), 0, 40, corners));
+    REQUIRE(is_near(path, make_polygon(star, 0)));
+    auto flip = Matrix(1, 0, 0, -1, 0, 100);
+    for(auto& vertex : corners) {
+      vertex = flip.map(vertex);
+    }
+    for(auto& vertex : star) {
+      vertex = flip.map(vertex);
+    }
+    REQUIRE(is_near(to_path(PolygonShape(5, Size(100, 100), 0, 40, corners)),
+      make_polygon(star, 0)));
   }
 
   TEST_CASE("path") {

@@ -22,10 +22,11 @@ namespace Rellu {
   inline constexpr auto PAINT_TABLE_WIDTH = 1024;
 
   /**
-   * The number of paint table texels describing each paint, the last
-   * holding the divisor of a projective paint.
+   * The number of paint table texels describing each paint, the fifth
+   * holding the divisor of a projective paint and the sixth the texture
+   * coordinates that a texture paint's samples are clamped to.
    */
-  inline constexpr auto PAINT_TEXELS = 5;
+  inline constexpr auto PAINT_TEXELS = 6;
 
   /** Lists the kinds of paint a paint table entry describes. */
   enum class PaintKind : unsigned char {
@@ -120,6 +121,15 @@ namespace Rellu {
 
     /** The index of the texture holding a blend's backdrop, or -1. */
     int m_backdrop = -1;
+
+    /** The index of the draw's uniform block, or -1 for the pass's. */
+    int m_uniforms = -1;
+
+    /**
+     * The texels of the target that the draw is confined to, measured from
+     * its top as rendered, or an empty rectangle for the whole target.
+     */
+    QRect m_scissor;
   };
 
   /** A render pass over one target. */

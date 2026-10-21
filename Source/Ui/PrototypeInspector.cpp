@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleValidator>
@@ -22,11 +23,13 @@
 #include <QWheelEvent>
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
+#include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Prototype/InteractionCommands.hpp"
 #include "Rellu/Prototype/KeyNames.hpp"
 #include "Rellu/Prototype/StageDocument.hpp"
 #include "Rellu/Ui/PrototypeInspector.hpp"
 #include "Rellu/Ui/Translation.hpp"
+#include "FieldKeys.hpp"
 #include "HyperlinkStatus.hpp"
 #include "Icons.hpp"
 
@@ -74,8 +77,8 @@ namespace {
   const auto STATE_TRANSITIONS =
     std::to_array({Transition::NONE, Transition::DISSOLVE});
 
-  const auto EASINGS = std::to_array({Easing::EASE_OUT, Easing::EASE_IN,
-    Easing::EASE_IN_OUT, Easing::LINEAR, Easing::SNAP, Easing::WIND_UP,
+  const auto EASINGS = std::to_array({Easing::LINEAR, Easing::EASE_OUT,
+    Easing::EASE_IN, Easing::EASE_IN_OUT, Easing::SNAP, Easing::WIND_UP,
     Easing::BOUNCE});
 
   QString to_label(Transition transition) {
@@ -459,6 +462,204 @@ namespace {
     return NodeId();
   }
 
+  enum class DestinationKind : unsigned char {
+    NONE,
+    STATE,
+    ARTBOARD,
+    LAYER,
+    SEPARATOR
+  };
+
+  struct DestinationTarget {
+    DestinationKind m_kind;
+    NodeId m_id;
+    QString m_label;
+  };
+
+  struct DestinationChoices {
+    std::vector<DestinationTarget> m_targets;
+    NodeId m_current;
+    QString m_placeholder;
+  };
+
+  bool is_state_trigger(const Trigger& trigger) {
+    return std::holds_alternative<TapTrigger>(trigger) ||
+      std::holds_alternative<HoverTrigger>(trigger) ||
+      std::holds_alternative<KeyTrigger>(trigger);
+  }
+
+  int count_artboards(const Document& document) {
+    auto count = 0;
+    for(auto& id : document.get_canvas()) {
+      if(auto node = document.find(id); node && node->get_artboard()) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+  DestinationChoices get_destination_choices(const Document& document,
+      const NodeId& owner, const Interaction& interaction,
+      const StateChoices& states) {
+    auto& action = interaction.m_action;
+    auto& trigger = interaction.m_trigger;
+    auto choices = DestinationChoices();
+    auto scroll = std::get_if<ScrollTransition>(&action);
+    choices.m_current =
+      scroll ? scroll->m_destination : get_destination(action);
+    auto is_transition = std::holds_alternative<ArtboardTransition>(action) ||
+      std::holds_alternative<StateTransition>(action);
+    auto has_states = is_transition;
+    auto has_artboards =
+      is_transition || std::holds_alternative<Overlay>(action);
+    auto has_layers = scroll != nullptr;
+    if(count_artboards(document) == 1) {
+      has_states = true;
+      has_layers = true;
+    }
+    if(!is_state_trigger(trigger)) {
+      has_states = false;
+    }
+    if(std::holds_alternative<HoverTrigger>(trigger)) {
+      has_layers = false;
+      has_artboards = false;
+    }
+    if(std::holds_alternative<DragTrigger>(trigger)) {
+      has_layers = false;
+    }
+    auto state_targets = std::vector<DestinationTarget>();
+    if(has_states && states.m_states.size() > 1) {
+      for(auto& state : states.m_states) {
+        if(state.m_id != states.m_current ||
+            state.m_id == choices.m_current) {
+          state_targets.push_back(DestinationTarget(
+            DestinationKind::STATE, state.m_id, state.m_name));
+        }
+      }
+    }
+    auto artboard_targets = std::vector<DestinationTarget>();
+    if(has_artboards) {
+      auto own = find_artboard(document, owner);
+      auto artboards = std::vector<const Node*>();
+      for(auto& id : document.get_canvas()) {
+        auto node = document.find(id);
+        if(node && node->get_artboard() &&
+            (id != own || id == choices.m_current)) {
+          artboards.push_back(node);
+        }
+      }
+      std::ranges::stable_sort(artboards, [] (auto left, auto right) {
+        auto& first = left->get_artboard()->m_frame;
+        auto& second = right->get_artboard()->m_frame;
+        if(first.m_y != second.m_y) {
+          return first.m_y < second.m_y;
+        }
+        return first.m_x < second.m_x;
+      });
+      for(auto node : artboards) {
+        artboard_targets.push_back(DestinationTarget(DestinationKind::ARTBOARD,
+          node->get_id(), QString::fromStdString(node->m_header.m_name)));
+      }
+    }
+    auto layer_targets = std::vector<DestinationTarget>();
+    if(has_layers) {
+      for(auto& id : get_scroll_destinations(document, owner)) {
+        layer_targets.push_back(DestinationTarget(DestinationKind::LAYER, id,
+          get_layer_label(document.get(id).m_header.m_name)));
+      }
+    }
+    auto& targets = choices.m_targets;
+    if(!choices.m_current.is_nil()) {
+      targets.push_back(DestinationTarget(DestinationKind::NONE, NodeId(),
+        translate("prototype.destination", "None")));
+    }
+    for(auto section : {&state_targets, &artboard_targets, &layer_targets}) {
+      if(section->empty()) {
+        continue;
+      }
+      if(!targets.empty()) {
+        targets.push_back(
+          DestinationTarget(DestinationKind::SEPARATOR, NodeId(), QString()));
+      }
+      targets.insert(targets.end(), section->begin(), section->end());
+    }
+    auto is_state = !state_targets.empty();
+    auto is_artboard = !artboard_targets.empty();
+    auto is_layer = !layer_targets.empty();
+    auto placeholder = [&] {
+      if(is_state && is_artboard && is_layer) {
+        return "(Choose a destination)";
+      } else if(is_state && is_layer) {
+        return "(Choose a state or a layer)";
+      } else if(is_state && is_artboard) {
+        return "(Choose an artboard or a state)";
+      } else if(is_artboard && is_layer) {
+        return "(Choose an artboard or a layer)";
+      } else if(is_artboard) {
+        return "(Choose an artboard)";
+      } else if(is_state) {
+        return "(Choose a state)";
+      } else if(is_layer) {
+        return "(Choose a layer)";
+      }
+      return "(Choose a destination)";
+    }();
+    choices.m_placeholder = translate("prototype", placeholder);
+    return choices;
+  }
+
+  Interaction choose_destination(const Document& document,
+      const Interaction& interaction, const DestinationTarget& target) {
+    auto changed = interaction;
+    auto& action = changed.m_action;
+    auto animation = make_empty_animation();
+    if(auto previous = get_animation(action)) {
+      animation = *previous;
+    }
+    if(target.m_kind == DestinationKind::NONE) {
+      if(auto transition = std::get_if<ArtboardTransition>(&action)) {
+        transition->m_destination = NodeId();
+      } else if(auto state = std::get_if<StateTransition>(&action)) {
+        state->m_state = StateId();
+      } else if(auto overlay = std::get_if<Overlay>(&action)) {
+        overlay->m_destination = NodeId();
+      } else if(auto scroll = std::get_if<ScrollTransition>(&action)) {
+        scroll->m_destination = NodeId();
+      }
+    } else if(target.m_kind == DestinationKind::STATE) {
+      if(animation.m_transition != Transition::NONE &&
+          animation.m_transition != Transition::DISSOLVE &&
+          animation.m_transition != Transition::AUTO_ANIMATE) {
+        animation.m_transition = Transition::AUTO_ANIMATE;
+      }
+      action = StateTransition(target.m_id, animation);
+    } else if(target.m_kind == DestinationKind::ARTBOARD) {
+      if(auto overlay = std::get_if<Overlay>(&action)) {
+        overlay->m_destination = target.m_id;
+      } else {
+        auto preserve = false;
+        if(auto transition = std::get_if<ArtboardTransition>(&action)) {
+          preserve = transition->m_preserve_scroll;
+        }
+        action = ArtboardTransition(target.m_id, animation, preserve);
+      }
+    } else if(target.m_kind == DestinationKind::LAYER) {
+      if(auto scroll = std::get_if<ScrollTransition>(&action)) {
+        scroll->m_destination = target.m_id;
+        scroll->m_offset =
+          clamp_scroll_offset(document, target.m_id, scroll->m_offset);
+      } else {
+        animation.m_transition = Transition::DISSOLVE;
+        action = ScrollTransition(target.m_id, 0, animation);
+        if(!std::holds_alternative<TapTrigger>(changed.m_trigger) &&
+            !std::holds_alternative<KeyTrigger>(changed.m_trigger)) {
+          changed.m_trigger = TapTrigger();
+        }
+      }
+    }
+    return changed;
+  }
+
   struct LinkRange {
     TextRange m_range;
     QString m_text;
@@ -521,7 +722,9 @@ PrototypeInspector::PrototypeInspector(QWidget* parent)
   rebuild();
 }
 
-PrototypeInspector::~PrototypeInspector() = default;
+PrototypeInspector::~PrototypeInspector() {
+  discard_preview();
+}
 
 Editor* PrototypeInspector::get_editor() const {
   return m_editor;
@@ -533,6 +736,7 @@ void PrototypeInspector::set_editor(Editor* editor) {
   if(m_editor != editor) {
     m_last = std::nullopt;
   }
+  discard_preview();
   m_editor = editor;
   m_current = InteractionId();
   if(m_editor) {
@@ -551,6 +755,10 @@ void PrototypeInspector::set_fixed_position_factory(
     FixedPositionFactory factory) {
   m_fixed_position_factory = std::move(factory);
   schedule();
+}
+
+void PrototypeInspector::set_release_handler(ReleaseHandler handler) {
+  m_release_handler = std::move(handler);
 }
 
 const NodeId& PrototypeInspector::get_node() const {
@@ -593,13 +801,24 @@ void PrototypeInspector::schedule() {
   }
   m_is_pending = true;
   QTimer::singleShot(0, this, [this] {
-    if(m_is_pending) {
+    if(!m_is_pending) {
+      return;
+    } else if(m_preview) {
+      m_is_pending = false;
+    } else {
       rebuild();
     }
   });
 }
 
 void PrototypeInspector::rebuild() {
+  m_is_pending = false;
+  if(auto focus = QApplication::focusWidget();
+      focus && m_content && m_content->isAncestorOf(focus)) {
+    focus->clearFocus();
+    release();
+  }
+  discard_preview();
   m_is_pending = false;
   auto scroll = m_scroll->verticalScrollBar()->value();
   m_fields.clear();
@@ -626,10 +845,18 @@ void PrototypeInspector::rebuild() {
       current = interaction;
     }
   }
-  if(!current && !interactions.empty()) {
-    current = interactions.front();
+  if(!current && document && !m_node.is_nil()) {
+    auto chosen = find_default_interaction(*document, m_node);
+    for(auto interaction : interactions) {
+      if(interaction->m_id == chosen) {
+        current = interaction;
+      }
+    }
   }
   m_current = current ? current->m_id : InteractionId();
+  if(m_editor) {
+    m_editor->get_context().set_interaction(m_current);
+  }
   auto add_field = [&] (QVBoxLayout& layout, const std::string& name,
       const QString& label, QWidget* input) {
     m_fields.emplace_back(name, input);
@@ -720,23 +947,23 @@ void PrototypeInspector::rebuild() {
         trigger_kinds.begin()));
     QObject::connect(trigger, &QComboBox::activated, this,
       [this, base, trigger_kinds] (int index) {
-        auto changed = base;
+        auto chosen = Trigger();
         auto kind = trigger_kinds[index];
         if(kind == TAP) {
-          changed.m_trigger = TapTrigger();
+          chosen = TapTrigger();
         } else if(kind == DRAG) {
-          changed.m_trigger = DragTrigger();
+          chosen = DragTrigger();
         } else if(kind == TIME) {
-          changed.m_trigger = TimeTrigger(DEFAULT_DELAY);
+          chosen = TimeTrigger(DEFAULT_DELAY);
         } else if(kind == HOVER) {
-          changed.m_trigger = HoverTrigger();
+          chosen = HoverTrigger();
         } else if(kind == KEYS) {
-          changed.m_trigger = KeyTrigger();
+          chosen = KeyTrigger();
         } else {
           return;
         }
-        if(changed.m_trigger.index() != base.m_trigger.index()) {
-          apply(std::move(changed));
+        if(chosen.index() != base.m_trigger.index()) {
+          apply(change_trigger(base, std::move(chosen)));
         }
       });
     add_field(*section.m_layout, "trigger", "Trigger", trigger);
@@ -824,9 +1051,7 @@ void PrototypeInspector::rebuild() {
           changed.m_action =
             Overlay(destination, Point(0, 0), animation);
         } else if(index == SCROLL_TO) {
-          if(animation.m_transition == Transition::AUTO_ANIMATE) {
-            animation.m_transition = Transition::NONE;
-          }
+          animation.m_transition = Transition::DISSOLVE;
           changed.m_action = ScrollTransition(NodeId(), 0, animation);
         } else if(index == PREVIOUS) {
           changed.m_action = PreviousArtboard();
@@ -856,120 +1081,66 @@ void PrototypeInspector::rebuild() {
     }
     if(std::holds_alternative<ArtboardTransition>(action) ||
         std::holds_alternative<StateTransition>(action) ||
-        std::holds_alternative<Overlay>(action)) {
-      auto is_overlay = std::holds_alternative<Overlay>(action);
-      auto has_states = !is_overlay && states.m_states.size() > 1;
-      auto destination = get_destination(action);
-      auto targets = std::vector<std::pair<NodeId, bool>>();
+        std::holds_alternative<Overlay>(action) ||
+        std::holds_alternative<ScrollTransition>(action)) {
+      auto choices =
+        get_destination_choices(*document, m_node, base, states);
       auto box = new ChoiceBox();
       box->setObjectName("choice_field");
       auto selected = -1;
-      auto add_target = [&] (const NodeId& id, const QString& name,
-          bool is_state) {
-        if(id == destination) {
-          selected = box->count();
-        }
-        box->addItem(name);
-        targets.emplace_back(id, is_state);
-      };
-      if(has_states) {
-        for(auto& state : states.m_states) {
-          if(state.m_id != states.m_current || state.m_id == destination) {
-            add_target(state.m_id, state.m_name, true);
-          }
-        }
-      }
-      auto own = find_artboard(*document, m_node);
-      for(auto& id : document->get_canvas()) {
-        auto node = document->find(id);
-        if(!node || !node->get_artboard() ||
-            (id == own && id != destination)) {
+      for(auto& target : choices.m_targets) {
+        if(target.m_kind == DestinationKind::SEPARATOR) {
+          box->insertSeparator(box->count());
           continue;
         }
-        if(!targets.empty() && targets.back().second) {
-          box->insertSeparator(box->count());
-          targets.emplace_back(NodeId(), false);
+        if(target.m_kind != DestinationKind::NONE &&
+            target.m_id == choices.m_current) {
+          selected = box->count();
         }
-        add_target(id, QString::fromStdString(node->m_header.m_name), false);
+        box->addItem(target.m_label);
       }
-      if(has_states) {
-        box->setPlaceholderText(
-          translate("prototype", "(Choose an artboard or a state)"));
-      } else {
-        box->setPlaceholderText(
-          translate("prototype", "(Choose an artboard)"));
-      }
+      box->setPlaceholderText(choices.m_placeholder);
       box->setCurrentIndex(selected);
       QObject::connect(box, &QComboBox::activated, this,
-        [this, base, targets] (int index) {
+        [this, base, targets = choices.m_targets] (int index) {
           if(index < 0 || index >= static_cast<int>(targets.size()) ||
-              targets[index].first.is_nil()) {
+              targets[index].m_kind == DestinationKind::SEPARATOR) {
             return;
           }
-          auto changed = base;
-          auto& target = targets[index].first;
-          auto animation = *get_animation(changed.m_action);
-          if(auto overlay = std::get_if<Overlay>(&changed.m_action)) {
-            overlay->m_destination = target;
-          } else if(targets[index].second) {
-            changed.m_action = StateTransition(target, animation);
-          } else {
-            auto preserve = false;
-            if(auto transition =
-                std::get_if<ArtboardTransition>(&base.m_action)) {
-              preserve = transition->m_preserve_scroll;
-            }
-            changed.m_action = ArtboardTransition(target, animation, preserve);
+          auto changed = choose_destination(
+            m_editor->get_document(), base, targets[index]);
+          if(changed != base) {
+            apply(std::move(changed));
           }
-          apply(std::move(changed));
         });
       add_field(*section.m_layout, "destination", "Destination", box);
     }
     if(auto scroll = std::get_if<ScrollTransition>(&action)) {
-      auto targets = std::vector<NodeId>();
-      auto box = new ChoiceBox();
-      box->setObjectName("choice_field");
-      auto selected = -1;
-      if(!scroll->m_destination.is_nil()) {
-        box->addItem(translate("prototype.destination", "None"));
-        targets.push_back(NodeId());
-      }
-      for(auto& id : get_scroll_destinations(*document, m_node)) {
-        if(id == scroll->m_destination) {
-          selected = box->count();
-        }
-        box->addItem(get_layer_label(document->get(id).m_header.m_name));
-        targets.push_back(id);
-      }
-      box->setPlaceholderText(translate("prototype", "(Choose a layer)"));
-      box->setCurrentIndex(selected);
-      QObject::connect(box, &QComboBox::activated, this,
-        [this, base, targets] (int index) {
-          if(index < 0 || index >= static_cast<int>(targets.size())) {
-            return;
-          }
-          auto changed = base;
-          auto& transition = std::get<ScrollTransition>(changed.m_action);
-          if(transition.m_destination == targets[index]) {
-            return;
-          }
-          transition.m_destination = targets[index];
-          transition.m_offset = clamp_scroll_offset(m_editor->get_document(),
-            transition.m_destination, transition.m_offset);
-          apply(std::move(changed));
-        });
-      add_field(*section.m_layout, "destination", "Destination", box);
       auto offset = new QLineEdit();
       offset->setObjectName("number_field");
       auto validator = new QDoubleValidator(offset);
       validator->setLocale(QLocale::c());
       offset->setValidator(validator);
       offset->setText(QString::number(scroll->m_offset, 'g', 10));
+      QObject::connect(offset, &QLineEdit::textEdited, this,
+        [this, base] (const QString& text) {
+          auto is_valid = false;
+          auto value = text.toDouble(&is_valid);
+          if(!is_valid) {
+            return;
+          }
+          auto changed = base;
+          auto& transition = std::get<ScrollTransition>(changed.m_action);
+          transition.m_offset = clamp_scroll_offset(
+            m_editor->get_document(), transition.m_destination, value);
+          preview(base, std::move(changed));
+        });
       QObject::connect(offset, &QLineEdit::editingFinished, this,
         [this, base, offset] {
           auto is_valid = false;
           auto value = offset->text().toDouble(&is_valid);
           if(!is_valid) {
+            discard_preview();
             return;
           }
           auto changed = base;
@@ -977,6 +1148,7 @@ void PrototypeInspector::rebuild() {
           value = clamp_scroll_offset(
             m_editor->get_document(), transition.m_destination, value);
           if(value == transition.m_offset) {
+            discard_preview();
             offset->setText(QString::number(value, 'g', 10));
             return;
           }
@@ -1085,18 +1257,15 @@ void PrototypeInspector::rebuild() {
           });
         add_field(*section.m_layout, "animation", "Animation", box);
       }
-      auto easing_count = is_auto ? EASINGS.size() : std::size_t(4);
-      auto easing_index = std::ranges::find(EASINGS, animation->m_easing) -
-        EASINGS.begin();
-      if(static_cast<std::size_t>(easing_index) >= easing_count) {
-        easing_count = EASINGS.size();
-      }
       auto options = std::vector<Option>();
-      for(auto i = std::size_t(0); i != easing_count; ++i) {
-        options.push_back(Option(to_label(EASINGS[i]), true));
+      for(auto choice : EASINGS) {
+        options.push_back(Option(to_label(choice), true));
       }
-      auto easing = make_combo(
-        options, static_cast<int>(easing_index), "prototype.easing");
+      auto easing = make_combo(options, static_cast<int>(
+        std::ranges::find(EASINGS, animation->m_easing) - EASINGS.begin()),
+        "prototype.easing");
+      auto is_timed = animation->m_transition != Transition::NONE;
+      easing->setEnabled(is_timed);
       QObject::connect(easing, &QComboBox::activated, this,
         [this, base] (int index) {
           auto changed = base;
@@ -1104,6 +1273,10 @@ void PrototypeInspector::rebuild() {
           apply(std::move(changed));
         });
       add_field(*section.m_layout, "easing", "Easing", easing);
+    }
+    if(auto animation = get_animation(action);
+        animation && !std::holds_alternative<DragTrigger>(base.m_trigger)) {
+      auto is_timed = animation->m_transition != Transition::NONE;
       auto duration = make_seconds_combo(std::to_array({0.2, 0.3, 0.4, 0.6,
         0.8, 1.0, 2.0}), animation->m_duration);
       auto commit = [this, base, duration] {
@@ -1117,6 +1290,7 @@ void PrototypeInspector::rebuild() {
         animation->m_duration = to_stored_seconds(*seconds);
         apply(std::move(changed));
       };
+      duration->setEnabled(is_timed);
       QObject::connect(duration, &QComboBox::activated, this, commit);
       QObject::connect(
         duration->lineEdit(), &QLineEdit::editingFinished, this, commit);
@@ -1270,6 +1444,7 @@ void PrototypeInspector::rebuild() {
     }
   }
   m_layout->addStretch(1);
+  bind_keys();
   m_scroll->setWidget(m_content);
   m_scroll->verticalScrollBar()->setValue(scroll);
 }
@@ -1278,6 +1453,7 @@ void PrototypeInspector::apply(Interaction interaction) {
   if(!m_editor) {
     return;
   }
+  discard_preview();
   if(!std::holds_alternative<PreviousArtboard>(interaction.m_action)) {
     m_last = interaction;
   }
@@ -1286,4 +1462,68 @@ void PrototypeInspector::apply(Interaction interaction) {
       std::make_unique<SetInteractionCommand>(std::move(interaction)));
   } catch(const std::invalid_argument&) {}
   schedule();
+}
+
+void PrototypeInspector::preview(
+    const Interaction& base, Interaction interaction) {
+  if(!m_editor) {
+    return;
+  }
+  if(!m_preview) {
+    m_preview = base;
+  }
+  auto& document = m_editor->get_document();
+  try {
+    auto transaction = Transaction(document);
+    SetInteractionCommand(std::move(interaction)).apply(document, transaction);
+    transaction.commit_unrecorded();
+  } catch(const std::invalid_argument&) {}
+}
+
+void PrototypeInspector::discard_preview() {
+  if(!m_preview) {
+    return;
+  }
+  auto base = std::move(*m_preview);
+  m_preview = std::nullopt;
+  if(m_editor) {
+    auto& document = m_editor->get_document();
+    try {
+      auto transaction = Transaction(document);
+      SetInteractionCommand(std::move(base)).apply(document, transaction);
+      transaction.commit_unrecorded();
+    } catch(const std::invalid_argument&) {}
+  }
+  schedule();
+}
+
+void PrototypeInspector::release() {
+  if(m_release_handler) {
+    m_release_handler();
+  }
+}
+
+void PrototypeInspector::bind_keys() {
+  for(auto& field : m_fields) {
+    auto input = field.second;
+    if(!input || dynamic_cast<KeyField*>(input)) {
+      continue;
+    }
+    auto line = qobject_cast<QLineEdit*>(input);
+    if(auto box = qobject_cast<QComboBox*>(input)) {
+      QObject::connect(box, &QComboBox::activated, this, [this, box] {
+        box->clearFocus();
+        release();
+      });
+      line = box->lineEdit();
+    }
+    if(line) {
+      bind_field_keys(*input, [this, line, text = line->text()] {
+        discard_preview();
+        line->setText(text);
+      }, [this] {
+        release();
+      });
+    }
+  }
 }

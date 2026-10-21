@@ -22,14 +22,31 @@ layout(binding = 4) uniform sampler2D image;
 
 const int MAXIMUM_TAPS = 32;
 
+vec4 fetch(vec2 coordinates) {
+  vec2 grid = 256.0 / source_rect.zw;
+  coordinates = clamp(coordinates, bounds.xy, bounds.zw);
+  return textureLod(image, floor(coordinates * grid + 0.5) / grid, 0.0);
+}
+
 void main() {
   vec2 coordinates = (v_position - source_rect.xy) * source_rect.zw;
   if(options.z > 0.5) {
     coordinates.y = 1.0 - coordinates.y;
   }
   vec4 color = vec4(0.0);
-  if(blur.w < 0.5) {
-    color = textureLod(image, clamp(coordinates, bounds.xy, bounds.zw), 0.0);
+  if(blur.z < 0.0) {
+    float total = 0.0;
+    for(int i = -MAXIMUM_TAPS; i <= MAXIMUM_TAPS; ++i) {
+      float tap = float(i);
+      if(tap < blur.z + 0.5 || tap > blur.w) {
+        continue;
+      }
+      color += fetch(coordinates + tap * blur.xy);
+      total += 1.0;
+    }
+    color /= total;
+  } else if(blur.w < 0.5) {
+    color = fetch(coordinates);
   } else {
     float total = 0.0;
     float scale = -0.5 / (blur.z * blur.z);
@@ -39,8 +56,7 @@ void main() {
         continue;
       }
       float weight = exp(tap * tap * scale);
-      color += weight * textureLod(image,
-        clamp(coordinates + tap * blur.xy, bounds.xy, bounds.zw), 0.0);
+      color += weight * fetch(coordinates + tap * blur.xy);
       total += weight;
     }
     color /= total;

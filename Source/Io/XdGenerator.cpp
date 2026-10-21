@@ -8,6 +8,7 @@
 #include <utility>
 #include <variant>
 #include <QString>
+#include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Io/XdGenerator.hpp"
 #include "Rellu/Io/XdValues.hpp"
 #include "Rellu/Localization/Localization.hpp"
@@ -296,6 +297,14 @@ namespace {
     } else if(auto polygon = std::get_if<PolygonShape>(&geometry)) {
       json.set("type", "polygon");
       json.set("uxdesign#cornerCount", polygon->m_corner_count);
+      auto& points = json.set("points", XdValue::make_array());
+      auto vertices = polygon->m_vertices.empty() ? make_polygon_points(
+        polygon->m_corner_count, polygon->m_size) : polygon->m_vertices;
+      for(auto& vertex : vertices) {
+        auto& point = points.append(XdValue::make_object());
+        point.set("x", vertex.m_x);
+        point.set("y", vertex.m_y);
+      }
       json.set("uxdesign#width", polygon->m_size.m_width);
       json.set("uxdesign#height", polygon->m_size.m_height);
       if(polygon->m_corner_radius != 0) {
@@ -303,14 +312,6 @@ namespace {
       }
       if(polygon->m_star_ratio != 100) {
         json.set("uxdesign#starRatio", polygon->m_star_ratio);
-      }
-      if(!polygon->m_vertices.empty()) {
-        auto& points = json.set("points", XdValue::make_array());
-        for(auto& vertex : polygon->m_vertices) {
-          auto& point = points.append(XdValue::make_object());
-          point.set("x", vertex.m_x);
-          point.set("y", vertex.m_y);
-        }
       }
     } else if(auto path = std::get_if<PathShape>(&geometry)) {
       json.set("type", "path");

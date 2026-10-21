@@ -118,6 +118,20 @@ TEST_SUITE("ViewFit") {
       Rect(0, 0, 1600, 960));
   }
 
+  TEST_CASE("fit_window") {
+    auto area = Rect(0, 0, 3840, 2088);
+    REQUIRE(fit_window(Rect(770, 334, 2150, 1330), area) ==
+      Rect(770, 334, 2150, 1330));
+    REQUIRE(fit_window(Rect(1404, 654, 2400, 1440), area) ==
+      Rect(1404, 648, 2400, 1440));
+    REQUIRE(fit_window(Rect(1500, 700, 2400, 1440), area) ==
+      Rect(1440, 648, 2400, 1440));
+    REQUIRE(fit_window(Rect(-30, -5, 2400, 1440), area) ==
+      Rect(0, 0, 2400, 1440));
+    REQUIRE(fit_window(Rect(100, 100, 4000, 2200), area) == area);
+    REQUIRE(fit_window(Rect(-3000, 100, 2400, 1440),
+      Rect(-2560, 0, 2560, 1400)) == Rect(-2560, 0, 2400, 1400));
+  }
   TEST_CASE("zoom_limits") {
     REQUIRE(fit_view(Rect(0, 0, 0.001, 0.001), Size(1000, 800)).m_zoom ==
       MAXIMUM_ZOOM);

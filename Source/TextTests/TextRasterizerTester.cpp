@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <doctest/doctest.h>
 #include "Rellu/Text/TextRasterizer.hpp"
@@ -153,6 +154,44 @@ TEST_SUITE("TextRasterizer") {
     REQUIRE(rasters[0].m_color == Color(0, 0, 0, 1));
     REQUIRE(rasters[1].m_color == Color(1, 0, 0, 1));
     REQUIRE(rasters[2].m_color == Color(1, 0, 0, 1));
+  }
+
+  TEST_CASE("capacity") {
+    REQUIRE(TextRasterizer().get_capacity() ==
+      TextRasterizer::DEFAULT_CAPACITY);
+    auto layout = make_layout(u"Hello", Color(0, 0, 0, 1));
+    auto unbounded = TextRasterizer();
+    auto expected = unbounded.rasterize(layout, make_scale(8, 8));
+    REQUIRE(unbounded.get_cache_size() > 0);
+    auto bounded = TextRasterizer(GlyphRasterization::DIRECT_WRITE, 2048);
+    REQUIRE(bounded.get_capacity() == 2048);
+    for(auto i = 0; i != 3; ++i) {
+      auto rasters = bounded.rasterize(layout, make_scale(8, 8));
+      REQUIRE(bounded.get_cache_size() <= 2048);
+      REQUIRE(rasters.size() == expected.size());
+      REQUIRE(rasters[0].m_mask.m_coverage == expected[0].m_mask.m_coverage);
+    }
+    REQUIRE(!bounded.rasterize(layout, Matrix()).empty());
+    REQUIRE(bounded.get_cache_size() > 0);
+    REQUIRE(bounded.get_cache_size() <= 2048);
+  }
+
+  TEST_CASE("prepare") {
+    auto layout = make_layout(u"Hi", Color(0, 0, 0, 1));
+    auto rasterizer = TextRasterizer();
+    REQUIRE(!rasterizer.prepare(layout, make_scale(3, 3),
+      std::chrono::steady_clock::time_point::min()));
+    auto size = rasterizer.get_cache_size();
+    REQUIRE(size > 0);
+    REQUIRE(rasterizer.prepare(layout, make_scale(3, 3),
+      std::chrono::steady_clock::time_point::max()));
+    REQUIRE(rasterizer.get_cache_size() > size);
+    size = rasterizer.get_cache_size();
+    auto rasters = rasterizer.rasterize(layout, make_scale(3, 3));
+    REQUIRE(rasterizer.get_cache_size() == size);
+    auto expected = TextRasterizer().rasterize(layout, make_scale(3, 3));
+    REQUIRE(rasters.size() == expected.size());
+    REQUIRE(rasters[0].m_mask.m_coverage == expected[0].m_mask.m_coverage);
   }
 
   TEST_CASE("free_type") {

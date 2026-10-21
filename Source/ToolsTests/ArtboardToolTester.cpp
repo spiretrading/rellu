@@ -66,7 +66,7 @@ TEST_SUITE("ArtboardTool") {
     REQUIRE(tools.get_tool_name() == "artboard");
     drag(tools, Point(600, 600), Point(700, 650), Qt::ShiftModifier);
     auto& square = document.get(editor.get_selection().get_primary());
-    REQUIRE(square.get_artboard()->m_frame == Rect(600, 600, 100, 100));
+    REQUIRE(square.get_artboard()->m_frame == Rect(600, 600, 50, 50));
     REQUIRE(square.m_header.m_name == "Artboard \xE2\x80\x93 2");
   }
 

@@ -79,8 +79,10 @@ namespace Rellu {
      * The alternating lengths of dashes and gaps, repeated twice if odd in
      * count, laid out from the start of each subpath to its end, which for
      * a closed subpath is its start, so that its last dash ends there with
-     * a cap rather than joining its first; empty, negative, non-finite or
-     * all zero lengths draw a solid stroke.
+     * a cap rather than joining its first, unless the lengths are not all
+     * equal and that dash ends exactly there; a pattern ending exactly there
+     * with a gap still joins the first dash to the closing segment; empty,
+     * negative, non-finite or all zero lengths draw a solid stroke.
      */
     std::vector<double> m_dashes;
 

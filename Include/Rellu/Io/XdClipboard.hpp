@@ -1,5 +1,6 @@
 #ifndef RELLU_IO_XD_CLIPBOARD_HPP
 #define RELLU_IO_XD_CLIPBOARD_HPP
+#include <filesystem>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -49,16 +50,19 @@ namespace Rellu {
   /**
    * Writes nodes in Adobe XD's clipboard format: UTF-16 JSON, terminated by
    * a null character, listing the nodes in document coordinates with the
-   * resources they use and the region they cover.
+   * definitions of the components they use and the region they cover.
    * @param document The document holding the nodes.
    * @param items The nodes in z order, none a descendant of another.
    * @param bounds The region in document coordinates the nodes cover.
    * @param layout The function providing the stored layout of text.
+   * @param directory The folder receiving a file for each image the nodes
+   *        use, which the data refers to, or empty to refer to no image.
    * @return The clipboard data.
    */
   QByteArray write_xd_clipboard(const Document& document,
     const std::vector<XdClipboardItem>& items, const Rect& bounds,
-    const XdTextLayout& layout = {});
+    const XdTextLayout& layout = {},
+    const std::filesystem::path& directory = {});
 
   /**
    * Reads data in Adobe XD's clipboard format into a document, which

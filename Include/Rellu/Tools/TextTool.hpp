@@ -204,7 +204,6 @@ namespace Rellu {
         std::vector<LineGeometry> m_lines;
         Rect m_bounds = Rect(0, 0, 0, 0);
         std::optional<std::vector<TextFill>> m_fills;
-        std::optional<Rect> m_clip;
       };
       struct Highlight {
         NodeId m_id;

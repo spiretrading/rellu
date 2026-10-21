@@ -27,6 +27,7 @@ layout(binding = 5) uniform sampler2D backdrop;
 vec4 paint;
 vec4 extra;
 vec4 gradient;
+vec4 limits;
 
 vec4 fetch(float index) {
   float row = floor(index / sizes.z);
@@ -51,10 +52,15 @@ void load_paint() {
   paint = v_paint;
   extra = v_extra;
   gradient = v_gradient;
-  if(!is_exact() || v_index < -0.5) {
+  limits = vec4(0.0);
+  if(v_index < -0.5) {
     return;
   }
-  float base = 5.0 * floor(v_index + 0.5);
+  float base = 6.0 * floor(v_index + 0.5);
+  limits = fetch(base + 5.0);
+  if(!is_exact()) {
+    return;
+  }
   vec4 first = fetch(base);
   vec4 second = fetch(base + 1.0);
   vec4 third = fetch(base + 2.0);
@@ -198,7 +204,11 @@ vec3 blend(vec3 b, vec3 s, float mode) {
 
 void main() {
   load_paint();
-  vec4 s = textureGrad(source, paint.xy, gradient.xy, gradient.zw);
+  vec2 point = paint.xy;
+  if(limits.z > limits.x) {
+    point = clamp(point, limits.xy, limits.zw);
+  }
+  vec4 s = textureGrad(source, point, gradient.xy, gradient.zw);
   vec4 b = textureLod(backdrop, extra.xy, 0.0);
   if(paint.w > 15.5) {
     vec4 shadow = v_color * s.a * b.a;

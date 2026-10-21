@@ -74,6 +74,14 @@ namespace Rellu {
    * @param area The area in logical pixels.
    */
   Rect center_window(Size size, const Rect& area);
+
+  /**
+   * Returns a window's bounds moved, and shrunk where larger than an area,
+   * to lie within the area.
+   * @param bounds The window's bounds.
+   * @param area The area.
+   */
+  Rect fit_window(const Rect& bounds, const Rect& area);
 }
 
 #endif

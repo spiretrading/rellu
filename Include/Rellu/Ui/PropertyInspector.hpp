@@ -13,6 +13,7 @@
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Model/ChangeSet.hpp"
 #include "Rellu/Model/Document.hpp"
+#include "Rellu/Model/Node.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Model/Subscription.hpp"
 #include "Rellu/Ui/ActionRegistry.hpp"
@@ -35,10 +36,20 @@ namespace Rellu {
    * locked. The text section of text being edited in place follows its caret
    * and selection. Its swatches open Adobe XD's color picker, whose edits
    * merge into one undoable step until it closes. Its buttons trigger the
-   * actions of an ActionRegistry.
+   * actions of an ActionRegistry. As in Adobe XD, Enter and Tab apply a
+   * field's value and Escape restores it, each giving up the keyboard focus,
+   * and a property whose editor is live shows as it is typed without
+   * recording a step, Escape restoring its value from before and entering
+   * it recording one step from the value before.
    */
   class PropertyInspector : public QWidget {
     public:
+
+      /**
+       * The type of function called when a field gives up the keyboard
+       * focus after Enter, Tab or Escape, or as the fields are rebuilt.
+       */
+      using ReleaseHandler = std::function<void ()>;
 
       /** The width of the inspector in device independent pixels. */
       static constexpr auto WIDTH = 290;
@@ -188,6 +199,13 @@ namespace Rellu {
        */
       bool is_locked() const;
 
+      /**
+       * Sets the function called when a field gives up the keyboard focus
+       * after Enter, Tab or Escape, or as the fields are rebuilt.
+       * @param handler The function to call.
+       */
+      void set_release_handler(ReleaseHandler handler);
+
     private:
       struct Field;
       Document* m_document;
@@ -209,6 +227,9 @@ namespace Rellu {
       std::vector<std::pair<std::string, QWidget*>> m_sections;
       std::vector<std::unique_ptr<Field>> m_fields;
       std::string m_edited_path;
+      std::string m_preview_path;
+      std::vector<Node> m_preview_nodes;
+      ReleaseHandler m_release_handler;
       std::string m_picked_path;
       int m_generation;
       bool m_is_committing;
@@ -232,6 +253,11 @@ namespace Rellu {
       void commit(
         int generation, const std::string& path, const PropertyValue& value);
       void finish(int generation, const std::string& path);
+      void preview(
+        int generation, const std::string& path, const PropertyValue& value);
+      void cancel(int generation, const std::string& path);
+      void discard_preview();
+      void release();
       void apply(const std::string& path, const PropertyValue& value);
       void seal(const std::string& path);
       void open_picker(const QRect& anchor, const std::string& path);

@@ -32,6 +32,7 @@ namespace {
   constexpr auto WHEEL_ZOOM = 1.0015;
   constexpr auto SCENE_BUDGET = std::chrono::milliseconds(8);
   constexpr auto PREPARATION_BUDGET = std::chrono::milliseconds(8);
+  constexpr auto TEXT_SETTLE_TIME = std::chrono::milliseconds(150);
   constexpr auto TITLE_PADDING = 1;
   constexpr auto TITLE_SLACK = 12.0;
   const auto TITLE_STYLE = QString(
@@ -55,6 +56,13 @@ namespace {
         QLineEdit::keyPressEvent(event);
       }
   };
+
+  bool is_moving(const ChangeSet& changes) {
+    return std::any_of(changes.m_modified.begin(), changes.m_modified.end(),
+      [] (const auto& change) {
+        return change.m_mask == ChangeMask::TRANSFORM;
+      });
+  }
 
   double get_level(double zoom) {
     return std::exp2(std::ceil(std::log2(zoom)));
@@ -90,6 +98,8 @@ DocumentView::DocumentView(QWidget* parent)
       m_zoom(1),
       m_offset(0, 0),
       m_level(1),
+      m_text_scale(0),
+      m_is_text_settled(false),
       m_is_fitting(false),
       m_is_fit_held(false),
       m_is_space_pressed(false),
@@ -109,6 +119,15 @@ DocumentView::DocumentView(QWidget* parent)
     tool->blink();
     update();
   });
+  m_text_timer.setSingleShot(true);
+  m_text_timer.setInterval(TEXT_SETTLE_TIME);
+  QObject::connect(&m_text_timer, &QTimer::timeout, this, [this] {
+    if(m_scene) {
+      m_is_text_settled = true;
+      m_scene->set_text_transform(make_scale(m_text_scale, m_text_scale));
+      update();
+    }
+  });
   m_preparation.setInterval(0);
   QObject::connect(&m_preparation, &QTimer::timeout, this, [this] {
     if(!m_tools || m_tools->get_hit_tester().prepare(PREPARATION_BUDGET)) {
@@ -120,6 +139,7 @@ DocumentView::DocumentView(QWidget* parent)
 DocumentView::~DocumentView() {
   finish_rename(false);
   m_preparation.stop();
+  m_text_timer.stop();
   m_caret_timer.stop();
   m_text_subscription.release();
   m_tool_subscription.release();
@@ -145,10 +165,15 @@ void DocumentView::set_document(std::unique_ptr<Document> document) {
   m_document = std::move(document);
   if(m_document) {
     m_level = 1;
+    m_text_scale = 0;
     m_scene = std::make_unique<Scene>(*m_document, StripRasterizer::TOLERANCE);
     m_scene->update();
     get_renderer().set_drawing(m_scene->get_drawing());
-    m_subscription = m_document->subscribe([this] (const auto&) {
+    m_subscription = m_document->subscribe([this] (const auto& changes) {
+      if(is_moving(changes)) {
+        m_is_text_settled = false;
+        m_text_timer.start();
+      }
       update();
     });
   }
@@ -229,11 +254,17 @@ void DocumentView::render(QRhiCommandBuffer* buffer) {
   if(!m_is_fit_held) {
     m_is_fitting = false;
   }
-  if(m_scene && !m_scene->is_current()) {
+  update_text();
+  if(m_scene) {
     auto region = Rect(-m_offset.m_x / m_zoom, -m_offset.m_y / m_zoom,
       width() / m_zoom, height() / m_zoom);
-    get_renderer().invalidate(m_scene->update(region, SCENE_BUDGET));
     if(!m_scene->is_current()) {
+      get_renderer().invalidate(m_scene->update(region, SCENE_BUDGET));
+    } else if(m_is_text_settled && !m_scene->is_rasterized()) {
+      get_renderer().invalidate(m_scene->rasterize(region, SCENE_BUDGET));
+    }
+    if(!m_scene->is_current() ||
+        (m_is_text_settled && !m_scene->is_rasterized())) {
       update();
     }
   }
@@ -506,8 +537,26 @@ void DocumentView::update_view() {
   if(m_tools) {
     m_tools->set_view(view, devicePixelRatio(), Size(width(), height()));
   }
+  update_text();
   place_title_editor();
   update();
+}
+
+void DocumentView::update_text() {
+  if(!m_scene) {
+    return;
+  }
+  auto scale = m_zoom * devicePixelRatio();
+  if(scale != m_text_scale) {
+    m_text_scale = scale;
+    m_is_text_settled = false;
+    m_scene->set_text_transform(std::nullopt);
+    m_text_timer.start();
+  }
+  auto region = Rect(-m_offset.m_x / m_zoom, -m_offset.m_y / m_zoom,
+    width() / m_zoom, height() / m_zoom);
+  m_scene->set_text_region(
+    inflate(region, region.m_width, region.m_height));
 }
 
 void DocumentView::update_cursor() {

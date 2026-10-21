@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 #include "Rellu/Io/XdImporters.hpp"
+#include "Rellu/Io/XdValue.hpp"
 #include "Rellu/Io/XdValues.hpp"
 
 using namespace Qt::StringLiterals;
@@ -305,6 +306,34 @@ namespace {
     }
   }
 
+  std::vector<QString> get_owner_order(
+      XdImport& import, const QJsonObject& owners) {
+    auto keys = std::vector<QString>();
+    auto seen = std::unordered_set<QString>();
+    auto& package = import.get_package();
+    if(package.contains(XdPackage::INTERACTIONS)) {
+      auto text = package.read(XdPackage::INTERACTIONS);
+      if(auto root = parse_xd_value(std::string_view(
+          text.constData(), static_cast<std::size_t>(text.size())))) {
+        if(auto list = root->find("interactions"); list && list->is_object()) {
+          for(auto& member : list->get_members()) {
+            auto key = QString::fromStdString(member.m_key);
+            if(owners.contains(key) && seen.insert(key).second) {
+              keys.push_back(std::move(key));
+            }
+          }
+        }
+      }
+    }
+    for(auto owner = owners.constBegin(); owner != owners.constEnd();
+        ++owner) {
+      if(seen.insert(owner.key()).second) {
+        keys.push_back(owner.key());
+      }
+    }
+    return keys;
+  }
+
   void import_table(XdImport& import, PrototypeTable& table,
       std::unordered_map<InteractionId, Interaction>& added) {
     auto& root = import.get_interactions();
@@ -313,13 +342,12 @@ namespace {
     if(!owners) {
       return;
     }
-    auto& json = owners->get_json();
-    for(auto owner = json.constBegin(); owner != json.constEnd(); ++owner) {
-      auto list = owners->get_array(owner.key());
+    for(auto& key : get_owner_order(import, owners->get_json())) {
+      auto list = owners->get_array(key);
       if(!list) {
         continue;
       }
-      auto owner_id = to_node_id(owner.key());
+      auto owner_id = to_node_id(key);
       for(auto i = std::size_t(0); i != list->get_size(); ++i) {
         auto entry = list->get_object(i);
         if(!entry) {

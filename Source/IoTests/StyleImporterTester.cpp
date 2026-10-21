@@ -211,7 +211,10 @@ TEST_SUITE("StyleImporter") {
       {"dx": 0, "dy": 3, "r": 6, "color": {"mode": "RGB", "value": {"r": 0,
       "g": 0, "b": 0}, "alpha": 0.25}}, {"dx": 1, "dy": 1, "r": 0,
       "color": {"mode": "RGB", "value": {"r": 255, "g": 255, "b": 255}}}]},
-      "visible": false}, {"type": "uxdesign#innerShadow", "global": true,
+      "visible": false}, {"type": "dropShadow", "global": true, "params": {
+      "dropShadows": [{"dx": 4, "dy": 4, "r": 4, "color": {"mode": "RGB",
+      "value": {"r": 0, "g": 0, "b": 0}}}]}},
+      {"type": "uxdesign#innerShadow", "global": true,
       "params": {"innerShadows": [{"dx": 2, "dy": 2, "r": 3, "color": {
       "mode": "RGB", "value": {"r": 0, "g": 0, "b": 0}}}]}},
       {"type": "uxdesign#blur", "global": true, "params": {"blurAmount": 10,
@@ -219,14 +222,12 @@ TEST_SUITE("StyleImporter") {
       "backgroundEffect": true}}]})"), document);
     REQUIRE(report.m_unconsumed.empty());
     auto& effects = get_style(document).m_effects;
-    REQUIRE(effects.size() == 4);
+    REQUIRE(effects.size() == 3);
     REQUIRE(effects[0] == Effect(DropShadow(Point(0, 3), 6,
       Color(0, 0, 0, 0.25), false)));
-    REQUIRE(effects[1] == Effect(DropShadow(Point(1, 1), 0,
-      Color(1, 1, 1, 1), false)));
-    REQUIRE(effects[2] == Effect(InnerShadow(Point(2, 2), 3,
+    REQUIRE(effects[1] == Effect(InnerShadow(Point(2, 2), 3,
       Color(0, 0, 0, 1), true)));
-    REQUIRE(effects[3] == Effect(Blur(10, -5, 0.4, true, true)));
+    REQUIRE(effects[2] == Effect(Blur(10, -5, 0.4, true, true)));
   }
 
   TEST_CASE("unsupported_filter") {

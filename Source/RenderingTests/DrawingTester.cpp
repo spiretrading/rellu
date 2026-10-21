@@ -107,6 +107,16 @@ TEST_SUITE("Drawing") {
     REQUIRE(drawing.get_region(0).m_bounds.contains(Rect(70, 50, 10, 10)));
   }
 
+  TEST_CASE("bounds_hint") {
+    auto fill = FillCommand(share(make_rectangle(Rect(0, 0, 10, 10))),
+      make_scale(2, 2), SolidPaint(make_color(255, 0, 0)), std::nullopt,
+      std::nullopt, Rect(1, 2, 3, 4));
+    auto drawing = Drawing();
+    drawing.set_lists({make_list({fill})});
+    REQUIRE(drawing.get_bounds() == Rect(2, 4, 6, 8));
+    REQUIRE(drawing.get_region(0).m_bounds == Rect(2, 4, 6, 8));
+  }
+
   TEST_CASE("pixels") {
     auto region = DrawRegion(Rect(1.5, 2.25, 3, 4), 2);
     REQUIRE(to_pixels(region, make_translation(1, 0) * make_scale(2, 2)) ==

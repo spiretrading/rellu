@@ -367,6 +367,62 @@ TEST_SUITE("XdWriter") {
     REQUIRE(join(find_differences(imported, rewritten)) == "");
   }
 
+  TEST_CASE("polygon_points") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 600, 200);
+    auto board =
+      transaction.append(NodeId(), make_header("Artboard"), artboard);
+    auto ids = std::vector<NodeId>();
+    for(auto count : {3, 5, 6, 8}) {
+      auto shape = Shape();
+      shape.m_geometry = PolygonShape(count, Size(100, 100));
+      ids.push_back(transaction.append(board, make_header("Polygon"), shape));
+    }
+    transaction.commit();
+    auto package = XdPackage(write_xd(document));
+    auto expected = std::vector<std::vector<Point>>({
+      {Point(50, 0), Point(100, 100), Point(0, 100)},
+      {Point(50, 0), Point(100, 38.197), Point(80.902, 100),
+        Point(19.098, 100), Point(0, 38.197)},
+      {Point(75, 0), Point(100, 50), Point(75, 100), Point(25, 100),
+        Point(0, 50), Point(25, 0)},
+      {Point(70.711, 0), Point(100, 29.289), Point(100, 70.711),
+        Point(70.711, 100), Point(29.289, 100), Point(0, 70.711),
+        Point(0, 29.289), Point(29.289, 0)}});
+    for(auto i = std::size_t(0); i != ids.size(); ++i) {
+      auto shape = find_written(package, ids[i]).value("shape"_L1).toObject();
+      auto points = shape.value("points"_L1).toArray();
+      REQUIRE(points.size() == static_cast<qsizetype>(expected[i].size()));
+      for(auto j = qsizetype(0); j != points.size(); ++j) {
+        auto point = points.at(j).toObject();
+        REQUIRE(std::abs(point.value("x"_L1).toDouble() -
+          expected[i][j].m_x) < 1e-3);
+        REQUIRE(std::abs(point.value("y"_L1).toDouble() -
+          expected[i][j].m_y) < 1e-3);
+      }
+    }
+    for(auto& entry : package.get_entries()) {
+      if(!entry.ends_with(".agc")) {
+        continue;
+      }
+      auto bytes = package.read(entry);
+      auto start = bytes.indexOf("\"polygon\"");
+      while(start != -1) {
+        auto count = bytes.indexOf("\"uxdesign#cornerCount\"", start);
+        auto points = bytes.indexOf("\"points\"", start);
+        auto width = bytes.indexOf("\"uxdesign#width\"", start);
+        auto height = bytes.indexOf("\"uxdesign#height\"", start);
+        REQUIRE(start < count);
+        REQUIRE(count < points);
+        REQUIRE(points < width);
+        REQUIRE(width < height);
+        start = bytes.indexOf("\"polygon\"", start + 1);
+      }
+    }
+  }
+
   TEST_CASE("package_entries") {
     auto document = Document();
     auto built = build(document);

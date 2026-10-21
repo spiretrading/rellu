@@ -1,3 +1,5 @@
+#include <chrono>
+#include <optional>
 #include <variant>
 #include <vector>
 #include <doctest/doctest.h>
@@ -22,6 +24,13 @@ namespace {
     text.m_base_style.m_font = Font("Arial", "Regular", "ArialMT", 16);
     text.m_base_style.m_color = color;
     return text;
+  }
+
+  Shape make_shape(const Rect& bounds, Color color) {
+    auto shape = Shape();
+    shape.m_geometry = RectangleShape(bounds);
+    shape.m_style.m_fill = SolidFill(color);
+    return shape;
   }
 
   const FillCommand& get_fill(const DrawList& list, std::size_t index) {
@@ -126,6 +135,138 @@ TEST_SUITE("SceneBuilder") {
     REQUIRE(builder.build().size() == 1);
   }
 
+  TEST_CASE("text_transform") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto shapes = transaction.append(
+      NodeId(), make_header(make_translation(0.1, 0)), Group());
+    transaction.append(
+      shapes, make_header(Matrix()),
+      make_shape(Rect(0, 0, 4, 4), Color(1, 0, 0, 1)));
+    auto texts = transaction.append(
+      NodeId(), make_header(make_translation(5, 30)), Group());
+    transaction.append(
+      texts, make_header(Matrix()), make_text(make_color(0, 0, 0)));
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto device = make_scale(2, 2);
+    builder.set_text_transform(device);
+    REQUIRE(builder.get_text_transform() == device);
+    REQUIRE(!builder.get_device_transform());
+    auto dependencies = SceneDependencies();
+    auto shape_lists = builder.build_lists(shapes, dependencies);
+    REQUIRE(!dependencies.m_is_device_dependent);
+    REQUIRE(get_fill(*shape_lists.at(0), 0).m_transform ==
+      make_translation(0.1, 0));
+    auto text_lists = builder.build_lists(texts, dependencies);
+    REQUIRE(dependencies.m_is_device_dependent);
+    REQUIRE(dependencies.m_device_transform == device);
+    REQUIRE(text_lists.at(0)->size() > 1);
+    for(auto& command : *text_lists.at(0)) {
+      REQUIRE(std::get<FillCommand>(command).m_transform == *invert(device));
+    }
+    REQUIRE(builder.build_lists(texts, dependencies) == text_lists);
+    builder.set_text_transform(make_scale(3, 3));
+    REQUIRE(builder.build_lists(shapes, dependencies) == shape_lists);
+    REQUIRE(builder.build_lists(texts, dependencies) != text_lists);
+    REQUIRE(dependencies.m_device_transform == make_scale(3, 3));
+    builder.set_text_transform(std::nullopt);
+    text_lists = builder.build_lists(texts, dependencies);
+    REQUIRE(dependencies.m_is_device_dependent);
+    REQUIRE(!dependencies.m_device_transform);
+    REQUIRE(text_lists.at(0)->size() == 1);
+    REQUIRE(get_fill(*text_lists.at(0), 0).m_transform ==
+      make_translation(5, 30));
+  }
+
+  TEST_CASE("deferred_text") {
+    auto document = Document();
+    auto transaction = std::optional<Transaction>(std::in_place, document);
+    auto group = transaction->append(
+      NodeId(), make_header(make_translation(5, 30)), Group());
+    auto text = transaction->append(
+      group, make_header(Matrix()), make_text(make_color(0, 0, 0)));
+    transaction->commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto device = make_scale(2, 2);
+    builder.set_text_transform(device);
+    REQUIRE(!builder.is_text_deferred());
+    builder.set_text_deferred(true);
+    REQUIRE(builder.is_text_deferred());
+    auto dependencies = SceneDependencies();
+    auto lists = builder.build_lists(group, dependencies);
+    REQUIRE(lists.at(0)->size() == 1);
+    REQUIRE(get_fill(*lists.at(0), 0).m_transform ==
+      make_translation(5, 30));
+    REQUIRE(dependencies.m_is_device_dependent);
+    REQUIRE(dependencies.m_device_transform == device);
+    REQUIRE(!dependencies.m_is_rasterized);
+    REQUIRE(builder.has_pending_text());
+    REQUIRE(builder.rasterize_text(std::chrono::hours(1)) ==
+      std::vector{text});
+    REQUIRE(!builder.has_pending_text());
+    builder.invalidate(text);
+    lists = builder.build_lists(group, dependencies);
+    REQUIRE(lists.at(0)->size() > 1);
+    REQUIRE(dependencies.m_is_rasterized);
+    auto move = [&] (const Matrix& transform) {
+      auto header = document.get(group).m_header;
+      header.m_transform = transform;
+      transaction.emplace(document);
+      transaction->replace_header(header);
+      transaction->commit();
+      builder.invalidate_transform(group);
+      return builder.build_lists(group, dependencies);
+    };
+    lists = move(make_translation(8.3, 32));
+    REQUIRE(lists.at(0)->size() == 1);
+    REQUIRE(get_fill(*lists.at(0), 0).m_transform ==
+      make_translation(8.3, 32));
+    lists = move(make_translation(9.1, 33));
+    REQUIRE(get_fill(*lists.at(0), 0).m_transform ==
+      make_translation(9.1, 33));
+    REQUIRE(builder.has_pending_text());
+    while(builder.has_pending_text()) {
+      for(auto& id : builder.rasterize_text(std::chrono::hours(1))) {
+        builder.invalidate(id);
+      }
+      lists = builder.build_lists(group, dependencies);
+    }
+    REQUIRE(lists.at(0)->size() > 1);
+    auto rasterized = SceneBuilder(document, TOLERANCE);
+    rasterized.set_text_transform(device);
+    REQUIRE(rasterized.build_lists(group, dependencies).at(0)->size() ==
+      lists.at(0)->size());
+  }
+
+  TEST_CASE("late_text") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto group = transaction.append(NodeId(), make_header(Matrix()), Group());
+    for(auto i = 0; i != 3; ++i) {
+      auto child = transaction.append(
+        group, make_header(make_translation(0, 30 * i)), Group());
+      transaction.append(
+        child, make_header(Matrix()), make_text(make_color(0, 0, 0)));
+    }
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    builder.set_text_transform(make_scale(2, 2));
+    auto dependencies = SceneDependencies();
+    auto lists = builder.build_lists(group, dependencies);
+    REQUIRE(!dependencies.m_is_device_mixed);
+    builder.set_text_transform(make_scale(3, 3));
+    auto late = builder.build_lists(
+      group, dependencies, std::chrono::steady_clock::now());
+    REQUIRE(late == lists);
+    REQUIRE(dependencies.m_device_transform == make_scale(2, 2));
+    REQUIRE(!dependencies.m_is_device_mixed);
+    auto current = builder.build_lists(group, dependencies);
+    REQUIRE(current != lists);
+    REQUIRE(dependencies.m_device_transform == make_scale(3, 3));
+    REQUIRE(!dependencies.m_is_device_mixed);
+  }
+
   TEST_CASE("outlined_text") {
     auto document = Document();
     auto transaction = Transaction(document);
@@ -208,5 +349,23 @@ TEST_SUITE("SceneBuilder") {
     auto list = builder.build();
     REQUIRE(list.size() == 1);
     REQUIRE(!get_fill(list, 0).m_clip);
+  }
+
+  TEST_CASE("edited_overflow") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto text = make_text(make_color(0, 0, 0));
+    text.m_content = Shared(std::u16string(u"ab cd ef"));
+    text.m_frame = AreaFrame(Size(10, 10));
+    auto id = transaction.append(NodeId(), make_header(Matrix()), text);
+    transaction.commit();
+    auto builder = SceneBuilder(document, TOLERANCE);
+    auto list = builder.build();
+    REQUIRE(list.size() == 1);
+    auto bottom = get_bounds(*get_fill(list, 0).m_path).get_bottom();
+    REQUIRE(bottom > 10);
+    builder.set_edited_text(id);
+    list = builder.build();
+    REQUIRE(get_bounds(*get_fill(list, 0).m_path).get_bottom() > bottom + 20);
   }
 }

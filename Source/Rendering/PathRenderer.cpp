@@ -67,9 +67,13 @@ namespace {
 
   auto make_pipeline(QRhi& rhi, PlanPipeline pipeline,
       QRhiShaderResourceBindings& layout,
-      QRhiRenderPassDescriptor& descriptor, int sample_count) {
+      QRhiRenderPassDescriptor& descriptor, int sample_count,
+      bool is_scissored = false) {
     auto result = std::unique_ptr<QRhiGraphicsPipeline>(
       rhi.newGraphicsPipeline());
+    if(is_scissored) {
+      result->setFlags(QRhiGraphicsPipeline::UsesScissor);
+    }
     result->setTopology(QRhiGraphicsPipeline::TriangleStrip);
     result->setTargetBlends({make_blend(pipeline)});
     result->setShaderStages({
@@ -237,6 +241,10 @@ void PathRenderer::initialize(
     rhi, PlanPipeline::SOLID, *m_layout, *m_format_descriptor, 1);
   m_over = make_pipeline(
     rhi, PlanPipeline::OVER, *m_layout, *m_format_descriptor, 1);
+  m_scissored_solid = make_pipeline(
+    rhi, PlanPipeline::SOLID, *m_layout, *m_format_descriptor, 1, true);
+  m_scissored_over = make_pipeline(
+    rhi, PlanPipeline::OVER, *m_layout, *m_format_descriptor, 1, true);
   m_blend = make_pipeline(
     rhi, PlanPipeline::BLEND, *m_layout, *m_format_descriptor, 1);
   m_blur = make_pipeline(
@@ -247,6 +255,8 @@ void PathRenderer::release() {
   m_bindings.clear();
   m_blur.reset();
   m_blend.reset();
+  m_scissored_over.reset();
+  m_scissored_solid.reset();
   m_over.reset();
   m_solid.reset();
   m_solid_pipeline.reset();
@@ -654,8 +664,13 @@ QRhiShaderResourceBindings& PathRenderer::get_bindings(
 }
 
 QRhiGraphicsPipeline& PathRenderer::get_pipeline(
-    PlanPipeline pipeline, bool is_external) {
-  if(is_external) {
+    PlanPipeline pipeline, bool is_external, bool is_scissored) {
+  if(is_scissored) {
+    if(pipeline == PlanPipeline::SOLID) {
+      return *m_scissored_solid;
+    }
+    return *m_scissored_over;
+  } else if(is_external) {
     if(pipeline == PlanPipeline::SOLID) {
       return *m_solid_pipeline;
     }
@@ -676,17 +691,29 @@ void PathRenderer::record(
   if(!is_external) {
     size = m_surfaces[m_assignments[pass.m_target]].m_size;
   }
-  auto offset = QRhiCommandBuffer::DynamicOffset(
-    0, static_cast<quint32>(pass.m_uniforms * m_uniform_stride));
   auto current = static_cast<QRhiGraphicsPipeline*>(nullptr);
   for(auto& draw : pass.m_draws) {
-    auto& pipeline = get_pipeline(draw.m_pipeline, is_external);
+    auto is_scissored = !draw.m_scissor.isEmpty();
+    auto& pipeline =
+      get_pipeline(draw.m_pipeline, is_external, is_scissored);
     if(&pipeline != current) {
       buffer.setGraphicsPipeline(&pipeline);
       buffer.setViewport(QRhiViewport(0, 0,
         static_cast<float>(size.width()), static_cast<float>(size.height())));
       current = &pipeline;
     }
+    if(is_scissored) {
+      auto& scissor = draw.m_scissor;
+      buffer.setScissor(QRhiScissor(scissor.x(),
+        size.height() - scissor.y() - scissor.height(), scissor.width(),
+        scissor.height()));
+    }
+    auto uniforms = draw.m_uniforms;
+    if(uniforms < 0) {
+      uniforms = pass.m_uniforms;
+    }
+    auto offset = QRhiCommandBuffer::DynamicOffset(
+      0, static_cast<quint32>(uniforms * m_uniform_stride));
     auto backdrop = m_blank.get();
     if(draw.m_backdrop >= 0) {
       backdrop = m_surfaces[m_assignments[draw.m_backdrop]].m_texture.get();

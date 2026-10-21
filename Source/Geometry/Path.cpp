@@ -251,6 +251,10 @@ bool Path::is_empty() const {
   return m_segments.empty();
 }
 
+void Path::reserve(std::size_t count) {
+  m_segments.reserve(count);
+}
+
 void Path::move_to(Point point) {
   if(!m_segments.empty() && m_segments.back().m_type == SegmentType::MOVE) {
     m_segments.pop_back();

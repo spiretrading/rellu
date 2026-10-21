@@ -765,8 +765,10 @@ PropertyEditors Rellu::make_standard_property_editors(TextMeasurer measurer) {
     make_size_setter(true, measurer), 0.0, std::nullopt));
   editors.add("transform.height", make_number_editor(
     make_size_setter(false, measurer), 0.0, std::nullopt));
-  editors.add("transform.rotation", make_number_editor(
-    make_rotation_setter(measurer), std::nullopt, std::nullopt));
+  auto rotation = make_number_editor(
+    make_rotation_setter(measurer), std::nullopt, std::nullopt);
+  rotation.m_is_live = true;
+  editors.add("transform.rotation", std::move(rotation));
   editors.add("transform.orientation", make_editor(set_orientation));
   auto opacity = make_number_editor(set_opacity, 0.0, 1.0);
   opacity.m_scale = 100;

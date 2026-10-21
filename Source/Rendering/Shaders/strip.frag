@@ -30,6 +30,7 @@ const float RAMP_WIDTH = 512.0;
 vec4 paint;
 vec4 extra;
 vec4 gradient;
+vec4 limits;
 float divisor;
 
 vec4 fetch(float index) {
@@ -55,8 +56,12 @@ void load_paint() {
   paint = v_paint;
   extra = v_extra;
   gradient = v_gradient;
+  limits = vec4(0.0);
   divisor = v_divisor;
   if(!is_exact()) {
+    if(paint.z > 2.5 && paint.z < 4.5) {
+      limits = fetch(6.0 * floor(v_index + 0.5) + 5.0);
+    }
     return;
   }
   paint = vec4(0.0);
@@ -66,7 +71,7 @@ void load_paint() {
   if(v_index < -0.5) {
     return;
   }
-  float base = 5.0 * floor(v_index + 0.5);
+  float base = 6.0 * floor(v_index + 0.5);
   vec4 first = fetch(base);
   vec4 second = fetch(base + 1.0);
   vec2 position = get_position();
@@ -80,6 +85,7 @@ void load_paint() {
     extra = vec4(third.x * position.x + third.y,
       third.z * position.y + third.w, fourth.xy);
     gradient = vec4(first.x, second.x, first.y, second.y);
+    limits = fetch(base + 5.0);
   } else if(first.w > 1.5) {
     extra = fetch(base + 2.0);
     gradient = fetch(base + 3.0);
@@ -114,14 +120,30 @@ float get_angular_offset() {
   return fract(atan(position.y, position.x) / 6.283185307179586 - extra.z);
 }
 
+vec2 snap(vec2 coordinates, vec2 size) {
+  return floor(coordinates * size * 256.0 + 0.5) / (256.0 * size);
+}
+
 vec4 sample_texture() {
+  vec2 point = paint.xy;
+  if(limits.z > limits.x) {
+    point = clamp(point, limits.xy, limits.zw);
+  }
   float footprint = max(length(gradient.xy * extra.zw),
     length(gradient.zw * extra.zw));
   if(paint.w > 0.5 && footprint < 0.4995) {
-    vec2 texel = (floor(paint.xy * extra.zw) + 0.5) / extra.zw;
+    vec2 texel = (floor(point * extra.zw) + 0.5) / extra.zw;
     return textureLod(source, texel, 0.0);
   }
-  return textureLod(source, paint.xy, floor(log2(max(footprint, 1.0))));
+  float level = floor(log2(max(footprint, 1.0)));
+  if(level < 0.5) {
+    point = snap(point, extra.zw);
+    if(limits.z > limits.x) {
+      point = clamp(point, limits.xy, limits.zw);
+    }
+    return textureLod(source, point, 0.0);
+  }
+  return textureLod(source, point, level);
 }
 
 float get_bounds_coverage() {
@@ -150,6 +172,10 @@ vec4 get_paint() {
   }
   vec4 color = sample_texture();
   if(paint.z > 3.5) {
+    if(any(lessThan(extra.xy, vec2(0.0))) ||
+        any(greaterThan(extra.xy, vec2(1.0)))) {
+      return vec4(0.0);
+    }
     return vec4(color.a);
   }
   if(extra.x > 0.5) {

@@ -138,6 +138,8 @@ namespace Rellu {
       double m_zoom;
       Point m_offset;
       double m_level;
+      double m_text_scale;
+      bool m_is_text_settled;
       bool m_is_fitting;
       bool m_is_fit_held;
       bool m_is_space_pressed;
@@ -146,6 +148,7 @@ namespace Rellu {
       std::map<std::tuple<CursorKind, int, double>, QCursor> m_cursors;
       QTimer m_preparation;
       QTimer m_caret_timer;
+      QTimer m_text_timer;
       QLineEdit* m_title_editor;
       NodeId m_renamed;
 
@@ -153,6 +156,7 @@ namespace Rellu {
       void zoom(double factor, QPointF center);
       void pan(QPointF delta);
       void update_view();
+      void update_text();
       void update_cursor();
       void attach_tools();
       TextTool* get_text_tool() const;

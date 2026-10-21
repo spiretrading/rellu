@@ -1,6 +1,7 @@
 #include <string>
 #include <vector>
 #include <doctest/doctest.h>
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -21,7 +22,10 @@
 #include "Rellu/Ui/ComponentPropertyEditors.hpp"
 #include "Rellu/Ui/GridActions.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
+#include "Rellu/Ui/TextMeasurement.hpp"
+#include "Rellu/Ui/TextPropertyEditors.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
+#include "FocusWindow.hpp"
 #include "TestDocument.hpp"
 
 using namespace Rellu;
@@ -66,6 +70,27 @@ namespace {
     inspector.set_property_editors(
       make_standard_property_editors(estimate_text_bounds));
     inspector.set_editor(&editor);
+  }
+
+  PropertyInspector* make_focused_inspector(Editor& editor) {
+    auto inspector = new PropertyInspector();
+    auto& library = get_default_font_library();
+    auto editors = make_standard_property_editors(estimate_text_bounds);
+    add_text_property_editors(editors, library, make_text_measurer(library),
+      [editor = &editor] {
+        return &editor->get_text_selection();
+      });
+    inspector->set_property_editors(std::move(editors));
+    inspector->set_editor(&editor);
+    return inspector;
+  }
+
+  QLineEdit& focus(const PropertyInspector& inspector, const char* path) {
+    auto& line = get_line(inspector, path);
+    line.setFocus();
+    line.selectAll();
+    REQUIRE(line.hasFocus());
+    return line;
   }
 
   NodeId add_shape(
@@ -999,5 +1024,166 @@ TEST_SUITE("PropertyInspector") {
       Fill(SolidFill(make_color(0, 0, 0))));
     REQUIRE(document.get(ids.m_label).get_text()->m_style.m_fill ==
       Fill(SolidFill(make_color(0, 0, 0))));
+  }
+
+  TEST_CASE("field_keys") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = make_focused_inspector(editor);
+    auto window = FocusWindow(inspector);
+    inspector->set_release_handler([&] {
+      window.release();
+    });
+    auto& history = editor.get_history();
+    editor.get_selection().select(ids.m_background);
+    QApplication::processEvents();
+    focus(*inspector, "transform.width");
+    type("150");
+    press(Qt::Key_Return);
+    REQUIRE(get_text(*inspector, "transform.width") == "150");
+    REQUIRE(window.m_canvas->hasFocus());
+    REQUIRE(window.m_releases == 1);
+    REQUIRE(history.get_undo_count() == 1);
+    focus(*inspector, "transform.x");
+    type("30");
+    press(Qt::Key_Tab);
+    REQUIRE(get_text(*inspector, "transform.x") == "30");
+    REQUIRE(window.m_canvas->hasFocus());
+    REQUIRE(window.m_releases == 2);
+    REQUIRE(history.get_undo_count() == 2);
+    auto& opacity = focus(*inspector, "appearance.opacity");
+    type("40");
+    press(Qt::Key_Escape);
+    REQUIRE(document.get(ids.m_background).m_header.m_opacity == 1);
+    REQUIRE(opacity.text() == "100%");
+    REQUIRE(window.m_canvas->hasFocus());
+    REQUIRE(window.m_releases == 3);
+    REQUIRE(history.get_undo_count() == 2);
+    REQUIRE(editor.get_selection().get_size() == 1);
+    REQUIRE(editor.get_selection().get_primary() == ids.m_background);
+    focus(*inspector, "transform.height");
+    type("80");
+    window.m_canvas->setFocus(Qt::MouseFocusReason);
+    QApplication::processEvents();
+    REQUIRE(get_text(*inspector, "transform.height") == "80");
+    REQUIRE(history.get_undo_count() == 3);
+    editor.get_selection().select(ids.m_label);
+    QApplication::processEvents();
+    focus(*inspector, "text.size");
+    type("20");
+    press(Qt::Key_Return);
+    REQUIRE(get_text(*inspector, "text.size") == "20");
+    REQUIRE(window.m_canvas->hasFocus());
+    focus(*inspector, "text.letter_spacing");
+    type("50");
+    press(Qt::Key_Tab);
+    REQUIRE(get_text(*inspector, "text.letter_spacing") == "50");
+    REQUIRE(window.m_canvas->hasFocus());
+    REQUIRE(!window.m_zoom->hasFocus());
+  }
+
+  TEST_CASE("live_rotation") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = make_focused_inspector(editor);
+    auto window = FocusWindow(inspector);
+    inspector->set_release_handler([&] {
+      window.release();
+    });
+    auto& history = editor.get_history();
+    editor.get_selection().select(ids.m_background);
+    QApplication::processEvents();
+    enter(*inspector, "appearance.opacity", "50");
+    REQUIRE(editor.undo());
+    history.mark_clean();
+    auto header = document.get(ids.m_background).m_header;
+    auto& rotation = focus(*inspector, "transform.rotation");
+    auto text = rotation.text();
+    type("4");
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation == 4);
+    type("5");
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation == 45);
+    REQUIRE(rotation.text() == "45");
+    REQUIRE(history.get_undo_count() == 0);
+    REQUIRE(history.get_redo_count() == 1);
+    press(Qt::Key_Escape);
+    REQUIRE(document.get(ids.m_background).m_header == header);
+    REQUIRE(history.get_undo_count() == 0);
+    REQUIRE(history.get_redo_count() == 1);
+    REQUIRE(!history.is_dirty());
+    REQUIRE(rotation.text() == text);
+    REQUIRE(window.m_canvas->hasFocus());
+    REQUIRE(editor.redo());
+    REQUIRE(document.get(ids.m_background).m_header.m_opacity == 0.5);
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation == 0);
+    focus(*inspector, "transform.rotation");
+    type("30");
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation == 30);
+    REQUIRE(history.get_undo_count() == 1);
+    press(Qt::Key_Return);
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation == 30);
+    REQUIRE(history.get_undo_count() == 2);
+    REQUIRE(history.get_redo_count() == 0);
+    REQUIRE(history.get_undo_label() == "Rotate");
+    REQUIRE(history.is_dirty());
+    REQUIRE(window.m_canvas->hasFocus());
+    focus(*inspector, "transform.rotation");
+    type("60");
+    window.m_canvas->setFocus(Qt::MouseFocusReason);
+    QApplication::processEvents();
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation == 60);
+    REQUIRE(history.get_undo_count() == 3);
+    REQUIRE(editor.undo());
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation == 30);
+    REQUIRE(editor.undo());
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation == 0);
+    REQUIRE(editor.undo());
+    REQUIRE(document.get(ids.m_background).m_header == header);
+    editor.get_selection().select(
+      std::vector<NodeId>({ids.m_background, ids.m_ellipse}));
+    QApplication::processEvents();
+    auto ellipse = document.get(ids.m_ellipse).m_header;
+    focus(*inspector, "transform.rotation");
+    type("20");
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation == 20);
+    REQUIRE(document.get(ids.m_ellipse).m_header.m_rotation == 20);
+    REQUIRE(history.get_redo_count() == 3);
+    press(Qt::Key_Escape);
+    REQUIRE(document.get(ids.m_background).m_header == header);
+    REQUIRE(document.get(ids.m_ellipse).m_header == ellipse);
+    REQUIRE(history.get_undo_count() == 0);
+    REQUIRE(history.get_redo_count() == 3);
+    focus(*inspector, "transform.rotation");
+    type("10");
+    press(Qt::Key_Tab);
+    REQUIRE(document.get(ids.m_background).m_header.m_rotation == 10);
+    REQUIRE(document.get(ids.m_ellipse).m_header.m_rotation == 10);
+    REQUIRE(history.get_undo_count() == 1);
+    REQUIRE(history.get_redo_count() == 0);
+    REQUIRE(history.get_undo_label() == "Rotate");
+    REQUIRE(editor.undo());
+    REQUIRE(document.get(ids.m_background).m_header == header);
+    REQUIRE(document.get(ids.m_ellipse).m_header == ellipse);
+  }
+
+  TEST_CASE("rebuild_focus") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto inspector = make_focused_inspector(editor);
+    auto window = FocusWindow(inspector);
+    inspector->set_release_handler([&] {
+      window.release();
+    });
+    editor.get_selection().select(ids.m_background);
+    QApplication::processEvents();
+    focus(*inspector, "transform.width");
+    editor.get_selection().select(ids.m_label);
+    QApplication::processEvents();
+    REQUIRE(window.m_canvas->hasFocus());
+    REQUIRE(!window.m_zoom->hasFocus());
+    REQUIRE(window.m_releases == 1);
   }
 }

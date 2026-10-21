@@ -120,10 +120,58 @@ namespace {
     return list;
   }
 
+  bool is_equal(const Scene& scene, const DrawList& list) {
+    auto i = std::size_t(0);
+    for(auto& fragment : scene.get_drawing()->get_lists()) {
+      for(auto& command : *fragment) {
+        if(i == list.size() || !is_equal(command, list[i])) {
+          return false;
+        }
+        ++i;
+      }
+    }
+    return i == list.size();
+  }
+
   bool is_rebuilt_equal(const Document& document, const Scene& scene) {
     auto builder = SceneBuilder(document, scene.get_tolerance());
-    return is_equal(flatten(scene), builder.build());
+    return is_equal(scene, builder.build());
   }
+
+  class Rebuilder {
+    public:
+      Rebuilder(const Document& document, const Scene& scene)
+        : m_document(&document),
+          m_scene(&scene) {}
+
+      bool is_rebuilt_equal() {
+        auto position = m_document->get_undo_count();
+        m_lists.resize(position);
+        m_lists.push_back(build());
+        return is_equal(*m_scene, *m_lists.back());
+      }
+
+      bool is_restored_equal() {
+        auto position = m_document->get_undo_count();
+        if(position >= m_lists.size()) {
+          m_lists.resize(position + 1);
+        }
+        auto& list = m_lists[position];
+        if(!list) {
+          list = build();
+        }
+        return is_equal(*m_scene, *list);
+      }
+
+    private:
+      const Document* m_document;
+      const Scene* m_scene;
+      std::vector<std::optional<DrawList>> m_lists;
+
+      DrawList build() const {
+        return SceneBuilder(*m_document, m_scene->get_tolerance()).build();
+      }
+  };
 
   bool is_touching(const std::vector<DrawRegion>& regions, const Rect& rect) {
     for(auto& region : regions) {
@@ -522,6 +570,93 @@ TEST_SUITE("Scene") {
     REQUIRE(is_rebuilt_equal(document, scene));
   }
 
+  TEST_CASE("text_transform") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    transaction.append(NodeId(), make_header(make_translation(5, 30)),
+      make_text(u"Text"));
+    transaction.append(NodeId(), make_header(make_translation(100, 0)),
+      make_shape(Rect(0, 0, 4, 4), make_color(255, 0, 0)));
+    transaction.commit();
+    auto scene = Scene(document, TOLERANCE);
+    scene.update();
+    auto lists = scene.get_drawing()->get_lists();
+    auto device = make_scale(2, 2);
+    scene.set_text_transform(device);
+    REQUIRE(scene.get_text_transform() == device);
+    REQUIRE(!scene.is_current());
+    scene.update();
+    REQUIRE(scene.is_current());
+    auto& rasterized = scene.get_drawing()->get_lists();
+    REQUIRE(rasterized[0] != lists[0]);
+    REQUIRE(rasterized[1] == lists[1]);
+    auto builder = SceneBuilder(document, TOLERANCE);
+    builder.set_text_transform(device);
+    REQUIRE(is_equal(flatten(scene), builder.build()));
+    scene.set_text_transform(device);
+    REQUIRE(scene.is_current());
+    scene.set_text_region(Rect(90, 0, 20, 20));
+    REQUIRE(scene.get_text_region() == Rect(90, 0, 20, 20));
+    REQUIRE(!scene.is_current());
+    scene.update();
+    REQUIRE(scene.is_current());
+    REQUIRE(is_rebuilt_equal(document, scene));
+    scene.set_text_region(Rect(0, 0, 50, 50));
+    scene.update();
+    REQUIRE(is_equal(flatten(scene), builder.build()));
+    scene.set_text_transform(std::nullopt);
+    scene.update();
+    REQUIRE(is_rebuilt_equal(document, scene));
+  }
+
+  TEST_CASE("rasterize") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    transaction.append(NodeId(), make_header(make_translation(5, 30)),
+      make_text(u"Text"));
+    transaction.append(NodeId(), make_header(make_translation(100, 0)),
+      make_shape(Rect(0, 0, 4, 4), make_color(255, 0, 0)));
+    transaction.commit();
+    auto scene = Scene(document, TOLERANCE);
+    auto device = make_scale(2, 2);
+    scene.set_text_transform(device);
+    auto region = Rect(0, 0, 200, 200);
+    scene.update(region, std::chrono::hours(1));
+    REQUIRE(scene.is_current());
+    REQUIRE(!scene.is_rasterized());
+    REQUIRE(is_rebuilt_equal(document, scene));
+    auto lists = scene.get_drawing()->get_lists();
+    auto damage = scene.rasterize(region, std::chrono::hours(1));
+    REQUIRE(scene.is_current());
+    REQUIRE(scene.is_rasterized());
+    REQUIRE(is_touching(damage, Rect(5, 20, 10, 10)));
+    auto& rasterized = scene.get_drawing()->get_lists();
+    REQUIRE(rasterized[0] != lists[0]);
+    REQUIRE(rasterized[1] == lists[1]);
+    auto builder = SceneBuilder(document, TOLERANCE);
+    builder.set_text_transform(device);
+    REQUIRE(is_equal(flatten(scene), builder.build()));
+  }
+
+  TEST_CASE("text_region") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    transaction.append(NodeId(), make_header(make_translation(5, 30)),
+      make_text(u"Text"));
+    transaction.append(NodeId(), make_header(make_translation(500, 30)),
+      make_text(u"Text"));
+    transaction.commit();
+    auto scene = Scene(document, TOLERANCE);
+    scene.set_text_transform(Matrix());
+    scene.set_text_region(Rect(0, 0, 100, 100));
+    scene.update();
+    REQUIRE(scene.is_current());
+    auto& lists = scene.get_drawing()->get_lists();
+    REQUIRE(lists.size() == 2);
+    REQUIRE(lists[0]->size() > 1);
+    REQUIRE(lists[1]->size() == 1);
+  }
+
   TEST_CASE("canvas") {
     auto document = Document();
     auto transaction = std::optional<Transaction>(std::in_place, document);
@@ -605,12 +740,18 @@ TEST_SUITE("Scene") {
     auto sample = make_sample(document);
     auto scene = Scene(document, TOLERANCE);
     scene.update();
-    REQUIRE(is_rebuilt_equal(document, scene));
+    auto rebuilder = Rebuilder(document, scene);
+    REQUIRE(rebuilder.is_rebuilt_equal());
     REQUIRE(scene.get_drawing()->get_lists().size() > 4);
     auto check = [&] {
       scene.update();
       REQUIRE(scene.is_current());
-      REQUIRE(is_rebuilt_equal(document, scene));
+      REQUIRE(rebuilder.is_rebuilt_equal());
+    };
+    auto revisit = [&] {
+      scene.update();
+      REQUIRE(scene.is_current());
+      REQUIRE(rebuilder.is_restored_equal());
     };
     displace(document, get_child(document, sample.m_grid, 300), Point(3, 2));
     check();
@@ -732,10 +873,10 @@ TEST_SUITE("Scene") {
     scene.set_tolerance(TOLERANCE);
     check();
     while(document.undo()) {
-      check();
+      revisit();
     }
     while(document.redo()) {
-      check();
+      revisit();
     }
   }
 
@@ -744,10 +885,16 @@ TEST_SUITE("Scene") {
     auto sample = make_sample(document);
     auto scene = Scene(document, TOLERANCE);
     scene.update();
+    auto rebuilder = Rebuilder(document, scene);
     auto check = [&] {
       scene.update();
       REQUIRE(scene.is_current());
-      REQUIRE(is_rebuilt_equal(document, scene));
+      REQUIRE(rebuilder.is_rebuilt_equal());
+    };
+    auto revisit = [&] {
+      scene.update();
+      REQUIRE(scene.is_current());
+      REQUIRE(rebuilder.is_restored_equal());
     };
     displace(document, sample.m_grid, Point(3, 2));
     check();
@@ -786,10 +933,10 @@ TEST_SUITE("Scene") {
     displace(document, sample.m_instances, Point(1, 1));
     check();
     while(document.undo()) {
-      check();
+      revisit();
     }
     while(document.redo()) {
-      check();
+      revisit();
     }
   }
 

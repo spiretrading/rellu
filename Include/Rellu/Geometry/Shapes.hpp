@@ -125,6 +125,31 @@ namespace Rellu {
   Path make_polygon(int corner_count, const Rect& bounds, double corner_radius,
     double star_ratio = 100);
 
+  /**
+   * Returns the points Adobe XD stores for the corners of the regular
+   * polygon it draws for a corner count, in single precision.
+   * @param corner_count The number of corners, at least 3; fewer produce no
+   *        points.
+   * @param size The size of the box the corners span.
+   */
+  std::vector<Point> make_polygon_points(int corner_count, Size size);
+
+  /**
+   * Returns the aspect of the regular polygon Adobe XD draws for a corner
+   * count, scaled so that its larger side is 1.
+   * @param corner_count The number of corners; fewer than 3 have a square
+   *        aspect.
+   */
+  Size get_equilateral_aspect(int corner_count);
+
+  /**
+   * Tests whether a polygon has the aspect of its regular polygon to whole
+   * units, as Adobe XD tests it.
+   * @param corner_count The number of corners.
+   * @param size The size of the box the polygon spans.
+   */
+  bool is_equilateral(int corner_count, Size size);
+
   constexpr bool CornerRadii::operator ==(const CornerRadii& radii) const {
     return equals(m_top_left, radii.m_top_left) &&
       equals(m_top_right, radii.m_top_right) &&

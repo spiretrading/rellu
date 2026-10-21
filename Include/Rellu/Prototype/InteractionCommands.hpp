@@ -113,6 +113,26 @@ namespace Rellu {
   double clamp_scroll_offset(
     const Document& document, const NodeId& destination, double offset);
 
+  /**
+   * Changes an interaction's trigger as Adobe XD's inspector does, changing
+   * the action or trigger where Adobe XD corrects them.
+   * @param interaction The interaction.
+   * @param trigger The trigger.
+   * @return The interaction with its trigger changed.
+   */
+  Interaction change_trigger(Interaction interaction, Trigger trigger);
+
+  /**
+   * Returns the interaction Adobe XD selects when a node is selected: the
+   * first by trigger of the node's interactions when they all share one
+   * wire, otherwise none.
+   * @param document The document.
+   * @param owner The node.
+   * @return The interaction's id, or nil if none is selected.
+   */
+  InteractionId find_default_interaction(
+    const Document& document, const NodeId& owner);
+
   /** Adds an interaction to a node, labelled Add Interaction. */
   class AddInteractionCommand : public Command {
     public:
@@ -148,6 +168,26 @@ namespace Rellu {
 
     private:
       Interaction m_interaction;
+  };
+
+  /** Sets the offset of a Scroll To, labelled Y-Offset. */
+  class SetScrollOffsetCommand : public Command {
+    public:
+
+      /**
+       * Constructs a SetScrollOffsetCommand.
+       * @param id The Scroll To interaction's id.
+       * @param offset The offset.
+       */
+      SetScrollOffsetCommand(const InteractionId& id, double offset) noexcept;
+
+      std::string get_label() const override;
+      void apply(const Document& document, Transaction& transaction) override;
+      bool merge(const Command& command) override;
+
+    private:
+      InteractionId m_id;
+      double m_offset;
   };
 
   /** Removes an interaction, labelled Delete Interaction. */

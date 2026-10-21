@@ -1,7 +1,9 @@
 #ifndef RELLU_SCENE_SCENE_BUILDER_HPP
 #define RELLU_SCENE_SCENE_BUILDER_HPP
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -38,6 +40,27 @@ namespace Rellu {
 
     /** The largest tolerance producing the same conversion. */
     double m_maximum_tolerance = 0;
+
+    /**
+     * Whether the conversion draws text whose drawing depends on the
+     * transform to device pixels.
+     */
+    bool m_is_device_dependent = false;
+
+    /**
+     * The transform to device pixels the conversion's text was drawn for,
+     * none if it was drawn as outlines.
+     */
+    std::optional<Matrix> m_device_transform;
+
+    /** Whether the conversion draws text rasterized into device pixels. */
+    bool m_is_rasterized = false;
+
+    /**
+     * Whether parts of the conversion's text were drawn for different
+     * transforms to device pixels.
+     */
+    bool m_is_device_mixed = false;
   };
 
   /**
@@ -90,6 +113,51 @@ namespace Rellu {
        */
       void set_device_transform(const std::optional<Matrix>& transform);
 
+      /**
+       * Returns the transform from document coordinates to the device pixels
+       * that text alone is rasterized for while no device transform is set,
+       * if any.
+       */
+      const std::optional<Matrix>& get_text_transform() const;
+
+      /**
+       * Sets the transform from document coordinates to the device pixels
+       * that text is rasterized for while no device transform is set, in
+       * which case text is drawn as it is for a device transform while
+       * shapes are placed exactly. Conversions kept by build_lists that
+       * draw no text for device pixels remain reusable.
+       * @param transform The transform to device pixels, or none to draw
+       *        text as outlines.
+       */
+      void set_text_transform(const std::optional<Matrix>& transform);
+
+      /**
+       * Returns <code>true</code> iff build_lists defers rasterizing text
+       * for the text transform.
+       */
+      bool is_text_deferred() const;
+
+      /**
+       * Sets whether build_lists defers rasterizing text for the text
+       * transform, drawing text not yet rasterized for its placement as
+       * outlines until rasterize_text rasterizes it.
+       * @param is_deferred <code>true</code> iff rasterizing is deferred.
+       */
+      void set_text_deferred(bool is_deferred);
+
+      /** Returns <code>true</code> iff any text waits to be rasterized. */
+      bool has_pending_text() const;
+
+      /**
+       * Rasterizes the text that build_lists drew as outlines while waiting
+       * to be rasterized, oldest first, until a budget of time is spent,
+       * rasterizing at least one text node if any waits.
+       * @param budget The time to spend rasterizing.
+       * @return The text nodes rasterized, whose changed drawing must be
+       *         reported through invalidate.
+       */
+      std::vector<NodeId> rasterize_text(std::chrono::nanoseconds budget);
+
       /** Returns the text node drawn as it is while edited, or nil. */
       const NodeId& get_edited_text() const;
 
@@ -126,16 +194,32 @@ namespace Rellu {
       /**
        * Converts a node and its descendants as they appear within their
        * ancestors into draw lists that together draw what build converts the
-       * node into, reusing the draw lists kept by earlier calls for the
-       * subtrees that no change reported through invalidate has affected
-       * since. Every change to the document that affects its drawing must be
-       * reported through invalidate before the next call.
+       * node into, but for text whose rasterizing is deferred, reusing the
+       * draw lists kept by earlier calls for the subtrees that no change
+       * reported through invalidate has affected since. Every change to the
+       * document that affects its drawing must be reported through
+       * invalidate before the next call.
        * @param id The node's id.
        * @param dependencies Receives what the conversion depends on.
        * @return The draw lists in z order, none if there is no such node.
        */
       std::vector<std::shared_ptr<const DrawList>> build_lists(
         const NodeId& id, SceneDependencies& dependencies);
+
+      /**
+       * Converts a node and its descendants as the other build_lists does,
+       * except that once a deadline passes, the subtrees converted for
+       * another text transform but otherwise unaffected are reused as they
+       * are, leaving their text drawn for the transforms they were converted
+       * for.
+       * @param id The node's id.
+       * @param dependencies Receives what the conversion depends on.
+       * @param deadline The time past which such subtrees are reused.
+       * @return The draw lists in z order, none if there is no such node.
+       */
+      std::vector<std::shared_ptr<const DrawList>> build_lists(
+        const NodeId& id, SceneDependencies& dependencies,
+        std::chrono::steady_clock::time_point deadline);
 
       /**
        * Reports a change to a node or an image, discarding what build_lists
@@ -168,8 +252,14 @@ namespace Rellu {
         std::optional<Projection> m_projection;
         Matrix m_single;
         bool m_is_clipped = false;
+        bool m_is_referenced = false;
 
         bool operator ==(const Placement&) const = default;
+      };
+      struct PendingText {
+        NodeId m_id;
+        Matrix m_transform;
+        bool m_is_referenced;
       };
       struct Entry {
         const Node* m_source;
@@ -198,13 +288,21 @@ namespace Rellu {
         std::optional<Rect> m_clip;
         std::uint64_t m_generation;
       };
+      struct TextLevel {
+        std::shared_ptr<const Path> m_path;
+        Rect m_bounds;
+        Color m_color;
+        int m_level;
+      };
       struct TextOutline {
         std::shared_ptr<const Node> m_record;
         TextLayout m_layout;
         std::vector<TextFill> m_fills;
         std::vector<std::shared_ptr<const Path>> m_paths;
-        std::vector<std::pair<Matrix, std::vector<TextRaster>>> m_rasters;
+        std::vector<Rect> m_bounds;
+        std::vector<std::pair<Matrix, std::vector<TextLevel>>> m_rasters;
         Matrix m_mirror;
+        std::uint64_t m_raster_epoch;
         std::uint64_t m_generation;
       };
       struct Segment {
@@ -236,6 +334,13 @@ namespace Rellu {
       const Document* m_document;
       double m_tolerance;
       std::optional<Matrix> m_device_transform;
+      std::optional<Matrix> m_text_transform;
+      std::optional<Matrix> m_raster_transform;
+      std::uint64_t m_raster_epoch;
+      bool m_is_text_deferred;
+      std::optional<std::chrono::steady_clock::time_point> m_deadline;
+      std::deque<PendingText> m_pending;
+      std::unordered_map<NodeId, Matrix> m_latest;
       NodeId m_edited_text;
       std::uint64_t m_generation;
       std::unordered_map<NodeId, Outline> m_outlines;
@@ -274,6 +379,8 @@ namespace Rellu {
       void forget(const NodeId& id);
       void mark_ancestors(const Node& node);
       void invalidate_dependents(const NodeId& key);
+      bool is_late() const;
+      const std::optional<Matrix>& get_text_device() const;
       void clear_retained();
       void add_dependencies(const Node& reference);
       void add_tolerance(double minimum, double maximum);
@@ -290,8 +397,11 @@ namespace Rellu {
       void add_text(const Node& node, const Placement& placement,
         DrawList& list);
       TextOutline& get_text_outline(const Node& node);
-      const std::vector<TextRaster>& get_rasters(
-        TextOutline& outline, const Matrix& transform);
+      const std::vector<TextLevel>* find_rasters(
+        const TextOutline& outline, const Matrix& transform) const;
+      const std::vector<TextLevel>& add_rasters(
+        TextOutline& outline, const Matrix& transform, bool is_referenced);
+      void defer(const NodeId& id, const Matrix& transform, bool is_referenced);
   };
 }
 

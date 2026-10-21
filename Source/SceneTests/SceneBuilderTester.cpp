@@ -523,7 +523,36 @@ TEST_SUITE("SceneBuilder") {
     REQUIRE(contains(outline, Point(10.5, 3)));
     REQUIRE(!contains(outline, Point(5, -0.5)));
     REQUIRE(!contains(outline, Point(2, 0.5)));
-    REQUIRE(!contains(outline, Point(-0.5, -0.5)));
+    REQUIRE(contains(outline, Point(-0.5, -0.5)));
+  }
+
+  TEST_CASE("dash_start") {
+    auto get_outline = [] (ShapeGeometry geometry, StrokeAlignment alignment) {
+      auto document = Document();
+      auto transaction = Transaction(document);
+      auto shape = Shape();
+      shape.m_geometry = std::move(geometry);
+      shape.m_style.m_stroke = Stroke(make_color(0, 0, 0), 2, alignment,
+        StrokeCap::BUTT, StrokeJoin::MITER, 4, {10, 1000});
+      transaction.append(NodeId(), make_header(), shape);
+      transaction.commit();
+      auto builder = SceneBuilder(document, TOLERANCE);
+      auto list = builder.build();
+      return *get_fill(list, 0).m_path;
+    };
+    auto ellipse = get_outline(
+      EllipseShape(Point(50, 50), 50, 50), StrokeAlignment::CENTER);
+    REQUIRE(contains(ellipse, Point(54, 0.5)));
+    REQUIRE(!contains(ellipse, Point(46, 0.5)));
+    auto hexagon = PolygonShape();
+    hexagon.m_corner_count = 6;
+    hexagon.m_size = Size(100, 90);
+    auto inside = get_outline(hexagon, StrokeAlignment::INSIDE);
+    REQUIRE(contains(inside, Point(30, 1)));
+    REQUIRE(!contains(inside, Point(70, 1)));
+    auto center = get_outline(hexagon, StrokeAlignment::CENTER);
+    REQUIRE(contains(center, Point(77.4, 4.4)));
+    REQUIRE(!contains(center, Point(30, 0.5)));
   }
 
   TEST_CASE("artboard") {

@@ -292,7 +292,7 @@ Rect Rellu::make_drawn_box(
   auto origin = round_point(start);
   auto delta = round_point(end) - origin;
   if(modifiers.testFlag(Qt::ShiftModifier)) {
-    auto side = std::max(std::abs(delta.m_x), std::abs(delta.m_y));
+    auto side = std::min(std::abs(delta.m_x), std::abs(delta.m_y));
     delta = Point(get_sign(delta.m_x) * side, get_sign(delta.m_y) * side);
   }
   if(modifiers.testFlag(Qt::AltModifier)) {
@@ -304,6 +304,45 @@ Rect Rellu::make_drawn_box(
   return Rect(std::min(origin.m_x, corner.m_x),
     std::min(origin.m_y, corner.m_y), std::abs(delta.m_x),
     std::abs(delta.m_y));
+}
+
+Rect Rellu::make_drawn_box(Point start, Point end,
+    Qt::KeyboardModifiers modifiers, Size aspect) {
+  if(!modifiers.testFlag(Qt::ShiftModifier)) {
+    return make_drawn_box(start, end, modifiers);
+  }
+  auto origin = round_point(start);
+  auto delta = round_point(end) - origin;
+  auto is_centered = modifiers.testFlag(Qt::AltModifier);
+  if(is_centered) {
+    delta = Point(2 * delta.m_x, 2 * delta.m_y);
+  }
+  auto width = std::abs(delta.m_x);
+  auto height = std::abs(delta.m_y);
+  if(!(width > 0) || !(height > 0)) {
+    return Rect(origin.m_x, origin.m_y, 0, 0);
+  }
+  auto fitted = aspect.m_width / aspect.m_height * height;
+  if(fitted < width) {
+    width = fitted;
+  } else {
+    height = aspect.m_height / aspect.m_width * width;
+  }
+  auto snap = [&] (double size) {
+    size = std::max(size, 1.0);
+    if(is_centered) {
+      return 2 * std::round(size / 2);
+    }
+    return std::round(size);
+  };
+  width = snap(width);
+  height = snap(height);
+  if(is_centered) {
+    return Rect(origin.m_x - width / 2, origin.m_y - height / 2, width,
+      height);
+  }
+  return Rect(delta.m_x < 0 ? origin.m_x - width : origin.m_x,
+    delta.m_y < 0 ? origin.m_y - height : origin.m_y, width, height);
 }
 
 bool Rellu::hold_drawn_layout(

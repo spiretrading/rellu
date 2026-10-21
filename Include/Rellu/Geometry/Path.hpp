@@ -1,6 +1,7 @@
 #ifndef RELLU_GEOMETRY_PATH_HPP
 #define RELLU_GEOMETRY_PATH_HPP
 #include <array>
+#include <cstddef>
 #include <numbers>
 #include <vector>
 #include "Rellu/Geometry/Matrix.hpp"
@@ -97,6 +98,12 @@ namespace Rellu {
 
       /** Returns <code>true</code> iff there are no segments. */
       bool is_empty() const;
+
+      /**
+       * Reserves room for segments added later.
+       * @param count The number of segments to make room for in total.
+       */
+      void reserve(std::size_t count);
 
       /**
        * Starts a new subpath, replacing the previous subpath if it consists

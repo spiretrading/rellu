@@ -1,15 +1,53 @@
 #include <cstddef>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <stdexcept>
+#include <utility>
+#include <QByteArray>
 #include <rhi/qrhi_platform.h>
 #include "Rellu/Rendering/OffscreenRenderer.hpp"
 
 using namespace Rellu;
 
 namespace {
+  using CacheKey = std::pair<QRhi::Implementation, bool>;
+
+  std::mutex& get_cache_mutex() {
+    static auto mutex = std::mutex();
+    return mutex;
+  }
+
+  std::map<CacheKey, QByteArray>& get_caches() {
+    static auto caches = std::map<CacheKey, QByteArray>();
+    return caches;
+  }
+
+  CacheKey to_key(RenderBackend backend) {
+    return CacheKey(backend.m_implementation, backend.m_is_software);
+  }
+
+  void load_cache(QRhi& rhi, RenderBackend backend) {
+    auto lock = std::lock_guard(get_cache_mutex());
+    auto& caches = get_caches();
+    auto cache = caches.find(to_key(backend));
+    if(cache != caches.end()) {
+      rhi.setPipelineCacheData(cache->second);
+    }
+  }
+
+  void save_cache(QRhi& rhi, RenderBackend backend) {
+    auto data = rhi.pipelineCacheData();
+    if(data.isEmpty()) {
+      return;
+    }
+    auto lock = std::lock_guard(get_cache_mutex());
+    get_caches()[to_key(backend)] = std::move(data);
+  }
+
   auto make_rhi(
       RenderBackend backend, std::unique_ptr<QOffscreenSurface>& surface) {
-    auto flags = QRhi::Flags();
+    auto flags = QRhi::Flags(QRhi::EnablePipelineCacheDataSave);
     if(backend.m_is_software) {
       flags |= QRhi::PreferSoftwareRenderer;
     }
@@ -38,6 +76,7 @@ namespace {
     if(!rhi) {
       throw std::runtime_error("Unable to create the QRhi.");
     }
+    load_cache(*rhi, backend);
     return rhi;
   }
 
@@ -116,6 +155,7 @@ OffscreenRenderer::~OffscreenRenderer() {
   if(m_target) {
     m_renderer->release();
   }
+  save_cache(*m_rhi, m_backend);
 }
 
 RenderBackend OffscreenRenderer::get_backend() const {
@@ -201,4 +241,5 @@ void OffscreenRenderer::prepare(QSize size) {
   create(*target);
   m_renderer->initialize(*m_rhi, *m_descriptor, 1);
   m_target = std::move(target);
+  save_cache(*m_rhi, m_backend);
 }

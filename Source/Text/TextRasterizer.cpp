@@ -1,8 +1,10 @@
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <list>
 #include <mutex>
 #include <unordered_map>
 #include "Rellu/Text/TextRasterizer.hpp"
@@ -255,11 +257,28 @@ namespace {
 }
 
 struct TextRasterizer::Backend {
+  struct Entry {
+    CoverageMask m_mask;
+    std::list<GlyphKey>::iterator m_use;
+  };
   GlyphRasterization m_rasterization;
   std::unique_ptr<GlyphRenderer> m_direct_write;
   std::unique_ptr<GlyphRenderer> m_free_type;
-  std::mutex m_mutex;
-  std::unordered_map<GlyphKey, CoverageMask, GlyphKeyHash> m_glyphs;
+  std::size_t m_capacity;
+  std::size_t m_size;
+  mutable std::mutex m_mutex;
+  std::list<GlyphKey> m_uses;
+  std::unordered_map<GlyphKey, Entry, GlyphKeyHash> m_glyphs;
+
+  static std::size_t get_footprint(const CoverageMask& mask) {
+    return mask.m_coverage.size() + sizeof(Entry) + sizeof(GlyphKey);
+  }
+
+  bool contains(
+      const PlacedGlyph& glyph, double size, const Matrix& transform) const {
+    return m_glyphs.contains(
+      GlyphKey(glyph.m_typeface.get(), glyph.m_index, size, transform));
+  }
 
   const CoverageMask& get(
       const PlacedGlyph& glyph, double size, const Matrix& transform) {
@@ -267,7 +286,8 @@ struct TextRasterizer::Backend {
       GlyphKey(glyph.m_typeface.get(), glyph.m_index, size, transform);
     auto entry = m_glyphs.find(key);
     if(entry != m_glyphs.end()) {
-      return entry->second;
+      m_uses.splice(m_uses.begin(), m_uses, entry->second.m_use);
+      return entry->second.m_mask;
     }
     auto mask = CoverageMask();
     if(!m_direct_write || !m_direct_write->render(
@@ -278,7 +298,19 @@ struct TextRasterizer::Backend {
       m_free_type->render(
         glyph.m_typeface, glyph.m_index, size, transform, mask);
     }
-    return m_glyphs.emplace(key, std::move(mask)).first->second;
+    m_size += get_footprint(mask);
+    m_uses.push_front(key);
+    return m_glyphs.emplace(key,
+      Entry(std::move(mask), m_uses.begin())).first->second.m_mask;
+  }
+
+  void trim() {
+    while(m_size > m_capacity && !m_uses.empty()) {
+      auto entry = m_glyphs.find(m_uses.back());
+      m_size -= get_footprint(entry->second.m_mask);
+      m_glyphs.erase(entry);
+      m_uses.pop_back();
+    }
   }
 };
 
@@ -286,7 +318,13 @@ TextRasterizer::TextRasterizer()
   : TextRasterizer(DEFAULT_RASTERIZATION) {}
 
 TextRasterizer::TextRasterizer(GlyphRasterization rasterization)
+  : TextRasterizer(rasterization, DEFAULT_CAPACITY) {}
+
+TextRasterizer::TextRasterizer(
+    GlyphRasterization rasterization, std::size_t capacity)
     : m_backend(std::make_unique<Backend>()) {
+  m_backend->m_capacity = capacity;
+  m_backend->m_size = 0;
   if(rasterization == GlyphRasterization::DIRECT_WRITE) {
     m_backend->m_direct_write = make_direct_write_renderer();
   }
@@ -301,6 +339,15 @@ TextRasterizer::~TextRasterizer() = default;
 
 GlyphRasterization TextRasterizer::get_rasterization() const {
   return m_backend->m_rasterization;
+}
+
+std::size_t TextRasterizer::get_capacity() const {
+  return m_backend->m_capacity;
+}
+
+std::size_t TextRasterizer::get_cache_size() const {
+  auto lock = std::lock_guard(m_backend->m_mutex);
+  return m_backend->m_size;
 }
 
 bool TextRasterizer::is_supported(const Matrix& transform) {
@@ -329,6 +376,40 @@ Point TextRasterizer::get_origin(
     y = std::floor(origin.m_y + 0.5);
   }
   return Point(x, y);
+}
+
+bool TextRasterizer::prepare(const TextLayout& layout,
+    const Matrix& transform,
+    std::chrono::steady_clock::time_point deadline) const {
+  if(!is_supported(transform)) {
+    return true;
+  }
+  auto scale = std::sqrt(std::abs(transform.get_determinant()));
+  auto residual = Matrix(transform.m_a / scale, transform.m_b / scale,
+    transform.m_c / scale, transform.m_d / scale, 0, 0);
+  auto lock = std::lock_guard(m_backend->m_mutex);
+  auto is_started = false;
+  for(auto& glyph : layout.m_glyphs) {
+    if(is_outlined(glyph, transform) ||
+        !glyph.m_typeface->get_color_layers(glyph.m_index).empty()) {
+      continue;
+    }
+    auto origin = get_origin(glyph, transform);
+    auto offset = residual;
+    offset.m_tx = origin.m_x - std::floor(origin.m_x);
+    offset.m_ty = origin.m_y - std::floor(origin.m_y);
+    if(m_backend->contains(glyph, glyph.m_size * scale, offset)) {
+      continue;
+    }
+    if(is_started && std::chrono::steady_clock::now() >= deadline) {
+      m_backend->trim();
+      return false;
+    }
+    m_backend->get(glyph, glyph.m_size * scale, offset);
+    is_started = true;
+  }
+  m_backend->trim();
+  return true;
 }
 
 std::vector<TextRaster> TextRasterizer::rasterize(
@@ -390,6 +471,7 @@ std::vector<TextRaster> TextRasterizer::rasterize(
       }
     }
   }
+  m_backend->trim();
   return rasters;
 }
 

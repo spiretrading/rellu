@@ -265,6 +265,27 @@ TEST_SUITE("Shapes") {
     REQUIRE(is_near(vertices[5], Point(20, 0)));
   }
 
+  TEST_CASE("equilateral_aspect") {
+    auto is_near_size = [] (Size left, Size right) {
+      return std::abs(left.m_width - right.m_width) < 1e-9 &&
+        std::abs(left.m_height - right.m_height) < 1e-9;
+    };
+    auto triangle = std::sqrt(3.0) / 2;
+    REQUIRE(is_near_size(get_equilateral_aspect(3), Size(1, triangle)));
+    REQUIRE(is_near_size(get_equilateral_aspect(4), Size(1, 1)));
+    REQUIRE(is_near_size(get_equilateral_aspect(5),
+      Size(1, (1 + std::cos(std::numbers::pi / 5)) /
+        (2 * std::sin(2 * std::numbers::pi / 5)))));
+    REQUIRE(is_near_size(get_equilateral_aspect(6), Size(1, triangle)));
+    REQUIRE(is_near_size(get_equilateral_aspect(8), Size(1, 1)));
+    REQUIRE(get_equilateral_aspect(2) == Size(1, 1));
+    REQUIRE(is_equilateral(3, Size(100, 86.6)));
+    REQUIRE(is_equilateral(6, Size(80, 69.28)));
+    REQUIRE(is_equilateral(4, Size(30, 30)));
+    REQUIRE(!is_equilateral(6, Size(40, 40)));
+    REQUIRE(!is_equilateral(3, Size(0, 0)));
+  }
+
   TEST_CASE("rounded_polygon") {
     auto square =
       std::vector{Point(0, 0), Point(10, 0), Point(10, 10), Point(0, 10)};

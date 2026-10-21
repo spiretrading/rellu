@@ -1,9 +1,40 @@
 #include <algorithm>
+#include <cmath>
 #include <unordered_set>
 #include <utility>
 #include "Rellu/Commands/PolygonCommands.hpp"
+#include "Rellu/Geometry/Shapes.hpp"
 
 using namespace Rellu;
+
+namespace {
+  double snap(double start, double size, double offset) {
+    auto snapped = std::round(start - offset) + offset;
+    return std::round(start + size - offset) + offset - snapped;
+  }
+
+  double get_offset(double position) {
+    if(position - std::floor(position) == 0.5) {
+      return 0.5;
+    }
+    return 0;
+  }
+
+  void reshape(Matrix& transform, Size& size, int count) {
+    auto aspect = get_equilateral_aspect(count);
+    auto center = transform.map(Point(size.m_width / 2, size.m_height / 2));
+    size.m_width = aspect.m_width / aspect.m_height * size.m_height;
+    if(transform.m_a == 1 && transform.m_b == 0 && transform.m_c == 0 &&
+        transform.m_d == 1) {
+      size = Size(snap(transform.m_tx, size.m_width, get_offset(
+        transform.m_tx)), snap(transform.m_ty, size.m_height,
+          get_offset(transform.m_ty)));
+    }
+    auto moved = transform.map(Point(size.m_width / 2, size.m_height / 2));
+    transform.m_tx += center.m_x - moved.m_x;
+    transform.m_ty += center.m_y - moved.m_y;
+  }
+}
 
 SetCornerCountCommand::SetCornerCountCommand(
   std::vector<NodeId> nodes, int count) noexcept
@@ -32,8 +63,14 @@ void SetCornerCountCommand::apply(
     }
     auto payload = *shape;
     auto& edited = std::get<PolygonShape>(payload.m_geometry);
+    auto is_equal = is_equilateral(edited.m_corner_count, edited.m_size);
     edited.m_corner_count = m_count;
     edited.m_vertices.clear();
+    if(is_equal) {
+      auto header = node->m_header;
+      reshape(header.m_transform, edited.m_size, m_count);
+      transaction.replace_header(std::move(header));
+    }
     transaction.replace_payload(id, std::move(payload));
   }
 }

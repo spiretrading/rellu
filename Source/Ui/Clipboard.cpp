@@ -2,14 +2,17 @@
 #include <cmath>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <map>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
 #include <QBuffer>
+#include <QDir>
 #include <QImage>
 #include <QUuid>
 #include "Rellu/Commands/ArtboardCommands.hpp"
@@ -20,6 +23,7 @@
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/StyleCommands.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
+#include "Rellu/Io/SvgImport.hpp"
 #include "Rellu/Io/XdClipboard.hpp"
 #include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/Transaction.hpp"
@@ -35,6 +39,9 @@ namespace {
     "application/x-qt-windows-mime;value=\"%1\"").arg(QString::fromLatin1(
       XD_CLIPBOARD_FORMAT.data(),
       static_cast<qsizetype>(XD_CLIPBOARD_FORMAT.size())));
+  const auto SVG_TYPE = QStringLiteral(
+    "application/x-qt-windows-mime;value=\"Scalable Vector Graphics\"");
+  const auto IMAGE_DIRECTORY = QStringLiteral("Rellu Clipboard");
   constexpr auto TEXT_FRAME_SIZE = 300.0;
   constexpr auto SEQUENCE_PADDING = 10.0;
   constexpr auto MINIMUM_OVERLAP = 10.0;
@@ -107,6 +114,45 @@ namespace {
       return &scroll->m_destination;
     }
     return nullptr;
+  }
+
+  QString decode_text(const QByteArray& bytes) {
+    auto text = QString();
+    if(bytes.size() >= 2 && bytes[1] == '\0') {
+      text = QString::fromUtf16(reinterpret_cast<const char16_t*>(
+        bytes.constData()), bytes.size() / 2);
+    } else {
+      text = QString::fromUtf8(bytes);
+    }
+    while(!text.isEmpty() && text.back() == QChar(0)) {
+      text.chop(1);
+    }
+    return text;
+  }
+
+  QString find_svg(const QMimeData& data) {
+    if(data.hasFormat(SVG_TYPE)) {
+      if(auto text = decode_text(data.data(SVG_TYPE)); is_svg(text)) {
+        return text;
+      }
+    }
+    if(data.hasText()) {
+      if(auto text = data.text(); is_svg(text)) {
+        return text;
+      }
+    }
+    return QString();
+  }
+
+  std::vector<std::filesystem::path>& get_image_folders() {
+    static auto folders = std::vector<std::filesystem::path>();
+    return folders;
+  }
+
+  std::filesystem::path to_folder_name(const QByteArray& mark) {
+    auto id = QUuid::fromString(QString::fromLatin1(mark));
+    return std::filesystem::path(
+      id.toString(QUuid::WithoutBraces).toStdU16String());
   }
 
   bool can_copy(const Document& document, const NodeId& id) {
@@ -1363,7 +1409,11 @@ std::shared_ptr<const Clipboard::Content>& Clipboard::get_published() {
   return published;
 }
 
-Clipboard::Clipboard() = default;
+Clipboard::Clipboard()
+  : Clipboard(get_default_image_directory()) {}
+
+Clipboard::Clipboard(std::filesystem::path directory)
+  : m_directory(std::move(directory)) {}
 
 Clipboard::~Clipboard() = default;
 
@@ -1404,8 +1454,28 @@ bool Clipboard::copy(const Document& document,
     items.push_back(XdClipboardItem(roots[i],
       content->m_trees[i].m_transform, content->m_trees[i].m_offset));
   }
+  auto folder = std::filesystem::path();
+  auto error = std::error_code();
+  if(!m_directory.empty()) {
+    folder = m_directory / to_folder_name(content->m_mark);
+    if(!std::filesystem::create_directories(folder, error) || error) {
+      folder.clear();
+    }
+  }
   content->m_xd = write_xd_clipboard(document, items,
-    content->get_bounds().value_or(Rect(0, 0, 0, 0)), layout);
+    content->get_bounds().value_or(Rect(0, 0, 0, 0)), layout, folder);
+  auto& folders = get_image_folders();
+  for(auto& earlier : folders) {
+    std::filesystem::remove_all(earlier, error);
+  }
+  folders.clear();
+  if(!folder.empty()) {
+    if(std::filesystem::is_empty(folder, error)) {
+      std::filesystem::remove(folder, error);
+    } else {
+      folders.push_back(folder);
+    }
+  }
   m_content = std::move(content);
   get_published() = m_content;
   return true;
@@ -1413,6 +1483,39 @@ bool Clipboard::copy(const Document& document,
 
 void Clipboard::clear() {
   m_content.reset();
+}
+
+std::filesystem::path Clipboard::get_default_image_directory() {
+  return std::filesystem::path(
+    QDir::temp().filePath(IMAGE_DIRECTORY).toStdU16String());
+}
+
+void Clipboard::remove_stale_images(
+    const std::filesystem::path& directory, const QMimeData* data) {
+  auto error = std::error_code();
+  auto current = std::filesystem::path();
+  auto time = std::optional<std::filesystem::file_time_type>();
+  if(data && data->hasFormat(MARK_TYPE)) {
+    current = directory / to_folder_name(data->data(MARK_TYPE));
+    if(auto modified = std::filesystem::last_write_time(current, error);
+        !error) {
+      time = modified;
+    }
+  }
+  auto stale = std::vector<std::filesystem::path>();
+  for(auto& entry :
+      std::filesystem::directory_iterator(directory, error)) {
+    if(entry.path() == current) {
+      continue;
+    }
+    auto modified = entry.last_write_time(error);
+    if(error || !time || modified < *time) {
+      stale.push_back(entry.path());
+    }
+  }
+  for(auto& path : stale) {
+    std::filesystem::remove_all(path, error);
+  }
 }
 
 std::unique_ptr<QMimeData> Clipboard::make_mime_data() const {
@@ -1429,7 +1532,7 @@ std::unique_ptr<QMimeData> Clipboard::make_mime_data() const {
 
 bool Clipboard::is_loadable(const QMimeData& data) {
   return data.hasFormat(MARK_TYPE) || data.hasFormat(XD_TYPE) ||
-    data.hasImage() || data.hasText();
+    data.hasImage() || data.hasText() || !find_svg(data).isEmpty();
 }
 
 bool Clipboard::load(const QMimeData& data, const TextMeasurer& measurer) {
@@ -1460,6 +1563,20 @@ bool Clipboard::load(const QMimeData& data, const TextMeasurer& measurer) {
             ++index;
           }
         }
+        content->m_is_foreign = true;
+        m_content = std::move(content);
+        return true;
+      }
+    } catch(const std::exception&) {}
+  }
+  if(auto svg = find_svg(data); !svg.isEmpty()) {
+    auto scratch = Document();
+    try {
+      read_svg(svg, scratch);
+      auto& canvas = scratch.get_canvas();
+      if(!canvas.empty()) {
+        auto content = Content::make(scratch, canvas, measurer);
+        content->m_is_sequenced = true;
         content->m_is_foreign = true;
         m_content = std::move(content);
         return true;

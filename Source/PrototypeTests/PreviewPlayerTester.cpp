@@ -504,6 +504,109 @@ TEST_SUITE("PreviewPlayer") {
     REQUIRE(player->get_reports().empty());
   }
 
+  TEST_CASE("scroll_to_fixed") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    auto low = NodeId();
+    auto middle = NodeId();
+    auto pin = NodeId();
+    {
+      auto transaction = Transaction(document);
+      low = add_box(transaction, scene.m_long, "Low", Rect(200, 600, 50, 20),
+        make_color(0, 0, 255));
+      middle = add_box(transaction, scene.m_long, "Middle",
+        Rect(200, 250, 50, 20), make_color(0, 0, 255));
+      pin = add_box(transaction, scene.m_long, "Pin", Rect(300, 10, 50, 20),
+        make_color(0, 0, 255));
+      for(auto& id : {low, middle, pin}) {
+        auto header = document.get(id).m_header;
+        header.m_is_fixed_position = true;
+        transaction.replace_header(std::move(header));
+      }
+      transaction.commit();
+      document.clear_history();
+    }
+    auto instant = Animation(Transition::DISSOLVE, Easing::EASE_OUT, 0);
+    auto to_low = add_interaction(document, scene.m_header, KeyTrigger("A"),
+      ScrollTransition(low, 0, instant));
+    auto to_middle = add_interaction(document, scene.m_header,
+      KeyTrigger("B"), ScrollTransition(middle, 0, instant));
+    add_interaction(document, pin, TapTrigger(),
+      ScrollTransition(scene.m_footer, 0, instant));
+    auto player = make_player(document, scene.m_long);
+    REQUIRE(player->trigger(to_low));
+    REQUIRE(player->get_scroll() == 500);
+    player->scroll(-1000);
+    REQUIRE(player->trigger(to_middle));
+    REQUIRE(player->get_scroll() == 250);
+    player->scroll(-1000);
+    tap(*player, Point(310, 15));
+    REQUIRE(player->get_scroll() == 500);
+    REQUIRE(player->get_reports().empty());
+  }
+
+  TEST_CASE("scroll_to_overlay") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    auto sheet = NodeId();
+    auto target = NodeId();
+    auto close = NodeId();
+    auto card = NodeId();
+    auto item = NodeId();
+    auto go = NodeId();
+    {
+      auto transaction = Transaction(document);
+      sheet = add_board(transaction, "Sheet", Rect(2000, 0, 300, 900),
+        make_color(255, 255, 255));
+      close = add_box(transaction, sheet, "Close", Rect(0, 0, 300, 50),
+        make_color(0, 0, 0));
+      target = add_box(transaction, sheet, "Target", Rect(0, 700, 300, 50),
+        make_color(255, 0, 0));
+      card = add_board(transaction, "Small", Rect(2500, 0, 200, 200),
+        make_color(255, 255, 255));
+      go = add_box(transaction, card, "Go", Rect(0, 0, 200, 20),
+        make_color(0, 0, 0));
+      item = add_box(transaction, card, "Item", Rect(0, 150, 200, 20),
+        make_color(255, 0, 0));
+      transaction.commit();
+      document.clear_history();
+    }
+    auto instant = Animation(Transition::NONE, Easing::EASE_OUT, 0);
+    auto show_sheet = add_interaction(document, scene.m_header,
+      KeyTrigger("A"), Overlay(sheet, Point(40, 0), instant));
+    auto show_small = add_interaction(document, scene.m_header,
+      KeyTrigger("B"), Overlay(card, Point(40, 40), instant));
+    add_interaction(document, close, TapTrigger(), ScrollTransition(target, 0,
+      Animation(Transition::DISSOLVE, Easing::EASE_OUT, 0.3)));
+    add_interaction(document, go, TapTrigger(),
+      ScrollTransition(item, 0, instant));
+    auto player = make_player(document, scene.m_long);
+    player->set_window_height(540);
+    REQUIRE(player->trigger(show_sheet));
+    tap(*player, Point(60, 10));
+    REQUIRE(player->is_animating());
+    player->advance(0.3);
+    REQUIRE(!player->is_animating());
+    REQUIRE(player->get_overlays().back().m_scroll == 360);
+    REQUIRE(player->get_layers().back().m_scroll == 360);
+    REQUIRE(player->get_scroll() == 0);
+    player->scroll(Point(60, 100), Point(0, -50));
+    REQUIRE(player->get_overlays().back().m_scroll == 360);
+    auto unbounded = make_player(document, scene.m_long);
+    REQUIRE(unbounded->trigger(show_sheet));
+    tap(*unbounded, Point(60, 10));
+    unbounded->advance(0.3);
+    REQUIRE(unbounded->get_overlays().back().m_scroll == 600);
+    auto fitting = make_player(document, scene.m_long);
+    REQUIRE(fitting->trigger(show_small));
+    tap(*fitting, Point(50, 45));
+    REQUIRE(!fitting->is_animating());
+    REQUIRE(fitting->get_overlays().back().m_scroll == 0);
+    REQUIRE(fitting->get_scroll() == 0);
+    REQUIRE(player->get_reports().empty());
+    REQUIRE(fitting->get_reports().empty());
+  }
+
   TEST_CASE("position") {
     auto document = Document();
     auto scene = build_prototype_scene(document);

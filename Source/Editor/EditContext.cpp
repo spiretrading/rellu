@@ -49,6 +49,10 @@ const NodeId& EditContext::get_hover() const {
   return m_hover;
 }
 
+const InteractionId& EditContext::get_interaction() const {
+  return m_interaction;
+}
+
 NodeId EditContext::get_scope() const {
   if(!m_container.is_nil()) {
     return m_container;
@@ -107,6 +111,14 @@ void EditContext::set_hover(const NodeId& hover) {
     return;
   }
   m_hover = hover;
+  m_signal();
+}
+
+void EditContext::set_interaction(const InteractionId& interaction) {
+  if(interaction == m_interaction) {
+    return;
+  }
+  m_interaction = interaction;
   m_signal();
 }
 

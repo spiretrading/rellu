@@ -2,7 +2,6 @@
 #include <cctype>
 #include <memory>
 #include <doctest/doctest.h>
-#include <QJsonDocument>
 #include "Rellu/Commands/History.hpp"
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Io/XdPackage.hpp"
@@ -88,11 +87,24 @@ TEST_SUITE("RoundTrip") {
   TEST_CASE("scroll_to") {
     auto document = Document();
     auto scene = build_prototype_scene(document);
-    add_interaction(document, scene.m_header, TapTrigger(),
-      ScrollTransition(scene.m_footer, -40, Animation(
-        Transition::DISSOLVE, Easing::EASE_IN_OUT, DEFAULT_DURATION)));
-    add_interaction(document, scene.m_footer, TapTrigger(),
-      ScrollTransition(NodeId(), 0, make_empty_animation()));
+    auto add_header = [&] {
+      add_interaction(document, scene.m_header, TapTrigger(),
+        ScrollTransition(scene.m_footer, -40, Animation(
+          Transition::DISSOLVE, Easing::EASE_IN_OUT, DEFAULT_DURATION)));
+    };
+    auto add_footer = [&] {
+      add_interaction(document, scene.m_footer, TapTrigger(),
+        ScrollTransition(NodeId(), 0, make_empty_animation()));
+    };
+    auto is_header_first =
+      to_string(scene.m_footer) < to_string(scene.m_header);
+    if(is_header_first) {
+      add_header();
+      add_footer();
+    } else {
+      add_footer();
+      add_header();
+    }
     auto data = write_xd(document);
     auto raw = XdPackage(data).read(XdPackage::INTERACTIONS);
     auto json = QByteArray();
@@ -101,9 +113,15 @@ TEST_SUITE("RoundTrip") {
         json.append(c);
       }
     }
-    auto header = json.indexOf(
-      QByteArray::fromStdString(to_string(scene.m_header)));
-    REQUIRE(header >= 0);
+    auto find_entry = [&] (const NodeId& owner) {
+      auto index = json.indexOf(
+        QByteArray::fromStdString("\"" + to_string(owner) + "\":["));
+      REQUIRE(index >= 0);
+      return index;
+    };
+    auto header = find_entry(scene.m_header);
+    auto footer = find_entry(scene.m_footer);
+    REQUIRE((header < footer) == is_header_first);
     auto find = [&] (const char* key, qsizetype from) {
       auto index = json.indexOf(key, from);
       REQUIRE(index > from);
@@ -118,8 +136,6 @@ TEST_SUITE("RoundTrip") {
     auto locale = find("\"voiceLocale\":\"en-us\"", offset);
     auto trigger = find("\"triggerEvent\":\"tap\"", locale);
     find("\"action\":\"scroll-transition\"", trigger);
-    auto footer = json.indexOf(
-      QByteArray::fromStdString(to_string(scene.m_footer)), header);
     auto footer_properties = find("\"properties\"", footer);
     auto end = find("\"triggerEvent\"", footer_properties);
     auto body = json.mid(footer_properties, end - footer_properties);
@@ -128,8 +144,8 @@ TEST_SUITE("RoundTrip") {
     auto reloaded = Document();
     import_xd(XdPackage(data), reloaded);
     REQUIRE(get_sorted(reloaded) == get_sorted(document));
-    REQUIRE(QJsonDocument::fromJson(XdPackage(write_xd(reloaded)).read(
-      XdPackage::INTERACTIONS)) == QJsonDocument::fromJson(raw));
+    REQUIRE(XdPackage(write_xd(reloaded)).read(XdPackage::INTERACTIONS) ==
+      raw);
   }
 
   TEST_CASE("removal") {

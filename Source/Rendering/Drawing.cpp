@@ -46,6 +46,24 @@ namespace {
     return grow(bounds, margin / scale).intersects(region);
   }
 
+  Rect map_bounds(const Rect& bounds, const Matrix& transform) {
+    auto first = transform.map(bounds.get_top_left());
+    auto left = first.m_x;
+    auto top = first.m_y;
+    auto right = left;
+    auto bottom = top;
+    for(auto& corner : {Point(bounds.get_right(), bounds.get_top()),
+        Point(bounds.get_left(), bounds.get_bottom()),
+        Point(bounds.get_right(), bounds.get_bottom())}) {
+      auto point = transform.map(corner);
+      left = std::min(left, point.m_x);
+      top = std::min(top, point.m_y);
+      right = std::max(right, point.m_x);
+      bottom = std::max(bottom, point.m_y);
+    }
+    return Rect(left, top, right - left, bottom - top);
+  }
+
   Rect get_bounds(const std::shared_ptr<const Path>& path,
       const Matrix& transform, const std::optional<Rect>& clip) {
     auto left = std::numeric_limits<double>::infinity();
@@ -83,7 +101,13 @@ namespace {
     auto fills = Rect(0, 0, 0, 0);
     for(auto& command : list) {
       if(auto fill = std::get_if<FillCommand>(&command)) {
-        auto bounds = Rellu::get_bounds(*fill->m_path, fill->m_transform);
+        auto bounds = Rect(0, 0, 0, 0);
+        if(fill->m_bounds && fill->m_transform.m_b == 0 &&
+            fill->m_transform.m_c == 0) {
+          bounds = map_bounds(*fill->m_bounds, fill->m_transform);
+        } else {
+          bounds = Rellu::get_bounds(*fill->m_path, fill->m_transform);
+        }
         if(fill->m_clip) {
           bounds = intersect(bounds, *fill->m_clip);
         }
@@ -149,8 +173,16 @@ namespace {
     for(auto i = std::uint32_t(0); i != list.size(); ++i) {
       auto& command = list[i];
       if(auto fill = std::get_if<FillCommand>(&command)) {
-        add(Extent(get_bounds(fill->m_path, fill->m_transform, fill->m_clip),
-          MARGIN), i, i + 1, false);
+        auto bounds = Rect(0, 0, 0, 0);
+        if(fill->m_bounds) {
+          bounds = map_bounds(*fill->m_bounds, fill->m_transform);
+          if(fill->m_clip) {
+            bounds = intersect(bounds, *fill->m_clip);
+          }
+        } else {
+          bounds = get_bounds(fill->m_path, fill->m_transform, fill->m_clip);
+        }
+        add(Extent(bounds, MARGIN), i, i + 1, false);
       } else if(auto blur = std::get_if<BackdropBlurCommand>(&command)) {
         auto bounds = grow(get_bounds(blur->m_path, blur->m_transform,
           blur->m_clip), 3 * std::abs(blur->m_radius));

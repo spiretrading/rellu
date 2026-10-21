@@ -1,3 +1,5 @@
+#include <cstddef>
+#include <limits>
 #include <optional>
 #include <utility>
 #include "Rellu/Io/XdImporters.hpp"
@@ -172,14 +174,16 @@ namespace {
   }
 
   void read_shadows(XdObject& params, QLatin1StringView key, bool is_inner,
-      bool is_visible, std::vector<Effect>& effects) {
+      bool is_visible, std::size_t limit, std::vector<Effect>& effects) {
     auto shadows = params.get_array(key);
     if(!shadows) {
       return;
     }
     for(auto i = std::size_t(0); i != shadows->get_size(); ++i) {
       if(auto shadow = shadows->get_object(i)) {
-        if(auto effect = read_shadow(*shadow, is_inner, is_visible)) {
+        if(i >= limit) {
+          shadow->consume_all();
+        } else if(auto effect = read_shadow(*shadow, is_inner, is_visible)) {
           effects.push_back(std::move(*effect));
         }
       }
@@ -327,6 +331,7 @@ std::optional<Stroke> Rellu::read_stroke(XdObject& stroke) {
 
 std::vector<Effect> Rellu::read_effects(XdArray& filters) {
   auto effects = std::vector<Effect>();
+  auto has_drop_shadow = false;
   for(auto i = std::size_t(0); i != filters.get_size(); ++i) {
     auto filter = filters.get_object(i);
     if(!filter) {
@@ -340,10 +345,17 @@ std::vector<Effect> Rellu::read_effects(XdArray& filters) {
       continue;
     }
     if(type == "dropShadow"_L1) {
-      read_shadows(*params, "dropShadows"_L1, false, is_visible, effects);
-      filter->consume("type"_L1);
+      if(!has_drop_shadow) {
+        read_shadows(*params, "dropShadows"_L1, false, is_visible, 1, effects);
+        has_drop_shadow = true;
+        filter->consume("type"_L1);
+      } else {
+        filter->consume_all();
+        params->consume_all();
+      }
     } else if(type == "uxdesign#innerShadow"_L1) {
-      read_shadows(*params, "innerShadows"_L1, true, is_visible, effects);
+      read_shadows(*params, "innerShadows"_L1, true, is_visible,
+        std::numeric_limits<std::size_t>::max(), effects);
       filter->consume("type"_L1);
     } else if(type == "uxdesign#blur"_L1) {
       if(auto blur = read_blur(*params, is_visible)) {

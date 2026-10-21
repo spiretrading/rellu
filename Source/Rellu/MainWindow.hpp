@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <QAbstractButton>
 #include <QKeyEvent>
 #include <QMainWindow>
 #include <QPainter>
@@ -118,7 +119,7 @@ namespace Rellu {
       DocumentView* m_view;
       QWidget* m_menu_row;
       QMenuBar* m_menu_bar;
-      QWidget* m_maximize;
+      QAbstractButton* m_maximize;
       ActionRegistry m_actions;
       CommandRegistry m_commands;
       std::unique_ptr<EditActions> m_edit_actions;
@@ -155,6 +156,7 @@ namespace Rellu {
       Subscription m_tool_subscription;
       bool m_is_launching;
       bool m_is_restored_expanded;
+      std::optional<QRect> m_restored_bounds;
 
       QMenuBar* make_layout();
       void add_actions();

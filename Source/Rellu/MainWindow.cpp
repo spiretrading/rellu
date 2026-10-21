@@ -14,6 +14,7 @@
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QContextMenuEvent>
+#include <QEnterEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -139,7 +140,8 @@ namespace {
   class CaptionButton : public QAbstractButton {
     public:
       CaptionButton(CaptionKind kind, const QString& tip)
-          : m_kind(kind) {
+          : m_kind(kind),
+            m_is_hovered(false) {
         setObjectName("caption_button");
         setFocusPolicy(Qt::NoFocus);
         setFixedSize(CAPTION_BUTTON_WIDTH, MENU_ROW_HEIGHT);
@@ -149,17 +151,28 @@ namespace {
       }
 
     protected:
+      void enterEvent(QEnterEvent* event) override {
+        m_is_hovered = true;
+        update();
+        QAbstractButton::enterEvent(event);
+      }
+
+      void leaveEvent(QEvent* event) override {
+        m_is_hovered = false;
+        update();
+        QAbstractButton::leaveEvent(event);
+      }
+
       void paintEvent(QPaintEvent*) override {
         auto painter = QPainter(this);
-        auto is_hovered = underMouse();
         auto ink = QColor(0x3F, 0x3F, 0x3F);
-        if(m_kind == CaptionKind::CLOSE && (is_hovered || isDown())) {
+        if(m_kind == CaptionKind::CLOSE && (m_is_hovered || isDown())) {
           painter.fillRect(rect(), isDown() ? QColor(0xF1, 0x70, 0x7A) :
             QColor(0xE8, 0x11, 0x23));
           ink = Qt::white;
         } else if(isDown()) {
           painter.fillRect(rect(), QColor(0xC6, 0xC6, 0xC6));
-        } else if(is_hovered) {
+        } else if(m_is_hovered) {
           painter.fillRect(rect(), QColor(0xD6, 0xD6, 0xD6));
         }
         painter.setRenderHint(QPainter::Antialiasing);
@@ -189,6 +202,7 @@ namespace {
 
     private:
       CaptionKind m_kind;
+      bool m_is_hovered;
   };
 
   class HighlightOverlay : public QWidget {
@@ -364,6 +378,13 @@ MainWindow::MainWindow(QWidget* parent)
   m_app_bar->set_release_handler([this] {
     m_view->setFocus();
   });
+  auto release = [this] {
+    if(m_view) {
+      m_view->setFocus();
+    }
+  };
+  m_inspector->set_release_handler(release);
+  m_prototype_inspector->set_release_handler(release);
   auto bar = make_layout();
   add_xd_menus(m_actions);
   add_actions();
@@ -578,10 +599,14 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
 
 bool MainWindow::nativeEvent(
     const QByteArray& type, void* message, qintptr* result) {
+  if(m_restored_bounds && is_showing(message)) {
+    set_normal_bounds(*this, *m_restored_bounds);
+    m_restored_bounds.reset();
+  }
   if(m_maximize && handle_frame_event(*this, message, result,
       [this] (QPoint position) {
         return is_caption(position);
-      }, MENU_ROW_HEIGHT)) {
+      }, MENU_ROW_HEIGHT, m_maximize)) {
     return true;
   }
   return QMainWindow::nativeEvent(type, message, result);
@@ -1261,6 +1286,23 @@ void MainWindow::restore_settings() {
     } else {
       resize(1600, 960);
     }
+  } else if(auto saved = settings.value("main_window/bounds").toRect();
+      saved.isValid()) {
+    if(auto area = get_work_area(saved); area.isValid()) {
+      auto bounds = fit_window(
+        Rect(saved.x(), saved.y(), saved.width(), saved.height()),
+        Rect(area.x(), area.y(), area.width(), area.height()));
+      auto normal = QRect(static_cast<int>(bounds.m_x),
+        static_cast<int>(bounds.m_y), static_cast<int>(bounds.m_width),
+        static_cast<int>(bounds.m_height));
+      if(windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen)) {
+        QTimer::singleShot(0, this, [this, normal] {
+          set_normal_bounds(*this, normal);
+        });
+      } else {
+        m_restored_bounds = normal;
+      }
+    }
   }
   m_is_restored_expanded = static_cast<bool>(
     windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen));
@@ -1428,6 +1470,9 @@ void MainWindow::save_settings() const {
   auto settings = QSettings();
   settings.setValue("recent_files", m_recent_files.get_paths());
   settings.setValue("main_window/geometry", saveGeometry());
+  if(auto bounds = get_normal_bounds(*this); bounds.isValid()) {
+    settings.setValue("main_window/bounds", bounds);
+  }
   settings.setValue("main_window/panel",
     QString::fromStdString(m_toolbar->get_panel()));
 }

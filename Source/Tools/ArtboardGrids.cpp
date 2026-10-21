@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <vector>
 #include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Geometry/Rect.hpp"
 #include "Rellu/Tools/ArtboardGrids.hpp"
@@ -8,6 +9,48 @@ using namespace Rellu;
 namespace {
   constexpr auto MINIMUM_CELL = 4.0;
   constexpr auto MAXIMUM_LINES = 2000;
+  constexpr auto BAND_DEPTH = 1.0;
+  constexpr auto BAND_WIDTH = 4.0 / 9;
+  constexpr auto CAP_HEIGHT = 1.0;
+
+  void add_fill(const Rect& rect, Color color, CanvasOverlay& overlay) {
+    auto shape = OverlayShape();
+    shape.m_center = rect.get_center();
+    shape.m_size = rect.get_size();
+    shape.m_fill = color;
+    shape.m_is_snapped = false;
+    overlay.m_shapes.push_back(shape);
+  }
+
+  void add_band(const Rect& column, Color color, CanvasOverlay& overlay) {
+    if(!(column.m_width > 2 * BAND_DEPTH) ||
+        !(column.m_height > 2 * BAND_DEPTH)) {
+      return;
+    }
+    auto inset = BAND_DEPTH - BAND_WIDTH;
+    auto height = column.m_height - 2 * inset;
+    auto width = column.m_width - 2 * BAND_DEPTH;
+    add_fill(Rect(column.m_x + inset, column.m_y + inset, BAND_WIDTH, height),
+      color, overlay);
+    add_fill(Rect(column.get_right() - BAND_DEPTH, column.m_y + inset,
+      BAND_WIDTH, height), color, overlay);
+    add_fill(Rect(column.m_x + BAND_DEPTH, column.m_y + inset, width,
+      BAND_WIDTH), color, overlay);
+    add_fill(Rect(column.m_x + BAND_DEPTH,
+      column.get_bottom() - BAND_DEPTH, width, BAND_WIDTH), color, overlay);
+  }
+
+  void add_caps(const Rect& left, const Rect& right, Color color,
+      CanvasOverlay& overlay) {
+    auto width = right.m_x - left.get_right();
+    if(!(width > 0) || !(left.m_height > 2 * CAP_HEIGHT)) {
+      return;
+    }
+    add_fill(Rect(left.get_right(), left.m_y, width, CAP_HEIGHT), color,
+      overlay);
+    add_fill(Rect(left.get_right(), left.get_bottom() - CAP_HEIGHT, width,
+      CAP_HEIGHT), color, overlay);
+  }
 
   void draw_columns(const LayoutGrid& grid, const Rect& frame,
       const Matrix& view, CanvasOverlay& overlay) {
@@ -20,15 +63,17 @@ namespace {
     }
     auto top = frame.m_y + margins.m_top;
     auto height = frame.m_height - margins.m_top - margins.m_bottom;
+    auto columns = std::vector<Rect>();
     for(auto i = 0; i != count; ++i) {
       auto x = frame.m_x + margins.m_left + i * (width + grid.m_gutter);
-      auto column = view.map(Rect(x, top, width, height));
-      auto shape = OverlayShape();
-      shape.m_center = column.get_center();
-      shape.m_size = column.get_size();
-      shape.m_fill = grid.m_column_color;
-      shape.m_is_snapped = false;
-      overlay.m_shapes.push_back(shape);
+      columns.push_back(view.map(Rect(x, top, width, height)));
+      add_fill(columns.back(), grid.m_column_color, overlay);
+    }
+    for(auto& column : columns) {
+      add_band(column, grid.m_column_color, overlay);
+    }
+    for(auto i = std::size_t(1); i < columns.size(); ++i) {
+      add_caps(columns[i - 1], columns[i], grid.m_column_color, overlay);
     }
   }
 

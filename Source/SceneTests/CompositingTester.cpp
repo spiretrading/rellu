@@ -66,6 +66,26 @@ TEST_SUITE("Compositing") {
     REQUIRE(std::holds_alternative<EndLayerCommand>(list[6]));
   }
 
+  TEST_CASE("backdrop_brightness") {
+    auto get_brightness = [] (double amount) {
+      auto list = DrawList();
+      add_styled(list, make_fill(make_color(255, 255, 255, 0)), std::nullopt,
+        {Blur(5, amount, 0, true)});
+      for(auto& command : list) {
+        if(auto backdrop = std::get_if<BackdropBlurCommand>(&command)) {
+          return backdrop->m_brightness;
+        }
+      }
+      return 2.0;
+    };
+    REQUIRE(get_brightness(0) == 0);
+    REQUIRE(get_brightness(3) == 8.0 / 255);
+    REQUIRE(get_brightness(-3) == -8.0 / 255);
+    REQUIRE(get_brightness(7) == 18.0 / 255);
+    REQUIRE(get_brightness(100) == get_brightness(50));
+    REQUIRE(get_brightness(-100) == -127.0 / 255);
+  }
+
   TEST_CASE("mask") {
     auto mask = Mask();
     mask.m_shapes.push_back(MaskShape(make_translation(5, 5),

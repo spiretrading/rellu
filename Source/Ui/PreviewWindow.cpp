@@ -327,6 +327,7 @@ void PreviewWindow::fit() {
       std::max(zoom * devicePixelRatio(), 1.0 / 64));
   }
   m_zoom = zoom;
+  m_player->set_window_height(height() / zoom);
   m_offset = Point((width() - viewport.m_width * zoom) / 2,
     (height() - viewport.m_height * zoom) / 2);
 }

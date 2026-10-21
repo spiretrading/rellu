@@ -131,6 +131,38 @@ TEST_SUITE("TileCache") {
     }
   }
 
+  TEST_CASE("batched_layers") {
+    auto list = std::make_shared<DrawList>();
+    for(auto i = 0; i != 6; ++i) {
+      auto layer = BeginLayerCommand();
+      layer.m_drop_shadows.push_back(
+        Shadow(Point(1 + i, 3), 2 + i, make_color(0, 0, 0, 0.6)));
+      list->push_back(layer);
+      list->push_back(make_fill(make_rectangle(Rect(10 + 30 * i, 10, 20, 20)),
+        make_color(40 * i, 200, 100)));
+      list->push_back(EndLayerCommand());
+    }
+    for(auto mode : {BlendMode::NORMAL, BlendMode::MULTIPLY}) {
+      auto group = BeginLayerCommand();
+      group.m_opacity = 0.5;
+      group.m_blend_mode = mode;
+      list->push_back(group);
+      auto y = mode == BlendMode::NORMAL ? 70.0 : 110.0;
+      list->push_back(make_fill(
+        make_ellipse(Point(20, y), 12, 12), make_color(255, 0, 0)));
+      list->push_back(make_fill(
+        make_rectangle(Rect(150, y - 10, 30, 20)), make_color(0, 0, 255)));
+      list->push_back(EndLayerCommand());
+    }
+    auto drawing = std::make_shared<Drawing>();
+    drawing->set_lists({make_background(), list});
+    for(auto& view : {make_scale(1, 1),
+        make_translation(3.4, 7.6) * make_scale(1.5, 1.5)}) {
+      auto whole = Harness(drawing, 4096, view).render();
+      REQUIRE(Harness(drawing, 40, view).render() == whole);
+    }
+  }
+
   TEST_CASE("pan") {
     auto drawing = make_drawing();
     auto view = make_translation(4, 3);

@@ -5,6 +5,7 @@
 #include <utility>
 #include <variant>
 #include <QHashFunctions>
+#include "Rellu/Geometry/Shapes.hpp"
 #include "Rellu/Geometry/SvgPath.hpp"
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Io/XdValues.hpp"
@@ -124,6 +125,10 @@ namespace {
         }
         polygon.m_vertices.push_back(Point(point->get_number("x"_L1, 0),
           point->get_number("y"_L1, 0)));
+      }
+      if(polygon.m_vertices ==
+          make_polygon_points(polygon.m_corner_count, polygon.m_size)) {
+        polygon.m_vertices.clear();
       }
     }
     return polygon;

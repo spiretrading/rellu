@@ -165,6 +165,8 @@ namespace Rellu {
       std::unique_ptr<QRhiGraphicsPipeline> m_solid_pipeline;
       std::unique_ptr<QRhiGraphicsPipeline> m_solid;
       std::unique_ptr<QRhiGraphicsPipeline> m_over;
+      std::unique_ptr<QRhiGraphicsPipeline> m_scissored_solid;
+      std::unique_ptr<QRhiGraphicsPipeline> m_scissored_over;
       std::unique_ptr<QRhiGraphicsPipeline> m_blend;
       std::unique_ptr<QRhiGraphicsPipeline> m_blur;
       std::map<std::tuple<QRhiTexture*, QRhiTexture*, PlanPipeline>,
@@ -191,7 +193,7 @@ namespace Rellu {
       QRhiShaderResourceBindings& get_bindings(
         QRhiTexture* source, QRhiTexture* backdrop, PlanPipeline pipeline);
       QRhiGraphicsPipeline& get_pipeline(
-        PlanPipeline pipeline, bool is_external);
+        PlanPipeline pipeline, bool is_external, bool is_scissored);
       void record(QRhiCommandBuffer& buffer, const PlanPass& pass,
         bool is_external);
   };
