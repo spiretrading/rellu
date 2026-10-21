@@ -581,7 +581,7 @@ bool MainWindow::nativeEvent(
   if(m_maximize && handle_frame_event(*this, message, result,
       [this] (QPoint position) {
         return is_caption(position);
-      })) {
+      }, MENU_ROW_HEIGHT)) {
     return true;
   }
   return QMainWindow::nativeEvent(type, message, result);

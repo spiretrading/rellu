@@ -645,6 +645,16 @@ namespace {
     } else if(auto link = std::get_if<Hyperlink>(&interaction.m_action)) {
       action = "hyperlink";
       properties.set("hyperlinkUrl", link->m_url);
+    } else if(auto scroll =
+        std::get_if<ScrollTransition>(&interaction.m_action)) {
+      action = "scroll-transition";
+      set_animation(scroll->m_animation);
+      if(!scroll->m_destination.is_nil()) {
+        properties.set("destination", to_id(scroll->m_destination));
+      }
+      if(scroll->m_offset != 0) {
+        properties.set("yOffset", scroll->m_offset);
+      }
     }
     properties.set("voiceLocale", "en-us");
     json.set("triggerEvent", event);

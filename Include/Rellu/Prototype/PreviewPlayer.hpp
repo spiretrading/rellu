@@ -74,6 +74,22 @@ namespace Rellu {
   };
 
   /**
+   * Returns the scroll of an artboard that brings a Scroll To's layer to
+   * the top of the viewport, moved by the offset, clamped to the artboard's
+   * scrollable range.
+   * @param document The document holding the artboard.
+   * @param artboard The artboard scrolled.
+   * @param transition The Scroll To.
+   * @param maximum The greatest scroll of the artboard.
+   * @param measurer The function measuring text.
+   * @return The scroll, or <code>std::nullopt</code> if the layer is not
+   *         found.
+   */
+  std::optional<double> get_scroll_target(const Document& document,
+    const NodeId& artboard, const ScrollTransition& transition,
+    double maximum, const TextMeasurer& measurer = estimate_text_bounds);
+
+  /**
    * Plays a document's prototype as Adobe XD's Desktop Preview does, in a
    * viewport the size of the current artboard's visible part, and keeps a
    * document of its own, the stage, showing what is to be drawn. Taps,
@@ -82,7 +98,8 @@ namespace Rellu {
    * innermost first. Transitions slide, push or dissolve between artboards,
    * auto-animate interpolates the matched layers of two artboards or two
    * states, overlays show over the current artboard until a tap outside
-   * them, previous returns through the history, and component instances
+   * them, Scroll To scrolls the current artboard to one of its layers,
+   * previous returns through the history, and component instances
    * switch states, hover states reverting when the pointer leaves. Every
    * destination that does not resolve, and every action the preview does
    * not play, is reported.
@@ -290,7 +307,8 @@ namespace Rellu {
       enum class Kind : unsigned char {
         SCREEN,
         OVERLAY,
-        STATE
+        STATE,
+        SCROLL
       };
       struct Animating {
         Kind m_kind;
@@ -361,6 +379,8 @@ namespace Rellu {
         bool is_scroll_preserved);
       bool go_back();
       bool show_overlay(const Overlay& overlay);
+      bool scroll_to(const ScrollTransition& transition);
+      void update_scrolls();
       bool hide_overlay();
       bool switch_state(const NodeId& instance, const StateId& state,
         const Animation& animation);

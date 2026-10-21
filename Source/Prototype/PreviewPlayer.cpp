@@ -2,6 +2,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <utility>
+#include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Prototype/Easing.hpp"
@@ -302,6 +303,24 @@ std::optional<double> PreviewPlayer::get_next_time() const {
   return next;
 }
 
+std::optional<double> Rellu::get_scroll_target(const Document& document,
+    const NodeId& artboard, const ScrollTransition& transition,
+    double maximum, const TextMeasurer& measurer) {
+  auto board = document.find(artboard);
+  if(!board || !board->get_artboard() ||
+      transition.m_destination.is_nil() ||
+      !document.find(transition.m_destination) ||
+      find_artboard(document, transition.m_destination) != artboard) {
+    return std::nullopt;
+  }
+  auto& frame = board->get_artboard()->m_frame;
+  auto bounds = get_world_bounds(
+    document, transition.m_destination, BoundsType::GEOMETRY, measurer);
+  auto top = bounds ? bounds->m_y : frame.m_y;
+  return std::clamp(
+    top - frame.m_y + transition.m_offset, 0.0, std::max(maximum, 0.0));
+}
+
 bool PreviewPlayer::advance(double seconds) {
   constexpr auto MAXIMUM_EVENTS = 10000;
   auto is_changed = !m_animations.empty();
@@ -340,6 +359,7 @@ bool PreviewPlayer::advance(double seconds) {
     }
   }
   m_time = std::max(m_time, end);
+  update_scrolls();
   for(auto& animating : m_animations) {
     if(animating.m_auto) {
       animating.m_auto->apply(ease(animating.m_animation.m_easing,
@@ -442,6 +462,9 @@ bool PreviewPlayer::scroll(double delta) {
   if(!m_screen) {
     return false;
   }
+  std::erase_if(m_animations, [] (const auto& animating) {
+    return animating.m_kind == Kind::SCROLL;
+  });
   auto scroll = std::clamp(m_screen->m_scroll + delta, 0.0,
     get_maximum_scroll(m_screen->m_artboard));
   if(scroll == m_screen->m_scroll) {
@@ -806,6 +829,10 @@ void PreviewPlayer::finish(Animating& animating) {
   }
   if(animating.m_kind == Kind::SCREEN && m_screen) {
     schedule(m_screen->m_artboard);
+  } else if(animating.m_kind == Kind::SCROLL && m_screen) {
+    if(m_screen->m_artboard == animating.m_to.m_artboard) {
+      m_screen->m_scroll = animating.m_to.m_scroll;
+    }
   } else if(animating.m_kind == Kind::OVERLAY && !animating.m_is_reversed &&
       animating.m_overlay) {
     schedule(animating.m_overlay->m_artboard);
@@ -857,6 +884,9 @@ bool PreviewPlayer::perform(
     return switch_state(instance, state->m_state, state->m_animation);
   } else if(std::holds_alternative<PreviousArtboard>(interaction.m_action)) {
     return go_back();
+  } else if(auto scroll =
+      std::get_if<ScrollTransition>(&interaction.m_action)) {
+    return scroll_to(*scroll);
   } else if(auto link = std::get_if<Hyperlink>(&interaction.m_action)) {
     if(link->m_url.empty()) {
       report("Hyperlink without an address");
@@ -943,6 +973,50 @@ bool PreviewPlayer::go_back() {
   m_animations.push_back(Animating(Kind::SCREEN, animation, m_time, true,
     target, current, std::nullopt, nullptr));
   return true;
+}
+
+bool PreviewPlayer::scroll_to(const ScrollTransition& transition) {
+  auto& artboard = m_screen->m_artboard;
+  auto target = get_scroll_target(*m_stage, artboard, transition,
+    get_maximum_scroll(artboard), m_measurer);
+  if(!target) {
+    report("Scroll target not found: " + describe(transition.m_destination));
+    return false;
+  }
+  std::erase_if(m_animations, [] (const auto& animating) {
+    return animating.m_kind == Kind::SCROLL;
+  });
+  if(*target == m_screen->m_scroll) {
+    return false;
+  }
+  if(!(transition.m_animation.m_duration > 0)) {
+    m_screen->m_scroll = *target;
+    return true;
+  }
+  auto from = *m_screen;
+  auto to = from;
+  to.m_scroll = *target;
+  m_animations.push_back(Animating(Kind::SCROLL, transition.m_animation,
+    m_time, false, from, to, std::nullopt, nullptr));
+  return true;
+}
+
+void PreviewPlayer::update_scrolls() {
+  if(!m_screen) {
+    return;
+  }
+  for(auto& animating : m_animations) {
+    if(animating.m_kind != Kind::SCROLL ||
+        animating.m_to.m_artboard != m_screen->m_artboard) {
+      continue;
+    }
+    auto progress = ease(animating.m_animation.m_easing,
+      (m_time - animating.m_start) / animating.m_animation.m_duration);
+    auto start = animating.m_from.m_scroll;
+    m_screen->m_scroll = std::clamp(
+      start + (animating.m_to.m_scroll - start) * progress, 0.0,
+      get_maximum_scroll(m_screen->m_artboard));
+  }
 }
 
 bool PreviewPlayer::show_overlay(const Overlay& overlay) {

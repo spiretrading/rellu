@@ -103,6 +103,8 @@ namespace {
       return &overlay->m_destination;
     } else if(auto playback = std::get_if<VideoPlayback>(&action)) {
       return &playback->m_target;
+    } else if(auto scroll = std::get_if<ScrollTransition>(&action)) {
+      return &scroll->m_destination;
     }
     return nullptr;
   }

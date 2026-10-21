@@ -215,18 +215,19 @@ TEST_SUITE("OffscreenRenderer") {
   }
 
   TEST_CASE("tiling") {
-    auto list = make_list();
+    auto renderer = CanvasRenderer();
+    renderer.set_background(QColor(0, 0, 0, 0));
+    renderer.set_draw_list(make_list());
+    auto offscreen = OffscreenRenderer(renderer);
+    auto whole = offscreen.get_tile_size();
     for(auto& view : {make_translation(-3.25, -7.5),
         make_translation(4.6, 2.2) * make_scale(1.5, 1.5),
         make_translation(-91.3, -45.8) * make_scale(3.3, 3.3)}) {
+      renderer.set_view(view);
       for(auto scale : {1.0, 2.0}) {
         auto size = QSize(static_cast<int>(200 * scale),
           static_cast<int>(160 * scale));
-        auto renderer = CanvasRenderer();
-        renderer.set_background(QColor(0, 0, 0, 0));
-        renderer.set_draw_list(list);
-        renderer.set_view(view);
-        auto offscreen = OffscreenRenderer(renderer);
+        offscreen.set_tile_size(whole);
         auto image = offscreen.render(size, scale);
         for(auto tile : {37, 64, 170}) {
           offscreen.set_tile_size(tile);

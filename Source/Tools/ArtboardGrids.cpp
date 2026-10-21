@@ -27,6 +27,7 @@ namespace {
       shape.m_center = column.get_center();
       shape.m_size = column.get_size();
       shape.m_fill = grid.m_column_color;
+      shape.m_is_snapped = false;
       overlay.m_shapes.push_back(shape);
     }
   }

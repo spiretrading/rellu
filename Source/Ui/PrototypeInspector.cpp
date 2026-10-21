@@ -14,6 +14,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
+#include <QRegularExpression>
 #include <QScrollBar>
 #include <QStandardItemModel>
 #include <QTimer>
@@ -379,6 +380,8 @@ namespace {
       return PREVIOUS;
     } else if(std::holds_alternative<VideoPlayback>(action)) {
       return VIDEO;
+    } else if(std::holds_alternative<ScrollTransition>(action)) {
+      return SCROLL_TO;
     }
     return TRANSITION;
   }
@@ -425,8 +428,24 @@ namespace {
       return &overlay->m_animation;
     } else if(auto state = std::get_if<StateTransition>(&action)) {
       return &state->m_animation;
+    } else if(auto scroll = std::get_if<ScrollTransition>(&action)) {
+      return &scroll->m_animation;
     }
     return nullptr;
+  }
+
+  QString get_layer_label(const std::string& name) {
+    auto text = QString::fromStdString(name);
+    auto limit = 30;
+    if(auto end = text.indexOf(QRegularExpression("\\s*\\n"));
+        end >= 0 && end <= 30) {
+      limit = static_cast<int>(end);
+    }
+    auto points = text.toStdU32String();
+    if(points.size() <= static_cast<std::size_t>(limit)) {
+      return text;
+    }
+    return QString::fromStdU32String(points.substr(0, limit)) + "...";
   }
 
   NodeId get_destination(const Action& action) {
@@ -762,9 +781,13 @@ void PrototypeInspector::rebuild() {
     auto type_index = get_type_index(base.m_action);
     auto type_kinds = get_types(type_index);
     auto types = std::vector<Option>();
+    auto can_scroll = !is_artboard &&
+      (std::holds_alternative<TapTrigger>(base.m_trigger) ||
+        std::holds_alternative<KeyTrigger>(base.m_trigger));
     for(auto kind : type_kinds) {
       types.push_back(Option(QString::fromStdString(get_type_labels()[kind]),
-        kind != SCROLL_TO && kind != AUDIO && kind != SPEECH));
+        (kind != SCROLL_TO || can_scroll || kind == type_index) &&
+          kind != AUDIO && kind != SPEECH));
     }
     auto type = make_combo(types, static_cast<int>(
       std::ranges::find(type_kinds, type_index) - type_kinds.begin()));
@@ -800,6 +823,11 @@ void PrototypeInspector::rebuild() {
           }
           changed.m_action =
             Overlay(destination, Point(0, 0), animation);
+        } else if(index == SCROLL_TO) {
+          if(animation.m_transition == Transition::AUTO_ANIMATE) {
+            animation.m_transition = Transition::NONE;
+          }
+          changed.m_action = ScrollTransition(NodeId(), 0, animation);
         } else if(index == PREVIOUS) {
           changed.m_action = PreviousArtboard();
         } else if(index == VIDEO) {
@@ -897,6 +925,66 @@ void PrototypeInspector::rebuild() {
         });
       add_field(*section.m_layout, "destination", "Destination", box);
     }
+    if(auto scroll = std::get_if<ScrollTransition>(&action)) {
+      auto targets = std::vector<NodeId>();
+      auto box = new ChoiceBox();
+      box->setObjectName("choice_field");
+      auto selected = -1;
+      if(!scroll->m_destination.is_nil()) {
+        box->addItem(translate("prototype.destination", "None"));
+        targets.push_back(NodeId());
+      }
+      for(auto& id : get_scroll_destinations(*document, m_node)) {
+        if(id == scroll->m_destination) {
+          selected = box->count();
+        }
+        box->addItem(get_layer_label(document->get(id).m_header.m_name));
+        targets.push_back(id);
+      }
+      box->setPlaceholderText(translate("prototype", "(Choose a layer)"));
+      box->setCurrentIndex(selected);
+      QObject::connect(box, &QComboBox::activated, this,
+        [this, base, targets] (int index) {
+          if(index < 0 || index >= static_cast<int>(targets.size())) {
+            return;
+          }
+          auto changed = base;
+          auto& transition = std::get<ScrollTransition>(changed.m_action);
+          if(transition.m_destination == targets[index]) {
+            return;
+          }
+          transition.m_destination = targets[index];
+          transition.m_offset = clamp_scroll_offset(m_editor->get_document(),
+            transition.m_destination, transition.m_offset);
+          apply(std::move(changed));
+        });
+      add_field(*section.m_layout, "destination", "Destination", box);
+      auto offset = new QLineEdit();
+      offset->setObjectName("number_field");
+      auto validator = new QDoubleValidator(offset);
+      validator->setLocale(QLocale::c());
+      offset->setValidator(validator);
+      offset->setText(QString::number(scroll->m_offset, 'g', 10));
+      QObject::connect(offset, &QLineEdit::editingFinished, this,
+        [this, base, offset] {
+          auto is_valid = false;
+          auto value = offset->text().toDouble(&is_valid);
+          if(!is_valid) {
+            return;
+          }
+          auto changed = base;
+          auto& transition = std::get<ScrollTransition>(changed.m_action);
+          value = clamp_scroll_offset(
+            m_editor->get_document(), transition.m_destination, value);
+          if(value == transition.m_offset) {
+            offset->setText(QString::number(value, 'g', 10));
+            return;
+          }
+          transition.m_offset = value;
+          apply(std::move(changed));
+        });
+      add_field(*section.m_layout, "y_offset", "Y-Offset", offset);
+    }
     if(auto link = std::get_if<Hyperlink>(&action)) {
       auto url = new QLineEdit();
       url->setObjectName("text_field");
@@ -966,7 +1054,8 @@ void PrototypeInspector::rebuild() {
     if(auto animation = get_animation(action)) {
       auto is_auto = animation->m_transition == Transition::AUTO_ANIMATE;
       auto is_transition = !std::holds_alternative<Overlay>(action);
-      if(!(is_auto && is_transition)) {
+      if(!(is_auto && is_transition) &&
+          !std::holds_alternative<ScrollTransition>(action)) {
         auto choices = std::vector<Transition>(
           TRANSITIONS.begin(), TRANSITIONS.end());
         if(std::holds_alternative<Overlay>(action)) {

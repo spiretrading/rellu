@@ -2031,6 +2031,9 @@ void Rellu::delete_component(const Document& document,
       update(overlay->m_destination);
     } else if(auto video = std::get_if<VideoPlayback>(&interaction.m_action)) {
       update(video->m_target);
+    } else if(auto scroll =
+        std::get_if<ScrollTransition>(&interaction.m_action)) {
+      update(scroll->m_destination);
     }
     if(is_changed) {
       transaction.replace_interaction(std::move(interaction));

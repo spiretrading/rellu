@@ -1,7 +1,10 @@
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <stdexcept>
 #include <utility>
+#include "Rellu/Commands/Bounds.hpp"
+#include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Prototype/InteractionCommands.hpp"
 
@@ -32,6 +35,8 @@ namespace {
       return state->m_animation;
     } else if(auto overlay = std::get_if<Overlay>(&action)) {
       return overlay->m_animation;
+    } else if(auto scroll = std::get_if<ScrollTransition>(&action)) {
+      return scroll->m_animation;
     }
     return make_empty_animation();
   }
@@ -47,6 +52,13 @@ namespace {
     }
     if(!destination.is_nil()) {
       require_artboard(document, destination);
+    }
+    if(auto scroll =
+        std::get_if<ScrollTransition>(&interaction.m_action)) {
+      if(!scroll->m_destination.is_nil() &&
+          !document.find(scroll->m_destination)) {
+        throw std::invalid_argument("Unknown layer.");
+      }
     }
   }
 }
@@ -89,10 +101,17 @@ Interaction Rellu::make_new_interaction(const Document& document,
         Overlay(NodeId(), Point(0, 0), overlay->m_animation);
     } else if(std::holds_alternative<Hyperlink>(last->m_action)) {
       interaction.m_action = Hyperlink();
+    } else if(auto scroll = std::get_if<ScrollTransition>(&last->m_action)) {
+      interaction.m_action =
+        ScrollTransition(NodeId(), scroll->m_offset, scroll->m_animation);
     }
   }
   auto node = document.find(owner);
   auto is_artboard = node && node->get_artboard();
+  if(auto scroll = std::get_if<ScrollTransition>(&interaction.m_action);
+      scroll && is_artboard) {
+    interaction.m_action = ArtboardTransition(NodeId(), scroll->m_animation);
+  }
   auto get_order = [] (const Trigger& trigger) {
     if(std::holds_alternative<DragTrigger>(trigger)) {
       return 1;
@@ -239,6 +258,40 @@ const Flow* Rellu::find_flow(const Document& document, const NodeId& artboard) {
     }
   }
   return nullptr;
+}
+
+std::vector<NodeId> Rellu::get_scroll_destinations(
+    const Document& document, const NodeId& owner) {
+  auto destinations = std::vector<NodeId>();
+  auto artboard = find_artboard(document, owner);
+  if(artboard.is_nil() || artboard == owner) {
+    return destinations;
+  }
+  auto& children = document.get(artboard).m_children;
+  for(auto i = children.rbegin(); i != children.rend(); ++i) {
+    if(*i != owner) {
+      destinations.push_back(*i);
+    }
+  }
+  return destinations;
+}
+
+double Rellu::clamp_scroll_offset(
+    const Document& document, const NodeId& destination, double offset) {
+  if(destination.is_nil() || !document.find(destination)) {
+    return 0;
+  }
+  auto artboard = find_artboard(document, destination);
+  auto node = artboard.is_nil() ? nullptr : document.find(artboard);
+  if(!node || !node->get_artboard()) {
+    return 0;
+  }
+  auto& frame = node->get_artboard()->m_frame;
+  auto bounds = get_world_bounds(document, destination);
+  auto top = bounds ? bounds->m_y : frame.m_y;
+  auto minimum = frame.m_y - top;
+  auto maximum = frame.m_y + frame.m_height - top;
+  return std::round(std::min(maximum, std::max(minimum, offset)));
 }
 
 AddInteractionCommand::AddInteractionCommand(Interaction interaction)

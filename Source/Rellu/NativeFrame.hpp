@@ -35,10 +35,11 @@ namespace Rellu {
    * @param result The result of the message, set when it is handled.
    * @param is_caption The function testing whether a point lies on the
    *        title bar's empty space.
+   * @param caption_height The height of the title bar.
    * @return <code>true</code> iff the event was handled.
    */
   bool handle_frame_event(QWidget& window, void* message, qintptr* result,
-    const CaptionTest& is_caption);
+    const CaptionTest& is_caption, int caption_height);
 }
 
 #endif

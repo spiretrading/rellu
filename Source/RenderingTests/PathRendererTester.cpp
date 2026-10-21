@@ -78,8 +78,12 @@ namespace {
   }
 
   Coverage make_sampled_coverage(std::function<bool (Point)> inside,
-      int samples = 32) {
+      const Rect& bounds, int samples = 32) {
+    auto area = inflate(bounds, 1);
     return [=] (int x, int y) {
+      if(!area.intersects(Rect(x, y, 1, 1))) {
+        return 0.0;
+      }
       auto count = 0;
       for(auto i = 0; i != samples; ++i) {
         for(auto j = 0; j != samples; ++j) {
@@ -94,16 +98,18 @@ namespace {
 
   Coverage make_path_coverage(Path path, Matrix transform) {
     auto inverse = *invert(transform);
+    auto bounds = get_bounds(path, transform);
     return make_sampled_coverage([=] (Point point) {
       return contains(path, inverse.map(point));
-    });
+    }, bounds);
   }
 
   Coverage make_supersampled_coverage(Path path, Matrix transform) {
     auto inverse = *invert(transform);
+    auto bounds = get_bounds(path, transform);
     return make_sampled_coverage([=] (Point point) {
       return contains(path, inverse.map(point));
-    }, 4);
+    }, bounds, 4);
   }
 
   Coverage make_analytic_coverage(const Path& path, const Matrix& transform) {
@@ -336,16 +342,17 @@ TEST_SUITE("PathRenderer") {
     auto color = make_color(40, 90, 200);
     renderer.m_list.push_back(fill(make_rectangle(Rect(3, 5, 17, 9)), color));
     renderer.m_list.push_back(fill(make_rectangle(Rect(22, 1, 1, 20)), color));
+    auto offscreen = OffscreenRenderer(renderer);
     auto expected = make_image(QSize(32, 24), QColor(255, 255, 255),
       {Layer(make_rectangle_coverage(Rect(3, 5, 17, 9)), color),
         Layer(make_rectangle_coverage(Rect(22, 1, 1, 20)), color)});
     require_match(
-      render(renderer, QSize(32, 24)), expected, ImageTolerance(0, 0));
+      offscreen.render(QSize(32, 24), 1), expected, ImageTolerance(0, 0));
     auto scaled = make_image(QSize(64, 48), QColor(255, 255, 255),
       {Layer(make_rectangle_coverage(Rect(6, 10, 34, 18)), color),
         Layer(make_rectangle_coverage(Rect(44, 2, 2, 40)), color)});
     require_match(
-      render(renderer, QSize(64, 48), 2), scaled, ImageTolerance(0, 0));
+      offscreen.render(QSize(64, 48), 2), scaled, ImageTolerance(0, 0));
   }
 
   TEST_CASE("fractional_rectangles") {
@@ -446,14 +453,16 @@ TEST_SUITE("PathRenderer") {
       return path;
     };
     auto color = make_color(90, 30, 160, 0.75);
+    auto renderer = TestRenderer();
+    auto offscreen = OffscreenRenderer(renderer);
     for(auto rule : {FillRule::NON_ZERO, FillRule::EVEN_ODD}) {
       CAPTURE(int(rule));
-      auto renderer = TestRenderer();
       auto shapes = make_shapes(rule);
+      renderer.m_list.clear();
       renderer.m_list.push_back(fill(shapes, color));
       auto expected = make_image(QSize(60, 42), QColor(0, 0, 0, 0),
         {Layer(make_supersampled_coverage(shapes, Matrix()), color)});
-      auto image = render(renderer, QSize(60, 42));
+      auto image = offscreen.render(QSize(60, 42), 1);
       require_match(image, expected, ImageTolerance(13, 0.005));
       auto inside = qAlpha(image.pixel(11, 11));
       auto hole = qAlpha(image.pixel(31, 11));
@@ -481,6 +490,7 @@ TEST_SUITE("PathRenderer") {
     renderer.m_list.push_back(
       fill(rectangle, make_color(230, 120, 0), rotation));
     renderer.m_list.push_back(fill(ellipse, make_color(0, 60, 230), skew));
+    auto offscreen = OffscreenRenderer(renderer);
     auto expected = [&] (double scale) {
       auto pixels = make_scale(scale, scale) * view;
       return make_image(
@@ -490,9 +500,9 @@ TEST_SUITE("PathRenderer") {
           Layer(make_supersampled_coverage(ellipse, pixels * skew),
             make_color(0, 60, 230))});
     };
-    require_match(render(renderer, QSize(48, 26)), expected(1),
+    require_match(offscreen.render(QSize(48, 26), 1), expected(1),
       ImageTolerance(17, 0.02));
-    require_match(render(renderer, QSize(96, 52), 2), expected(2),
+    require_match(offscreen.render(QSize(96, 52), 2), expected(2),
       ImageTolerance(17, 0.02));
   }
 
@@ -509,13 +519,14 @@ TEST_SUITE("PathRenderer") {
     add(Rect(5.5, 8.5, 12, 9), make_color(20, 200, 40, 0.8));
     add(Rect(12, 1, 6, 16), make_color(255, 255, 255, 0.1));
     add(Rect(1, 14, 22, 3), make_color(0, 0, 0, 0));
+    auto offscreen = OffscreenRenderer(renderer);
     auto expected = make_image(QSize(24, 20), QColor(240, 230, 220), layers);
     require_match(
-      render(renderer, QSize(24, 20)), expected, ImageTolerance(2, 0));
+      offscreen.render(QSize(24, 20), 1), expected, ImageTolerance(2, 0));
     renderer.m_background = QColor(0, 0, 0, 0);
     auto transparent = make_image(QSize(24, 20), QColor(0, 0, 0, 0), layers);
     require_match(
-      render(renderer, QSize(24, 20)), transparent, ImageTolerance(2, 0));
+      offscreen.render(QSize(24, 20), 1), transparent, ImageTolerance(2, 0));
   }
 
   TEST_CASE("clipping") {
@@ -568,6 +579,8 @@ TEST_SUITE("PathRenderer") {
       {make_color(204, 77, 128), make_color(51, 153, 230, 0.75)},
       {make_color(26, 230, 102), make_color(179, 51, 153)},
       {make_color(240, 200, 30), make_color(20, 40, 220, 0.5)}});
+    auto renderer = TestRenderer();
+    auto offscreen = OffscreenRenderer(renderer);
     for(auto mode : {BlendMode::MULTIPLY, BlendMode::SCREEN,
         BlendMode::OVERLAY, BlendMode::DARKEN, BlendMode::LIGHTEN,
         BlendMode::COLOR_DODGE, BlendMode::COLOR_BURN, BlendMode::HARD_LIGHT,
@@ -579,7 +592,7 @@ TEST_SUITE("PathRenderer") {
         auto backdrop = pair[0];
         auto translucent = backdrop;
         translucent.m_alpha = 0.5;
-        auto renderer = TestRenderer();
+        renderer.m_list.clear();
         renderer.m_list.push_back(
           fill(make_rectangle(Rect(0, 0, 4, 4)), backdrop));
         renderer.m_list.push_back(
@@ -588,7 +601,7 @@ TEST_SUITE("PathRenderer") {
         renderer.m_list.push_back(
           fill(make_rectangle(Rect(0, 0, 12, 4)), pair[1]));
         renderer.m_list.push_back(EndLayerCommand());
-        auto image = render(renderer, QSize(12, 4));
+        auto image = offscreen.render(QSize(12, 4), 1);
         require_pixel(image, 1, 1, composite(mode, backdrop, pair[1]), 3);
         require_pixel(image, 5, 1, composite(mode, translucent, pair[1]), 3);
         require_pixel(image, 9, 1, premultiply(pair[1]), 1);
@@ -609,12 +622,13 @@ TEST_SUITE("PathRenderer") {
     renderer.m_list.push_back(fill(make_rectangle(Rect(0, 4, 12, 4)), red));
     renderer.m_list.push_back(EndLayerCommand());
     renderer.m_list.push_back(EndLayerCommand());
-    auto image = render(renderer, QSize(12, 8));
+    auto offscreen = OffscreenRenderer(renderer);
+    auto image = offscreen.render(QSize(12, 8), 1);
     require_pixel(image, 1, 1, Pixel({0.5, 0, 0, 0.5}), 1);
     require_pixel(image, 6, 1, Pixel({0, 0, 0.5, 0.5}), 1);
     require_pixel(image, 10, 1, Pixel({0, 0, 0.5, 0.5}), 1);
     require_pixel(image, 6, 5, Pixel({0.25, 0, 0, 0.25}), 1);
-    auto scaled = render(renderer, QSize(24, 16), 2);
+    auto scaled = offscreen.render(QSize(24, 16), 2);
     require_pixel(scaled, 12, 2, Pixel({0, 0, 0.5, 0.5}), 1);
   }
 
@@ -807,11 +821,13 @@ TEST_SUITE("PathRenderer") {
   }
 
   TEST_CASE("drop_shadow") {
+    auto renderer = TestRenderer();
+    auto offscreen = OffscreenRenderer(renderer);
     for(auto [radius, scale] : {std::pair(3.0, 1.0), std::pair(3.0, 2.0),
         std::pair(12.0, 1.0)}) {
       CAPTURE(radius);
       CAPTURE(scale);
-      auto renderer = TestRenderer();
+      renderer.m_list.clear();
       auto layer = begin_layer();
       layer.m_drop_shadows.push_back(
         Shadow(Point(-4, 2), radius, make_color(0, 0, 255, 0.5)));
@@ -820,7 +836,7 @@ TEST_SUITE("PathRenderer") {
         make_rectangle(Rect(64, -100, 200, 300)), make_color(255, 0, 0)));
       renderer.m_list.push_back(EndLayerCommand());
       auto size = static_cast<int>(64 * scale);
-      auto image = render(renderer, QSize(size + size / 2, 4), scale);
+      auto image = offscreen.render(QSize(size + size / 2, 4), scale);
       for(auto x = 0; x != size; ++x) {
         auto distance = (x + 0.5) / scale - 60;
         auto alpha = 0.5 * get_normal_cdf(distance / radius);

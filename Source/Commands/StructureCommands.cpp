@@ -211,6 +211,8 @@ namespace {
       remap(overlay->m_destination, mapping);
     } else if(auto playback = std::get_if<VideoPlayback>(&action)) {
       remap(playback->m_target, mapping);
+    } else if(auto scroll = std::get_if<ScrollTransition>(&action)) {
+      remap(scroll->m_destination, mapping);
     }
   }
 

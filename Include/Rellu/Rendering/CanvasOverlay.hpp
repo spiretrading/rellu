@@ -12,8 +12,8 @@ namespace Rellu {
   /**
    * A rectangle drawn over the canvas in the frame's logical units, turned
    * and rounded, filled within a stroke along the inside of its edges. The
-   * edges of a rectangle turned by a multiple of a right angle lie on whole
-   * pixels.
+   * edges of a snapped rectangle turned by a multiple of a right angle lie
+   * on whole pixels.
    */
   struct OverlayShape {
 
@@ -40,6 +40,12 @@ namespace Rellu {
      * one when positive.
      */
     double m_stroke_width = 0;
+
+    /**
+     * Whether the edges lie on whole pixels when turned by a multiple of a
+     * right angle, rather than covering fractions of pixels.
+     */
+    bool m_is_snapped = true;
   };
 
   /** An image drawn over the canvas with one of its pixels per pixel. */

@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <cctype>
 #include <memory>
 #include <doctest/doctest.h>
+#include <QJsonDocument>
 #include "Rellu/Commands/History.hpp"
 #include "Rellu/Io/XdImporters.hpp"
 #include "Rellu/Io/XdPackage.hpp"
@@ -81,6 +83,53 @@ TEST_SUITE("RoundTrip") {
     auto again = Document();
     reload(reloaded, again);
     REQUIRE(find_differences(reloaded, again).empty());
+  }
+
+  TEST_CASE("scroll_to") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    add_interaction(document, scene.m_header, TapTrigger(),
+      ScrollTransition(scene.m_footer, -40, Animation(
+        Transition::DISSOLVE, Easing::EASE_IN_OUT, DEFAULT_DURATION)));
+    add_interaction(document, scene.m_footer, TapTrigger(),
+      ScrollTransition(NodeId(), 0, make_empty_animation()));
+    auto data = write_xd(document);
+    auto raw = XdPackage(data).read(XdPackage::INTERACTIONS);
+    auto json = QByteArray();
+    for(auto c : raw) {
+      if(!std::isspace(static_cast<unsigned char>(c))) {
+        json.append(c);
+      }
+    }
+    auto header = json.indexOf(
+      QByteArray::fromStdString(to_string(scene.m_header)));
+    REQUIRE(header >= 0);
+    auto find = [&] (const char* key, qsizetype from) {
+      auto index = json.indexOf(key, from);
+      REQUIRE(index > from);
+      return index;
+    };
+    auto properties = find("\"properties\"", header);
+    auto transition = find("\"transition\":\"dissolve\"", properties);
+    auto duration = find("\"duration\"", transition);
+    auto easing = find("\"easing\":\"ease-in-out\"", duration);
+    auto destination = find("\"destination\"", easing);
+    auto offset = find("\"yOffset\":-40", destination);
+    auto locale = find("\"voiceLocale\":\"en-us\"", offset);
+    auto trigger = find("\"triggerEvent\":\"tap\"", locale);
+    find("\"action\":\"scroll-transition\"", trigger);
+    auto footer = json.indexOf(
+      QByteArray::fromStdString(to_string(scene.m_footer)), header);
+    auto footer_properties = find("\"properties\"", footer);
+    auto end = find("\"triggerEvent\"", footer_properties);
+    auto body = json.mid(footer_properties, end - footer_properties);
+    REQUIRE(!body.contains("destination"));
+    REQUIRE(!body.contains("yOffset"));
+    auto reloaded = Document();
+    import_xd(XdPackage(data), reloaded);
+    REQUIRE(get_sorted(reloaded) == get_sorted(document));
+    REQUIRE(QJsonDocument::fromJson(XdPackage(write_xd(reloaded)).read(
+      XdPackage::INTERACTIONS)) == QJsonDocument::fromJson(raw));
   }
 
   TEST_CASE("removal") {

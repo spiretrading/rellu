@@ -117,6 +117,20 @@ namespace {
         "\xBD\xD0\xB0\xD1\x87\xD0\xB5\xD0\xBD\xD0\xB8\xD1\x8F)",
         "(\xE9\x80\x89\xE6\x8B\xA9\xE7\x9B\xAE\xE6\xA0\x87)"}),
     Translation("",
+      "(Choose a layer)",
+      "app:PLACEHOLDER_CHOOSE_LAYER", {
+        "(Ebene w\xC3\xA4hlen)",
+        "(Elige una capa)",
+        "(Choisir une disposition)",
+        "(Scegli livello)",
+        "(\xE3\x83\xAC\xE3\x82\xA4\xE3\x83\xA4\xE3\x83\xBC\xE3\x82\x92\xE9\x81"
+        "\xB8\xE6\x8A\x9E)",
+        "(\xEB\xA0\x88\xEC\x9D\xB4\xEC\x96\xB4 \xEC\x84\xA0\xED\x83\x9D)",
+        "(Escolha uma camada)",
+        "(\xD0\x92\xD1\x8B\xD0\xB1\xD0\xB5\xD1\x80\xD0\xB8\xD1\x82\xD0\xB5 "
+        "\xD1\x81\xD0\xBB\xD0\xBE\xD0\xB9)",
+        "(\xE9\x80\x89\xE6\x8B\xA9\xE5\x9B\xBE\xE5\xB1\x82)"}),
+    Translation("",
       "(Choose an artboard or a state)",
       "app:PLACEHOLDER_CHOOSE_ARTBOARD_OR_STATE", {
         "(Zeichenfl\xC3\xA4" "che oder Zustand ausw\xC3\xA4hlen)",
@@ -7509,6 +7523,18 @@ namespace {
         "Y",
         "Y"}),
     Translation("",
+      "Y-Offset",
+      "app:ACTION_VIEW_YOFFSET", {
+        "Y-Versatz",
+        "Desplazamiento Y",
+        "D\xC3\xA9" "calage Y",
+        "Offset Y",
+        "Y-\xE3\x82\xAA\xE3\x83\x95\xE3\x82\xBB\xE3\x83\x83\xE3\x83\x88",
+        "Y-\xEC\x98\xA4\xED\x94\x84\xEC\x85\x8B",
+        "Deslocamento em Y",
+        "Y-\xD1\x81\xD0\xBC\xD0\xB5\xD1\x89\xD0\xB5\xD0\xBD\xD0\xB8\xD0\xB5",
+        "Y \xE5\x81\x8F\xE7\xA7\xBB"}),
+    Translation("",
       "Yes",
       "libraries:DL_INFO_YES", {
         "Ja",
@@ -10473,6 +10499,18 @@ namespace {
       "None",
       "app:TRANSITION_NONE", {
         "Ohne",
+        "Ninguno",
+        "Aucun",
+        "Nessuna",
+        "\xE3\x81\xAA\xE3\x81\x97",
+        "\xEC\x97\x86\xEC\x9D\x8C",
+        "Nenhuma",
+        "\xD0\x9D\xD0\xB5\xD1\x82",
+        "\xE6\x97\xA0"}),
+    Translation("prototype.destination",
+      "None",
+      "app:TARGET_NONE", {
+        "Kein Ziel",
         "Ninguno",
         "Aucun",
         "Nessuna",

@@ -207,6 +207,12 @@ namespace {
           properties.consume("subtype"_L1);
         }
         return playback;
+      } else if(name == "scroll-transition"_L1) {
+        auto transition = ScrollTransition();
+        transition.m_destination = read_destination(properties);
+        transition.m_animation = read_animation(properties);
+        transition.m_offset = properties.get_number("yOffset"_L1, 0);
+        return transition;
       } else if(name == "hyperlink"_L1) {
         auto link = Hyperlink();
         if(auto url = properties.get_string("hyperlinkUrl"_L1)) {

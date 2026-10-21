@@ -72,6 +72,125 @@ namespace {
       std::chrono::steady_clock::now() - start).count();
   }
 
+  struct Dimensions {
+    int m_artboards;
+    int m_groups;
+    int m_shapes;
+    int m_wide;
+  };
+
+  struct Timings {
+    std::size_t m_nodes;
+    double m_build;
+    double m_open;
+    double m_expand;
+    double m_wide;
+    double m_find;
+    double m_rename;
+    double m_edit;
+    double m_remove;
+  };
+
+  Timings test_large_document(const Dimensions& dimensions) {
+    auto times = Timings();
+    auto document = Document();
+    auto artboards = std::vector<NodeId>();
+    auto last_group = NodeId();
+    auto last_shape = NodeId();
+    auto wide = NodeId();
+    auto start = std::chrono::steady_clock::now();
+    {
+      auto transaction = Transaction(document);
+      auto artboard = Artboard();
+      artboard.m_frame = Rect(0, 0, 100, 100);
+      auto shape = make_rectangle_shape(10, 10);
+      for(auto i = 0; i != dimensions.m_artboards; ++i) {
+        artboards.push_back(transaction.append(
+          NodeId(), make_header("Artboard " + std::to_string(i)), artboard));
+        for(auto j = 0; j != dimensions.m_groups; ++j) {
+          last_group = transaction.append(
+            artboards.back(), make_header("Group"), Group());
+          for(auto k = 0; k != dimensions.m_shapes; ++k) {
+            last_shape = transaction.append(
+              last_group, make_header("Shape"), shape);
+          }
+        }
+      }
+      wide = transaction.append(NodeId(), make_header("Wide"), Group());
+      for(auto i = 0; i != dimensions.m_wide; ++i) {
+        transaction.append(wide, make_header("Item"), shape);
+      }
+      transaction.commit();
+    }
+    times.m_nodes = document.get_nodes().get_size();
+    times.m_build = get_milliseconds(start);
+    auto model = LayersModel();
+    start = std::chrono::steady_clock::now();
+    model.set_document(&document);
+    auto rows = model.rowCount();
+    for(auto row = 0; row != rows; ++row) {
+      model.data(model.index(row, LayersModel::NAME), Qt::DisplayRole);
+    }
+    times.m_open = get_milliseconds(start);
+    REQUIRE(rows == dimensions.m_artboards + 1);
+    auto view = QTreeView();
+    view.setUniformRowHeights(true);
+    view.setModel(&model);
+    view.resize(300, 800);
+    view.show();
+    start = std::chrono::steady_clock::now();
+    auto artboard = model.index(dimensions.m_artboards - 1, LayersModel::NAME);
+    view.expand(artboard);
+    view.expand(
+      model.index(dimensions.m_groups - 1, LayersModel::NAME, artboard));
+    view.scrollToBottom();
+    view.grab();
+    times.m_expand = get_milliseconds(start);
+    start = std::chrono::steady_clock::now();
+    auto wide_index = model.find(wide);
+    view.expand(wide_index);
+    view.scrollTo(
+      model.index(dimensions.m_wide / 2, LayersModel::NAME, wide_index));
+    view.grab();
+    times.m_wide = get_milliseconds(start);
+    start = std::chrono::steady_clock::now();
+    auto shape = model.find(last_shape);
+    times.m_find = get_milliseconds(start);
+    REQUIRE(model.get_id(shape) == last_shape);
+    start = std::chrono::steady_clock::now();
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(last_shape).m_header;
+      header.m_name = "Renamed";
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    times.m_rename = get_milliseconds(start);
+    REQUIRE(model.data(shape, Qt::DisplayRole).toString() == "Renamed");
+    start = std::chrono::steady_clock::now();
+    {
+      auto transaction = Transaction(document);
+      transaction.insert(
+        wide, 0, make_header("Inserted"), make_rectangle_shape(1, 1));
+      transaction.remove(document.get_children(wide)[dimensions.m_wide / 2]);
+      transaction.commit();
+    }
+    times.m_edit = get_milliseconds(start);
+    REQUIRE(model.rowCount(wide_index) == dimensions.m_wide);
+    REQUIRE(model.data(model.index(dimensions.m_wide - 1, LayersModel::NAME,
+      wide_index), Qt::DisplayRole).toString() == "Inserted");
+    start = std::chrono::steady_clock::now();
+    {
+      auto transaction = Transaction(document);
+      transaction.remove(artboards.front());
+      transaction.commit();
+    }
+    times.m_remove = get_milliseconds(start);
+    REQUIRE(model.rowCount() == dimensions.m_artboards);
+    view.hide();
+    return times;
+  }
+
   struct Recorder {
     std::vector<std::string> m_events;
 
@@ -393,118 +512,30 @@ TEST_SUITE("LayersModel") {
   }
 
   TEST_CASE("large_document") {
-    constexpr auto ARTBOARDS = 100;
-    constexpr auto GROUPS = 100;
-    constexpr auto SHAPES = 100;
-    constexpr auto WIDE = 100000;
-    auto document = Document();
-    auto artboards = std::vector<NodeId>();
-    auto last_group = NodeId();
-    auto last_shape = NodeId();
-    auto wide = NodeId();
-    auto start = std::chrono::steady_clock::now();
-    {
-      auto transaction = Transaction(document);
-      auto artboard = Artboard();
-      artboard.m_frame = Rect(0, 0, 100, 100);
-      auto shape = make_rectangle_shape(10, 10);
-      for(auto i = 0; i != ARTBOARDS; ++i) {
-        artboards.push_back(transaction.append(
-          NodeId(), make_header("Artboard " + std::to_string(i)), artboard));
-        for(auto j = 0; j != GROUPS; ++j) {
-          last_group = transaction.append(
-            artboards.back(), make_header("Group"), Group());
-          for(auto k = 0; k != SHAPES; ++k) {
-            last_shape = transaction.append(
-              last_group, make_header("Shape"), shape);
-          }
-        }
-      }
-      wide = transaction.append(NodeId(), make_header("Wide"), Group());
-      for(auto i = 0; i != WIDE; ++i) {
-        transaction.append(wide, make_header("Item"), shape);
-      }
-      transaction.commit();
-    }
-    MESSAGE("Built ", document.get_nodes().get_size(), " nodes in ",
-      get_milliseconds(start), " ms");
-    auto model = LayersModel();
-    start = std::chrono::steady_clock::now();
-    model.set_document(&document);
-    auto rows = model.rowCount();
-    for(auto row = 0; row != rows; ++row) {
-      model.data(model.index(row, LayersModel::NAME), Qt::DisplayRole);
-    }
-    auto open_time = get_milliseconds(start);
-    MESSAGE("Listed ", rows, " top-level rows in ", open_time, " ms");
-    REQUIRE(rows == ARTBOARDS + 1);
-    auto view = QTreeView();
-    view.setUniformRowHeights(true);
-    view.setModel(&model);
-    view.resize(300, 800);
-    view.show();
-    start = std::chrono::steady_clock::now();
-    auto artboard = model.index(ARTBOARDS - 1, LayersModel::NAME);
-    view.expand(artboard);
-    view.expand(model.index(GROUPS - 1, LayersModel::NAME, artboard));
-    view.scrollToBottom();
-    view.grab();
-    auto expand_time = get_milliseconds(start);
-    MESSAGE("Expanded and painted a group of ", SHAPES, " in ", expand_time,
-      " ms");
-    start = std::chrono::steady_clock::now();
-    auto wide_index = model.find(wide);
-    view.expand(wide_index);
-    view.scrollTo(model.index(WIDE / 2, LayersModel::NAME, wide_index));
-    view.grab();
-    auto wide_time = get_milliseconds(start);
-    MESSAGE("Expanded and painted a group of ", WIDE, " in ", wide_time,
-      " ms");
-    start = std::chrono::steady_clock::now();
-    auto shape = model.find(last_shape);
-    auto find_time = get_milliseconds(start);
-    MESSAGE("Found a node at depth 3 in ", find_time, " ms");
-    REQUIRE(model.get_id(shape) == last_shape);
-    start = std::chrono::steady_clock::now();
-    {
-      auto transaction = Transaction(document);
-      auto header = document.get(last_shape).m_header;
-      header.m_name = "Renamed";
-      transaction.replace_header(header);
-      transaction.commit();
-    }
-    auto rename_time = get_milliseconds(start);
-    MESSAGE("Renamed a node in ", rename_time, " ms");
-    REQUIRE(model.data(shape, Qt::DisplayRole).toString() == "Renamed");
-    start = std::chrono::steady_clock::now();
-    {
-      auto transaction = Transaction(document);
-      transaction.insert(
-        wide, 0, make_header("Inserted"), make_rectangle_shape(1, 1));
-      transaction.remove(document.get_children(wide)[WIDE / 2]);
-      transaction.commit();
-    }
-    auto edit_time = get_milliseconds(start);
-    MESSAGE("Inserted and removed rows of the group of ", WIDE, " in ",
-      edit_time, " ms");
-    REQUIRE(model.rowCount(wide_index) == WIDE);
-    REQUIRE(model.data(model.index(WIDE - 1, LayersModel::NAME, wide_index),
-      Qt::DisplayRole).toString() == "Inserted");
-    start = std::chrono::steady_clock::now();
-    {
-      auto transaction = Transaction(document);
-      transaction.remove(artboards.front());
-      transaction.commit();
-    }
-    auto remove_time = get_milliseconds(start);
-    MESSAGE("Removed an artboard of ", GROUPS * (SHAPES + 1) + 1,
-      " nodes in ", remove_time, " ms");
-    REQUIRE(model.rowCount() == ARTBOARDS);
-    REQUIRE(open_time < 100);
-    REQUIRE(expand_time < 1000);
-    REQUIRE(find_time < 100);
-    REQUIRE(rename_time < 100);
-    view.hide();
+    test_large_document(Dimensions(4, 4, 4, 1000));
+  }
+
+  TEST_CASE("large_document_performance" * doctest::skip()) {
+    auto dimensions = Dimensions(100, 100, 100, 100000);
+    auto times = test_large_document(dimensions);
+    MESSAGE("Built ", times.m_nodes, " nodes in ", times.m_build, " ms");
+    MESSAGE("Listed ", dimensions.m_artboards + 1, " top-level rows in ",
+      times.m_open, " ms");
+    MESSAGE("Expanded and painted a group of ", dimensions.m_shapes, " in ",
+      times.m_expand, " ms");
+    MESSAGE("Expanded and painted a group of ", dimensions.m_wide, " in ",
+      times.m_wide, " ms");
+    MESSAGE("Found a node at depth 3 in ", times.m_find, " ms");
+    MESSAGE("Renamed a node in ", times.m_rename, " ms");
+    MESSAGE("Inserted and removed rows of the group of ", dimensions.m_wide,
+      " in ", times.m_edit, " ms");
+    MESSAGE("Removed an artboard of ",
+      dimensions.m_groups * (dimensions.m_shapes + 1) + 1, " nodes in ",
+      times.m_remove, " ms");
+    REQUIRE(times.m_open < 100);
+    REQUIRE(times.m_expand < 1000);
+    REQUIRE(times.m_find < 100);
+    REQUIRE(times.m_rename < 100);
   }
 
   TEST_CASE("pasteboard_row") {

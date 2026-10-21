@@ -467,6 +467,43 @@ TEST_SUITE("PreviewPlayer") {
     REQUIRE(player->get_scroll() == 0);
   }
 
+  TEST_CASE("scroll_to") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    auto animation = make_linear(Transition::DISSOLVE);
+    REQUIRE(get_scroll_target(document, scene.m_long,
+      ScrollTransition(scene.m_footer, -400, animation), 500) == 200.0);
+    REQUIRE(get_scroll_target(document, scene.m_long,
+      ScrollTransition(scene.m_footer, 0, animation), 500) == 500.0);
+    REQUIRE(get_scroll_target(document, scene.m_long,
+      ScrollTransition(scene.m_header, -30, animation), 500) == 0.0);
+    REQUIRE(!get_scroll_target(document, scene.m_long,
+      ScrollTransition(scene.m_box, 0, animation), 500));
+    REQUIRE(!get_scroll_target(document, scene.m_long,
+      ScrollTransition(NodeId(), 0, animation), 500));
+    add_interaction(document, scene.m_header, TapTrigger(),
+      ScrollTransition(scene.m_footer, -150, animation));
+    add_interaction(document, scene.m_footer, TapTrigger(),
+      ScrollTransition(scene.m_header, 0, Animation(Transition::DISSOLVE,
+        Easing::EASE_OUT, 0)));
+    auto player = make_player(document, scene.m_long);
+    tap(*player, Point(20, 20));
+    REQUIRE(player->is_animating());
+    REQUIRE(player->get_scroll() == 0);
+    player->advance(0.5);
+    REQUIRE(player->get_scroll() == doctest::Approx(225));
+    REQUIRE(player->get_layers()[0].m_scroll == doctest::Approx(225));
+    player->advance(0.5);
+    REQUIRE(!player->is_animating());
+    REQUIRE(player->get_scroll() == 450);
+    REQUIRE(player->get_artboard() == scene.m_long);
+    REQUIRE(player->get_history().empty());
+    tap(*player, Point(50, 200));
+    REQUIRE(player->get_scroll() == 0);
+    REQUIRE(!player->is_animating());
+    REQUIRE(player->get_reports().empty());
+  }
+
   TEST_CASE("position") {
     auto document = Document();
     auto scene = build_prototype_scene(document);

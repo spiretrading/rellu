@@ -358,6 +358,67 @@ TEST_SUITE("PrototypeInspector") {
       "Speech Playback"}));
   }
 
+  TEST_CASE("scroll_to") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    auto editor = Editor(document);
+    auto inspector = PrototypeInspector();
+    inspector.set_editor(&editor);
+    editor.get_selection().select(scene.m_home);
+    QApplication::processEvents();
+    get<QToolButton>(inspector, "add").click();
+    QApplication::processEvents();
+    REQUIRE(!is_item_enabled(get<QComboBox>(inspector, "type"), "Scroll To"));
+    editor.get_selection().select(scene.m_button);
+    QApplication::processEvents();
+    get<QToolButton>(inspector, "add").click();
+    QApplication::processEvents();
+    REQUIRE(is_item_enabled(get<QComboBox>(inspector, "type"), "Scroll To"));
+    choose(get<QComboBox>(inspector, "type"), "Scroll To");
+    REQUIRE(get_first(document, scene.m_button).m_action ==
+      Action(ScrollTransition(NodeId(), 0, make_empty_animation())));
+    REQUIRE(editor.get_history().get_undo_label() == "Change Interaction");
+    REQUIRE(get<QComboBox>(inspector, "type").currentText() == "Scroll To");
+    REQUIRE(!inspector.find_field("animation"));
+    REQUIRE(!inspector.find_field("preserve_scroll"));
+    auto& destination = get<QComboBox>(inspector, "destination");
+    REQUIRE(destination.placeholderText() == "(Choose a layer)");
+    REQUIRE(destination.currentIndex() == -1);
+    REQUIRE(destination.count() == 2);
+    REQUIRE(destination.itemText(0) == "Toggle");
+    REQUIRE(destination.itemText(1) == "Box");
+    choose(destination, "Box");
+    REQUIRE(get_first(document, scene.m_button).m_action ==
+      Action(ScrollTransition(scene.m_box, 0, make_empty_animation())));
+    auto& chosen = get<QComboBox>(inspector, "destination");
+    REQUIRE(chosen.itemText(0) == "None");
+    REQUIRE(chosen.currentText() == "Box");
+    auto& offset = get<QLineEdit>(inspector, "y_offset");
+    REQUIRE(offset.text() == "0");
+    offset.setText("-500");
+    offset.editingFinished();
+    QApplication::processEvents();
+    REQUIRE(std::get<ScrollTransition>(
+      get_first(document, scene.m_button).m_action).m_offset == -100);
+    REQUIRE(get<QLineEdit>(inspector, "y_offset").text() == "-100");
+    choose(get<QComboBox>(inspector, "easing"), "Ease In");
+    enter(get<QComboBox>(inspector, "duration"), "0.6 s");
+    REQUIRE(get_first(document, scene.m_button).m_action ==
+      Action(ScrollTransition(scene.m_box, -100,
+        Animation(Transition::NONE, Easing::EASE_IN, 0.6000000238418579))));
+    REQUIRE(editor.get_history().get_undo_label() == "Change Interaction");
+    choose(get<QComboBox>(inspector, "destination"), "None");
+    REQUIRE(std::get<ScrollTransition>(
+      get_first(document, scene.m_button).m_action).m_destination.is_nil());
+    REQUIRE(editor.undo());
+    REQUIRE(std::get<ScrollTransition>(get_first(document,
+      scene.m_button).m_action).m_destination == scene.m_box);
+    choose(get<QComboBox>(inspector, "type"), "Transition");
+    REQUIRE(get_first(document, scene.m_button).m_action ==
+      Action(ArtboardTransition(NodeId(),
+        Animation(Transition::NONE, Easing::EASE_IN, 0.6000000238418579))));
+  }
+
   TEST_CASE("text_hyperlinks") {
     auto document = Document();
     auto scene = build_prototype_scene(document);

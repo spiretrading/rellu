@@ -94,6 +94,25 @@ namespace Rellu {
   /** Returns the flow starting on an artboard, or nullptr if none does. */
   const Flow* find_flow(const Document& document, const NodeId& artboard);
 
+  /**
+   * Returns the layers a Scroll To interaction can scroll to, in the order
+   * Adobe XD lists them.
+   * @param document The document.
+   * @param owner The node the interaction is attached to.
+   */
+  std::vector<NodeId> get_scroll_destinations(
+    const Document& document, const NodeId& owner);
+
+  /**
+   * Clamps a Scroll To offset as Adobe XD does.
+   * @param document The document.
+   * @param destination The layer scrolled to.
+   * @param offset The offset.
+   * @return The offset clamped.
+   */
+  double clamp_scroll_offset(
+    const Document& document, const NodeId& destination, double offset);
+
   /** Adds an interaction to a node, labelled Add Interaction. */
   class AddInteractionCommand : public Command {
     public:

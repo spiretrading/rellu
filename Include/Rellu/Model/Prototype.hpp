@@ -142,6 +142,21 @@ namespace Rellu {
     bool operator ==(const StateTransition&) const = default;
   };
 
+  /** Scrolls the current artboard to one of its layers. */
+  struct ScrollTransition {
+
+    /** The layer scrolled to, or nil if unset. */
+    NodeId m_destination;
+
+    /** The distance from the layer's top to the top of the viewport. */
+    double m_offset = 0;
+
+    /** How the scroll is animated. */
+    Animation m_animation;
+
+    bool operator ==(const ScrollTransition& transition) const;
+  };
+
   /** Navigates back to the previously shown artboard. */
   struct PreviousArtboard {
     bool operator ==(const PreviousArtboard&) const = default;
@@ -183,7 +198,7 @@ namespace Rellu {
 
   /** The response to an interaction's trigger. */
   using Action = std::variant<ArtboardTransition, Overlay, StateTransition,
-    PreviousArtboard, VideoPlayback, Hyperlink>;
+    PreviousArtboard, VideoPlayback, Hyperlink, ScrollTransition>;
 
   /** A prototype interaction attached to a node. */
   struct Interaction {
@@ -241,6 +256,13 @@ namespace Rellu {
     return m_transition == animation.m_transition &&
       m_easing == animation.m_easing &&
       equals(m_duration, animation.m_duration);
+  }
+
+  inline bool ScrollTransition::operator ==(
+      const ScrollTransition& transition) const {
+    return m_destination == transition.m_destination &&
+      equals(m_offset, transition.m_offset) &&
+      m_animation == transition.m_animation;
   }
 }
 

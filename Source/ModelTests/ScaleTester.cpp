@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cstddef>
 #include <string>
 #include <doctest/doctest.h>
 #include "SampleDocument.hpp"
@@ -7,10 +8,6 @@ using namespace Rellu;
 using namespace Rellu::Tests;
 
 namespace {
-  constexpr auto ARTBOARD_COUNT = 200;
-  constexpr auto SHAPE_COUNT = 998;
-  constexpr auto NODE_COUNT = ARTBOARD_COUNT * (SHAPE_COUNT + 2);
-
   struct Stopwatch {
     std::chrono::steady_clock::time_point m_start =
       std::chrono::steady_clock::now();
@@ -27,10 +24,9 @@ namespace {
   std::string format(const char* label, double milliseconds) {
     return std::string(label) + ": " + std::to_string(milliseconds) + " ms";
   }
-}
 
-TEST_SUITE("Scale") {
-  TEST_CASE("large_document") {
+  void test_document(int artboard_count, int shape_count) {
+    auto node_count = std::size_t(artboard_count) * (shape_count + 2);
     auto document = Document();
     auto changes = std::size_t(0);
     auto subscription = document.subscribe([&] (const auto& change) {
@@ -43,14 +39,14 @@ TEST_SUITE("Scale") {
     auto stopwatch = Stopwatch();
     auto transaction = Transaction(document);
     auto target = NodeId();
-    for(auto i = 0; i != ARTBOARD_COUNT; ++i) {
+    for(auto i = 0; i != artboard_count; ++i) {
       auto artboard = Artboard();
       artboard.m_frame = Rect(i * 400.0, 0, 375, 812);
       auto artboard_id =
         transaction.append(NodeId(), make_header("Artboard"), artboard);
       auto group =
         transaction.append(artboard_id, make_header("Group"), Group());
-      for(auto j = 0; j != SHAPE_COUNT; ++j) {
+      for(auto j = 0; j != shape_count; ++j) {
         header.m_transform = make_translation(j, i);
         target = transaction.append(group, header, shape);
       }
@@ -58,8 +54,8 @@ TEST_SUITE("Scale") {
     auto insertion = stopwatch.lap();
     transaction.commit();
     auto commit = stopwatch.lap();
-    REQUIRE(document.get_nodes().get_size() == NODE_COUNT);
-    REQUIRE(changes == NODE_COUNT);
+    REQUIRE(document.get_nodes().get_size() == node_count);
+    REQUIRE(changes == node_count);
     {
       auto edit = Transaction(document);
       auto edited = document.get(target).m_header;
@@ -75,10 +71,10 @@ TEST_SUITE("Scale") {
     REQUIRE(document.undo());
     auto bulk_undo = stopwatch.lap();
     REQUIRE(document.get_nodes().get_size() == 0);
-    REQUIRE(changes == NODE_COUNT);
+    REQUIRE(changes == node_count);
     REQUIRE(document.redo());
     auto bulk_redo = stopwatch.lap();
-    REQUIRE(document.get_nodes().get_size() == NODE_COUNT);
+    REQUIRE(document.get_nodes().get_size() == node_count);
     {
       auto removal = Transaction(document);
       while(!document.get_canvas().empty()) {
@@ -88,7 +84,7 @@ TEST_SUITE("Scale") {
     }
     auto bulk_removal = stopwatch.lap();
     REQUIRE(document.get_nodes().get_size() == 0);
-    MESSAGE(NODE_COUNT << " nodes");
+    MESSAGE(node_count << " nodes");
     MESSAGE(format("insertion", insertion));
     MESSAGE(format("commit", commit));
     MESSAGE(format("single edit", single_edit));
@@ -96,5 +92,15 @@ TEST_SUITE("Scale") {
     MESSAGE(format("bulk undo", bulk_undo));
     MESSAGE(format("bulk redo", bulk_redo));
     MESSAGE(format("bulk removal", bulk_removal));
+  }
+}
+
+TEST_SUITE("Scale") {
+  TEST_CASE("bulk_edits") {
+    test_document(4, 98);
+  }
+
+  TEST_CASE("large_document" * doctest::skip()) {
+    test_document(200, 998);
   }
 }

@@ -57,7 +57,8 @@ namespace {
   Placement place(const OverlayShape& shape, double scale) {
     auto quarter = std::numbers::pi / 2;
     auto turns = std::round(shape.m_angle / quarter);
-    if(std::abs(shape.m_angle - turns * quarter) <= RIGHT_ANGLE_TOLERANCE) {
+    if(shape.m_is_snapped &&
+        std::abs(shape.m_angle - turns * quarter) <= RIGHT_ANGLE_TOLERANCE) {
       auto width = shape.m_size.m_width;
       auto height = shape.m_size.m_height;
       if(static_cast<long long>(turns) % 2 != 0) {
