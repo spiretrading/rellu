@@ -4,6 +4,8 @@
 #include <QCoreApplication>
 #include <QFocusEvent>
 #include <QKeyEvent>
+#include <QLabel>
+#include <QLineEdit>
 #include "Rellu/Ui/AppBar.hpp"
 
 using namespace Rellu;
@@ -15,6 +17,9 @@ TEST_SUITE("AppBar") {
     REQUIRE(format_zoom(1.93) == "193%");
     REQUIRE(format_zoom(1) == "100%");
     REQUIRE(format_zoom(0.25) == "25%");
+    REQUIRE(format_zoom(1173.0 / 2000) == "58.6%");
+    REQUIRE(format_zoom(1173.0 / 1200) == "97.8%");
+    REQUIRE(format_zoom(2539.0 / 1800) == "141.1%");
     REQUIRE(parse_zoom("150%") == 1.5);
     REQUIRE(*parse_zoom(" 30.6 ") == doctest::Approx(0.306));
     REQUIRE(!parse_zoom("wide"));
@@ -101,5 +106,27 @@ TEST_SUITE("AppBar") {
     REQUIRE(bar.get_title() == "shapes");
     bar.set_title("shapes", true);
     REQUIRE(bar.get_title() == "shapes *");
+  }
+  TEST_CASE("narrow") {
+    auto bar = AppBar();
+    bar.set_title("svgcalls2", false);
+    bar.resize(2000, AppBar::HEIGHT);
+    bar.show();
+    QCoreApplication::processEvents();
+    auto field = bar.findChild<QLineEdit*>("zoom_field");
+    REQUIRE(field);
+    REQUIRE(field->isVisible());
+    REQUIRE(bar.minimumSize().width() == 0);
+    bar.resize(500, AppBar::HEIGHT);
+    QCoreApplication::processEvents();
+    REQUIRE(!field->isVisible());
+    auto title = bar.findChild<QLabel*>("document_title");
+    REQUIRE(title);
+    auto design = bar.get_workspace_button(Workspace::SHARE).mapTo(&bar,
+      QPoint(bar.get_workspace_button(Workspace::SHARE).width(), 0)).x();
+    REQUIRE(title->mapTo(&bar, QPoint(0, 0)).x() > design);
+    bar.resize(2000, AppBar::HEIGHT);
+    QCoreApplication::processEvents();
+    REQUIRE(field->isVisible());
   }
 }

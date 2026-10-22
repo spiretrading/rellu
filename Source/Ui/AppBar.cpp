@@ -5,6 +5,7 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QResizeEvent>
 #include <QTimer>
 #include "Rellu/Ui/AppBar.hpp"
 #include "Rellu/Ui/Translation.hpp"
@@ -54,14 +55,19 @@ AppBar::AppBar(QWidget* parent)
       m_share(make_workspace_button("Share")),
       m_title(new QLabel()),
       m_history(make_icon_button(Glyph::CHEVRON_DOWN, "Version History")),
-      m_zoom_field(new QLineEdit()) {
+      m_zoom_field(new QLineEdit()),
+      m_left(nullptr),
+      m_middle(nullptr),
+      m_right(nullptr) {
   setObjectName("app_bar");
   setAttribute(Qt::WA_StyledBackground);
   setFixedHeight(HEIGHT);
   auto layout = new QGridLayout(this);
+  layout->setSizeConstraint(QLayout::SetNoConstraint);
   layout->setContentsMargins(8, 0, 12, 0);
   layout->setHorizontalSpacing(0);
   auto left = new QWidget();
+  m_left = left;
   auto left_layout = new QHBoxLayout(left);
   left_layout->setContentsMargins(0, 0, 0, 0);
   left_layout->setSpacing(0);
@@ -75,6 +81,7 @@ AppBar::AppBar(QWidget* parent)
   }
   left_layout->addStretch(1);
   auto middle = new QWidget();
+  m_middle = middle;
   auto middle_layout = new QHBoxLayout(middle);
   middle_layout->setContentsMargins(0, 0, 0, 0);
   middle_layout->setSpacing(2);
@@ -85,6 +92,7 @@ AppBar::AppBar(QWidget* parent)
   m_history->setEnabled(false);
   middle_layout->addWidget(m_history);
   auto right = new QWidget();
+  m_right = right;
   auto right_layout = new QHBoxLayout(right);
   right_layout->setContentsMargins(0, 0, 0, 0);
   right_layout->setSpacing(10);
@@ -226,6 +234,24 @@ QToolButton& AppBar::get_workspace_button(Workspace workspace) {
   return *m_design;
 }
 
+void AppBar::resizeEvent(QResizeEvent* event) {
+  QWidget::resizeEvent(event);
+  fit_controls();
+}
+
+void AppBar::fit_controls() {
+  auto grid = static_cast<QGridLayout*>(layout());
+  auto margins = grid->contentsMargins();
+  auto needed = margins.left() + m_left->sizeHint().width() +
+    m_middle->sizeHint().width() + m_right->sizeHint().width() +
+    margins.right();
+  auto is_fitting = width() >= needed;
+  m_right->setVisible(is_fitting);
+  grid->setColumnStretch(0, is_fitting ? 1 : 0);
+  grid->setColumnStretch(1, is_fitting ? 0 : 1);
+  grid->setColumnStretch(2, is_fitting ? 1 : 0);
+}
+
 bool AppBar::eventFilter(QObject* watched, QEvent* event) {
   if(watched == m_zoom_field) {
     if(event->type() == QEvent::FocusIn) {
@@ -277,7 +303,8 @@ void AppBar::pick_zoom(double zoom) {
 }
 
 QString Rellu::format_zoom(double zoom) {
-  auto tenths = std::round(zoom * 1000);
+  auto single = static_cast<double>(static_cast<float>(zoom));
+  auto tenths = std::round(single * 1000);
   if(std::fmod(tenths, 10) == 0) {
     return QString("%1%").arg(tenths / 10, 0, 'f', 0);
   }

@@ -22,7 +22,28 @@ namespace Rellu {
    * The space in logical pixels Adobe XD leaves above and below a region it
    * zooms to fit.
    */
-  constexpr auto FIT_PADDING_Y = 73.5;
+  constexpr auto FIT_PADDING_Y = 72.5;
+
+  /** The narrowest client area of Adobe XD's window, in logical pixels. */
+  constexpr auto MINIMUM_CLIENT_WIDTH = 500.0;
+
+  /**
+   * The shortest Adobe XD's window may be, its resize border below the
+   * client area included, in logical pixels.
+   */
+  constexpr auto MINIMUM_WINDOW_HEIGHT = 500.0;
+
+  /** The narrowest the canvas becomes before the left pane narrows. */
+  constexpr auto MINIMUM_CANVAS_WIDTH = 42.0;
+
+  /**
+   * Returns the smallest client area of a window in device pixels, as
+   * Adobe XD limits its window.
+   * @param ratio The number of device pixels per logical pixel.
+   * @param border The height in device pixels of the window's resize border
+   *        below its client area.
+   */
+  Size get_minimum_client_size(double ratio, double border);
 
   /** The zoom and offset of the canvas. */
   struct ViewFit {

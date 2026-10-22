@@ -1,12 +1,13 @@
 #include <cmath>
+#include <tuple>
 #include <doctest/doctest.h>
 #include "Rellu/Tools/ViewFit.hpp"
 
 using namespace Rellu;
 
 namespace {
-  const auto NARROW = Size(2719 / 1.5, 1980 / 1.5);
-  const auto WIDE = Size(2964 / 1.5, 1980 / 1.5);
+  const auto NARROW = Size(2719 / 1.5, 1977 / 1.5);
+  const auto WIDE = Size(2964 / 1.5, 1977 / 1.5);
 
   double to_percent(double zoom) {
     return std::round(zoom * 1000) / 10;
@@ -40,14 +41,14 @@ TEST_SUITE("ViewFit") {
     auto margins = get_margins(fit, web, NARROW);
     REQUIRE(margins.m_left == 90);
     REQUIRE(margins.m_right == 90);
-    REQUIRE(std::round(margins.m_top) == 276);
+    REQUIRE(std::round(margins.m_top) == 274);
     REQUIRE(margins.m_top == doctest::Approx(margins.m_bottom));
     auto artboards = Rect(0, 0, 3910, 1773);
     fit = fit_view(artboards, NARROW);
     REQUIRE(to_percent(fit.m_zoom) == 43.3);
     margins = get_margins(fit, artboards, NARROW);
     REQUIRE(margins.m_left == 90);
-    REQUIRE(std::round(margins.m_top) == 414);
+    REQUIRE(std::round(margins.m_top) == 413);
     auto rectangle = Rect(10, 20, 100, 50);
     fit = fit_view(rectangle, WIDE);
     REQUIRE(to_percent(fit.m_zoom) == 1856);
@@ -63,14 +64,14 @@ TEST_SUITE("ViewFit") {
     auto fit = fit_view(line, WIDE);
     REQUIRE(to_percent(fit.m_zoom) == 5585.7);
     auto margins = get_margins(fit, line, WIDE);
-    REQUIRE(margins.m_top == 110.25);
-    REQUIRE(margins.m_bottom == 110.25);
+    REQUIRE(margins.m_top == 108.75);
+    REQUIRE(margins.m_bottom == 108.75);
     REQUIRE(margins.m_left == doctest::Approx(margins.m_right));
     auto ipad = Rect(2000, 0, 1024, 1366);
     fit = fit_view(ipad, WIDE);
     REQUIRE(to_percent(fit.m_zoom) == 85.9);
     margins = get_margins(fit, ipad, WIDE);
-    REQUIRE(margins.m_top == 110.25);
+    REQUIRE(margins.m_top == 108.75);
     REQUIRE(margins.m_left == doctest::Approx(margins.m_right));
   }
 
@@ -190,5 +191,26 @@ TEST_SUITE("ViewFit") {
     REQUIRE(place() == Point(1748, 1000));
     set_zoom(66);
     REQUIRE(place() == Point(1451, 901));
+  }
+  TEST_CASE("xd_tall_fit") {
+    auto ratio = 1.5;
+    auto canvas = Point(687 / ratio, 111 / ratio);
+    auto region = Rect(686 / ratio - canvas.m_x, 0, 2719 / ratio,
+      1977 / ratio);
+    for(auto [height, zoom, left] : {std::tuple(2000.0, 0.5865, 1869.0),
+        std::tuple(1200.0, 0.9775, 1752.0)}) {
+      auto fit = fit_view(Rect(0, 0, 400, height), region.get_size());
+      REQUIRE(fit.m_zoom == doctest::Approx(zoom));
+      auto offset = snap_view_offset(fit.m_offset + region.get_top_left(),
+        region.get_top_left(), ratio);
+      REQUIRE(std::round((canvas.m_x + offset.m_x) * ratio) == left);
+      REQUIRE(std::round((canvas.m_y + offset.m_y) * ratio) == 219);
+      auto bottom = (canvas.m_y + offset.m_y + fit.m_zoom * height) * ratio;
+      REQUIRE(bottom == doctest::Approx(1978.5));
+    }
+  }
+  TEST_CASE("minimum_client_size") {
+    REQUIRE(get_minimum_client_size(1.5, 11) == Size(750, 739));
+    REQUIRE(get_minimum_client_size(1, 8) == Size(500, 492));
   }
 }

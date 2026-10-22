@@ -4,6 +4,7 @@
 #include <QEnterEvent>
 #include <QEvent>
 #include <QPointer>
+#include "Rellu/Tools/ViewFit.hpp"
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -165,6 +166,16 @@ bool Rellu::handle_frame_event(QWidget& window, void* message,
   } else if(native->message == WM_NCACTIVATE) {
     *result =
       DefWindowProcW(native->hwnd, native->message, native->wParam, -1);
+    return true;
+  } else if(native->message == WM_GETMINMAXINFO) {
+    auto info = reinterpret_cast<MINMAXINFO*>(native->lParam);
+    auto border = get_border(native->hwnd);
+    auto ratio = GetDpiForWindow(native->hwnd) /
+      static_cast<double>(USER_DEFAULT_SCREEN_DPI);
+    auto client = get_minimum_client_size(ratio, border);
+    info->ptMinTrackSize.x = static_cast<LONG>(client.m_width) + 2 * border;
+    info->ptMinTrackSize.y = static_cast<LONG>(client.m_height) + 1 + border;
+    *result = 0;
     return true;
   } else if(native->message == WM_NCCALCSIZE && native->wParam) {
     auto params = reinterpret_cast<NCCALCSIZE_PARAMS*>(native->lParam);

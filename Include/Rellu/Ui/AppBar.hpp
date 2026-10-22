@@ -27,7 +27,10 @@ namespace Rellu {
   /**
    * The bar below the menu row: the home button and the workspace switcher
    * at the left, the document's title in the middle, and the invite,
-   * preview and zoom controls at the right.
+   * preview and zoom controls at the right. As in Adobe XD, the bar imposes
+   * no minimum width: when the controls at the right do not fit beside the
+   * rest they are hidden and the title is centred in the space right of the
+   * workspace switcher, and what still does not fit is clipped.
    */
   class AppBar : public QWidget {
     public:
@@ -123,6 +126,7 @@ namespace Rellu {
 
     protected:
       bool eventFilter(QObject* watched, QEvent* event) override;
+      void resizeEvent(QResizeEvent* event) override;
 
     private:
       Workspace m_workspace;
@@ -136,6 +140,11 @@ namespace Rellu {
       QLabel* m_title;
       QToolButton* m_history;
       QLineEdit* m_zoom_field;
+      QWidget* m_left;
+      QWidget* m_middle;
+      QWidget* m_right;
+
+      void fit_controls();
 
       void update_workspace();
       void enter_zoom();
@@ -144,7 +153,8 @@ namespace Rellu {
 
   /**
    * Formats a zoom as a percentage the way XD's zoom field shows it, with
-   * one decimal when the percentage is not whole, such as 30.6%.
+   * one decimal when the percentage is not whole, such as 30.6%, rounding
+   * the zoom held in single precision as XD holds it.
    * @param zoom The number of canvas pixels per document pixel.
    */
   QString format_zoom(double zoom);

@@ -28,8 +28,11 @@
 #include <QPixmap>
 #include <QPolygonF>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScreen>
 #include <QSettings>
+#include <QShowEvent>
+#include <QSizePolicy>
 #include <QToolButton>
 #include <QTimer>
 #include <QToolTip>
@@ -72,6 +75,7 @@ namespace {
   constexpr auto ZOOM_STEP = 2.0;
   constexpr auto MAXIMUM_RECENT_FILES = 15;
   constexpr auto LEFT_PANEL_WIDTH = 407;
+  const auto LEFT_PANEL_WIDTH_KEY = QString("main_window/left_panel_width");
   constexpr auto MENU_ROW_HEIGHT = 32;
   constexpr auto CAPTION_BUTTON_WIDTH = 46;
   constexpr auto HIT_TOLERANCE = 3.0;
@@ -312,7 +316,8 @@ MainWindow::MainWindow(QWidget* parent)
       m_highlight(nullptr),
       m_gradient_overlay(nullptr),
       m_is_launching(false),
-      m_is_restored_expanded(false) {
+      m_is_restored_expanded(false),
+      m_left_panel_width(LEFT_PANEL_WIDTH) {
   add_standard_commands(m_commands, m_measurer);
   add_align_commands(m_commands, m_measurer);
   add_path_commands(
@@ -553,7 +558,51 @@ void MainWindow::changeEvent(QEvent* event) {
   }
 }
 
+void MainWindow::resizeEvent(QResizeEvent* event) {
+  QMainWindow::resizeEvent(event);
+  fit_left_panel();
+}
+
+void MainWindow::showEvent(QShowEvent* event) {
+  QMainWindow::showEvent(event);
+  fit_left_panel();
+}
+
+void MainWindow::fit_left_panel() {
+  auto central = centralWidget();
+  if(!central || !isVisible() || isMinimized()) {
+    return;
+  }
+  auto available = central->width() - m_toolbar->width() -
+    static_cast<int>(MINIMUM_CANVAS_WIDTH);
+  if(m_inspector_frame->isVisible()) {
+    available -= m_inspector_frame->width();
+  }
+  if(m_left_panel->isVisible() && available < m_left_panel_width) {
+    m_left_panel_width = std::max(available, 0);
+    QSettings().setValue(LEFT_PANEL_WIDTH_KEY, m_left_panel_width);
+  }
+  m_left_panel->setFixedWidth(m_left_panel_width);
+}
+
+void MainWindow::place_caption_buttons() {
+  if(!m_menu_row) {
+    return;
+  }
+  auto x = m_menu_row->width();
+  for(auto i = m_caption_buttons.rbegin(); i != m_caption_buttons.rend();
+      ++i) {
+    x -= (*i)->width();
+    (*i)->move(x, 0);
+    (*i)->raise();
+  }
+}
+
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+  if(watched == m_menu_row && (event->type() == QEvent::Resize ||
+      event->type() == QEvent::Show)) {
+    place_caption_buttons();
+  }
   if(m_view && watched == m_view) {
     if(event->type() == QEvent::Resize || event->type() == QEvent::Show) {
       update_launch();
@@ -948,7 +997,10 @@ QMenuBar* MainWindow::make_layout() {
   menu_row->setObjectName("menu_row");
   menu_row->setAttribute(Qt::WA_StyledBackground);
   menu_row->setFixedHeight(MENU_ROW_HEIGHT);
+  menu_row->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+  menu_row->installEventFilter(this);
   auto menu_layout = new QHBoxLayout(menu_row);
+  menu_layout->setSizeConstraint(QLayout::SetNoConstraint);
   menu_layout->setContentsMargins(15, 0, 0, 0);
   menu_layout->setSpacing(14);
   auto mark = new QLabel();
@@ -957,6 +1009,7 @@ QMenuBar* MainWindow::make_layout() {
   menu_layout->addWidget(mark);
   auto bar = new QMenuBar();
   bar->setNativeMenuBar(false);
+  bar->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
   menu_layout->addWidget(bar);
   menu_layout->addStretch(1);
   m_menu_row = menu_row;
@@ -980,26 +1033,30 @@ QMenuBar* MainWindow::make_layout() {
     connect(close, &QAbstractButton::clicked, this, [this] {
       this->close();
     });
-    menu_layout->addWidget(minimize);
-    menu_layout->addWidget(maximize);
-    menu_layout->addWidget(close);
+    for(auto button : std::to_array<QWidget*>({minimize, maximize, close})) {
+      button->setParent(menu_row);
+      m_caption_buttons.push_back(button);
+    }
     m_maximize = maximize;
     enable_custom_frame(*this);
   }
   setMenuWidget(menu_row);
   auto central = new QWidget();
   central->setObjectName("central");
+  central->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
   auto layout = new QVBoxLayout(central);
+  layout->setSizeConstraint(QLayout::SetNoConstraint);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
   layout->addWidget(m_app_bar);
   auto body = new QWidget();
   auto body_layout = new QHBoxLayout(body);
+  body_layout->setSizeConstraint(QLayout::SetNoConstraint);
   body_layout->setContentsMargins(0, 0, 0, 0);
   body_layout->setSpacing(0);
   body_layout->addWidget(m_toolbar);
   m_left_panel->setObjectName("left_panel");
-  m_left_panel->setFixedWidth(LEFT_PANEL_WIDTH);
+  m_left_panel->setFixedWidth(m_left_panel_width);
   m_left_panel->addWidget(m_assets);
   m_left_panel->addWidget(m_layers);
   m_left_panel->addWidget(m_plugins);
@@ -1224,6 +1281,7 @@ void MainWindow::show_panel(const std::string& name) {
     m_left_panel->setCurrentWidget(m_plugins);
   }
   m_left_panel->setVisible(!panel.empty());
+  fit_left_panel();
   for(auto candidate : {"assets", "layers", "plugins"}) {
     m_actions.get(get_panel_action(candidate)).setChecked(
       m_toolbar->get_panel() == candidate);
@@ -1293,6 +1351,9 @@ void MainWindow::restore_settings() {
   auto settings = QSettings();
   m_recent_files.set_paths(settings.value("recent_files").toStringList());
   update_recent_files();
+  m_left_panel_width = std::clamp(settings.value(LEFT_PANEL_WIDTH_KEY,
+    LEFT_PANEL_WIDTH).toInt(), 0, LEFT_PANEL_WIDTH);
+  m_left_panel->setFixedWidth(m_left_panel_width);
   if(!restoreGeometry(settings.value("main_window/geometry").toByteArray())) {
     if(auto screen = this->screen()) {
       auto area = screen->availableGeometry();

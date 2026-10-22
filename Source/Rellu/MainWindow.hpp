@@ -111,6 +111,8 @@ namespace Rellu {
 
     protected:
       void closeEvent(QCloseEvent* event) override;
+      void resizeEvent(QResizeEvent* event) override;
+      void showEvent(QShowEvent* event) override;
       void changeEvent(QEvent* event) override;
       bool eventFilter(QObject* watched, QEvent* event) override;
       bool nativeEvent(
@@ -158,6 +160,8 @@ namespace Rellu {
       Subscription m_tool_subscription;
       bool m_is_launching;
       bool m_is_restored_expanded;
+      int m_left_panel_width;
+      std::vector<QWidget*> m_caption_buttons;
       std::optional<QRect> m_restored_bounds;
 
       QMenuBar* make_layout();
@@ -190,6 +194,8 @@ namespace Rellu {
       void detach();
       void update_title();
       void update_document_state();
+      void fit_left_panel();
+      void place_caption_buttons();
       void update_selection_actions();
       void reveal(const NodeId& id);
       void show_region(const Rect& region);

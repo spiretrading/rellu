@@ -33,6 +33,11 @@ ViewFit Rellu::fit_view(const Rect& region, Size size) {
   return fit;
 }
 
+Size Rellu::get_minimum_client_size(double ratio, double border) {
+  return Size(std::round(MINIMUM_CLIENT_WIDTH * ratio),
+    std::round(MINIMUM_WINDOW_HEIGHT * ratio) - border);
+}
+
 Point Rellu::snap_view_offset(Point offset, Point origin, double ratio) {
   if(!(ratio > 0)) {
     return offset;

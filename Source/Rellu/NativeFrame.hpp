@@ -31,7 +31,9 @@ namespace Rellu {
   void enable_custom_frame(QWidget& window);
 
   /**
-   * Handles the native events of a window drawing its own title bar.
+   * Handles the native events of a window drawing its own title bar,
+   * limiting its client area to get_minimum_client_size as Adobe XD limits
+   * its window.
    * @param window The window.
    * @param message The native message.
    * @param result The result of the message, set when it is handled.
