@@ -840,6 +840,76 @@ TEST_SUITE("Clipboard") {
       mark.get_shape()->m_geometry));
   }
 
+  TEST_CASE("svg_failures") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto clipboard = Clipboard();
+    REQUIRE(clipboard.copy(document, {ids.m_loose}));
+    auto text = QMimeData();
+    text.setText(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><defs><rect
+      id="r" width="1" height="1"/></defs><use href="#r"/><circle r="5"/>
+      </svg>)svg");
+    REQUIRE(!clipboard.load(text));
+    REQUIRE(!clipboard.make_paste_command());
+    auto failed = QMimeData();
+    failed.setText(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><defs><filter
+      id="u"><feOffset dx="5px" dy="2"/><feGaussianBlur stdDeviation="2"/>
+      <feFlood/><feComposite operator="in"/></filter></defs><rect width="1"
+      height="1" filter="url(#u)"/></svg>)svg");
+    REQUIRE(clipboard.load(failed));
+    auto editor = Editor(document);
+    REQUIRE(editor.execute(clipboard.make_paste_command(
+      make_target({}, Rect(0, 0, 600, 600)))));
+    auto& empty = document.get(editor.get_selection().get_primary());
+    REQUIRE(empty.get_group());
+    REQUIRE(empty.m_children.empty());
+    REQUIRE(get_world_transform(document, empty.get_id()) == Matrix());
+  }
+
+  TEST_CASE("svg_fonts") {
+    auto document = Document();
+    build_test_document(document);
+    auto editor = Editor(document);
+    auto clipboard = Clipboard();
+    auto text = QMimeData();
+    text.setText(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><text x="10"
+      y="30" font-family="NoSuchFont, Arial">Two</text><text x="10" y="70"
+      font-family="'Courier New', Arial">One</text></svg>)svg");
+    REQUIRE(clipboard.load(text));
+    REQUIRE(editor.execute(clipboard.make_paste_command(
+      make_target({}, Rect(0, 0, 600, 600)))));
+    auto& group = document.get(editor.get_selection().get_primary());
+    REQUIRE(group.m_children.size() == 2);
+    auto& missing = document.get(group.m_children[0]).get_text()->
+      m_base_style.m_font;
+    REQUIRE(missing.m_family == "Segoe UI");
+    REQUIRE(missing.m_postscript_name == "SegoeUI");
+    auto& courier = document.get(group.m_children[1]).get_text()->
+      m_base_style.m_font;
+    REQUIRE(courier.m_family == "Courier New");
+    REQUIRE(courier.m_postscript_name == "CourierNewPSMT");
+  }
+
+  TEST_CASE("svg_line_spacing") {
+    auto document = Document();
+    build_test_document(document);
+    auto editor = Editor(document);
+    auto clipboard = Clipboard();
+    auto text = QMimeData();
+    text.setText(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><text
+      font-family="Arial" font-size="20"><tspan x="10" y="30">A</tspan><tspan
+      x="10" y="53">B</tspan><tspan x="10" y="106">C</tspan></text>
+      </svg>)svg");
+    REQUIRE(clipboard.load(text));
+    REQUIRE(editor.execute(clipboard.make_paste_command(
+      make_target({}, Rect(0, 0, 600, 600)))));
+    auto& node = document.get(editor.get_selection().get_primary());
+    auto& pasted = *node.get_text();
+    REQUIRE(*pasted.m_content == u"A\nB\n\nC");
+    REQUIRE(pasted.m_runs.size() == 3);
+    REQUIRE(pasted.m_runs[1].m_style.m_font.m_size == 27.42729949951172);
+  }
+
   TEST_CASE("svg_group") {
     auto document = Document();
     build_test_document(document);

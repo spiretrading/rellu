@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -134,10 +135,22 @@ namespace {
     return text;
   }
 
+  Font to_installed(Font font) {
+    auto resolution = get_default_font_library().resolve(font);
+    if(resolution.m_match != FontMatch::POSTSCRIPT_NAME &&
+        resolution.m_match != FontMatch::FAMILY_AND_STYLE &&
+        resolution.m_match != FontMatch::FAMILY) {
+      font.m_family = "Segoe UI";
+      font.m_postscript_name.clear();
+    }
+    return font;
+  }
+
   void resolve_font(Font& font) {
     if(!font.m_postscript_name.empty()) {
       return;
     }
+    font = to_installed(std::move(font));
     auto resolution = get_default_font_library().resolve(font);
     if(resolution.m_typeface &&
         (resolution.m_match == FontMatch::POSTSCRIPT_NAME ||
@@ -148,12 +161,26 @@ namespace {
   }
 
   std::optional<SvgFontExtent> measure_font(const Font& font) {
-    auto resolution = get_default_font_library().resolve(font);
+    auto resolution = get_default_font_library().resolve(to_installed(font));
     if(!resolution.m_typeface) {
       return std::nullopt;
     }
     auto& metrics = resolution.m_typeface->get_metrics();
-    return SvgFontExtent(metrics.m_line_ascent, metrics.m_line_descent);
+    return SvgFontExtent(
+      metrics.m_line_ascent, metrics.m_line_descent, metrics.m_x_height);
+  }
+
+  std::optional<double> measure_advance(
+      const Font& font, const std::u16string& text) {
+    auto resolution = get_default_font_library().resolve(to_installed(font));
+    if(!resolution.m_typeface) {
+      return std::nullopt;
+    }
+    auto advance = 0.0;
+    for(auto& glyph : resolution.m_typeface->shape(text, 0, text.size())) {
+      advance += glyph.m_advance;
+    }
+    return advance * font.m_size;
   }
 
   void resolve_fonts(Document& document) {
@@ -577,6 +604,7 @@ struct Clipboard::Content {
   std::vector<Interaction> m_interactions;
   std::unordered_set<NodeId> m_instanced;
   bool m_is_sequenced = false;
+  bool m_is_unplaced = false;
   bool m_is_foreign = false;
   bool m_is_image = false;
   bool m_is_text = false;
@@ -860,6 +888,11 @@ class Clipboard::PasteCommand : public Command {
       placement.m_artboard = target;
       placement.m_target = target;
       placement.m_deltas.assign(trees.size(), Point(0, 0));
+      if(m_content->m_is_unplaced) {
+        placement.m_artboard = NodeId();
+        placement.m_target = NodeId();
+        return placement;
+      }
       auto container = target;
       auto region = std::optional<Rect>();
       if(auto frame = get_frame(document, container)) {
@@ -1687,16 +1720,21 @@ bool Clipboard::load(const QMimeData& data, const TextMeasurer& measurer) {
   if(auto svg = find_svg(data); !svg.isEmpty()) {
     auto scratch = Document();
     try {
-      read_svg(svg, scratch, &measure_font);
+      auto is_complete = read_svg(
+        svg, scratch, SvgMeasurer(&measure_font, &measure_advance));
       resolve_fonts(scratch);
       auto& canvas = scratch.get_canvas();
       if(!canvas.empty()) {
         auto content = Content::make(scratch, canvas, measurer);
         content->m_is_sequenced = true;
         content->m_is_foreign = true;
+        content->m_is_unplaced = !is_complete;
         m_content = std::move(content);
         return true;
       }
+    } catch(const std::runtime_error&) {
+      m_content = nullptr;
+      return false;
     } catch(const std::exception&) {}
   }
   if(data.hasImage()) {

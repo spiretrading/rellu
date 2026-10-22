@@ -119,6 +119,19 @@ namespace {
       font, HB_OT_METRICS_TAG_SUBSCRIPT_EM_Y_OFFSET, scale, 0.15);
     metrics.m_subscript_size = get_position(
       font, HB_OT_METRICS_TAG_SUBSCRIPT_EM_Y_SIZE, scale, 0.65);
+    metrics.m_x_height =
+      get_position(font, HB_OT_METRICS_TAG_X_HEIGHT, scale, 0);
+    if(!(metrics.m_x_height > 0)) {
+      auto glyph = hb_codepoint_t(0);
+      auto extents = hb_glyph_extents_t();
+      if(hb_font_get_nominal_glyph(font, 'x', &glyph) &&
+          hb_font_get_glyph_extents(font, glyph, &extents) &&
+          extents.y_bearing > 0) {
+        metrics.m_x_height = extents.y_bearing * scale;
+      } else {
+        metrics.m_x_height = 0;
+      }
+    }
     if(is_using_typographic_metrics(face)) {
       metrics.m_line_ascent = metrics.m_ascender;
       metrics.m_line_descent = -metrics.m_descender;

@@ -2,6 +2,7 @@
 #define RELLU_IO_SVG_IMPORT_HPP
 #include <functional>
 #include <optional>
+#include <string>
 #include <QString>
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/Text.hpp"
@@ -16,14 +17,27 @@ namespace Rellu {
 
     /** The depth below the baseline. */
     double m_descent = 0;
+
+    /** The height of lowercase letters, or 0 if it is unknown. */
+    double m_x_height = 0;
   };
 
-  /**
-   * Returns the extent of the glyph cells of the face displaying a font, or
-   * none if it is unknown.
-   */
-  using SvgFontMeasurer =
-    std::function<std::optional<SvgFontExtent> (const Font& font)>;
+  /** Measures the fonts SVG text is displayed in. */
+  struct SvgMeasurer {
+
+    /**
+     * Returns the extent of the glyph cells of the face displaying a font,
+     * or none if it is unknown.
+     */
+    std::function<std::optional<SvgFontExtent> (const Font& font)> m_extent;
+
+    /**
+     * Returns the distance text displayed in a font advances, in pixels, or
+     * none if it is unknown.
+     */
+    std::function<std::optional<double> (
+      const Font& font, const std::u16string& text)> m_advance;
+  };
 
   /**
    * Tests whether text is SVG markup: an XML document whose root element is
@@ -36,14 +50,17 @@ namespace Rellu {
    * Reads SVG markup into a document as Adobe XD pastes it: the graphic
    * elements become editable shapes, text, images, masks and groups on the
    * canvas, wrapped in a group when the markup holds several. Throws
-   * std::invalid_argument if the text is not SVG markup.
+   * std::invalid_argument if the text is not SVG markup, and
+   * std::runtime_error if Adobe XD fails to convert it, pasting nothing.
    * @param text The markup.
    * @param document The empty document receiving the nodes.
-   * @param measurer The function measuring fonts to space the lines of text
-   *        placed at irregular intervals, or empty to leave them unspaced.
+   * @param measurer The functions measuring fonts, or empty functions to
+   *        leave text that depends on them unmeasured.
+   * @return <code>true</code> iff every element converted, otherwise Adobe
+   *         XD pastes what remains where it is, without placing it.
    */
-  void read_svg(const QString& text, Document& document,
-    const SvgFontMeasurer& measurer = {});
+  bool read_svg(const QString& text, Document& document,
+    const SvgMeasurer& measurer = {});
 }
 
 #endif

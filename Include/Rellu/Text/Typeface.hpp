@@ -79,6 +79,9 @@ namespace Rellu {
 
     /** The size of subscript text relative to the em. */
     double m_subscript_size = 0;
+
+    /** The height of lowercase letters, or 0 if the face gives none. */
+    double m_x_height = 0;
   };
 
   /** A glyph produced by shaping text, positioned in ems. */

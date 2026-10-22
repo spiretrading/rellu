@@ -36,6 +36,8 @@ namespace {
   const auto TEXT_NODE = u"#text"_s;
   const auto DEFAULT_FAMILY = u"Helvetica Neue"_s;
   constexpr auto DEFAULT_SIZE = 300.0;
+  constexpr auto WINDOW_SIZE = 1.0;
+  constexpr auto LAYOUT_UNITS = 120.0;
   constexpr auto FONT_SIZE = 20.0;
   constexpr auto PRECISION = 1e5;
   constexpr auto TOLERANCE = 0.01;
@@ -63,6 +65,8 @@ namespace {
     std::vector<Item> m_children;
     std::vector<Effect> m_effects;
     double m_fill_alpha = 1;
+    bool m_is_image = false;
+    bool m_is_failed = false;
   };
 
   struct Compound {
@@ -117,6 +121,16 @@ namespace {
     uR"(^filter/feoffset\+fegaussianblur\+feflood\+fecomposite\+)"
     uR"(fecomposite\+fecomposite$)"_s);
 
+  const auto PLAIN_NUMBER = QRegularExpression(
+    uR"(^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$)"_s);
+
+  const auto PIXELS = QRegularExpression(uR"(px\s*$)"_s);
+
+  const auto LENGTH = QRegularExpression(
+    uR"(^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?))"
+    uR"((em|ex|px|in|cm|mm|pt|pc|%)?\s*$)"_s,
+    QRegularExpression::CaseInsensitiveOption);
+
   const auto IMAGE_DATA = QRegularExpression(
     uR"(^data:(?:image|img)/[^;]+;base64,)"_s);
 
@@ -126,6 +140,10 @@ namespace {
 
   double to_single(double value) {
     return static_cast<double>(static_cast<float>(value));
+  }
+
+  double to_layout_units(double value) {
+    return to_single(std::round(value * LAYOUT_UNITS) / LAYOUT_UNITS);
   }
 
   Matrix to_single(const Matrix& matrix) {
@@ -707,8 +725,8 @@ namespace {
     return reader.read().value_or(std::numeric_limits<double>::quiet_NaN());
   }
 
-  std::optional<double> parse_length(
-      QStringView text, double reference, double font_size = FONT_SIZE) {
+  std::optional<double> parse_length(QStringView text, double reference,
+      double font_size = FONT_SIZE, std::optional<double> ex = std::nullopt) {
     auto reader = NumberReader(text.trimmed());
     auto number = reader.read();
     if(!number) {
@@ -732,7 +750,7 @@ namespace {
     } else if(unit == u"em"_s) {
       return *number * font_size;
     } else if(unit == u"ex"_s) {
-      return *number * font_size / 2;
+      return *number * ex.value_or(font_size / 2);
     }
     return std::nullopt;
   }
@@ -749,7 +767,8 @@ namespace {
     return *number;
   }
 
-  double resolve_font_size(QStringView text, double parent) {
+  double resolve_font_size(
+      QStringView text, double parent, std::optional<double> ex) {
     auto value = text.trimmed().toString().toLower();
     static const auto KEYWORDS = std::array<std::pair<const char16_t*,
       double>, 7>({std::pair(u"xx-small", 9.0), std::pair(u"x-small", 10.0),
@@ -766,7 +785,23 @@ namespace {
     } else if(value == u"smaller"_s) {
       return parent / 1.2;
     }
-    return parse_length(value, parent, parent).value_or(parent);
+    return parse_length(value, parent, parent, ex).value_or(parent);
+  }
+
+  double to_js_number(QStringView text) {
+    if(text.trimmed().isEmpty()) {
+      return 0;
+    } else if(!PLAIN_NUMBER.matchView(text).hasMatch()) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    return text.trimmed().toDouble();
+  }
+
+  double to_json(double value) {
+    if(std::isnan(value)) {
+      return 0;
+    }
+    return value;
   }
 
   double to_radians(double degrees) {
@@ -1030,6 +1065,9 @@ namespace {
   }
 
   void hide_fill(Item& item) {
+    if(item.m_is_image) {
+      return;
+    }
     if(auto shape = std::get_if<Box<Shape>>(&item.m_payload)) {
       auto& style = shape->edit().m_style;
       style.m_fill = disable_fill(style.m_fill);
@@ -1038,6 +1076,9 @@ namespace {
 
   void collect_mask(const Item& item, const Matrix& transform,
       std::vector<MaskShape>& shapes) {
+    if(item.m_is_failed) {
+      return;
+    }
     auto matrix = transform * item.m_header.m_transform;
     if(auto shape = std::get_if<Box<Shape>>(&item.m_payload)) {
       auto mask = MaskShape();
@@ -1062,17 +1103,22 @@ namespace {
 
   class Converter {
     public:
-      Converter(const Element& root, SvgFontMeasurer measurer)
+      Converter(const Element& root, SvgMeasurer measurer)
           : m_root(&root),
             m_measurer(std::move(measurer)) {
         index(root, m_ids);
         auto box = parse_numbers(root.m_attributes.value(u"viewBox"_s));
-        auto width = parse_length(root.m_attributes.value(u"width"_s), 0);
-        auto height = parse_length(root.m_attributes.value(u"height"_s), 0);
-        m_width = width && *width > 0 ? *width :
-          box.size() == 4 ? box[2] : DEFAULT_SIZE;
-        m_height = height && *height > 0 ? *height :
-          box.size() == 4 ? box[3] : DEFAULT_SIZE;
+        auto width_value = root.m_attributes.value(u"width"_s);
+        auto height_value = root.m_attributes.value(u"height"_s);
+        auto width = get_root_length(width_value);
+        auto height = get_root_length(height_value);
+        if(box.size() == 4) {
+          m_width = box[2];
+          m_height = box[3];
+        } else {
+          m_width = width != 0 ? width : DEFAULT_SIZE;
+          m_height = height != 0 ? height : DEFAULT_SIZE;
+        }
       }
 
       std::vector<Item> convert() {
@@ -1080,6 +1126,16 @@ namespace {
         defaults.insert(u"font-family"_s, DEFAULT_FAMILY);
         defaults.insert(u"font-size"_s, QString::number(FONT_SIZE));
         m_root_properties = inherit(*m_root, defaults);
+        m_root_properties.insert(u"font-family"_s, DEFAULT_FAMILY);
+        m_root_properties.insert(u"font-size"_s, QString::number(FONT_SIZE));
+        m_root_properties.insert(u"font-style"_s, u"normal"_s);
+        m_root_properties.insert(u"font-weight"_s, u"400"_s);
+        m_root_properties.insert(u"font-variant"_s, u"normal"_s);
+        if(parse_length(m_root_properties.value(u"stroke-width"_s), 0) ==
+            0.01) {
+          m_root_properties.insert(u"stroke-width"_s, u"1"_s);
+        }
+        index_font_sizes(*m_root, m_root_properties);
         auto items = std::vector<Item>();
         convert_children(*m_root, m_root_properties, true, items);
         return items;
@@ -1087,6 +1143,10 @@ namespace {
 
       std::vector<ImageResource>& get_images() {
         return m_images;
+      }
+
+      bool has_failures() const {
+        return m_has_failures;
       }
 
     private:
@@ -1097,6 +1157,14 @@ namespace {
         TextAlignment m_alignment = TextAlignment::LEFT;
         QStringList m_decorations;
         double m_fill_alpha = 1;
+        double m_alpha = 1;
+        double m_opacity = 1;
+        bool m_has_stroke = false;
+        Stroke m_stroke;
+        std::optional<double> m_x;
+        std::optional<double> m_y;
+        double m_dx = 0;
+        double m_dy = 0;
       };
 
       struct Position {
@@ -1149,10 +1217,12 @@ namespace {
       };
 
       const Element* m_root;
-      SvgFontMeasurer m_measurer;
+      SvgMeasurer m_measurer;
+      bool m_has_failures = false;
       QHash<QString, const Element*> m_ids;
       double m_width;
       double m_height;
+      QHash<const Element*, double> m_font_sizes;
       Properties m_root_properties;
       std::vector<const Element*> m_uses;
       std::vector<const Element*> m_clips;
@@ -1164,8 +1234,8 @@ namespace {
         return m_ids.value(id, nullptr);
       }
 
-      static Properties inherit(const Element& element,
-          const Properties& inherited) {
+      Properties inherit(const Element& element,
+          const Properties& inherited) const {
         auto properties = inherited;
         auto parent = inherited.value(u"font-size"_s).toDouble();
         if(parent <= 0) {
@@ -1177,7 +1247,8 @@ namespace {
               entry.value().trimmed() != u"inherit"_s) {
             if(entry.key() == u"font-size"_s) {
               properties.insert(entry.key(), QString::number(
-                resolve_font_size(entry.value(), parent), 'g', 17));
+                resolve_font_size(entry.value(), parent,
+                  get_ex(entry.value(), make_font(inherited))), 'g', 17));
             } else {
               properties.insert(entry.key(), entry.value().trimmed());
             }
@@ -1205,22 +1276,158 @@ namespace {
         return value != u"none"_s;
       }
 
-      double get_length(const Element& element, const QString& name,
-          double reference) const {
-        return parse_length(
-          element.m_attributes.value(name), reference).value_or(0);
+      void index_font_sizes(
+          const Element& element, const Properties& properties) {
+        m_font_sizes.insert(&element, get_font_size(properties));
+        for(auto child : get_elements(element)) {
+          index_font_sizes(*child, inherit(*child, properties));
+        }
       }
 
-      double get_x(const Element& element, const QString& name) const {
-        return round(get_length(element, name, m_width));
+      double get_root_length(const QString& value) const {
+        auto length = parse_length(value, WINDOW_SIZE, FONT_SIZE,
+          get_ex(value, make_root_font()));
+        if(!length || *length < 0) {
+          return WINDOW_SIZE;
+        }
+        return *length;
       }
 
-      double get_y(const Element& element, const QString& name) const {
-        return round(get_length(element, name, m_height));
+      static Font make_root_font() {
+        auto font = Font();
+        font.m_family = DEFAULT_FAMILY.toStdString();
+        font.m_style = "Regular";
+        font.m_size = FONT_SIZE;
+        return font;
       }
 
-      double get_diagonal() const {
-        return std::hypot(m_width, m_height) / std::numbers::sqrt2;
+      static Font make_font(const Properties& properties) {
+        auto font = Font();
+        font.m_family = to_family(
+          get(properties, u"font-family"_s, DEFAULT_FAMILY)).toStdString();
+        font.m_style = to_style_name(
+          get(properties, u"font-style"_s, u"normal"_s),
+          get(properties, u"font-weight"_s, u"400"_s)).toStdString();
+        font.m_size = round(get_font_size(properties));
+        return font;
+      }
+
+      double get_x_height(const Font& font) const {
+        if(m_measurer.m_extent) {
+          if(auto extent = m_measurer.m_extent(font); extent &&
+              extent->m_x_height > 0) {
+            return extent->m_x_height;
+          }
+        }
+        return 0.5;
+      }
+
+      double get_ex(const Font& font) const {
+        return font.m_size * get_x_height(font);
+      }
+
+      std::optional<double> get_ex(
+          QStringView value, const Font& font) const {
+        if(!value.trimmed().endsWith(u"ex", Qt::CaseInsensitive)) {
+          return std::nullopt;
+        }
+        return get_ex(font);
+      }
+
+      static QString get_default(const QString& type, const QString& name) {
+        if((type == u"use"_s || type == u"svg"_s) &&
+            (name == u"width"_s || name == u"height"_s)) {
+          return u"100%"_s;
+        } else if(type == u"radialGradient"_s && (name == u"cx"_s ||
+            name == u"cy"_s || name == u"r"_s)) {
+          return u"50%"_s;
+        } else if(type == u"linearGradient"_s && name == u"x2"_s) {
+          return u"100%"_s;
+        }
+        return u"0"_s;
+      }
+
+      static bool is_vertical(const QString& type, const QString& name) {
+        if(type == u"rect"_s) {
+          return name == u"y"_s || name == u"ry"_s || name == u"height"_s;
+        } else if(type == u"image"_s) {
+          return name == u"y"_s || name == u"height"_s;
+        } else if(type == u"text"_s) {
+          return name == u"y"_s;
+        } else if(type == u"circle"_s) {
+          return name == u"cy"_s;
+        } else if(type == u"ellipse"_s) {
+          return name == u"cy"_s || name == u"ry"_s;
+        } else if(type == u"line"_s) {
+          return name == u"y1"_s || name == u"y2"_s;
+        } else if(type == u"tspan"_s) {
+          return name == u"y"_s || name == u"dy"_s;
+        }
+        return false;
+      }
+
+      double to_px(
+          const QString& value, bool is_vertical, const Font& font) const {
+        auto number = parse_float(value);
+        if(PLAIN_NUMBER.match(value).hasMatch() ||
+            PIXELS.match(value).hasMatch()) {
+          return round(number);
+        }
+        if(std::isnan(number)) {
+          return number;
+        }
+        auto match = LENGTH.match(value);
+        if(!match.hasMatch()) {
+          return 0;
+        }
+        auto amount = match.captured(1).toDouble();
+        auto unit = match.captured(2).toLower();
+        auto result = amount;
+        if(unit == u"%"_s) {
+          result = amount * (is_vertical ? m_height : m_width) / 100;
+        } else if(unit == u"em"_s) {
+          result = amount * font.m_size;
+        } else if(unit == u"ex"_s) {
+          result = amount * get_ex(font);
+        } else if(unit == u"in"_s) {
+          result = amount * 96;
+        } else if(unit == u"cm"_s) {
+          result = amount * 96 / 2.54;
+        } else if(unit == u"mm"_s) {
+          result = amount * 96 / 25.4;
+        } else if(unit == u"pt"_s) {
+          result = amount * 4 / 3;
+        } else if(unit == u"pc"_s) {
+          result = amount * 16;
+        }
+        return round(result);
+      }
+
+      double get_length(const Element& element, const QString& name) const {
+        auto value = element.m_attributes.contains(name) ?
+          element.m_attributes.value(name) :
+          get_default(element.m_name, name);
+        auto font = make_root_font();
+        font.m_size = m_font_sizes.value(&element, FONT_SIZE);
+        auto length =
+          to_px(value, is_vertical(element.m_name, name), font);
+        if(!std::isnan(length)) {
+          return length;
+        }
+        auto fallback = get_default(element.m_name, name);
+        if(PLAIN_NUMBER.match(fallback).hasMatch()) {
+          return parse_float(fallback);
+        }
+        return 0;
+      }
+
+      double get_stroke_width(const Properties& properties) const {
+        auto width = to_px(get(properties, u"stroke-width"_s, u"1"_s), false,
+          make_font(properties));
+        if(std::isnan(width)) {
+          return 1;
+        }
+        return width;
       }
 
       static double get_font_size(const Properties& properties) {
@@ -1322,6 +1529,9 @@ namespace {
           }
         }
         apply_filter(element, *item);
+        if(item->m_is_failed) {
+          return item;
+        }
         if(!clip) {
           clip = make_clip(element);
         }
@@ -1415,7 +1625,9 @@ namespace {
           const Properties& properties, Item item, Matrix& transform,
           std::optional<Mask>& clip) {
         auto reference = element.m_attributes.value(u"href"_s);
-        if(!reference.startsWith(u'#')) {
+        if(reference.isEmpty()) {
+          throw std::runtime_error("A use element has no xlink:href.");
+        } else if(!reference.startsWith(u'#')) {
           return std::nullopt;
         }
         auto target = find(reference.mid(1));
@@ -1425,7 +1637,7 @@ namespace {
         m_uses.push_back(target);
         auto converted = std::optional<Item>();
         auto offset = make_translation(
-          get_x(element, u"x"_s), get_y(element, u"y"_s));
+          get_length(element, u"x"_s), get_length(element, u"y"_s));
         if(target->m_name == u"symbol"_s) {
           auto symbol = Item();
           auto symbol_properties = inherit(*target, properties);
@@ -1438,8 +1650,9 @@ namespace {
             transform = transform * offset * viewport;
             if(get_own(*target, u"overflow"_s, u"hidden"_s) != u"visible"_s) {
               if(auto inverse = invert(viewport)) {
-                auto area = inverse->map(Rect(0, 0, get_use_width(element),
-                  get_use_height(element)));
+                auto size = get_use_size(element);
+                auto area = inverse->map(
+                  Rect(0, 0, size.m_width, size.m_height));
                 auto shape = MaskShape();
                 shape.m_geometry = RectangleShape(Rect(round(area.m_x),
                   round(area.m_y), round(area.m_width), round(area.m_height)));
@@ -1472,14 +1685,13 @@ namespace {
         return converted;
       }
 
-      double get_use_width(const Element& use) const {
-        return parse_length(use.m_attributes.value(u"width"_s), m_width).
-          value_or(m_width);
-      }
-
-      double get_use_height(const Element& use) const {
-        return parse_length(use.m_attributes.value(u"height"_s), m_height).
-          value_or(m_height);
+      Size get_use_size(const Element& use) const {
+        auto size = Size(get_length(use, u"width"_s),
+          get_length(use, u"height"_s));
+        if(size.m_width == 1 && size.m_height == 1) {
+          return Size(DEFAULT_SIZE, DEFAULT_SIZE);
+        }
+        return size;
       }
 
       Matrix make_viewport(const Element& use, const Element& symbol) const {
@@ -1487,10 +1699,9 @@ namespace {
         if(box.size() != 4 || box[2] <= 0 || box[3] <= 0) {
           return Matrix();
         }
-        auto width = parse_length(use.m_attributes.value(u"width"_s), m_width).
-          value_or(DEFAULT_SIZE);
-        auto height = parse_length(
-          use.m_attributes.value(u"height"_s), m_height).value_or(DEFAULT_SIZE);
+        auto size = get_use_size(use);
+        auto width = size.m_width;
+        auto height = size.m_height;
         auto ratio = symbol.m_attributes.value(u"preserveAspectRatio"_s).
           split(u' ', Qt::SkipEmptyParts);
         auto align = ratio.isEmpty() ? u"xMidYMid"_s : ratio[0];
@@ -1551,6 +1762,10 @@ namespace {
         return mask;
       }
 
+      static double read_number(const Element& element, const QString& name) {
+        return round(to_js_number(element.m_attributes.value(name, u"0"_s)));
+      }
+
       std::vector<Effect> make_sketch_shadows(
           const Element& filter, bool is_inner) const {
         auto offsets = std::vector<std::pair<const Element*, const Element*>>();
@@ -1568,21 +1783,23 @@ namespace {
           }
           auto values = matrices[i].first->m_attributes.value(u"values"_s).
             split(QRegularExpression(u"\\s+"_s));
-          if(values.size() < 19) {
-            continue;
-          }
+          auto value = [&] (qsizetype index) {
+            if(index >= values.size()) {
+              return std::numeric_limits<double>::quiet_NaN();
+            }
+            return to_js_number(values[index]);
+          };
           auto channel = [&] (qsizetype index) {
-            return std::clamp(round(255 * values[index].toDouble()), 0.0,
+            return std::clamp(to_json(round(255 * value(index))), 0.0,
               255.0) / 255;
           };
           auto color = Color(channel(4), channel(9), channel(14),
-            std::clamp(round(values[18].toDouble()), 0.0, 1.0));
+            std::clamp(to_json(round(value(18))), 0.0, 1.0));
           auto& offset = *offsets[i].first;
-          auto shift = Point(round(parse_fraction(
-            get_own(offset, u"dx"_s, u"0"_s), 0)), round(parse_fraction(
-            get_own(offset, u"dy"_s, u"0"_s), 0)));
-          auto blur = round(parse_fraction(get_own(
-            *blurs[i].first, u"stdDeviation"_s, u"0"_s), 0));
+          auto shift = Point(read_number(offset, u"dx"_s),
+            read_number(offset, u"dy"_s));
+          auto blur =
+            to_json(read_number(*blurs[i].first, u"stdDeviation"_s));
           if(is_inner) {
             effects.push_back(InnerShadow(shift, blur, color));
           } else {
@@ -1613,11 +1830,10 @@ namespace {
         color.m_alpha *= round(
           parse_fraction(get_own(flood, u"flood-opacity"_s, u"1"_s), 1));
         auto& offset = *offsets.front().first;
-        auto shift = Point(
-          round(parse_fraction(get_own(offset, u"dx"_s, u"0"_s), 0)),
-          round(parse_fraction(get_own(offset, u"dy"_s, u"0"_s), 0)));
-        auto blur = round(parse_fraction(get_own(
-          *blurs.front().first, u"stdDeviation"_s, u"0"_s), 0));
+        auto shift =
+          Point(read_number(offset, u"dx"_s), read_number(offset, u"dy"_s));
+        auto blur =
+          to_json(read_number(*blurs.front().first, u"stdDeviation"_s));
         if(is_inner) {
           return InnerShadow(shift, blur, color);
         }
@@ -1636,7 +1852,7 @@ namespace {
         return target;
       }
 
-      void apply_filter(const Element& element, Item& item) const {
+      void apply_filter(const Element& element, Item& item) {
         auto filter = find_filter(element);
         if(!filter) {
           return;
@@ -1667,6 +1883,17 @@ namespace {
         }
         if(has_inner_shadow(item)) {
           hide_fill(item);
+        }
+        for(auto& effect : effects) {
+          std::visit([&] (const auto& shadow) {
+            if constexpr(requires { shadow.m_offset; }) {
+              if(std::isnan(shadow.m_offset.m_x) ||
+                  std::isnan(shadow.m_offset.m_y)) {
+                item.m_is_failed = true;
+                m_has_failures = true;
+              }
+            }
+          }, effect);
         }
       }
 
@@ -1825,8 +2052,7 @@ namespace {
             has_effects(inner)) {
           return std::nullopt;
         }
-        auto width = round(parse_length(
-          get(properties, u"stroke-width"_s, u"1"_s), m_width).value_or(1));
+        auto width = get_stroke_width(properties);
         auto first = get_box(inner, inner_properties);
         auto second = get_box(outer, outer_properties);
         auto& larger = first.m_width > second.m_width ? first : second;
@@ -2056,31 +2282,24 @@ namespace {
       }
 
       std::optional<Item> make_image(const Element& element, Item item) {
-        auto reference = element.m_attributes.value(u"href"_s).trimmed();
-        auto image = load_image(reference);
-        if(!image) {
+        auto width = get_length(element, u"width"_s);
+        auto height = get_length(element, u"height"_s);
+        if(width < 0 || height < 0) {
           return std::nullopt;
         }
-        auto [id, size] = *image;
-        auto width = size.m_width;
-        auto height = size.m_height;
-        if(element.m_attributes.contains(u"width"_s)) {
-          width = get_x(element, u"width"_s);
-        }
-        if(element.m_attributes.contains(u"height"_s)) {
-          height = get_y(element, u"height"_s);
-        }
-        if(width <= 0 || height <= 0) {
-          return std::nullopt;
-        }
-        auto fill = ImageFill();
-        fill.m_image = id;
-        fill.m_size = size;
         auto shape = Shape();
         shape.m_geometry = RectangleShape(Rect(0, 0, width, height));
-        shape.m_style.m_fill = fill;
+        auto reference = element.m_attributes.value(u"href"_s).trimmed();
+        if(auto image = load_image(reference)) {
+          auto fill = ImageFill();
+          fill.m_image = image->first;
+          fill.m_size = image->second;
+          shape.m_style.m_fill = fill;
+          item.m_is_image = true;
+        }
         item.m_header.m_transform =
-          make_translation(get_x(element, u"x"_s), get_y(element, u"y"_s));
+          make_translation(get_length(element, u"x"_s),
+            get_length(element, u"y"_s));
         item.m_payload = Box<Shape>(std::move(shape));
         return item;
       }
@@ -2150,8 +2369,8 @@ namespace {
         }
         state.m_has_position = state.m_x || state.m_y;
         state.m_start_x = state.m_x.value_or(0);
-        auto frame = Point(get_first(element, u"x"_s, m_width),
-          get_first(element, u"y"_s, m_height));
+        auto frame = Point(get_length(element, u"x"_s),
+          get_length(element, u"y"_s));
         auto parent = find_parent(*m_root, element);
         auto is_first = parent && get_elements(*parent).front() == &element;
         collect_runs(
@@ -2164,13 +2383,43 @@ namespace {
         if(state.m_raw.isEmpty()) {
           return std::nullopt;
         }
-        auto is_spaced = true;
-        if(m_measurer && state.m_is_multiline && state.m_is_stroke_same &&
-            (!state.m_line_spacing || state.m_is_irregular)) {
-          is_spaced = space_lines(state);
+        auto opacity = std::optional<double>();
+        auto is_opacity_same = true;
+        for(auto& line : state.m_lines) {
+          for(auto& run : line) {
+            if(!opacity) {
+              opacity = run.m_opacity;
+            } else if(*opacity != run.m_opacity) {
+              is_opacity_same = false;
+            }
+          }
         }
-        if(state.m_is_multiline && state.m_is_stroke_same && state.m_reset &&
-            is_spaced) {
+        auto is_split = state.m_is_multiline && state.m_is_stroke_same &&
+          (!is_opacity_same || opacity == 0.0);
+        auto is_point = true;
+        if(!is_opacity_same || is_split) {
+          for(auto& line : state.m_lines) {
+            for(auto& run : line) {
+              if(is_split && run.m_opacity != 1 && run.m_has_stroke) {
+                is_point = false;
+              }
+              run.m_style.m_color.m_alpha =
+                quantize(run.m_alpha * run.m_opacity);
+            }
+          }
+        }
+        if(is_opacity_same && opacity && *opacity < 1) {
+          item.m_header.m_opacity = to_single(round(*opacity));
+        }
+        if(is_point && m_measurer.m_extent && state.m_is_multiline &&
+            state.m_is_stroke_same &&
+            (!state.m_line_spacing || state.m_is_irregular)) {
+          is_point = space_lines(state);
+        }
+        if(!state.m_is_multiline || !state.m_is_stroke_same || !is_point) {
+          return split_text(state, frame, std::move(item));
+        }
+        if(state.m_reset) {
           frame = *state.m_reset;
         }
         auto text = Text();
@@ -2246,19 +2495,57 @@ namespace {
         return item;
       }
 
-      double get_first(const Element& element, const QString& name,
-          double reference) const {
-        auto value = element.m_attributes.value(name);
-        auto reader = NumberReader(value);
-        if(!reader.read()) {
-          return 0;
+      std::optional<Item> split_text(
+          const TextState& state, Point pen, Item item) const {
+        auto texts = std::vector<Item>();
+        for(auto& line : state.m_lines) {
+          for(auto& run : line) {
+            if(run.m_to <= run.m_from) {
+              continue;
+            }
+            auto content = state.m_raw.mid(static_cast<qsizetype>(run.m_from),
+              static_cast<qsizetype>(run.m_to - run.m_from));
+            auto position = Point(run.m_x.value_or(pen.m_x) + run.m_dx,
+              run.m_y.value_or(pen.m_y) + run.m_dy);
+            auto text = Text();
+            text.m_frame = PositionedFrame();
+            text.m_content = Shared(content.toStdU16String());
+            text.m_base_style = run.m_style;
+            text.m_paragraph_style.m_alignment = run.m_alignment;
+            text.m_style.m_fill = SolidFill(run.m_style.m_color);
+            text.m_style.m_stroke = run.m_stroke;
+            auto child = Item();
+            child.m_header.m_name = make_content_name(content);
+            child.m_header.m_transform =
+              make_translation(position.m_x, position.m_y);
+            child.m_payload = Box<Text>(std::move(text));
+            child.m_fill_alpha = run.m_fill_alpha;
+            texts.push_back(std::move(child));
+            auto advance = 0.0;
+            if(m_measurer.m_advance) {
+              advance = m_measurer.m_advance(run.m_style.m_font,
+                content.toStdU16String()).value_or(0);
+            }
+            pen = Point(position.m_x + std::round(advance), position.m_y);
+          }
         }
-        auto first = value.trimmed();
-        auto end = first.indexOf(QRegularExpression(u"[\\s,]"_s));
-        if(end > 0) {
-          first = first.left(end);
+        if(texts.empty()) {
+          return std::nullopt;
+        } else if(texts.size() == 1) {
+          auto& text = texts.front();
+          text.m_header.m_transform =
+            item.m_header.m_transform * text.m_header.m_transform;
+          if(item.m_header.m_has_custom_name) {
+            text.m_header.m_name = item.m_header.m_name;
+            text.m_header.m_has_custom_name = true;
+          }
+          text.m_header.m_opacity = item.m_header.m_opacity;
+          text.m_header.m_is_visible = item.m_header.m_is_visible;
+          return std::move(text);
         }
-        return round(parse_length(first, reference).value_or(0));
+        item.m_payload = Group();
+        item.m_children = std::move(texts);
+        return item;
       }
 
       void collect_runs(const Element& element, const Properties& properties,
@@ -2270,8 +2557,8 @@ namespace {
         auto space = element.m_attributes.value(u"xml:space"_s);
         auto collapse = space.isEmpty() ? is_collapsed : space != u"preserve"_s;
         auto scope = Scope();
-        scope.m_dx = get_first(element, u"dx"_s, m_width);
-        scope.m_dy = get_first(element, u"dy"_s, m_height);
+        scope.m_dx = get_length(element, u"dx"_s);
+        scope.m_dy = get_length(element, u"dy"_s);
         scope.m_has_x = !element.m_attributes.value(u"x"_s).isEmpty();
         scope.m_has_y = !element.m_attributes.value(u"y"_s).isEmpty();
         scope.m_is_first = is_first;
@@ -2320,7 +2607,7 @@ namespace {
             auto position = Position();
             place(element, scope, position, state);
             state.m_cells.push_back(Cell(state.m_path, state.m_y.value_or(0),
-              make_cell_font(properties), std::nullopt));
+              make_font(properties), std::nullopt));
             continue;
           }
           auto run = Run();
@@ -2329,9 +2616,13 @@ namespace {
           run.m_decorations = decorations;
           auto position = Position();
           place(element, scope, position, state);
+          run.m_x = position.m_x;
+          run.m_y = position.m_y;
+          run.m_dx = position.m_dx.value_or(0);
+          run.m_dy = position.m_dy.value_or(0);
           fill_run(element, properties, run, state);
           state.m_cells.push_back(Cell(state.m_path, state.m_y.value_or(0),
-            make_cell_font(properties), state.m_row));
+            make_font(properties), state.m_row));
           if(!state.m_has_line) {
             state.m_lines.emplace_back();
             state.m_has_line = true;
@@ -2341,17 +2632,6 @@ namespace {
         state.m_path.pop_back();
       }
 
-      Font make_cell_font(const Properties& properties) const {
-        auto font = Font();
-        font.m_family = to_family(
-          get(properties, u"font-family"_s, DEFAULT_FAMILY)).toStdString();
-        font.m_style = to_style_name(
-          get(properties, u"font-style"_s, u"normal"_s),
-          get(properties, u"font-weight"_s, u"400"_s)).toStdString();
-        font.m_size = round(get_font_size(properties));
-        return font;
-      }
-
       std::optional<Extent> measure(
           const Element& element, const TextState& state) const {
         auto extent = std::optional<Extent>();
@@ -2359,7 +2639,7 @@ namespace {
           if(!std::ranges::contains(cell.m_path, &element)) {
             continue;
           }
-          auto metrics = m_measurer(cell.m_font);
+          auto metrics = m_measurer.m_extent(cell.m_font);
           if(!metrics) {
             continue;
           }
@@ -2388,6 +2668,8 @@ namespace {
           if(!extent) {
             continue;
           }
+          extent->m_top = to_layout_units(extent->m_top);
+          extent->m_bottom = to_layout_units(extent->m_bottom);
           auto& row = rows[*cell.m_row];
           row.m_top = std::min(row.m_top, extent->m_top);
           row.m_bottom = std::max(row.m_bottom, extent->m_bottom);
@@ -2413,7 +2695,8 @@ namespace {
                 proportion != proportions.end() && proportion->second != 0) {
               auto spacer = last;
               spacer.m_from = last.m_to;
-              spacer.m_style.m_font.m_size = round(gap / proportion->second);
+              spacer.m_style.m_font.m_size =
+                to_single(round(gap / proportion->second));
               state.m_lines.insert(state.m_lines.begin() +
                 static_cast<std::ptrdiff_t>(index + 1),
                 std::vector<Run>({std::move(spacer)}));
@@ -2442,11 +2725,11 @@ namespace {
             state.m_has_position = true;
           }
           if(scope.m_has_x) {
-            position.m_x = get_first(element, u"x"_s, m_width);
+            position.m_x = get_length(element, u"x"_s);
             scope.m_has_x = false;
           }
           if(scope.m_has_y) {
-            position.m_y = get_first(element, u"y"_s, m_height);
+            position.m_y = get_length(element, u"y"_s);
             if(!state.m_y) {
               state.m_y = position.m_y;
             }
@@ -2524,7 +2807,7 @@ namespace {
       }
 
       void fill_run(const Element& element, const Properties& properties,
-          Run& run, TextState& state) const {
+          Run& run, TextState& state) {
         auto& style = run.m_style;
         auto size = round(get_font_size(properties));
         style.m_font.m_family =
@@ -2534,8 +2817,10 @@ namespace {
           get(properties, u"font-style"_s, u"normal"_s),
           get(properties, u"font-weight"_s, u"400"_s)).toStdString();
         if(auto spacing = get(properties, u"letter-spacing"_s, u"normal"_s);
-            spacing != u"normal"_s && size != 0) {
-          if(auto length = parse_length(spacing, size, size)) {
+            spacing != u"normal"_s && !spacing.endsWith(u'%') &&
+            size != 0) {
+          if(auto length = parse_length(
+              spacing, size, size, get_ex(spacing, make_font(properties)))) {
             style.m_letter_spacing = round(*length / size * 1000);
           }
         }
@@ -2568,11 +2853,11 @@ namespace {
           color.m_alpha *= std::clamp(parse_fraction(
             get(properties, u"fill-opacity"_s, u"1"_s), 1), 0.0, 1.0);
         }
-        if(&element != state.m_element) {
-          color.m_alpha *= std::clamp(
-            parse_fraction(get_own(element, u"opacity"_s, u"1"_s), 1), 0.0,
-            1.0);
-        }
+        run.m_alpha = color.m_alpha;
+        run.m_opacity = std::clamp(
+          parse_fraction(get_own(element, u"opacity"_s, u"1"_s), 1), 0.0, 1.0);
+        run.m_has_stroke = get(properties, u"stroke"_s, u"none"_s) != u"none"_s;
+        run.m_stroke = make_stroke(properties, Rect(0, 0, 0, 0), Point(0, 0));
         color.m_alpha = quantize(color.m_alpha);
         style.m_color = color;
         auto stroke = QStringList();
@@ -2596,28 +2881,28 @@ namespace {
           u"evenodd"_s ? FillRule::EVEN_ODD : FillRule::NON_ZERO;
         if(type == u"rect"_s) {
           auto rectangle = RectangleShape();
-          rectangle.m_bounds = Rect(get_x(element, u"x"_s),
-            get_y(element, u"y"_s), get_x(element, u"width"_s),
-            get_y(element, u"height"_s));
-          auto radius = get_x(element, u"rx"_s);
+          rectangle.m_bounds = Rect(get_length(element, u"x"_s),
+            get_length(element, u"y"_s), get_length(element, u"width"_s),
+            get_length(element, u"height"_s));
+          auto radius = get_length(element, u"rx"_s);
           if(radius == 0) {
-            radius = get_y(element, u"ry"_s);
+            radius = get_length(element, u"ry"_s);
           }
           rectangle.m_radii = CornerRadii(radius, radius, radius, radius);
           return rectangle;
         } else if(type == u"circle"_s) {
-          auto radius = round(get_length(element, u"r"_s, get_diagonal()));
+          auto radius = get_length(element, u"r"_s);
           return EllipseShape(
-            Point(get_x(element, u"cx"_s), get_y(element, u"cy"_s)), radius,
-            radius);
+            Point(get_length(element, u"cx"_s), get_length(element, u"cy"_s)),
+            radius, radius);
         } else if(type == u"ellipse"_s) {
           return EllipseShape(
-            Point(get_x(element, u"cx"_s), get_y(element, u"cy"_s)),
-            get_x(element, u"rx"_s), get_y(element, u"ry"_s));
+            Point(get_length(element, u"cx"_s), get_length(element, u"cy"_s)),
+            get_length(element, u"rx"_s), get_length(element, u"ry"_s));
         } else if(type == u"line"_s) {
           return LineShape(
-            Point(get_x(element, u"x1"_s), get_y(element, u"y1"_s)),
-            Point(get_x(element, u"x2"_s), get_y(element, u"y2"_s)));
+            Point(get_length(element, u"x1"_s), get_length(element, u"y1"_s)),
+            Point(get_length(element, u"x2"_s), get_length(element, u"y2"_s)));
         } else if(type == u"polygon"_s || type == u"polyline"_s) {
           auto numbers = parse_numbers(element.m_attributes.value(u"points"_s));
           if(numbers.size() < 2) {
@@ -2734,7 +3019,8 @@ namespace {
             return std::nullopt;
           }
           transform = transform * make_translation(
-            get_x(*element_pointer, u"x"_s), get_y(*element_pointer, u"y"_s)) *
+            get_length(*element_pointer, u"x"_s),
+            get_length(*element_pointer, u"y"_s)) *
             parse_transform(target->m_attributes.value(u"transform"_s));
           element_pointer = target;
         }
@@ -2750,10 +3036,8 @@ namespace {
         auto fill = ImageFill();
         fill.m_image = image->first;
         fill.m_size = image->second;
-        auto image_width = element.m_attributes.contains(u"width"_s) ?
-          get_x(element, u"width"_s) : image->second.m_width;
-        auto image_height = element.m_attributes.contains(u"height"_s) ?
-          get_y(element, u"height"_s) : image->second.m_height;
+        auto image_width = get_length(element, u"width"_s);
+        auto image_height = get_length(element, u"height"_s);
         auto width = image_width * transform.m_a;
         auto height = image_height * transform.m_d;
         auto box = parse_numbers(get_linked(pattern, u"viewBox"_s));
@@ -2886,35 +3170,45 @@ namespace {
           u"userSpaceOnUse"_s;
         fill.m_units = is_user ? GradientUnits::USER_SPACE :
           GradientUnits::OBJECT_BOUNDING_BOX;
-        auto read = [&] (const QString& name, const QString& fallback,
-            double reference) {
+        auto font = make_root_font();
+        font.m_size = m_font_sizes.value(element, FONT_SIZE);
+        auto read = [&] (const QString& name, const QString& fallback) {
           auto value = get_linked(*element, name);
           if(value.isEmpty()) {
             value = fallback;
           }
-          if(is_user) {
-            return round(parse_length(value, reference).value_or(0));
+          if(!is_user) {
+            return round(parse_fraction(value, 0));
           }
-          return round(parse_fraction(value, 0));
+          auto length = to_px(value, false, font);
+          if(length == 0 || std::isnan(length)) {
+            return round(parse_fraction(fallback, 0));
+          }
+          return length;
+        };
+        auto read_focus = [&] (const QString& name, double center) {
+          auto value = get_linked(*element, name);
+          if(value.isEmpty()) {
+            return center;
+          } else if(!is_user) {
+            return round(parse_fraction(value, 0));
+          }
+          auto length = to_px(value, false, font);
+          if(length == 0 || std::isnan(length)) {
+            return center;
+          }
+          return length;
         };
         if(element->m_name == u"linearGradient"_s) {
           fill.m_geometry = LinearGradient(
-            Point(read(u"x1"_s, u"0"_s, m_width),
-              read(u"y1"_s, u"0"_s, m_height)),
-            Point(read(u"x2"_s, u"100%"_s, m_width),
-              read(u"y2"_s, u"0"_s, m_height)));
+            Point(read(u"x1"_s, u"0"_s), read(u"y1"_s, u"0"_s)),
+            Point(read(u"x2"_s, u"100%"_s), read(u"y2"_s, u"0"_s)));
         } else {
-          auto center = Point(read(u"cx"_s, u"50%"_s, m_width),
-            read(u"cy"_s, u"50%"_s, m_height));
-          auto focus = center;
-          if(!get_linked(*element, u"fx"_s).isEmpty()) {
-            focus.m_x = read(u"fx"_s, u"50%"_s, m_width);
-          }
-          if(!get_linked(*element, u"fy"_s).isEmpty()) {
-            focus.m_y = read(u"fy"_s, u"50%"_s, m_height);
-          }
-          fill.m_geometry = RadialGradient(
-            center, read(u"r"_s, u"50%"_s, get_diagonal()), focus);
+          auto center = Point(read(u"cx"_s, u"50%"_s), read(u"cy"_s, u"50%"_s));
+          auto focus = Point(read_focus(u"fx"_s, center.m_x),
+            read_focus(u"fy"_s, center.m_y));
+          fill.m_geometry =
+            RadialGradient(center, read(u"r"_s, u"50%"_s), focus);
         }
         fill.m_transform =
           parse_transform(get_linked(*element, u"gradientTransform"_s));
@@ -2933,8 +3227,7 @@ namespace {
 
       void apply_stroke_attributes(
           const Properties& properties, Stroke& stroke) const {
-        stroke.m_width = round(parse_length(
-          get(properties, u"stroke-width"_s, u"1"_s), m_width).value_or(1));
+        stroke.m_width = get_stroke_width(properties);
         auto cap = get(properties, u"stroke-linecap"_s, u"butt"_s);
         if(cap == u"round"_s) {
           stroke.m_cap = StrokeCap::ROUND;
@@ -2951,11 +3244,39 @@ namespace {
           get(properties, u"stroke-miterlimit"_s, u"4"_s), 4));
         auto dashes = get(properties, u"stroke-dasharray"_s, u"none"_s);
         if(dashes != u"none"_s) {
-          stroke.m_dashes = parse_numbers(dashes);
+          stroke.m_dashes = parse_dashes(dashes, make_font(properties));
         }
-        stroke.m_dash_offset = round(parse_length(
-          get(properties, u"stroke-dashoffset"_s, u"0"_s), get_diagonal()).
-            value_or(0));
+        auto offset = get(properties, u"stroke-dashoffset"_s, u"0"_s);
+        if(auto number = parse_float(offset);
+            offset.endsWith(u'%') && !std::isnan(number)) {
+          stroke.m_dash_offset = round(number);
+        } else {
+          auto font = make_font(properties);
+          stroke.m_dash_offset = round(parse_length(
+            offset, 0, font.m_size, get_ex(offset, font)).value_or(0));
+        }
+      }
+
+      std::vector<double> parse_dashes(
+          const QString& value, const Font& font) const {
+        auto dashes = std::vector<double>();
+        for(auto& token : value.split(
+            QRegularExpression(u"[,\\s]+"_s), Qt::SkipEmptyParts)) {
+          auto length = std::optional<double>();
+          if(token.endsWith(u'%')) {
+            if(auto number = parse_float(token); !std::isnan(number)) {
+              length = number;
+            }
+          } else {
+            length =
+              parse_length(token, 0, font.m_size, get_ex(token, font));
+          }
+          if(!length) {
+            return {};
+          }
+          dashes.push_back(*length);
+        }
+        return dashes;
       }
 
       Style make_style(const Properties& properties, const Rect& bounds,
@@ -3012,6 +3333,9 @@ namespace {
   }
 
   void append(Transaction& transaction, const NodeId& parent, Item item) {
+    if(item.m_is_failed) {
+      return;
+    }
     if(item.m_header.m_id.is_nil()) {
       item.m_header.m_id = generate_node_id();
     }
@@ -3034,8 +3358,8 @@ bool Rellu::is_svg(const QString& text) {
   return static_cast<bool>(parse(text));
 }
 
-void Rellu::read_svg(const QString& text, Document& document,
-    const SvgFontMeasurer& measurer) {
+bool Rellu::read_svg(const QString& text, Document& document,
+    const SvgMeasurer& measurer) {
   auto root = parse(text);
   if(!root) {
     throw std::invalid_argument("The text is not SVG markup.");
@@ -3047,13 +3371,13 @@ void Rellu::read_svg(const QString& text, Document& document,
   auto converter = Converter(*root, measurer);
   auto items = converter.convert();
   if(items.empty()) {
-    return;
+    return true;
   }
   auto transaction = Transaction(document);
   for(auto& image : converter.get_images()) {
     transaction.add_image(std::move(image));
   }
-  if(items.size() == 1) {
+  if(items.size() == 1 && !items.front().m_is_failed) {
     append(transaction, NodeId(), std::move(items.front()));
   } else {
     auto group = Item();
@@ -3062,4 +3386,5 @@ void Rellu::read_svg(const QString& text, Document& document,
     append(transaction, NodeId(), std::move(group));
   }
   transaction.commit();
+  return !converter.has_failures();
 }

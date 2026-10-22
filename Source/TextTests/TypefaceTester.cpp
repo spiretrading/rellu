@@ -1,3 +1,4 @@
+#include <cmath>
 #include <fstream>
 #include <iterator>
 #include <doctest/doctest.h>
@@ -42,6 +43,7 @@ TEST_SUITE("Typeface") {
     REQUIRE(metrics.m_underline_offset < 0);
     REQUIRE(metrics.m_underline_thickness > 0);
     REQUIRE(metrics.m_strikeout_offset > 0);
+    REQUIRE(std::abs(metrics.m_x_height - 1062.0 / 2048) < 1e-9);
   }
 
   TEST_CASE("shape") {
