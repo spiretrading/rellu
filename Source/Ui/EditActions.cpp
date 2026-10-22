@@ -104,6 +104,7 @@ EditActions::EditActions(
   });
   set_action("edit.cut", [this] { cut(); });
   set_action("edit.copy", [this] { copy(); });
+  set_action("edit.copy_svg", [this] { copy_svg(); });
   set_action("edit.paste", [this] { paste(); });
   set_action("edit.paste_appearance", [this] { paste_appearance(); });
   set_action("edit.select_all", [this] {
@@ -203,6 +204,14 @@ void EditActions::set_text_measurer(TextMeasurer measurer) {
   m_measurer = std::move(measurer);
 }
 
+void EditActions::set_text_layout(XdTextLayout layout) {
+  m_layout = std::move(layout);
+}
+
+void EditActions::set_image_renderer(ImageRenderer renderer) {
+  m_image_renderer = std::move(renderer);
+}
+
 void EditActions::set_source_provider(SourceProvider provider) {
   m_source_provider = std::move(provider);
 }
@@ -244,6 +253,7 @@ void EditActions::update() {
   m_actions->set_enabled("edit.redo", history.can_redo());
   auto is_copyable = Clipboard::is_copyable(*document, nodes);
   m_actions->set_enabled("edit.copy", is_copyable);
+  m_actions->set_enabled("edit.copy_svg", is_copyable);
   m_actions->set_enabled("edit.cut", is_copyable &&
     m_commands->make("edit.delete", *document, nodes));
   auto data = get_system_data();
@@ -356,13 +366,14 @@ bool EditActions::copy_selection() {
   if(m_source_provider) {
     source = m_source_provider();
   }
-  if(!m_clipboard.copy(m_editor->get_document(),
-      m_editor->get_selection().get_nodes(), m_measurer, {}, source)) {
+  auto& document = m_editor->get_document();
+  auto& nodes = m_editor->get_selection().get_nodes();
+  if(!m_clipboard.copy(document, nodes, m_measurer, m_layout, source)) {
     return false;
   }
   remember_text(*m_editor);
   if(auto clipboard = QGuiApplication::clipboard()) {
-    if(auto data = m_clipboard.make_mime_data()) {
+    if(auto data = m_clipboard.make_mime_data(m_image_renderer)) {
       clipboard->setMimeData(data.release());
     }
   }
@@ -387,6 +398,19 @@ void EditActions::cut() {
 void EditActions::copy() {
   run([&] {
     copy_selection();
+  });
+}
+
+void EditActions::copy_svg() {
+  run([&] {
+    auto svg = Clipboard::make_svg_code(m_editor->get_document(),
+      m_editor->get_selection().get_nodes(), m_measurer, m_layout);
+    if(svg.empty()) {
+      return;
+    }
+    if(auto clipboard = QGuiApplication::clipboard()) {
+      clipboard->setMimeData(Clipboard::make_svg_mime_data(svg).release());
+    }
   });
 }
 

@@ -34,6 +34,16 @@ namespace Rellu {
     QString m_folder;
   };
 
+  /** An asset an export writes. */
+  struct ExportAsset {
+
+    /** The node drawn. */
+    NodeId m_node;
+
+    /** The name of the asset's files, or empty for the node's name. */
+    QString m_name;
+  };
+
   /** A file an export writes. */
   struct ExportTask {
 
@@ -139,27 +149,24 @@ namespace Rellu {
    */
   std::vector<ExportScale> get_export_scales(const ExportOptions& options);
   /**
-   * Returns the nodes Export Batch exports: the nodes marked for export, in
-   * the order Adobe XD visits them.
+   * Returns the assets of nodes, named after the nodes.
+   * @param nodes The nodes.
+   */
+  std::vector<ExportAsset> to_export_assets(const std::vector<NodeId>& nodes);
+
+  /**
+   * Returns the assets Export Batch exports: the nodes marked for export, in
+   * the order Adobe XD visits them, a marked component instance followed by
+   * its component's other states, named after the instance and the state.
    * @param document The document.
    */
-  std::vector<NodeId> get_batch_export_nodes(const Document& document);
+  std::vector<ExportAsset> get_batch_export_assets(const Document& document);
 
   /**
    * Tests whether any node is marked for export.
    * @param document The document.
    */
   bool has_batch_export_nodes(const Document& document);
-
-  /**
-   * Orders nodes as the layers panel lists them, the topmost first, as
-   * Export Selected receives them.
-   * @param document The document holding the nodes.
-   * @param nodes The nodes.
-   * @return The <i>nodes</i> in order, those not on the canvas last.
-   */
-  std::vector<NodeId> sort_by_layers(
-    const Document& document, std::vector<NodeId> nodes);
 
   /**
    * Returns the artboards Export All Artboards exports.
@@ -170,7 +177,7 @@ namespace Rellu {
   /**
    * Lists the files an export writes, as Adobe XD lists them.
    * @param document The document holding the nodes.
-   * @param nodes The nodes exported.
+   * @param assets The assets exported.
    * @param options The export's options.
    * @param folder The folder written to.
    * @param document_name The name of the document's file without its
@@ -179,7 +186,7 @@ namespace Rellu {
    * @return The files written, empty if no node can be exported.
    */
   std::vector<ExportTask> make_export_tasks(const Document& document,
-    const std::vector<NodeId>& nodes, const ExportOptions& options,
+    const std::vector<ExportAsset>& assets, const ExportOptions& options,
     const QString& folder, const QString& document_name,
     const TextMeasurer& measurer = estimate_text_bounds);
 

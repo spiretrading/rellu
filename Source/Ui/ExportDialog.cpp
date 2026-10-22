@@ -136,6 +136,10 @@ QPushButton#export_secondary {
   border: 2px solid #999999;
   color: #707070;
 }
+QPushButton#export_primary:hover {
+  background: #4B4B4B;
+  color: #FFFFFF;
+}
 QPushButton#export_primary:focus {
   background: #1473E6;
   border-color: #1473E6;

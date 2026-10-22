@@ -39,15 +39,15 @@ ExportActions::ExportActions(ActionRegistry& actions, QWidget& window)
   if(actions.find(BATCH)) {
     actions.set_handler(BATCH, [this] {
       if(m_editor) {
-        export_nodes(get_batch_export_nodes(m_editor->get_document()), false);
+        export_assets(
+          get_batch_export_assets(m_editor->get_document()), false);
       }
     });
   }
   if(actions.find(SELECTED)) {
     actions.set_handler(SELECTED, [this] {
       if(m_editor) {
-        export_nodes(sort_by_layers(m_editor->get_document(),
-          m_editor->get_selection().get_nodes()), false);
+        export_nodes(m_editor->get_selection().get_nodes(), false);
       }
     });
   }
@@ -112,13 +112,18 @@ const QString& ExportActions::get_folder() const {
 
 void ExportActions::export_nodes(
     const std::vector<NodeId>& nodes, bool is_all_artboards) {
-  if(!m_editor || nodes.empty()) {
+  export_assets(to_export_assets(nodes), is_all_artboards);
+}
+
+void ExportActions::export_assets(
+    const std::vector<ExportAsset>& assets, bool is_all_artboards) {
+  if(!m_editor || assets.empty()) {
     return;
   }
   auto dialog = ExportDialog(m_options, m_scale_text, m_folder,
-    is_all_artboards, static_cast<int>(nodes.size()), m_window);
+    is_all_artboards, static_cast<int>(assets.size()), m_window);
   dialog.set_export_handler([&] {
-    run(dialog, nodes);
+    run(dialog, assets);
   });
   m_dialog_handler(dialog);
 }
@@ -140,7 +145,7 @@ void ExportActions::update() {
 }
 
 void ExportActions::run(
-    ExportDialog& dialog, const std::vector<NodeId>& nodes) {
+    ExportDialog& dialog, const std::vector<ExportAsset>& assets) {
   m_options = dialog.get_options();
   m_scale_text = dialog.get_scale_text();
   m_folder = dialog.get_folder();
@@ -152,11 +157,11 @@ void ExportActions::run(
     }
   }
   auto tasks = make_export_tasks(
-    document, nodes, m_options, m_folder, name, m_measurer);
+    document, assets, m_options, m_folder, name, m_measurer);
   if(tasks.empty()) {
     dialog.accept();
     m_alert_handler(make_failure_alert(
-      ExportFailure::GENERIC, static_cast<int>(nodes.size()), {}));
+      ExportFailure::GENERIC, static_cast<int>(assets.size()), {}));
     return;
   }
   dialog.set_exporting(true);

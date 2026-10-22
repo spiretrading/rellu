@@ -111,7 +111,8 @@ namespace Rellu {
     TRIGGER_DRAG,
     TRIGGER_HOVER,
     TRIGGER_TIME,
-    TRIGGER_KEYS
+    TRIGGER_KEYS,
+    EXPORT_MARK
   };
 
   /**
@@ -166,6 +167,12 @@ namespace Rellu {
 
   /** Returns the icon showing that a node is locked. */
   const QIcon& get_lock_icon();
+
+  /**
+   * Returns the icon of the layers panel's Mark for Export button.
+   * @param is_marked Whether the node is marked for export.
+   */
+  const QIcon& get_export_mark_icon(bool is_marked);
 }
 
 #endif

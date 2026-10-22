@@ -752,35 +752,49 @@ bool Rellu::is_overflowing(const Text& text, const FontLibrary& library) {
   return fit_lines(text, std::move(lines), spans, library).size() != count;
 }
 
+namespace {
+  Rect measure_bounds(
+      const Text& text, const FontLibrary& library, bool is_outward) {
+    if(auto area = std::get_if<AreaFrame>(&text.m_frame)) {
+      return Rect(0, 0, area->m_size.m_width, area->m_size.m_height);
+    }
+    auto& content = *text.m_content;
+    auto spans = make_spans(text);
+    auto bounds = std::optional<Rect>();
+    visit_lines(text, get_lines(text, spans, library), spans, library,
+      [&] (const Line& line, Point origin, const LineMetrics& metrics) {
+        auto box = Rect(origin.m_x, origin.m_y - metrics.m_ascent,
+          measure_width(content, line, spans, library),
+          metrics.m_ascent + metrics.m_descent);
+        if(bounds) {
+          bounds = unite(*bounds, box);
+        } else {
+          bounds = box;
+        }
+      });
+    if(!bounds) {
+      bounds = Rect(0, 0, 0, 0);
+    }
+    auto left = is_outward ? std::floor(bounds->get_left()) :
+      std::round(bounds->get_left());
+    auto top = std::round(bounds->get_top());
+    auto right = is_outward ? std::ceil(bounds->get_right()) :
+      std::round(bounds->get_right());
+    auto bottom = std::round(bounds->get_bottom());
+    if(auto frame = std::get_if<AutoHeightFrame>(&text.m_frame)) {
+      return Rect(0, 0, frame->m_width, std::max(bottom, 0.0));
+    }
+    return Rect(left, top, right - left, bottom - top);
+  }
+}
+
 Rect Rellu::measure_text(const Text& text, const FontLibrary& library) {
-  if(auto area = std::get_if<AreaFrame>(&text.m_frame)) {
-    return Rect(0, 0, area->m_size.m_width, area->m_size.m_height);
-  }
-  auto& content = *text.m_content;
-  auto spans = make_spans(text);
-  auto bounds = std::optional<Rect>();
-  visit_lines(text, get_lines(text, spans, library), spans, library,
-    [&] (const Line& line, Point origin, const LineMetrics& metrics) {
-      auto box = Rect(origin.m_x, origin.m_y - metrics.m_ascent,
-        measure_width(content, line, spans, library),
-        metrics.m_ascent + metrics.m_descent);
-      if(bounds) {
-        bounds = unite(*bounds, box);
-      } else {
-        bounds = box;
-      }
-    });
-  if(!bounds) {
-    bounds = Rect(0, 0, 0, 0);
-  }
-  auto left = std::round(bounds->get_left());
-  auto top = std::round(bounds->get_top());
-  auto right = std::round(bounds->get_right());
-  auto bottom = std::round(bounds->get_bottom());
-  if(auto frame = std::get_if<AutoHeightFrame>(&text.m_frame)) {
-    return Rect(0, 0, frame->m_width, std::max(bottom, 0.0));
-  }
-  return Rect(left, top, right - left, bottom - top);
+  return measure_bounds(text, library, false);
+}
+
+Rect Rellu::measure_painted_text(
+    const Text& text, const FontLibrary& library) {
+  return measure_bounds(text, library, true);
 }
 
 StoredLayout Rellu::store_layout(const Text& text, const FontLibrary& library) {

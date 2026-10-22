@@ -194,6 +194,14 @@ namespace Rellu {
       bool toggle_lock(const NodeId& id);
 
       /**
+       * Marks or unmarks a layer for export, as its Mark for Export button
+       * does.
+       * @param id The layer's id.
+       * @return <code>true</code> iff the layer changed.
+       */
+      bool toggle_export_mark(const NodeId& id);
+
+      /**
        * Moves layers as dragging them in the panel does.
        * @param nodes The layers to move.
        * @param parent The new parent's id, or nil for the canvas.

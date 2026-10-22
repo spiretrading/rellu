@@ -5,12 +5,14 @@
 #include <doctest/doctest.h>
 #include <QApplication>
 #include <QtPlugin>
+#include "Rellu/Testing/FailureDialogs.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
 #include "TestOptions.hpp"
 
 Q_IMPORT_PLUGIN(QOffscreenIntegrationPlugin)
 
 int main(int argc, char** argv) {
+  Rellu::Testing::suppress_failure_dialogs();
   auto platform = std::string("-platform");
   auto offscreen = std::string("offscreen");
   auto option = std::string_view("--xd-document=");

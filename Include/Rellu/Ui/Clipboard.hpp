@@ -1,10 +1,12 @@
 #ifndef RELLU_UI_CLIPBOARD_HPP
 #define RELLU_UI_CLIPBOARD_HPP
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
+#include <QImage>
 #include <QMimeData>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Command.hpp"
@@ -56,6 +58,17 @@ namespace Rellu {
    */
   class Clipboard {
     public:
+
+      /**
+       * The type of function rendering the image Adobe XD puts on the
+       * system clipboard for copied nodes.
+       * @param document The document holding the nodes.
+       * @param nodes The nodes copied, in z order.
+       * @param bounds The region rendered, in document coordinates.
+       * @return The image at one pixel per document unit, or a null image.
+       */
+      using BitmapRenderer = std::function<QImage (const Document& document,
+        const std::vector<NodeId>& nodes, const Rect& bounds)>;
 
       /**
        * Constructs an empty Clipboard keeping the files of copied images in
@@ -116,16 +129,75 @@ namespace Rellu {
         const XdTextLayout& layout = {},
         const XdClipboardSource& source = {});
 
+      /**
+       * Returns the nodes a copy copies: the copyable ones among nodes,
+       * artboards ordered by their top and then their left, other nodes in
+       * z order.
+       * @param document The document holding the nodes.
+       * @param nodes The nodes.
+       * @param measurer The function measuring text.
+       */
+      static std::vector<NodeId> get_copied_nodes(const Document& document,
+        const std::vector<NodeId>& nodes,
+        const TextMeasurer& measurer = estimate_text_bounds);
+
+      /**
+       * Makes the SVG markup Adobe XD puts on the clipboard for nodes, the
+       * copyable ones among them ordered as a copy orders them.
+       * @param document The document holding the nodes.
+       * @param nodes The nodes.
+       * @param measurer The function measuring text.
+       * @param layout The function laying out text without a stored layout.
+       * @return The UTF-8 markup, empty if no node is copyable.
+       */
+      static std::string make_svg_code(const Document& document,
+        const std::vector<NodeId>& nodes,
+        const TextMeasurer& measurer = estimate_text_bounds,
+        const XdTextLayout& layout = {});
+
+      /**
+       * Makes the data Adobe XD's Copy SVG Code puts on the system clipboard:
+       * the markup as Scalable Vector Graphics and as text.
+       * @param svg The UTF-8 markup.
+       * @return The data.
+       */
+      static std::unique_ptr<QMimeData> make_svg_mime_data(
+        const std::string& svg);
+
+      /**
+       * Makes the device-independent bitmap Adobe XD puts on the system
+       * clipboard for an image: a bottom-up 32-bit bitfields bitmap of
+       * premultiplied pixels.
+       * @param image The image.
+       * @return The bytes of the bitmap's header, masks and pixels.
+       */
+      static QByteArray make_bitmap(const QImage& image);
+
+      /**
+       * Returns the bounds in document coordinates of the image Adobe XD
+       * puts on the clipboard for nodes, the union of their drawn bounds.
+       * @param document The document holding the nodes.
+       * @param nodes The nodes copied.
+       * @param measurer The function measuring text.
+       */
+      static std::optional<Rect> get_bitmap_bounds(const Document& document,
+        const std::vector<NodeId>& nodes,
+        const TextMeasurer& measurer = estimate_text_bounds);
+
       /** Discards what is held. */
       void clear();
 
       /**
        * Makes the data offered to other applications and windows for what is
-       * held: Adobe XD's clipboard format and a mark identifying what is
-       * held within this application.
+       * held: Adobe XD's clipboard format, a mark identifying what is held
+       * within this application, and the SVG markup and image Adobe XD
+       * offers, which are made from what is held only once requested.
+       * @param renderer The function rendering the image, or none to offer
+       *        no image.
        * @return The data, or <code>nullptr</code> if nothing is held.
        */
-      std::unique_ptr<QMimeData> make_mime_data() const;
+      std::unique_ptr<QMimeData> make_mime_data(
+        const BitmapRenderer& renderer = {}) const;
 
       /**
        * Tests whether system clipboard data holds content that load accepts.

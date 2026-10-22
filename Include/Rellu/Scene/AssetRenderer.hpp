@@ -30,7 +30,8 @@ namespace Rellu {
       ~AssetRenderer();
 
       /**
-       * Renders a node.
+       * Renders a node, clipped neither to its artboard nor to the scroll
+       * groups holding it.
        * @param id The node's id.
        * @param bounds The region rendered, in document coordinates.
        * @param scale The number of pixels per document unit.

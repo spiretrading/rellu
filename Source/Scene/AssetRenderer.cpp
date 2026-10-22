@@ -44,7 +44,7 @@ QImage AssetRenderer::render(
   m_state->m_builder.set_tolerance(StripRasterizer::TOLERANCE / scale);
   m_state->m_builder.set_device_transform(device);
   m_state->m_renderer.set_draw_list(
-    std::make_shared<DrawList>(m_state->m_builder.build(id)));
+    std::make_shared<DrawList>(m_state->m_builder.build_unclipped(id)));
   m_state->m_renderer.set_view(make_translation(-bounds.m_x, -bounds.m_y));
   auto image = m_state->m_offscreen.render(size, scale);
   m_state->m_renderer.set_draw_list(nullptr);

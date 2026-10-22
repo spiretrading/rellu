@@ -106,6 +106,14 @@ namespace Rellu {
       void export_nodes(const std::vector<NodeId>& nodes,
         bool is_all_artboards);
 
+      /**
+       * Exports assets through the Export Assets dialog.
+       * @param assets The assets exported.
+       * @param is_all_artboards Whether All Artboards are exported.
+       */
+      void export_assets(const std::vector<ExportAsset>& assets,
+        bool is_all_artboards);
+
       /** Enables the actions that apply to the editor's document. */
       void update();
 
@@ -125,7 +133,7 @@ namespace Rellu {
 
       ExportActions(const ExportActions&) = delete;
       ExportActions& operator =(const ExportActions&) = delete;
-      void run(ExportDialog& dialog, const std::vector<NodeId>& nodes);
+      void run(ExportDialog& dialog, const std::vector<ExportAsset>& assets);
       void report(const ExportResult& result);
   };
 

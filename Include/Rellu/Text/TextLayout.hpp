@@ -161,6 +161,16 @@ namespace Rellu {
   Rect measure_text(const Text& text, const FontLibrary& library);
 
   /**
+   * Measures the region a text node paints as Adobe XD measures its draw
+   * bounds: as measure_text, but with the left and right edges of the lines
+   * rounded outward to whole units.
+   * @param text The text node's payload.
+   * @param library The fonts to resolve the text's fonts with.
+   * @return The bounds in the node's local space.
+   */
+  Rect measure_painted_text(const Text& text, const FontLibrary& library);
+
+  /**
    * Computes the line breaks and run positions Adobe XD stores for a text
    * node laid out as by lay_out.
    * @param text The text node's payload.

@@ -79,6 +79,12 @@ namespace Rellu {
       using SourceProvider = std::function<XdClipboardSource ()>;
 
       /**
+       * The type of function rendering the image Adobe XD puts on the
+       * system clipboard for copied nodes.
+       */
+      using ImageRenderer = Clipboard::BitmapRenderer;
+
+      /**
        * The type of function showing a message in a toast.
        * @param message The message, in Adobe XD's toast markup.
        */
@@ -140,6 +146,20 @@ namespace Rellu {
       void set_text_measurer(TextMeasurer measurer);
 
       /**
+       * Sets the function laying out text without a stored layout when what
+       * is copied is written.
+       * @param layout The function.
+       */
+      void set_text_layout(XdTextLayout layout);
+
+      /**
+       * Sets the function rendering the image a copy puts on the system
+       * clipboard, or none to put no image.
+       * @param renderer The function.
+       */
+      void set_image_renderer(ImageRenderer renderer);
+
+      /**
        * Sets the function identifying the document what is copied comes
        * from.
        * @param provider The function.
@@ -182,6 +202,8 @@ namespace Rellu {
       RevealHandler m_reveal_handler;
       Workspace m_workspace;
       TextMeasurer m_measurer;
+      XdTextLayout m_layout;
+      ImageRenderer m_image_renderer;
       SourceProvider m_source_provider;
       QMetaObject::Connection m_clipboard_connection;
       Subscription m_selection_subscription;
@@ -200,6 +222,7 @@ namespace Rellu {
       bool copy_selection();
       void cut();
       void copy();
+      void copy_svg();
       void paste();
       void paste_appearance();
       void duplicate();

@@ -4,10 +4,12 @@
 #include <doctest/doctest.h>
 #include <QGuiApplication>
 #include <QtPlugin>
+#include "Rellu/Testing/FailureDialogs.hpp"
 
 Q_IMPORT_PLUGIN(QOffscreenIntegrationPlugin)
 
 int main(int argc, char** argv) {
+  Rellu::Testing::suppress_failure_dialogs();
   auto platform = std::string("-platform");
   auto offscreen = std::string("offscreen");
   auto arguments = std::vector<char*>(argv, argv + argc);

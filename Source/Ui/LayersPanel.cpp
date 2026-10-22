@@ -24,6 +24,7 @@
 #include <QStyledItemDelegate>
 #include <QVBoxLayout>
 #include "Rellu/Commands/Components.hpp"
+#include "Rellu/Commands/HeaderCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
@@ -229,6 +230,11 @@ namespace {
             !index.data(LayersModel::LOCKED_ROLE).toBool() && is_hovered) {
           static auto unlocked = make_icon(Glyph::LOCK, Colors::DISABLED_TEXT);
           option->icon = unlocked;
+          option->features |= QStyleOptionViewItem::HasDecoration;
+        } else if(index.column() == LayersModel::EXPORT &&
+            !index.data(LayersModel::MARKED_ROLE).toBool() && is_hovered &&
+            index.data(LayersModel::ID_ROLE).isValid()) {
+          option->icon = get_export_mark_icon(false);
           option->features |= QStyleOptionViewItem::HasDecoration;
         }
       }
@@ -478,10 +484,12 @@ LayersPanel::LayersPanel(QWidget* parent)
     header->setStretchLastSection(false);
     header->setMinimumSectionSize(INDICATOR_WIDTH);
     header->setSectionResizeMode(LayersModel::NAME, QHeaderView::Stretch);
-    for(auto column : {LayersModel::VISIBILITY, LayersModel::LOCK}) {
+    for(auto column : {LayersModel::VISIBILITY, LayersModel::LOCK,
+        LayersModel::EXPORT}) {
       header->setSectionResizeMode(column, QHeaderView::Fixed);
       header->resizeSection(column, INDICATOR_WIDTH);
     }
+    header->moveSection(LayersModel::EXPORT, LayersModel::VISIBILITY);
     connect(view, &QTreeView::customContextMenuRequested, this,
       [this, view] (const QPoint& position) {
         show_context_menu(*view, position);
@@ -637,6 +645,24 @@ bool LayersPanel::toggle_lock(const NodeId& id) {
   }
 }
 
+bool LayersPanel::toggle_export_mark(const NodeId& id) {
+  auto document = m_model->get_document();
+  if(!m_editor || !document || !document->find(id)) {
+    return false;
+  }
+  auto header = find_rendered_header(*document, id);
+  if(!header) {
+    return false;
+  }
+  try {
+    auto command = std::make_unique<SetExportMarkCommand>(
+      std::vector{id}, !header->m_is_marked_for_export);
+    return static_cast<bool>(m_editor->execute(std::move(command)));
+  } catch(const std::exception&) {
+    return false;
+  }
+}
+
 bool LayersPanel::move(const std::vector<NodeId>& nodes, const NodeId& parent,
     std::size_t index) {
   if(!m_editor || !m_model->is_movable(nodes, parent)) {
@@ -735,7 +761,8 @@ bool LayersPanel::eventFilter(QObject* watched, QEvent* event) {
     }
   }
   if(!index.isValid() || (index.column() != LayersModel::VISIBILITY &&
-      index.column() != LayersModel::LOCK)) {
+      index.column() != LayersModel::LOCK &&
+      index.column() != LayersModel::EXPORT)) {
     return QWidget::eventFilter(watched, event);
   }
   if(!m_editor) {
@@ -744,8 +771,10 @@ bool LayersPanel::eventFilter(QObject* watched, QEvent* event) {
     auto id = m_model->get_id(index);
     if(index.column() == LayersModel::VISIBILITY) {
       toggle_visibility(id);
-    } else {
+    } else if(index.column() == LayersModel::LOCK) {
       toggle_lock(id);
+    } else {
+      toggle_export_mark(id);
     }
   }
   return true;

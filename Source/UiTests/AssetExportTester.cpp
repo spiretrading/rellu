@@ -7,6 +7,7 @@
 #include <doctest/doctest.h>
 #include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Ui/AssetExport.hpp"
+#include "Rellu/Ui/NodeDescription.hpp"
 #include "TestDocument.hpp"
 
 using namespace Rellu;
@@ -29,6 +30,13 @@ namespace {
     artboard.m_frame = frame;
     artboard.m_background = SolidFill(make_color(255, 255, 255));
     return transaction.append(NodeId(), make_header(name), artboard);
+  }
+
+  std::vector<ExportTask> make_tasks(const Document& document,
+      const std::vector<NodeId>& nodes, const ExportOptions& options,
+      const QString& folder, const QString& name) {
+    return make_export_tasks(
+      document, to_export_assets(nodes), options, folder, name);
   }
 
   std::vector<QString> get_names(const std::vector<ExportTask>& tasks,
@@ -109,7 +117,7 @@ TEST_SUITE("AssetExport") {
     auto document = Document();
     auto ids = build_test_document(document);
     REQUIRE(!has_batch_export_nodes(document));
-    REQUIRE(get_batch_export_nodes(document).empty());
+    REQUIRE(get_batch_export_assets(document).empty());
     auto transaction = Transaction(document);
     for(auto& id : {ids.m_card, ids.m_background, ids.m_loose}) {
       auto header = document.get(id).m_header;
@@ -118,28 +126,40 @@ TEST_SUITE("AssetExport") {
     }
     transaction.commit();
     REQUIRE(has_batch_export_nodes(document));
-    REQUIRE(get_batch_export_nodes(document) ==
-      std::vector{ids.m_card, ids.m_background, ids.m_loose});
+    auto assets = get_batch_export_assets(document);
+    REQUIRE(assets.size() == 3);
+    REQUIRE(assets[0].m_node == ids.m_card);
+    REQUIRE(assets[1].m_node == ids.m_background);
+    REQUIRE(assets[2].m_node == ids.m_loose);
+    REQUIRE(assets[2].m_name.isEmpty());
   }
 
-  TEST_CASE("sort_by_layers") {
+  TEST_CASE("batch_export_states") {
     auto document = Document();
+    auto ids = build_test_document(document);
     auto transaction = Transaction(document);
-    auto bottom = add_rectangle(transaction, NodeId(), "Icon",
-      Rect(0, 0, 10, 10));
-    auto group = transaction.append(NodeId(), make_header("Group"), Group());
-    auto inner = add_rectangle(transaction, group, "Inner",
-      Rect(0, 0, 10, 10));
-    auto top = add_rectangle(transaction, NodeId(), "Icon",
-      Rect(0, 0, 10, 10));
+    auto tree = transaction.insert_root(make_header("Button"), Group());
+    transaction.append(tree, make_header("Fill"),
+      make_rectangle_shape(80, 30));
+    auto component = document.get_resources().m_components.at(
+      ids.m_component);
+    auto state = ComponentState();
+    state.m_id = generate_node_id();
+    state.m_name = "State 2";
+    state.m_tree = tree;
+    component.m_states.push_back(state);
+    transaction.replace_component(component);
+    auto header = document.get(ids.m_instance).m_header;
+    header.m_is_marked_for_export = true;
+    transaction.replace_header(header);
     transaction.commit();
-    REQUIRE(sort_by_layers(document, {bottom, inner, top, group}) ==
-      std::vector{top, group, inner, bottom});
-    auto tasks = make_export_tasks(document,
-      sort_by_layers(document, {bottom, top}), ExportOptions(), "C:/out", "");
-    REQUIRE(tasks[0].m_node == top);
-    REQUIRE(get_names(tasks, "C:/out") ==
-      std::vector<QString>{"Icon.png", "Icon-1.png"});
+    auto assets = get_batch_export_assets(document);
+    REQUIRE(assets.size() == 2);
+    REQUIRE(assets[0].m_node == ids.m_instance);
+    REQUIRE(assets[0].m_name.isEmpty());
+    REQUIRE(assets[1].m_node == tree);
+    REQUIRE(assets[1].m_name == get_node_name(
+      document, document.get(ids.m_instance)) + " (State 2)");
   }
 
   TEST_CASE("export_tasks") {
@@ -157,36 +177,36 @@ TEST_SUITE("AssetExport") {
     transaction.commit();
     auto nodes = std::vector{first, second, empty, icon, line};
     auto options = ExportOptions();
-    auto tasks = make_export_tasks(document, nodes, options, "C:/out", "");
+    auto tasks = make_tasks(document, nodes, options, "C:/out", "");
     REQUIRE(get_names(tasks, "C:/out") ==
       std::vector<QString>{"Home.png", "home-1.png", "a-bc.png"});
     REQUIRE(tasks[2].m_scale == 1);
     options.m_preset = ExportPreset::ANDROID;
-    tasks = make_export_tasks(document, {icon}, options, "C:/out", "");
+    tasks = make_tasks(document, {icon}, options, "C:/out", "");
     REQUIRE(tasks.size() == 6);
     REQUIRE(get_names(tasks, "C:/out")[1] == "drawable-mdpi/a-bc.png");
     REQUIRE(tasks[0].m_scale == 0.75);
     options.m_preset = ExportPreset::WEB;
-    tasks = make_export_tasks(document, {icon}, options, "C:/out", "");
+    tasks = make_tasks(document, {icon}, options, "C:/out", "");
     REQUIRE(get_names(tasks, "C:/out") ==
       std::vector<QString>{"a-bc.png", "a-bc@2x.png"});
     options.m_preset = ExportPreset::NONE;
     options.m_scale = 4000;
-    tasks = make_export_tasks(document, {first}, options, "C:/out", "");
+    tasks = make_tasks(document, {first}, options, "C:/out", "");
     REQUIRE(tasks.size() == 1);
     REQUIRE(tasks[0].m_is_too_big);
     options.m_format = ExportFormat::PDF;
-    tasks = make_export_tasks(
+    tasks = make_tasks(
       document, {first, icon}, options, "C:/out", "Spire");
     REQUIRE(get_names(tasks, "C:/out") ==
       std::vector<QString>{"Spire.pdf", "Spire.pdf"});
     REQUIRE(tasks[0].m_scale == 1);
     options.m_is_pdf_single = false;
-    tasks = make_export_tasks(document, {first, line}, options, "C:/out", "");
+    tasks = make_tasks(document, {first, line}, options, "C:/out", "");
     REQUIRE(get_names(tasks, "C:/out") ==
       std::vector<QString>{"Home.pdf", "Line.pdf"});
     options.m_is_pdf_single = true;
-    tasks = make_export_tasks(document, {first, icon}, options, "C:/out", "");
+    tasks = make_tasks(document, {first, icon}, options, "C:/out", "");
     REQUIRE(get_names(tasks, "C:/out")[0] == "Untitled.pdf");
   }
 
@@ -201,7 +221,7 @@ TEST_SUITE("AssetExport") {
     transaction.commit();
     auto options = ExportOptions();
     options.m_preset = ExportPreset::ANDROID;
-    auto tasks = make_export_tasks(
+    auto tasks = make_tasks(
       document, {artboard, icon}, options, directory.path(), "");
     REQUIRE(find_existing_files(tasks).empty());
     auto steps = std::vector<int>();
@@ -225,7 +245,7 @@ TEST_SUITE("AssetExport") {
       std::vector<QString>{"Home.png", "Icon.png"});
     options = ExportOptions();
     options.m_format = ExportFormat::JPG;
-    tasks = make_export_tasks(
+    tasks = make_tasks(
       document, {artboard}, options, directory.path(), "");
     result = run_export(document, tasks, options, estimate_text_bounds,
       ExportProgress());
@@ -245,7 +265,7 @@ TEST_SUITE("AssetExport") {
     auto options = ExportOptions();
     options.m_preset = ExportPreset::ANDROID;
     auto tasks =
-      make_export_tasks(document, {icon}, options, directory.path(), "");
+      make_tasks(document, {icon}, options, directory.path(), "");
     auto result = run_export(document, tasks, options, estimate_text_bounds,
       [&] (int done, int total) {
         return done < 2;
@@ -269,7 +289,7 @@ TEST_SUITE("AssetExport") {
     transaction.commit();
     auto options = ExportOptions();
     options.m_scale = 161;
-    auto tasks = make_export_tasks(
+    auto tasks = make_tasks(
       document, {big, icon}, options, directory.path(), "");
     REQUIRE(tasks[0].m_is_too_big);
     auto result = run_export(document, tasks, options, estimate_text_bounds,
@@ -285,7 +305,7 @@ TEST_SUITE("AssetExport") {
     REQUIRE(file.open(QIODevice::WriteOnly));
     file.close();
     REQUIRE(file.setPermissions(QFileDevice::ReadOwner));
-    tasks = make_export_tasks(
+    tasks = make_tasks(
       document, {big, locked}, options, directory.path(), "");
     result = run_export(document, tasks, options, estimate_text_bounds,
       ExportProgress());
@@ -293,11 +313,5 @@ TEST_SUITE("AssetExport") {
     REQUIRE(result.m_failed_nodes == std::vector{locked});
     REQUIRE(result.m_failed_paths == std::vector{path});
     file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    options.m_format = ExportFormat::SVG;
-    tasks = make_export_tasks(document, {icon}, options, directory.path(), "");
-    result = run_export(document, tasks, options, estimate_text_bounds,
-      ExportProgress());
-    REQUIRE(result.m_failure == ExportFailure::GENERIC);
-    REQUIRE(result.m_failed_nodes == std::vector{icon});
   }
 }

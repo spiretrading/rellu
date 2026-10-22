@@ -380,6 +380,18 @@ TEST_SUITE("TextLayout") {
     REQUIRE(measure_text(text, get_library()) == Rect(0, 0, 200, 100));
   }
 
+  TEST_CASE("measure_painted_text") {
+    auto text = make_text(u"Hello\nWorld");
+    auto lines = measure_lines(text, get_library());
+    auto right = std::max(lines[0].m_carets.back(), lines[1].m_carets.back());
+    auto bounds = measure_painted_text(text, get_library());
+    REQUIRE(bounds.m_x == 0);
+    REQUIRE(bounds.m_width == std::ceil(right));
+    REQUIRE(bounds.m_height == measure_text(text, get_library()).m_height);
+    text.m_frame = AreaFrame(Size(200, 100));
+    REQUIRE(measure_painted_text(text, get_library()) == Rect(0, 0, 200, 100));
+  }
+
   TEST_CASE("store_layout") {
     auto text = make_text(u"Hello\nWorld");
     auto stored = store_layout(text, get_library());

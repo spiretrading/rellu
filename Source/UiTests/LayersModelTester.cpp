@@ -353,16 +353,23 @@ TEST_SUITE("LayersModel") {
     };
     REQUIRE(tip(LayersModel::VISIBILITY) == "Hide (Ctrl+,)");
     REQUIRE(tip(LayersModel::LOCK) == "Lock (Ctrl+L)");
+    REQUIRE(tip(LayersModel::EXPORT) == "Mark for Export (Shift+E)");
     {
       auto transaction = Transaction(document);
       auto header = document.get(ids.m_label).m_header;
       header.m_is_visible = false;
       header.m_is_locked = true;
+      header.m_is_marked_for_export = true;
       transaction.replace_header(header);
       transaction.commit();
     }
     REQUIRE(tip(LayersModel::VISIBILITY) == "Show (Ctrl+,)");
     REQUIRE(tip(LayersModel::LOCK) == "Unlock (Ctrl+L)");
+    REQUIRE(tip(LayersModel::EXPORT) == "Unmark for Export (Shift+E)");
+    REQUIRE(model.data(model.find(ids.m_label), LayersModel::MARKED_ROLE).
+      toBool());
+    REQUIRE(!model.data(model.find(ids.m_label, LayersModel::EXPORT),
+      Qt::DecorationRole).isNull());
   }
 
   TEST_CASE("header_changes") {

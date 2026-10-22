@@ -10,6 +10,12 @@ TextMeasurer Rellu::make_text_measurer(const FontLibrary& library) {
   };
 }
 
+TextMeasurer Rellu::make_painted_text_measurer(const FontLibrary& library) {
+  return [library = &library] (const Text& text) {
+    return measure_painted_text(text, *library);
+  };
+}
+
 TextOutliner Rellu::make_text_outliner(const FontLibrary& library) {
   return [library = &library] (const Text& text) {
     auto glyphs = Path();

@@ -57,24 +57,53 @@ namespace {
       node.get_kind() == NodeKind::GROUP;
   }
 
+  void add_inactive_states(const Document& document, const Node& node,
+      const ComponentInstance& instance, std::vector<ExportAsset>& assets) {
+    auto& components = document.get_resources().m_components;
+    auto component = components.find(instance.m_component);
+    if(component == components.end()) {
+      return;
+    }
+    auto name = get_node_name(document, node);
+    for(auto& state : component->second.m_states) {
+      if(state.m_id == instance.m_state) {
+        continue;
+      }
+      auto tree = state.m_tree;
+      for(auto& copy : instance.m_states) {
+        if(copy.m_id == state.m_id) {
+          tree = copy.m_tree;
+        }
+      }
+      if(document.find(tree)) {
+        assets.push_back(ExportAsset(tree,
+          name + " (" + QString::fromStdString(state.m_name) + ')'));
+      }
+    }
+  }
+
   void visit_batch(const Document& document, const NodeId& id, int depth,
       std::unordered_set<ComponentId>& components,
-      std::vector<NodeId>& nodes) {
+      std::vector<ExportAsset>& assets) {
     auto node = document.find(id);
     if(!node || depth > MAXIMUM_DEPTH) {
       return;
     }
     auto group = node->get_group();
-    if(group && group->m_component_instance &&
-        node->m_header.m_is_marked_for_export &&
-        !components.insert(group->m_component_instance->m_component).second) {
+    auto instance = group && group->m_component_instance ?
+      &*group->m_component_instance : nullptr;
+    if(instance && node->m_header.m_is_marked_for_export &&
+        !components.insert(instance->m_component).second) {
       return;
     }
     if(node->m_header.m_is_marked_for_export) {
-      nodes.push_back(id);
+      assets.push_back(ExportAsset(id, QString()));
     }
     for(auto& child : node->m_children) {
-      visit_batch(document, child, depth + 1, components, nodes);
+      visit_batch(document, child, depth + 1, components, assets);
+    }
+    if(instance && node->m_header.m_is_marked_for_export) {
+      add_inactive_states(document, *node, *instance, assets);
     }
   }
 
@@ -328,13 +357,23 @@ std::vector<ExportScale> Rellu::get_export_scales(
   return {make_export_scale(
     options.m_scale, QString::number(options.m_scale) + 'x')};
 }
-std::vector<NodeId> Rellu::get_batch_export_nodes(const Document& document) {
-  auto nodes = std::vector<NodeId>();
+std::vector<ExportAsset> Rellu::to_export_assets(
+    const std::vector<NodeId>& nodes) {
+  auto assets = std::vector<ExportAsset>();
+  for(auto& id : nodes) {
+    assets.push_back(ExportAsset(id, QString()));
+  }
+  return assets;
+}
+
+std::vector<ExportAsset> Rellu::get_batch_export_assets(
+    const Document& document) {
+  auto assets = std::vector<ExportAsset>();
   auto components = std::unordered_set<ComponentId>();
   for(auto& id : document.get_canvas()) {
-    visit_batch(document, id, 0, components, nodes);
+    visit_batch(document, id, 0, components, assets);
   }
-  return nodes;
+  return assets;
 }
 
 bool Rellu::has_batch_export_nodes(const Document& document) {
@@ -342,35 +381,6 @@ bool Rellu::has_batch_export_nodes(const Document& document) {
     document.get_canvas().end(), [&] (const auto& id) {
       return has_marked(document, id, 0);
     });
-}
-
-std::vector<NodeId> Rellu::sort_by_layers(
-    const Document& document, std::vector<NodeId> nodes) {
-  auto ranks = std::unordered_map<NodeId, std::size_t>();
-  auto pending = std::vector<std::pair<NodeId, int>>();
-  for(auto& id : document.get_canvas()) {
-    pending.emplace_back(id, 0);
-  }
-  while(!pending.empty()) {
-    auto [id, depth] = pending.back();
-    pending.pop_back();
-    ranks.emplace(id, ranks.size());
-    if(auto node = document.find(id); node && depth < MAXIMUM_DEPTH) {
-      for(auto& child : node->m_children) {
-        pending.emplace_back(child, depth + 1);
-      }
-    }
-  }
-  std::stable_sort(nodes.begin(), nodes.end(),
-    [&] (const auto& left, const auto& right) {
-      auto first = ranks.find(left);
-      auto second = ranks.find(right);
-      if(second == ranks.end()) {
-        return first != ranks.end();
-      }
-      return first != ranks.end() && first->second < second->second;
-    });
-  return nodes;
 }
 
 std::vector<NodeId> Rellu::get_export_artboards(const Document& document) {
@@ -384,7 +394,7 @@ std::vector<NodeId> Rellu::get_export_artboards(const Document& document) {
 }
 
 std::vector<ExportTask> Rellu::make_export_tasks(const Document& document,
-    const std::vector<NodeId>& nodes, const ExportOptions& options,
+    const std::vector<ExportAsset>& assets, const ExportOptions& options,
     const QString& folder, const QString& document_name,
     const TextMeasurer& measurer) {
   auto tasks = std::vector<ExportTask>();
@@ -397,11 +407,12 @@ std::vector<ExportTask> Rellu::make_export_tasks(const Document& document,
 
   auto extension = QString::fromUtf8(get_extension(options.m_format));
   auto is_single_pdf = options.m_format == ExportFormat::PDF &&
-    options.m_is_pdf_single && nodes.size() > 1;
+    options.m_is_pdf_single && assets.size() > 1;
   for(auto& scale : scales) {
     auto namer = ExportNamer();
     auto unnamed = 1;
-    for(auto& id : nodes) {
+    for(auto& asset : assets) {
+      auto& id = asset.m_node;
       auto node = document.find(id);
       if(!node) {
         continue;
@@ -416,7 +427,8 @@ std::vector<ExportTask> Rellu::make_export_tasks(const Document& document,
       if(is_container(*node) && node->m_children.empty()) {
         continue;
       }
-      auto name = sanitize_file_name(get_node_name(document, *node));
+      auto name = sanitize_file_name(asset.m_name.isEmpty() ?
+        get_node_name(document, *node) : asset.m_name);
       auto limit = get_maximum_name_length(root);
       if(node->get_artboard() || !name.isEmpty()) {
         name = namer.make(name, limit);

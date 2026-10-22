@@ -43,11 +43,14 @@ namespace Rellu {
         VISIBILITY,
 
         /** Whether the node is locked. */
-        LOCK
+        LOCK,
+
+        /** Whether the node is marked for export. */
+        EXPORT
       };
 
       /** The number of columns. */
-      static constexpr auto COLUMN_COUNT = 3;
+      static constexpr auto COLUMN_COUNT = 4;
 
       /** Lists the item data roles beyond Qt's own, valid in any column. */
       enum Role {
@@ -63,6 +66,9 @@ namespace Rellu {
 
         /** Whether the node is locked. */
         LOCKED_ROLE,
+
+        /** Whether the node is marked for export. */
+        MARKED_ROLE,
 
         /** The node's id in canonical text form. */
         ID_ROLE,

@@ -827,6 +827,15 @@ namespace {
         fill_rect(painter, color, QRectF(8, 15, 8, 1.4));
         break;
       }
+      case Glyph::EXPORT_MARK:
+      {
+        polyline(painter, color, {QPointF(11.5, 6), QPointF(5.5, 6),
+          QPointF(5.5, 18.5), QPointF(18, 18.5), QPointF(18, 12.5)}, 1.3);
+        line(painter, color, QPointF(11, 13), QPointF(18.5, 5.5), 1.3);
+        polyline(painter, color, {QPointF(13.5, 5.5), QPointF(18.5, 5.5),
+          QPointF(18.5, 10.5)}, 1.3);
+        break;
+      }
     }
   }
 
@@ -1021,6 +1030,17 @@ const QIcon& Rellu::get_visibility_icon(bool is_visible) {
     return visible;
   }
   return hidden;
+}
+
+const QIcon& Rellu::get_export_mark_icon(bool is_marked) {
+  static auto marked =
+    make_icon(Glyph::EXPORT_MARK, QColor(0x65, 0x65, 0x65));
+  static auto unmarked =
+    make_icon(Glyph::EXPORT_MARK, QColor(0xB7, 0xBB, 0xBF));
+  if(is_marked) {
+    return marked;
+  }
+  return unmarked;
 }
 
 const QIcon& Rellu::get_lock_icon() {

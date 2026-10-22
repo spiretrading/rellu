@@ -4,6 +4,7 @@
 #include <doctest/doctest.h>
 #include <QGuiApplication>
 #include <QtPlugin>
+#include "Rellu/Testing/FailureDialogs.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
 
 Q_IMPORT_PLUGIN(QJpegPlugin)
@@ -11,6 +12,7 @@ Q_IMPORT_PLUGIN(QOffscreenIntegrationPlugin)
 Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)
 
 int main(int argc, char** argv) {
+  Rellu::Testing::suppress_failure_dialogs();
   Rellu::set_default_font_directories({RELLU_FONTS_DIRECTORY});
   auto platform = std::string("-platform");
   auto offscreen = std::string("offscreen");

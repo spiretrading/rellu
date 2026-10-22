@@ -28,6 +28,7 @@ CMakeCache.txt
 CMakeFiles
 CMakeScripts
 Testing
+!Include/Rellu/Testing
 Makefile
 build.ninja
 build-*.ninja

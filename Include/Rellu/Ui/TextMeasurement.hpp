@@ -15,6 +15,14 @@ namespace Rellu {
   TextMeasurer make_text_measurer(const FontLibrary& library);
 
   /**
+   * Makes a TextMeasurer measuring the region text paints, as Adobe XD
+   * measures draw bounds.
+   * @param library The fonts to resolve the text's fonts with, which must
+   *        outlive the measurer.
+   */
+  TextMeasurer make_painted_text_measurer(const FontLibrary& library);
+
+  /**
    * Makes a TextOutliner outlining the glyphs and decorations of text as
    * they are drawn, mirrored within the text's bounds when it is flipped.
    * @param library The fonts to resolve the text's fonts with, which must

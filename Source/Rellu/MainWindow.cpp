@@ -55,6 +55,7 @@
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Tools/ViewFit.hpp"
 #include "Rellu/Ui/CanvasFrame.hpp"
+#include "Rellu/Ui/ClipboardRenderer.hpp"
 #include "Rellu/Ui/ComponentPropertyEditors.hpp"
 #include "Rellu/Ui/ContextMenus.hpp"
 #include "Rellu/Ui/DocumentSettings.hpp"
@@ -418,7 +419,8 @@ MainWindow::MainWindow(QWidget* parent)
   });
   m_inspector->set_grid_actions(m_grid_actions.get());
   m_export_actions = std::make_unique<ExportActions>(m_actions, *this);
-  m_export_actions->set_text_measurer(m_measurer);
+  m_export_actions->set_text_measurer(
+    make_painted_text_measurer(get_default_font_library()));
   m_export_actions->set_path_provider([this] {
     return m_session ? m_session->get_path() : QString();
   });
@@ -1140,6 +1142,13 @@ void MainWindow::add_actions() {
   m_actions.set_handler("file.revert", [this] { revert(); });
   m_edit_actions = std::make_unique<EditActions>(m_actions, m_commands);
   m_edit_actions->set_text_measurer(m_measurer);
+  m_edit_actions->set_text_layout(
+    make_xd_text_layout(get_default_font_library()));
+  m_edit_actions->set_image_renderer(
+    [renderer = std::make_shared<ClipboardRenderer>()] (
+        const auto& document, const auto& nodes, const auto& bounds) {
+      return renderer->render(document, nodes, bounds);
+    });
   m_edit_actions->set_source_provider([this] {
     auto source = XdClipboardSource();
     if(m_session) {

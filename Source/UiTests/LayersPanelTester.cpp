@@ -453,6 +453,12 @@ TEST_SUITE("LayersPanel") {
     REQUIRE(panel.toggle_lock(ids.m_ellipse));
     REQUIRE(document.get(ids.m_ellipse).m_header.m_is_locked);
     REQUIRE(editor.get_history().get_undo_label() == "Lock");
+    REQUIRE(panel.toggle_export_mark(ids.m_ellipse));
+    REQUIRE(document.get(ids.m_ellipse).m_header.m_is_marked_for_export);
+    REQUIRE(editor.get_history().get_undo_label() == "Mark for Export");
+    REQUIRE(panel.toggle_export_mark(ids.m_ellipse));
+    REQUIRE(!document.get(ids.m_ellipse).m_header.m_is_marked_for_export);
+    REQUIRE(editor.get_history().get_undo_label() == "Unmark for Export");
     REQUIRE(editor.get_selection().is_empty());
     REQUIRE(panel.toggle_visibility(ids.m_reference));
     auto& reference = document.get(ids.m_reference);

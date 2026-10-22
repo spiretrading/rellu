@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -1155,5 +1156,101 @@ TEST_SUITE("Clipboard") {
     REQUIRE(*label.get_text()->m_content == u"Pasted words");
     REQUIRE(get_world_transform(document, label.get_id()) ==
       make_translation(150, 150));
+  }
+
+  TEST_CASE("deferred_flavors") {
+    auto document = Document();
+    auto id = NodeId();
+    {
+      auto transaction = Transaction(document);
+      id = transaction.append(NodeId(), make_header("Label"),
+        make_text(u"Deferred"));
+      transaction.commit();
+    }
+    auto render = [] (const Document& document,
+        const std::vector<NodeId>& nodes, const Rect& bounds) {
+      auto image = QImage(static_cast<int>(std::ceil(bounds.m_width)),
+        static_cast<int>(std::ceil(bounds.m_height)),
+        QImage::Format_ARGB32_Premultiplied);
+      image.fill(qRgba(0, 0, static_cast<int>(nodes.size()), 255));
+      return image;
+    };
+    auto svg = Clipboard::make_svg_code(document, {id});
+    auto bounds = *Clipboard::get_bitmap_bounds(document, {id});
+    auto bitmap = Clipboard::make_bitmap(render(document, {id}, bounds));
+    auto measurements = 0;
+    auto measurer = [&] (const Text& text) {
+      ++measurements;
+      return estimate_text_bounds(text);
+    };
+    auto renderings = 0;
+    auto renderer = [&] (const Document& document,
+        const std::vector<NodeId>& nodes, const Rect& bounds) {
+      ++renderings;
+      return render(document, nodes, bounds);
+    };
+    auto clipboard = Clipboard();
+    REQUIRE(clipboard.copy(document, {id}, measurer));
+    auto copied = measurements;
+    auto data = clipboard.make_mime_data(renderer);
+    REQUIRE(measurements == copied);
+    REQUIRE(renderings == 0);
+    {
+      auto edit = Transaction(document);
+      edit.remove(id);
+      edit.commit();
+    }
+    auto expected = QByteArray::fromStdString(svg);
+    expected.append('\0');
+    auto svg_format = QString();
+    auto bitmap_format = QString();
+    for(auto& format : data->formats()) {
+      if(format.contains("Scalable Vector Graphics")) {
+        svg_format = format;
+      } else if(format.contains("x-rellu-dib")) {
+        bitmap_format = format;
+      }
+    }
+    REQUIRE(!svg_format.isEmpty());
+    REQUIRE(data->data(svg_format) == expected);
+    REQUIRE(measurements > copied);
+    REQUIRE(renderings == 0);
+    if(bitmap_format.isEmpty()) {
+      REQUIRE(Clipboard::make_bitmap(
+        qvariant_cast<QImage>(data->imageData())) == bitmap);
+    } else {
+      REQUIRE(data->data(bitmap_format) == bitmap);
+    }
+    REQUIRE(renderings == 1);
+  }
+
+  TEST_CASE("svg_code_data") {
+    auto data = Clipboard::make_svg_mime_data("<svg/>\r\n");
+    REQUIRE(data->text() == "<svg/>\r\n");
+    auto is_found = false;
+    for(auto& format : data->formats()) {
+      if(format.contains("Scalable Vector Graphics")) {
+        REQUIRE(data->data(format) == QByteArray("<svg/>\r\n", 9));
+        is_found = true;
+      }
+    }
+    REQUIRE(is_found);
+    REQUIRE(Clipboard::make_svg_code(Document(), {}).empty());
+  }
+
+  TEST_CASE("bitmap") {
+    auto image = QImage(2, 2, QImage::Format_ARGB32_Premultiplied);
+    image.setPixel(0, 0, qRgba(128, 0, 0, 128));
+    image.setPixel(1, 0, qRgba(0, 0, 0, 0));
+    image.setPixel(0, 1, qRgba(0, 255, 0, 255));
+    image.setPixel(1, 1, qRgba(0, 0, 255, 255));
+    auto bitmap = Clipboard::make_bitmap(image);
+    auto expected = QByteArray::fromHex(
+      "2800000002000000020000000100200003000000100000000000000000000000"
+      "0000000000000000"
+      "0000ff0000ff0000ff000000"
+      "00ff00ffff0000ff"
+      "0000808000000000");
+    REQUIRE(bitmap == expected);
   }
 }

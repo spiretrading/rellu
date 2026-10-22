@@ -117,7 +117,7 @@ TEST_SUITE("ExportActions") {
     fixture.m_exports->set_editor(&fixture.m_editor);
     fixture.m_exports->set_dialog_handler([&] (auto& dialog) {
       auto options = dialog.get_options();
-      options.m_format = ExportFormat::SVG;
+      options.m_scale = 100000;
       dialog.set_options(options);
       dialog.set_folder(directory.path());
       dialog.submit();

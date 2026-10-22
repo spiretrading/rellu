@@ -190,7 +190,7 @@ QVariant LayersModel::data(const QModelIndex& index, int role) const {
       return get_pasteboard_icon();
     } else if(role == VISIBLE_ROLE) {
       return true;
-    } else if(role == LOCKED_ROLE) {
+    } else if(role == LOCKED_ROLE || role == MARKED_ROLE) {
       return false;
     }
     return QVariant();
@@ -213,6 +213,8 @@ QVariant LayersModel::data(const QModelIndex& index, int role) const {
     return header->m_is_visible;
   } else if(role == LOCKED_ROLE) {
     return header->m_is_locked;
+  } else if(role == MARKED_ROLE) {
+    return header->m_is_marked_for_export;
   } else if(role == ID_ROLE) {
     return QString::fromStdString(to_string(node->get_id()));
   } else if(role == EXPANDED_ICON_ROLE) {
@@ -255,6 +257,14 @@ QVariant LayersModel::data(const QModelIndex& index, int role) const {
       return translate("layers", header->m_is_locked ? "Unlock (%1)" :
         "Lock (%1)").arg(to_xd_shortcut_text(QKeySequence("Ctrl+L")));
     }
+  } else if(index.column() == EXPORT) {
+    if(role == Qt::DecorationRole && header->m_is_marked_for_export) {
+      return get_export_mark_icon(true);
+    } else if(role == Qt::ToolTipRole) {
+      return translate("layers", header->m_is_marked_for_export ?
+        "Unmark for Export (%1)" : "Mark for Export (%1)").arg(
+          to_xd_shortcut_text(QKeySequence("Shift+E")));
+    }
   }
   return QVariant();
 }
@@ -270,6 +280,8 @@ QVariant LayersModel::headerData(
     return translate("layers", "Visible");
   } else if(section == LOCK) {
     return translate("layers", "Locked");
+  } else if(section == EXPORT) {
+    return translate("layers", "Mark for Export");
   }
   return QVariant();
 }

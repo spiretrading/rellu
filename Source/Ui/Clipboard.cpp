@@ -26,12 +26,14 @@
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/StyleCommands.hpp"
 #include "Rellu/Commands/TextCommands.hpp"
+#include "Rellu/Io/SvgExport.hpp"
 #include "Rellu/Io/SvgImport.hpp"
 #include "Rellu/Io/XdClipboard.hpp"
 #include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Ui/Clipboard.hpp"
+#include "BitmapFormat.hpp"
 
 using namespace Rellu;
 
@@ -45,6 +47,7 @@ namespace {
       static_cast<qsizetype>(XD_CLIPBOARD_FORMAT.size())));
   const auto SVG_TYPE = QStringLiteral(
     "application/x-qt-windows-mime;value=\"Scalable Vector Graphics\"");
+  const auto BITMAP_TYPE = QStringLiteral("application/x-rellu-dib");
   const auto IMAGE_DIRECTORY = QStringLiteral("Rellu Clipboard");
   constexpr auto TEXT_FRAME_SIZE = 300.0;
   constexpr auto SEQUENCE_PADDING = 10.0;
@@ -229,6 +232,69 @@ namespace {
     }
     return QString();
   }
+
+  QByteArray to_svg_data(const std::string& svg) {
+    auto data = QByteArray::fromStdString(svg);
+    data.append('\0');
+    return data;
+  }
+
+  class DeferredMimeData : public QMimeData {
+    public:
+      using Producer = std::function<QVariant ()>;
+
+      void defer(QString type, Producer producer) {
+        m_entries.push_back(Entry(std::move(type), std::move(producer)));
+      }
+
+      QStringList formats() const override {
+        auto formats = QMimeData::formats();
+        for(auto& entry : m_entries) {
+          if(!formats.contains(entry.m_type)) {
+            formats.append(entry.m_type);
+          }
+        }
+        return formats;
+      }
+
+      bool hasFormat(const QString& type) const override {
+        return QMimeData::hasFormat(type) || find(type);
+      }
+
+    protected:
+      QVariant retrieveData(
+          const QString& type, QMetaType preferred) const override {
+        if(auto entry = find(type)) {
+          if(!entry->m_value) {
+            try {
+              entry->m_value = entry->m_producer();
+            } catch(const std::exception&) {
+              entry->m_value = QVariant();
+            }
+          }
+          return *entry->m_value;
+        }
+        return QMimeData::retrieveData(type, preferred);
+      }
+
+    private:
+      struct Entry {
+        QString m_type;
+        Producer m_producer;
+        std::optional<QVariant> m_value;
+      };
+      mutable std::vector<Entry> m_entries;
+
+      Entry* find(const QString& type) const {
+        for(auto& entry : m_entries) {
+          if(entry.m_type == type) {
+            return &entry;
+          }
+        }
+        return nullptr;
+      }
+  };
+
 
   std::vector<std::filesystem::path>& get_image_folders() {
     static auto folders = std::vector<std::filesystem::path>();
@@ -624,6 +690,60 @@ struct Clipboard::Content {
   std::string m_path;
   QByteArray m_mark;
   QByteArray m_xd;
+  TextMeasurer m_measurer;
+  XdTextLayout m_layout;
+
+  struct Snapshot {
+    Document m_document;
+    std::vector<NodeId> m_roots;
+  };
+
+  static void insert_tree(Transaction& transaction,
+      const std::vector<Entry>& entries, bool is_root_on_canvas,
+      std::optional<Matrix> transform = std::nullopt) {
+    for(auto& entry : entries) {
+      if(&entry != &entries.front()) {
+        transaction.append(entry.m_parent, entry.m_header, entry.m_payload);
+      } else if(is_root_on_canvas) {
+        auto header = entry.m_header;
+        if(transform) {
+          header.m_transform = *transform;
+        }
+        transaction.append(NodeId(), std::move(header), entry.m_payload);
+      } else {
+        transaction.insert_root(entry.m_header, entry.m_payload);
+      }
+    }
+  }
+
+  std::shared_ptr<Snapshot> make_snapshot() const {
+    auto snapshot = std::make_shared<Snapshot>();
+    auto transaction = Transaction(snapshot->m_document);
+    for(auto& image : m_images) {
+      transaction.add_image(image);
+    }
+    for(auto& tree : m_masters) {
+      insert_tree(transaction, tree, false);
+    }
+    for(auto& component : m_components) {
+      transaction.add_component(component);
+    }
+    for(auto& tree : m_states) {
+      insert_tree(transaction, tree, false);
+    }
+    for(auto& tree : m_trees) {
+      if(tree.m_nodes.empty()) {
+        continue;
+      }
+      auto& root = tree.m_nodes.front();
+      auto is_artboard = std::holds_alternative<Box<Artboard>>(root.m_payload);
+      insert_tree(transaction, tree.m_nodes, true,
+        is_artboard ? std::nullopt : std::optional(tree.m_transform));
+      snapshot->m_roots.push_back(root.m_header.m_id);
+    }
+    transaction.commit();
+    return snapshot;
+  }
 
   static std::vector<Entry> collect(const Document& document,
       const NodeId& root, std::unordered_set<NodeId>& visited,
@@ -1605,26 +1725,13 @@ bool Clipboard::is_copyable(
 bool Clipboard::copy(const Document& document,
     const std::vector<NodeId>& nodes, const TextMeasurer& measurer,
     const XdTextLayout& layout, const XdClipboardSource& source) {
-  auto roots = get_copyable(document, nodes);
+  auto roots = get_copied_nodes(document, nodes, measurer);
   if(roots.empty()) {
     return false;
   }
-  if(document.get(roots.front()).get_artboard()) {
-    auto get_position = [&] (const NodeId& id) {
-      return get_world_bounds(document, id, BoundsType::GEOMETRY,
-        measurer).value_or(Rect(0, 0, 0, 0)).get_top_left();
-    };
-    std::stable_sort(roots.begin(), roots.end(),
-      [&] (const auto& left, const auto& right) {
-        auto first = get_position(left);
-        auto second = get_position(right);
-        return first.m_y < second.m_y ||
-          (first.m_y == second.m_y && first.m_x < second.m_x);
-      });
-  } else {
-    sort_by_z_order(document, roots);
-  }
   auto content = Content::make(document, roots, measurer);
+  content->m_measurer = measurer;
+  content->m_layout = layout;
   auto items = std::vector<XdClipboardItem>();
   for(auto i = std::size_t(0); i != roots.size(); ++i) {
     items.push_back(XdClipboardItem(roots[i],
@@ -1658,6 +1765,97 @@ bool Clipboard::copy(const Document& document,
   m_content = std::move(content);
   get_published() = m_content;
   return true;
+}
+
+std::vector<NodeId> Clipboard::get_copied_nodes(const Document& document,
+    const std::vector<NodeId>& nodes, const TextMeasurer& measurer) {
+  auto roots = get_copyable(document, nodes);
+  if(roots.empty()) {
+    return roots;
+  }
+  if(document.get(roots.front()).get_artboard()) {
+    auto get_position = [&] (const NodeId& id) {
+      return get_world_bounds(document, id, BoundsType::GEOMETRY,
+        measurer).value_or(Rect(0, 0, 0, 0)).get_top_left();
+    };
+    std::stable_sort(roots.begin(), roots.end(),
+      [&] (const auto& left, const auto& right) {
+        auto first = get_position(left);
+        auto second = get_position(right);
+        return first.m_y < second.m_y ||
+          (first.m_y == second.m_y && first.m_x < second.m_x);
+      });
+  } else {
+    sort_by_z_order(document, roots);
+  }
+  return roots;
+}
+
+std::string Clipboard::make_svg_code(const Document& document,
+    const std::vector<NodeId>& nodes, const TextMeasurer& measurer,
+    const XdTextLayout& layout) {
+  auto roots = get_copied_nodes(document, nodes, measurer);
+  if(roots.empty()) {
+    return std::string();
+  }
+  return Rellu::make_svg_code(
+    document, roots, SvgTextServices(layout, measurer));
+}
+
+std::unique_ptr<QMimeData> Clipboard::make_svg_mime_data(
+    const std::string& svg) {
+  auto data = std::make_unique<QMimeData>();
+  data->setData(SVG_TYPE, to_svg_data(svg));
+  data->setText(QString::fromUtf8(svg));
+  return data;
+}
+
+QByteArray Clipboard::make_bitmap(const QImage& image) {
+  auto pixels =
+    image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+  auto width = pixels.width();
+  auto height = pixels.height();
+  auto bytes = QByteArray();
+  auto append = [&] (auto value) {
+    bytes.append(reinterpret_cast<const char*>(&value), sizeof(value));
+  };
+  append(std::uint32_t(40));
+  append(std::int32_t(width));
+  append(std::int32_t(height));
+  append(std::uint16_t(1));
+  append(std::uint16_t(32));
+  append(std::uint32_t(3));
+  append(std::uint32_t(4 * width * height));
+  append(std::int32_t(0));
+  append(std::int32_t(0));
+  append(std::uint32_t(0));
+  append(std::uint32_t(0));
+  append(std::uint32_t(0x00FF0000));
+  append(std::uint32_t(0x0000FF00));
+  append(std::uint32_t(0x000000FF));
+  for(auto row = height - 1; row >= 0; --row) {
+    auto line = pixels.constScanLine(row);
+    for(auto column = 0; column != width; ++column) {
+      auto pixel = reinterpret_cast<const QRgb*>(line)[column];
+      bytes.append(static_cast<char>(qBlue(pixel)));
+      bytes.append(static_cast<char>(qGreen(pixel)));
+      bytes.append(static_cast<char>(qRed(pixel)));
+      bytes.append(static_cast<char>(qAlpha(pixel)));
+    }
+  }
+  return bytes;
+}
+
+std::optional<Rect> Clipboard::get_bitmap_bounds(const Document& document,
+    const std::vector<NodeId>& nodes, const TextMeasurer& measurer) {
+  auto bounds = std::optional<Rect>();
+  for(auto& id : nodes) {
+    if(auto drawn =
+        get_world_bounds(document, id, BoundsType::DRAW, measurer)) {
+      bounds = bounds ? unite(*bounds, *drawn) : *drawn;
+    }
+  }
+  return bounds;
 }
 
 void Clipboard::clear() {
@@ -1697,14 +1895,55 @@ void Clipboard::remove_stale_images(
   }
 }
 
-std::unique_ptr<QMimeData> Clipboard::make_mime_data() const {
+std::unique_ptr<QMimeData> Clipboard::make_mime_data(
+    const BitmapRenderer& renderer) const {
   if(!m_content) {
     return nullptr;
   }
-  auto data = std::make_unique<QMimeData>();
+  auto data = std::make_unique<DeferredMimeData>();
   data->setData(MARK_TYPE, m_content->m_mark);
   if(!m_content->m_xd.isEmpty()) {
     data->setData(XD_TYPE, m_content->m_xd);
+  }
+  if(m_content->m_measurer && !m_content->m_trees.empty()) {
+    auto content = m_content;
+    auto snapshot = std::make_shared<std::shared_ptr<Content::Snapshot>>();
+    auto get_snapshot = [content, snapshot] {
+      if(!*snapshot) {
+        *snapshot = content->make_snapshot();
+      }
+      return *snapshot;
+    };
+    data->defer(SVG_TYPE, [content, get_snapshot] {
+      auto copied = get_snapshot();
+      return QVariant(to_svg_data(Rellu::make_svg_code(copied->m_document,
+        copied->m_roots, SvgTextServices(content->m_layout,
+          content->m_measurer))));
+    });
+    if(renderer) {
+      auto render = [content, get_snapshot, renderer] {
+        auto copied = get_snapshot();
+        auto bounds = get_bitmap_bounds(copied->m_document, copied->m_roots,
+          content->m_measurer);
+        if(!bounds) {
+          return QImage();
+        }
+        return renderer(copied->m_document, copied->m_roots, *bounds);
+      };
+      if(register_bitmap_format(BITMAP_TYPE)) {
+        data->defer(BITMAP_TYPE, [render] {
+          auto image = render();
+          if(image.isNull()) {
+            return QVariant(QByteArray());
+          }
+          return QVariant(make_bitmap(image));
+        });
+      } else {
+        data->defer(QStringLiteral("application/x-qt-image"), [render] {
+          return QVariant(render());
+        });
+      }
+    }
   }
   return data;
 }
