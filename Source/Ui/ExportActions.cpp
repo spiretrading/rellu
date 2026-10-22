@@ -1,7 +1,10 @@
+#include <algorithm>
 #include <utility>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QJsonObject>
+#include "Rellu/Ui/DocumentSettings.hpp"
 #include "Rellu/Ui/ExportActions.hpp"
 #include "Rellu/Ui/Translation.hpp"
 
@@ -23,6 +26,64 @@ namespace {
     return translate("export", "If you continue to have problems, please "
       "report them to us in [our forums|http://www.adobe.com/go/xd_forums].");
   }
+
+  int to_choice(const QJsonObject& data, const QString& key, int count) {
+    auto value = data.value(key).toInt();
+    if(value < 0 || value >= count) {
+      return 0;
+    }
+    return value;
+  }
+}
+
+std::optional<ExportSettings> Rellu::find_export_settings(
+    const QByteArray& store, std::string_view document) {
+  auto data = find_document_settings(store, document);
+  if(!data) {
+    return std::nullopt;
+  }
+  auto settings = ExportSettings();
+  auto& options = settings.m_options;
+  options.m_format = static_cast<ExportFormat>(to_choice(*data, "format", 4));
+  options.m_scale = data->value("scale").toDouble(1);
+  if(!(options.m_scale > 0)) {
+    options.m_scale = 1;
+  }
+  options.m_preset = static_cast<ExportPreset>(to_choice(*data, "preset", 4));
+  options.m_jpg_quality =
+    std::clamp(data->value("jpgQuality").toInt(100), 0, 100);
+  options.m_svg_styling =
+    static_cast<SvgStyling>(to_choice(*data, "svgStyling", 2));
+  options.m_svg_images =
+    static_cast<SvgImages>(to_choice(*data, "svgImages", 2));
+  options.m_is_svg_minified = data->value("svgMinified").toBool();
+  options.m_is_svg_outlined = data->value("svgOutlined").toBool();
+  options.m_is_pdf_single = data->value("pdfSingle").toBool(true);
+  settings.m_scale_text = data->value("scaleText").toString();
+  settings.m_folder = data->value("folder").toString();
+  return settings;
+}
+
+QByteArray Rellu::record_export_settings(const QByteArray& store,
+    std::string_view document, const ExportSettings& settings,
+    std::int64_t time) {
+  auto data = std::optional<QJsonObject>();
+  if(settings != ExportSettings()) {
+    auto& options = settings.m_options;
+    data.emplace();
+    data->insert("format", static_cast<int>(options.m_format));
+    data->insert("scale", options.m_scale);
+    data->insert("preset", static_cast<int>(options.m_preset));
+    data->insert("jpgQuality", options.m_jpg_quality);
+    data->insert("svgStyling", static_cast<int>(options.m_svg_styling));
+    data->insert("svgImages", static_cast<int>(options.m_svg_images));
+    data->insert("svgMinified", options.m_is_svg_minified);
+    data->insert("svgOutlined", options.m_is_svg_outlined);
+    data->insert("pdfSingle", options.m_is_pdf_single);
+    data->insert("scaleText", settings.m_scale_text);
+    data->insert("folder", settings.m_folder);
+  }
+  return record_document_settings(store, document, data, time);
 }
 
 ExportActions::ExportActions(ActionRegistry& actions, QWidget& window)
@@ -102,11 +163,14 @@ void ExportActions::set_settings_handler(std::function<void ()> handler) {
   m_settings_handler = std::move(handler);
 }
 
-void ExportActions::set_settings(const ExportOptions& options,
-    const QString& scale_text, const QString& folder) {
-  m_options = options;
-  m_scale_text = scale_text;
-  m_folder = folder;
+ExportSettings ExportActions::get_settings() const {
+  return ExportSettings(m_options, m_scale_text, m_folder);
+}
+
+void ExportActions::set_settings(const ExportSettings& settings) {
+  m_options = settings.m_options;
+  m_scale_text = settings.m_scale_text;
+  m_folder = settings.m_folder;
 }
 
 const ExportOptions& ExportActions::get_options() const {

@@ -1,7 +1,11 @@
 #ifndef RELLU_UI_EXPORT_ACTIONS_HPP
 #define RELLU_UI_EXPORT_ACTIONS_HPP
+#include <cstdint>
 #include <functional>
+#include <optional>
+#include <string_view>
 #include <vector>
+#include <QByteArray>
 #include <QString>
 #include <QWidget>
 #include "Rellu/Commands/Bounds.hpp"
@@ -15,6 +19,48 @@
 #include "Rellu/Ui/XdAlert.hpp"
 
 namespace Rellu {
+
+  /** The settings an export remembers for the next export of a document. */
+  struct ExportSettings {
+
+    /** The options. */
+    ExportOptions m_options;
+
+    /**
+     * The size typed into the Export size field, or empty for one of its
+     * choices.
+     */
+    QString m_scale_text;
+
+    /** The folder exported to, or empty for none. */
+    QString m_folder;
+
+    bool operator ==(const ExportSettings&) const = default;
+  };
+
+  /**
+   * Finds the export settings recorded for a document in a store of them,
+   * kept as Adobe XD keeps them in its preferences, by document.
+   * @param store The store, as find_document_settings reads it.
+   * @param document The uxdesign#id of the document.
+   * @return The settings recorded, or none if the store has none for the
+   *         document.
+   */
+  std::optional<ExportSettings> find_export_settings(
+    const QByteArray& store, std::string_view document);
+
+  /**
+   * Records the export settings of a document in a store of them, the
+   * default settings removing the document's record.
+   * @param store The store, as record_document_settings writes it.
+   * @param document The uxdesign#id of the document.
+   * @param settings The settings.
+   * @param time The time of the recording, in milliseconds since the epoch.
+   * @return The store with the settings recorded.
+   */
+  QByteArray record_export_settings(const QByteArray& store,
+    std::string_view document, const ExportSettings& settings,
+    std::int64_t time);
 
   /**
    * Handles Adobe XD's export actions, file.export.batch,
@@ -93,15 +139,14 @@ namespace Rellu {
        */
       void set_settings_handler(std::function<void ()> handler);
 
+      /** Returns the settings the latest export remembered. */
+      ExportSettings get_settings() const;
+
       /**
-       * Restores the options and folder remembered by an earlier export.
-       * @param options The options.
-       * @param scale_text The size typed into the Export size field, or empty
-       *        for one of its choices.
-       * @param folder The folder, or empty for none.
+       * Restores the settings remembered by an earlier export.
+       * @param settings The settings.
        */
-      void set_settings(const ExportOptions& options,
-        const QString& scale_text, const QString& folder);
+      void set_settings(const ExportSettings& settings);
 
       /** Returns the options of the latest export. */
       const ExportOptions& get_options() const;

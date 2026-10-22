@@ -93,71 +93,8 @@ namespace {
     QString("assets/delete_nested_group_contents_dismissed");
   const auto GUIDE_SETTINGS_KEY = QString("guides/documents");
   const auto GRID_SETTINGS_KEY = QString("grids/documents");
-  const auto EXPORT_FORMAT_KEY = QString("export/format");
-  const auto EXPORT_SCALE_KEY = QString("export/scale");
-  const auto EXPORT_SCALE_TEXT_KEY = QString("export/scale_text");
-  const auto EXPORT_PRESET_KEY = QString("export/preset");
-  const auto EXPORT_QUALITY_KEY = QString("export/jpg_quality");
-  const auto EXPORT_STYLING_KEY = QString("export/svg_styling");
-  const auto EXPORT_IMAGES_KEY = QString("export/svg_images");
-  const auto EXPORT_MINIFIED_KEY = QString("export/svg_minified");
-  const auto EXPORT_OUTLINED_KEY = QString("export/svg_outlined");
-  const auto EXPORT_PDF_SINGLE_KEY = QString("export/pdf_single");
-  const auto EXPORT_FOLDER_KEY = QString("export/folder");
-
-  int load_choice(const QSettings& settings, const QString& key, int count) {
-    auto value = settings.value(key, 0).toInt();
-    if(value < 0 || value >= count) {
-      return 0;
-    }
-    return value;
-  }
-
-  void load_export_settings(ExportActions& actions) {
-    auto settings = QSettings();
-    auto options = ExportOptions();
-    options.m_format =
-      static_cast<ExportFormat>(load_choice(settings, EXPORT_FORMAT_KEY, 4));
-    options.m_scale = settings.value(EXPORT_SCALE_KEY, 1.0).toDouble();
-    if(!(options.m_scale > 0)) {
-      options.m_scale = 1;
-    }
-    options.m_preset =
-      static_cast<ExportPreset>(load_choice(settings, EXPORT_PRESET_KEY, 4));
-    options.m_jpg_quality = std::clamp(
-      settings.value(EXPORT_QUALITY_KEY, 100).toInt(), 0, 100);
-    options.m_svg_styling = static_cast<SvgStyling>(
-      load_choice(settings, EXPORT_STYLING_KEY, 2));
-    options.m_svg_images =
-      static_cast<SvgImages>(load_choice(settings, EXPORT_IMAGES_KEY, 2));
-    options.m_is_svg_minified =
-      settings.value(EXPORT_MINIFIED_KEY, false).toBool();
-    options.m_is_svg_outlined =
-      settings.value(EXPORT_OUTLINED_KEY, false).toBool();
-    options.m_is_pdf_single =
-      settings.value(EXPORT_PDF_SINGLE_KEY, true).toBool();
-    actions.set_settings(options,
-      settings.value(EXPORT_SCALE_TEXT_KEY).toString(),
-      settings.value(EXPORT_FOLDER_KEY).toString());
-  }
-
-  void store_export_settings(const ExportActions& actions) {
-    auto settings = QSettings();
-    auto& options = actions.get_options();
-    settings.setValue(EXPORT_FORMAT_KEY, static_cast<int>(options.m_format));
-    settings.setValue(EXPORT_SCALE_KEY, options.m_scale);
-    settings.setValue(EXPORT_SCALE_TEXT_KEY, actions.get_scale_text());
-    settings.setValue(EXPORT_PRESET_KEY, static_cast<int>(options.m_preset));
-    settings.setValue(EXPORT_QUALITY_KEY, options.m_jpg_quality);
-    settings.setValue(
-      EXPORT_STYLING_KEY, static_cast<int>(options.m_svg_styling));
-    settings.setValue(
-      EXPORT_IMAGES_KEY, static_cast<int>(options.m_svg_images));
-    settings.setValue(EXPORT_MINIFIED_KEY, options.m_is_svg_minified);
-    settings.setValue(EXPORT_OUTLINED_KEY, options.m_is_svg_outlined);
-    settings.setValue(EXPORT_PDF_SINGLE_KEY, options.m_is_pdf_single);
-    settings.setValue(EXPORT_FOLDER_KEY, actions.get_folder());
-  }
+  const auto EXPORT_SETTINGS_KEY = QString("exports/documents");
+  const auto OBSOLETE_EXPORT_GROUP = QString("export");
 
   std::int64_t get_time() {
     return QDateTime::currentDateTimeUtc().toMSecsSinceEpoch();
@@ -489,9 +426,8 @@ MainWindow::MainWindow(QWidget* parent)
   m_export_actions->set_path_provider([this] {
     return m_session ? m_session->get_path() : QString();
   });
-  load_export_settings(*m_export_actions);
   m_export_actions->set_settings_handler([this] {
-    store_export_settings(*m_export_actions);
+    store_export_settings();
   });
   m_edit_actions->set_paste_handler([this] (const auto& data, auto is_applied) {
     return m_guide_actions->paste(data, is_applied);
@@ -1651,6 +1587,34 @@ void MainWindow::load_document_settings(
   store_grid_settings();
 }
 
+void MainWindow::load_export_settings() {
+  auto settings = QSettings();
+  settings.remove(OBSOLETE_EXPORT_GROUP);
+  auto restored = ExportSettings();
+  if(m_session && !m_session->get_path().isEmpty() &&
+      !m_session->get_id().empty()) {
+    auto& id = m_session->get_id();
+    auto store = purge_document_settings(
+      settings.value(EXPORT_SETTINGS_KEY).toByteArray(), id, get_time());
+    settings.setValue(EXPORT_SETTINGS_KEY, store);
+    if(auto recorded = find_export_settings(store, id)) {
+      restored = *recorded;
+    }
+  }
+  m_export_actions->set_settings(restored);
+}
+
+void MainWindow::store_export_settings() const {
+  if(!m_export_actions || !m_session || m_session->get_path().isEmpty() ||
+      m_session->get_id().empty()) {
+    return;
+  }
+  auto settings = QSettings();
+  settings.setValue(EXPORT_SETTINGS_KEY, record_export_settings(
+    settings.value(EXPORT_SETTINGS_KEY).toByteArray(), m_session->get_id(),
+    m_export_actions->get_settings(), get_time()));
+}
+
 void MainWindow::store_guide_settings() const {
   if(!m_guide_actions || !m_session || m_session->get_id().empty()) {
     return;
@@ -1739,6 +1703,7 @@ bool MainWindow::save_to(const QString& path) {
     load_document_settings(
       m_guide_actions->get_settings(), m_grid_actions->get_settings());
   }
+  store_export_settings();
   return true;
 }
 
@@ -1799,6 +1764,7 @@ void MainWindow::install(
   m_grid_actions->set_editor(&editor);
   m_export_actions->set_editor(&editor);
   load_document_settings(GuideSettings(), GridSettings());
+  load_export_settings();
   m_component_drop->set_editor(&editor);
   m_history_subscription = editor.get_history().subscribe([this] {
     update_title();

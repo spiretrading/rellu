@@ -231,6 +231,8 @@ namespace Rellu {
       void load_document_settings(GuideSettings guides, GridSettings grids);
       void store_guide_settings() const;
       void store_grid_settings() const;
+      void load_export_settings();
+      void store_export_settings() const;
   };
 }
 

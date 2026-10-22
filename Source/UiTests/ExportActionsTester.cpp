@@ -124,7 +124,8 @@ TEST_SUITE("ExportActions") {
     options.m_format = ExportFormat::JPG;
     options.m_jpg_quality = 60;
     options.m_scale = 0.25;
-    fixture.m_exports->set_settings(options, "1/4x", directory.path());
+    fixture.m_exports->set_settings(
+      ExportSettings(options, "1/4x", directory.path()));
     REQUIRE(fixture.m_exports->get_options() == options);
     REQUIRE(fixture.m_exports->get_scale_text() == "1/4x");
     REQUIRE(fixture.m_exports->get_folder() == directory.path());
@@ -214,5 +215,38 @@ TEST_SUITE("ExportActions") {
     REQUIRE(failure.m_message.contains("2"));
     REQUIRE(failure.m_message != "There was a problem exporting 2 assets.");
     REQUIRE(failure.m_link.contains('['));
+  }
+
+  TEST_CASE("export_settings_store") {
+    auto settings = ExportSettings();
+    settings.m_options.m_format = ExportFormat::SVG;
+    settings.m_options.m_scale = 0.25;
+    settings.m_options.m_preset = ExportPreset::IOS;
+    settings.m_options.m_jpg_quality = 40;
+    settings.m_options.m_svg_styling = SvgStyling::INTERNAL_CSS;
+    settings.m_options.m_svg_images = SvgImages::LINK;
+    settings.m_options.m_is_svg_minified = true;
+    settings.m_options.m_is_svg_outlined = true;
+    settings.m_options.m_is_pdf_single = false;
+    settings.m_scale_text = "1/4x";
+    settings.m_folder = "C:/out";
+    auto store = record_export_settings(QByteArray(), "first", settings, 10);
+    REQUIRE(find_export_settings(store, "first") == settings);
+    REQUIRE(!find_export_settings(store, "second"));
+    auto other = ExportSettings();
+    other.m_folder = "C:/other";
+    store = record_export_settings(store, "second", other, 20);
+    REQUIRE(find_export_settings(store, "first") == settings);
+    REQUIRE(find_export_settings(store, "second") == other);
+    store = record_export_settings(store, "first", ExportSettings(), 30);
+    REQUIRE(!find_export_settings(store, "first"));
+    REQUIRE(find_export_settings(store, "second") == other);
+    auto corrupt = QByteArray(R"({"third": {"data": )"
+      R"("{\"format\": 9, \"scale\": -2, \"jpgQuality\": 500}"}})");
+    auto restored = find_export_settings(corrupt, "third");
+    REQUIRE(restored);
+    REQUIRE(restored->m_options.m_format == ExportFormat::PNG);
+    REQUIRE(restored->m_options.m_scale == 1);
+    REQUIRE(restored->m_options.m_jpg_quality == 100);
   }
 }
