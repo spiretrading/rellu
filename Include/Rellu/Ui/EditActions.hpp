@@ -38,7 +38,8 @@ namespace Rellu {
    * selection actions, and every action named after a command of a
    * CommandRegistry. An action backed by a command is enabled only while
    * the command applies to the selection, Reset to Main State only while no
-   * text is edited in place, as in Adobe XD.
+   * text is edited in place, as in Adobe XD. The Color Profile menu checks
+   * the document's profile, Unmanaged when it records none.
    */
   class EditActions {
     public:

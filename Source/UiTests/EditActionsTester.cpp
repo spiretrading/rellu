@@ -280,6 +280,45 @@ TEST_SUITE("EditActions") {
     QGuiApplication::clipboard()->clear();
   }
 
+  TEST_CASE("color_profile_menu") {
+    auto fixture = Fixture();
+    auto& actions = fixture.m_actions;
+    auto is_srgb = [&] {
+      auto srgb = actions.get("edit.color_profile.srgb").isChecked();
+      REQUIRE(actions.get("edit.color_profile.unmanaged").isChecked() == !srgb);
+      return srgb;
+    };
+    fixture.m_edit_actions->update();
+    REQUIRE(!is_srgb());
+    auto document = Document();
+    build_test_document(document);
+    auto editor = Editor(document);
+    fixture.m_edit_actions->set_editor(&editor);
+    REQUIRE(!is_srgb());
+    auto managed = Document();
+    {
+      auto transaction = Transaction(managed);
+      transaction.set_color_profile(ColorProfile::SRGB);
+      transaction.commit();
+    }
+    auto managed_editor = Editor(managed);
+    fixture.m_edit_actions->set_editor(&managed_editor);
+    REQUIRE(is_srgb());
+    auto unmanaged = Document();
+    {
+      auto transaction = Transaction(unmanaged);
+      transaction.set_color_profile(ColorProfile::UNMANAGED);
+      transaction.commit();
+    }
+    auto unmanaged_editor = Editor(unmanaged);
+    fixture.m_edit_actions->set_editor(&unmanaged_editor);
+    REQUIRE(!is_srgb());
+    fixture.m_edit_actions->set_editor(&managed_editor);
+    REQUIRE(is_srgb());
+    fixture.m_edit_actions->set_editor(nullptr);
+    REQUIRE(!is_srgb());
+  }
+
   TEST_CASE("color_profile_message") {
     REQUIRE(make_color_profile_message() == "Colors of the pasted object may "
       "look slightly different compared to the original. [Learn more about "

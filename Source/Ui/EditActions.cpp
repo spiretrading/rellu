@@ -222,6 +222,10 @@ void EditActions::set_notice_handler(NoticeHandler handler) {
 
 void EditActions::update() {
   auto document = m_editor ? &m_editor->get_document() : nullptr;
+  auto is_srgb = document &&
+    document->get_resources().m_color_profile == ColorProfile::SRGB;
+  m_actions->get("edit.color_profile.srgb").setChecked(is_srgb);
+  m_actions->get("edit.color_profile.unmanaged").setChecked(!is_srgb);
   auto& undo = m_actions->get("edit.undo");
   auto& redo = m_actions->get("edit.redo");
   if(!m_editor) {
