@@ -42,6 +42,7 @@ DocumentSession::DocumentSession(
   : m_document(&document),
     m_path(std::move(path)),
     m_id(read_manifest(document, "uxdesign#id")),
+    m_instance(to_string(generate_node_id())),
     m_parent(read_manifest(document, "uxdesign#parentDocId")),
     m_composite(read_manifest(document, "id")),
     m_metadata(read_metadata(document)),
@@ -77,6 +78,10 @@ QString DocumentSession::get_name() const {
 
 const std::string& DocumentSession::get_id() const {
   return m_id;
+}
+
+const std::string& DocumentSession::get_instance() const {
+  return m_instance;
 }
 
 bool DocumentSession::is_dirty() const {

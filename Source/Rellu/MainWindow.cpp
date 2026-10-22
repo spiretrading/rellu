@@ -1038,7 +1038,7 @@ void MainWindow::add_actions() {
   m_edit_actions->set_source_provider([this] {
     auto source = XdClipboardSource();
     if(m_session) {
-      source.m_id = m_session->get_id();
+      source.m_id = m_session->get_instance();
       source.m_path =
         QDir::toNativeSeparators(m_session->get_path()).toStdString();
     }

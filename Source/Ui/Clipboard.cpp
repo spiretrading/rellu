@@ -14,6 +14,8 @@
 #include <QBuffer>
 #include <QDir>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonParseError>
 #include <QUuid>
 #include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/ArtboardPlacement.hpp"
@@ -143,6 +145,15 @@ namespace {
       font.m_postscript_name =
         resolution.m_typeface->get_names().m_postscript_name;
     }
+  }
+
+  std::optional<SvgFontExtent> measure_font(const Font& font) {
+    auto resolution = get_default_font_library().resolve(font);
+    if(!resolution.m_typeface) {
+      return std::nullopt;
+    }
+    auto& metrics = resolution.m_typeface->get_metrics();
+    return SvgFontExtent(metrics.m_line_ascent, metrics.m_line_descent);
   }
 
   void resolve_fonts(Document& document) {
@@ -787,6 +798,13 @@ class Clipboard::PasteCommand : public Command {
     std::vector<NodeId> m_copies;
     Mapping m_localization;
 
+    bool is_same_document() const {
+      if(m_content->m_source.empty() || m_target.m_document.empty()) {
+        return !m_content->m_is_foreign;
+      }
+      return m_content->m_source == m_target.m_document;
+    }
+
     static bool is_mapped(const Mapping& mapping, const NodeId& id) {
       return std::any_of(mapping.begin(), mapping.end(),
         [&] (const auto& entry) { return entry.second == id; });
@@ -837,7 +855,7 @@ class Clipboard::PasteCommand : public Command {
         container = NodeId();
         placement.m_artboard = NodeId();
         auto bounds = m_content->get_bounds();
-        if(!m_content->m_is_foreign && !m_content->m_is_sequenced && bounds &&
+        if(is_same_document() && !m_content->m_is_sequenced && bounds &&
             overlaps_view(m_target.m_view, *bounds)) {
           placement.m_target = NodeId();
           return placement;
@@ -1136,7 +1154,18 @@ class Clipboard::PasteCommand : public Command {
     }
 
     static bool is_document_link(const ComponentLink& link) {
-      return !link.m_reference.starts_with('{');
+      auto reference = QByteArray::fromStdString(link.m_reference);
+      if(reference.startsWith("xdcloud:///")) {
+        reference = QByteArray::fromPercentEncoding(reference.mid(11));
+      }
+      if(reference.startsWith("cloud-asset://")) {
+        return false;
+      } else if(reference.startsWith('{')) {
+        auto error = QJsonParseError();
+        QJsonDocument::fromJson(reference, &error);
+        return error.error != QJsonParseError::NoError;
+      }
+      return true;
     }
 
     static std::pair<NodeHeader, Payload> make_copy(
@@ -1656,7 +1685,7 @@ bool Clipboard::load(const QMimeData& data, const TextMeasurer& measurer) {
   if(auto svg = find_svg(data); !svg.isEmpty()) {
     auto scratch = Document();
     try {
-      read_svg(svg, scratch);
+      read_svg(svg, scratch, &measure_font);
       resolve_fonts(scratch);
       auto& canvas = scratch.get_canvas();
       if(!canvas.empty()) {

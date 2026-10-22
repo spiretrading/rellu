@@ -45,6 +45,12 @@ namespace Rellu {
       const std::string& get_id() const;
 
       /**
+       * Returns the id Adobe XD gives this opening of the document, which
+       * identifies it on the clipboard and is kept when it is saved.
+       */
+      const std::string& get_instance() const;
+
+      /**
        * Returns <code>true</code> iff the document changed since it was
        * opened or last saved.
        */
@@ -74,6 +80,7 @@ namespace Rellu {
       Document* m_document;
       QString m_path;
       std::string m_id;
+      std::string m_instance;
       std::string m_parent;
       std::string m_composite;
       std::string m_metadata;

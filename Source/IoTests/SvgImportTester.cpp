@@ -1,4 +1,5 @@
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <variant>
 #include <vector>
@@ -299,6 +300,41 @@ TEST_SUITE("SvgImport") {
     REQUIRE(*get_root(other).get_text()->m_content == u"AB      C ");
   }
 
+  TEST_CASE("irregular_lines") {
+    auto measurer = [] (const Font& font) -> std::optional<SvgFontExtent> {
+      REQUIRE(font.m_family == "Arial");
+      return SvgFontExtent(0.9, 0.2);
+    };
+    auto read = [&] (const QString& y, const SvgFontMeasurer& measurer,
+        Document& document) -> const Node& {
+      read_svg(QString(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><text
+        font-family="Arial" font-size="20"><tspan x="10" y="30">A</tspan><tspan
+        x="10" y="53">B</tspan><tspan x="10" y="%1">C</tspan></text>
+        </svg>)svg").arg(y), document, measurer);
+      return get_root(document);
+    };
+    auto spaced = Document();
+    auto& gap = read("106", measurer, spaced);
+    auto& text = *gap.get_text();
+    REQUIRE(*text.m_content == u"A\nB\n\nC");
+    REQUIRE(!text.m_paragraph_style.m_line_height);
+    REQUIRE(gap.m_header.m_transform == make_translation(10, 30));
+    REQUIRE(text.m_runs.size() == 3);
+    REQUIRE(text.m_runs[0].m_length == 4);
+    REQUIRE(text.m_runs[1].m_length == 1);
+    REQUIRE(text.m_runs[1].m_style.m_font.m_size ==
+      std::round(31 / 1.1 * 1e5) / 1e5);
+    REQUIRE(text.m_runs[2].m_style.m_font.m_size == 20);
+    auto overlapped = Document();
+    auto& overlap = read("60", measurer, overlapped);
+    REQUIRE(*overlap.get_text()->m_content == u"A\nB\nC");
+    REQUIRE(overlap.m_header.m_transform == Matrix());
+    auto unmeasured = Document();
+    auto& plain = read("106", {}, unmeasured);
+    REQUIRE(*plain.get_text()->m_content == u"A\nB\nC");
+    REQUIRE(plain.m_header.m_transform == make_translation(10, 30));
+  }
+
   TEST_CASE("images") {
     auto document = Document();
     read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg"
@@ -331,6 +367,48 @@ TEST_SUITE("SvgImport") {
       get_child(document, root, 1).get_shape()->m_style.m_fill);
     REQUIRE(patterned.m_image == image.m_id);
     REQUIRE(patterned.m_scale_behavior == ScaleBehavior::COVER);
+  }
+
+  TEST_CASE("image_references") {
+    auto document = Document();
+    read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+      xmlns:xlink="http://www.w3.org/1999/xlink"><image width="5" height="5"
+      href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB)svg"
+      R"svg(CAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/>
+      <image width="6" height="6" href="missing.png"
+      xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB)svg"
+      R"svg(CAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/>
+      </svg>)svg", document);
+    auto& image = get_root(document);
+    REQUIRE(image.get_shape()->m_geometry ==
+      ShapeGeometry(RectangleShape(Rect(0, 0, 6, 6))));
+  }
+
+  TEST_CASE("pattern_images") {
+    auto document = Document();
+    read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+      xmlns:xlink="http://www.w3.org/1999/xlink"><defs><pattern id="p"
+      width="1" height="1" viewBox="0 0 1 1"><g/><image width="1" height="1"
+      xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB)svg"
+      R"svg(CAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/>
+      </pattern><pattern id="q" xlink:href="#p"/><pattern id="r" width="1"
+      height="1" viewBox="0 0 1 1"><rect width="1" height="1"/><image
+      width="1" height="1"
+      xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB)svg"
+      R"svg(CAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/>
+      </pattern></defs><rect width="8"
+      height="8" fill="url(#p)"/><rect width="8" height="8" fill="url(#q)"/>
+      <rect width="8" height="8" fill="url(#r)"/></svg>)svg", document);
+    auto& root = get_root(document);
+    REQUIRE(root.m_children.size() == 3);
+    auto fill = [&] (std::size_t index) {
+      return get_child(document, root, index).get_shape()->m_style.m_fill;
+    };
+    REQUIRE(std::get<ImageFill>(fill(0)).m_scale_behavior ==
+      ScaleBehavior::COVER);
+    REQUIRE(fill(1) == Fill(SolidFill(make_color(0, 0, 0))));
+    REQUIRE(fill(2) == Fill(SolidFill(make_color(0, 0, 0))));
+    REQUIRE(document.get_resources().m_images.size() == 1);
   }
 
   TEST_CASE("clip_paths") {
@@ -447,6 +525,61 @@ TEST_SUITE("SvgImport") {
     REQUIRE(framed.m_style.m_stroke->m_alignment == StrokeAlignment::CENTER);
     REQUIRE(framed.m_style.m_stroke->m_width == 1);
     REQUIRE(framed.m_style.m_stroke->m_color == make_color(0, 255, 0));
+  }
+
+  TEST_CASE("framed_strokes") {
+    auto document = Document();
+    read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><g stroke="#00f"
+      stroke-linejoin="round" stroke-dasharray="2 1"><rect x="0.5" y="0.5"
+      width="9" height="9" fill="#fff" stroke="none"/><path fill="#0f0"
+      stroke="none" opacity="0.5" d="M9 1V9H1V1H9M10 0H0V10H10V0Z"/></g><g
+      fill="none">
+      <rect x="0.5" y="0.5" width="9" height="9"/><path fill="#0f0"
+      d="m9 1V9H1V1H9M10 0H0V10H10V0Z"/></g><g fill="none"><rect x="0.5"
+      y="0.5" width="9" height="9"/><path fill="#0f0"
+      d="M9 1V9 2H1V1H9M10,0H0V10H10V0Z"/></g></svg>)svg", document);
+    auto& root = get_root(document);
+    REQUIRE(root.m_children.size() == 3);
+    auto& framed = *get_child(document, root, 0).get_shape();
+    REQUIRE(framed.m_style.m_fill == Fill(SolidFill(make_color(255, 255,
+      255))));
+    auto& stroke = *framed.m_style.m_stroke;
+    REQUIRE(stroke.m_is_enabled);
+    REQUIRE(stroke.m_alignment == StrokeAlignment::CENTER);
+    REQUIRE(stroke.m_width == 1);
+    REQUIRE(stroke.m_color == make_color(0, 255, 0, 128 / 255.0));
+    REQUIRE(stroke.m_join == StrokeJoin::ROUND);
+    REQUIRE(stroke.m_dashes == std::vector<double>({2, 1}));
+    REQUIRE(get_child(document, root, 1).m_children.size() == 2);
+    REQUIRE(get_child(document, root, 2).get_shape());
+  }
+
+  TEST_CASE("inner_shadow_groups") {
+    auto document = Document();
+    read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><defs><filter
+      id="i"><feOffset dx="1" dy="2" input="SourceAlpha"/><feGaussianBlur
+      stdDeviation="4" result="b"/><feFlood flood-color="#f00"
+      flood-opacity="0.5"/><feComposite operator="out" in="SourceGraphic"/>
+      <feComposite operator="in" in2="b"/><feComposite operator="in"
+      in2="SourceGraphic"/></filter></defs><g data-type="innerShadowGroup">
+      <rect width="10" height="10" fill="rgba(0, 0, 0, 0)"/><rect width="10"
+      height="10" filter="url(#i)"/></g><g data-type="innerShadowGroup">
+      <rect width="10" height="10" fill="#00f" fill-opacity="0.5"/><rect
+      width="10" height="10" filter="url(#i)"/></g><g
+      data-type="innerShadowGroup"><rect width="10" height="10"
+      fill="rgba(0, 0, 255, 0.5)"/><rect width="10" height="10"
+      filter="url(#i)"/></g></svg>)svg", document);
+    auto& root = get_root(document);
+    REQUIRE(root.m_children.size() == 3);
+    auto alpha = [&] (std::size_t index) {
+      auto& effects =
+        get_child(document, root, index).get_shape()->m_style.m_effects;
+      REQUIRE(effects.size() == 1);
+      return std::get<InnerShadow>(effects.front()).m_color.m_alpha;
+    };
+    REQUIRE(alpha(0) == 1);
+    REQUIRE(alpha(1) == 0.5);
+    REQUIRE(alpha(2) == 1);
   }
 
   TEST_CASE("switches") {

@@ -3,10 +3,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -60,6 +62,7 @@ namespace {
     Payload m_payload;
     std::vector<Item> m_children;
     std::vector<Effect> m_effects;
+    double m_fill_alpha = 1;
   };
 
   struct Compound {
@@ -137,6 +140,10 @@ namespace {
 
   bool is_close(double left, double right, double tolerance) {
     return std::abs(left - right) <= tolerance;
+  }
+
+  bool is_truthy(double value) {
+    return value != 0 && !std::isnan(value);
   }
 
   void to_bounding_box(GradientFill& fill, const Rect& bounds, Point offset) {
@@ -506,9 +513,9 @@ namespace {
       auto name = attribute.name().toString();
       auto space = attribute.namespaceUri();
       if(space == XLINK && name == u"href"_s) {
-        if(!element.m_attributes.contains(u"href"_s)) {
-          element.m_attributes.insert(name, attribute.value().toString());
-        }
+        element.m_attributes.insert(name, attribute.value().toString());
+      } else if(space.isEmpty() && name == u"href"_s) {
+        continue;
       } else if(space.isEmpty() && name == u"style"_s) {
         element.m_declarations = parse_declarations(attribute.value());
       } else if(space.isEmpty()) {
@@ -689,6 +696,15 @@ namespace {
       numbers.push_back(*number);
     }
     return numbers;
+  }
+
+  double parse_float(QStringView text) {
+    auto value = text.trimmed();
+    if(value.isEmpty() || value.front() == u',') {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    auto reader = NumberReader(value);
+    return reader.read().value_or(std::numeric_limits<double>::quiet_NaN());
   }
 
   std::optional<double> parse_length(
@@ -1020,17 +1036,6 @@ namespace {
     }
   }
 
-  double get_fill_alpha(const Item& item) {
-    if(auto shape = std::get_if<Box<Shape>>(&item.m_payload)) {
-      if(auto solid = std::get_if<SolidFill>(&(*shape)->m_style.m_fill)) {
-        return solid->m_color.m_alpha;
-      }
-    } else if(auto text = std::get_if<Box<Text>>(&item.m_payload)) {
-      return (*text)->m_base_style.m_color.m_alpha;
-    }
-    return 1;
-  }
-
   void collect_mask(const Item& item, const Matrix& transform,
       std::vector<MaskShape>& shapes) {
     auto matrix = transform * item.m_header.m_transform;
@@ -1057,8 +1062,9 @@ namespace {
 
   class Converter {
     public:
-      explicit Converter(const Element& root)
-          : m_root(&root) {
+      Converter(const Element& root, SvgFontMeasurer measurer)
+          : m_root(&root),
+            m_measurer(std::move(measurer)) {
         index(root, m_ids);
         auto box = parse_numbers(root.m_attributes.value(u"viewBox"_s));
         auto width = parse_length(root.m_attributes.value(u"width"_s), 0);
@@ -1090,6 +1096,7 @@ namespace {
         TextStyle m_style;
         TextAlignment m_alignment = TextAlignment::LEFT;
         QStringList m_decorations;
+        double m_fill_alpha = 1;
       };
 
       struct Position {
@@ -1105,6 +1112,13 @@ namespace {
         bool m_has_x = false;
         bool m_has_y = false;
         bool m_is_first = false;
+      };
+
+      struct Cell {
+        std::vector<const Element*> m_path;
+        double m_baseline = 0;
+        Font m_font;
+        std::optional<std::size_t> m_row;
       };
 
       struct TextState {
@@ -1124,15 +1138,25 @@ namespace {
         std::optional<Point> m_reset;
         std::optional<QString> m_stroke;
         bool m_is_stroke_same = true;
+        std::size_t m_row = 0;
+        std::vector<const Element*> m_path;
+        std::vector<Cell> m_cells;
+      };
+
+      struct Extent {
+        double m_top = std::numeric_limits<double>::infinity();
+        double m_bottom = 0;
       };
 
       const Element* m_root;
+      SvgFontMeasurer m_measurer;
       QHash<QString, const Element*> m_ids;
       double m_width;
       double m_height;
       Properties m_root_properties;
       std::vector<const Element*> m_uses;
       std::vector<const Element*> m_clips;
+      std::vector<const Element*> m_patterns;
       std::vector<ImageResource> m_images;
       QHash<QString, std::pair<ImageId, Size>> m_image_ids;
 
@@ -1316,6 +1340,7 @@ namespace {
           group.m_payload = Group();
           std::get<Group>(group.m_payload).m_mask = std::move(*clip);
           group.m_header.m_transform = transform * local;
+          group.m_fill_alpha = item->m_fill_alpha;
           group.m_children.push_back(std::move(*item));
           return group;
         }
@@ -1328,6 +1353,7 @@ namespace {
           std::optional<Mask>& clip) {
         auto item = Item();
         item.m_header = make_header(element, properties);
+        item.m_fill_alpha = get_paint_alpha(properties);
         transform = to_single(
           parse_transform(element.m_attributes.value(u"transform"_s)));
         auto& type = element.m_name;
@@ -1652,10 +1678,12 @@ namespace {
           }
           auto effect = get_effects(children[1]).front();
           if(auto inner = std::get_if<InnerShadow>(&effect)) {
-            auto alpha = get_fill_alpha(children[0]);
-            if(alpha != 0 && inner->m_color.m_alpha != 1) {
+            auto alpha = children[0].m_fill_alpha;
+            if(alpha != 0) {
               inner->m_color.m_alpha =
                 std::min(inner->m_color.m_alpha / alpha, 1.0);
+            } else {
+              inner->m_color.m_alpha = 1;
             }
           }
           get_effects(children[0]).push_back(effect);
@@ -1759,7 +1787,12 @@ namespace {
           item = convert(move_group_style(group, inner, false), properties);
           if(item) {
             if(auto style = find_style(*item)) {
-              style->m_stroke = *stroke;
+              auto merged = style->m_stroke.value_or(Stroke());
+              merged.m_color = stroke->m_color;
+              merged.m_width = stroke->m_width;
+              merged.m_alignment = StrokeAlignment::CENTER;
+              merged.m_is_enabled = true;
+              style->m_stroke = std::move(merged);
             }
           }
         } else if(auto child = match_shadow_element(group)) {
@@ -1792,8 +1825,8 @@ namespace {
             has_effects(inner)) {
           return std::nullopt;
         }
-        auto width = parse_length(get(properties, u"stroke-width"_s, u"1"_s),
-          get_diagonal()).value_or(1);
+        auto width = round(parse_length(
+          get(properties, u"stroke-width"_s, u"1"_s), m_width).value_or(1));
         auto first = get_box(inner, inner_properties);
         auto second = get_box(outer, outer_properties);
         auto& larger = first.m_width > second.m_width ? first : second;
@@ -1864,8 +1897,8 @@ namespace {
           if(!point) {
             return std::nullopt;
           }
-          if(corner.m_x && corner.m_y && *corner.m_x != 0 &&
-              *corner.m_y != 0 &&
+          if(corner.m_x && corner.m_y && is_truthy(*corner.m_x) &&
+              is_truthy(*corner.m_y) &&
               (std::abs(point->m_x - *corner.m_x) > FRAME_TOLERANCE ||
               std::abs(point->m_y - *corner.m_y) > FRAME_TOLERANCE)) {
             return std::nullopt;
@@ -1911,9 +1944,9 @@ namespace {
         auto bounds = get_box(rectangle, rectangle_properties);
         auto& larger = bounds.m_width > box.m_width ? bounds : box;
         auto& smaller = bounds.m_width > box.m_width ? box : bounds;
-        if(std::abs(larger.m_width - smaller.m_width) > FRAME_TOLERANCE ||
-            std::abs(smaller.m_x - larger.m_x) > FRAME_TOLERANCE ||
-            std::abs(smaller.m_y - larger.m_y) > FRAME_TOLERANCE) {
+        if(!is_close(larger.m_width, smaller.m_width, FRAME_TOLERANCE) ||
+            !is_close(smaller.m_x, larger.m_x, FRAME_TOLERANCE) ||
+            !is_close(smaller.m_y, larger.m_y, FRAME_TOLERANCE)) {
           return std::nullopt;
         }
         auto stroke = Stroke();
@@ -1937,7 +1970,7 @@ namespace {
           if(!previous) {
             return std::nullopt;
           }
-          auto y = rest.toDouble();
+          auto y = parse_float(rest);
           if(letter == u'v') {
             y += previous->m_y;
           }
@@ -1946,18 +1979,27 @@ namespace {
           if(!previous) {
             return std::nullopt;
           }
-          auto x = rest.toDouble();
+          auto x = parse_float(rest);
           if(letter == u'h') {
             x += previous->m_x;
           }
           return Point(x, previous->m_y);
         } else if(letter == u'M' || letter == u'm') {
-          auto numbers = parse_numbers(rest);
-          if(numbers.size() < 2) {
+          if(letter == u'm' && !previous) {
             return std::nullopt;
           }
-          auto point = Point(numbers[0], numbers[1]);
-          if(letter == u'm' && previous) {
+          if(auto space = rest.indexOf(u' '); space >= 0) {
+            rest[space] = u',';
+          }
+          if(!rest.contains(u',')) {
+            if(auto minus = rest.indexOf(u'-'); minus >= 0) {
+              rest.insert(minus, u',');
+            }
+          }
+          auto comma = rest.indexOf(u',');
+          auto point = Point(parse_float(comma < 0 ? QString() :
+            rest.left(comma)), parse_float(rest.mid(comma + 1)));
+          if(letter == u'm') {
             point = Point(point.m_x + previous->m_x, point.m_y + previous->m_y);
           }
           return point;
@@ -2122,7 +2164,13 @@ namespace {
         if(state.m_raw.isEmpty()) {
           return std::nullopt;
         }
-        if(state.m_is_multiline && state.m_is_stroke_same && state.m_reset) {
+        auto is_spaced = true;
+        if(m_measurer && state.m_is_multiline && state.m_is_stroke_same &&
+            (!state.m_line_spacing || state.m_is_irregular)) {
+          is_spaced = space_lines(state);
+        }
+        if(state.m_is_multiline && state.m_is_stroke_same && state.m_reset &&
+            is_spaced) {
           frame = *state.m_reset;
         }
         auto text = Text();
@@ -2147,7 +2195,9 @@ namespace {
         for(auto i = std::size_t(0); i != state.m_lines.size(); ++i) {
           if(i != 0) {
             content += u'\n';
-            if(!runs.empty()) {
+            if(auto& before = state.m_lines[i - 1]; !before.empty()) {
+              append_run(before.back().m_style, 1);
+            } else if(!runs.empty()) {
               ++runs.back().m_length;
             }
           }
@@ -2167,6 +2217,7 @@ namespace {
         if(!first) {
           return std::nullopt;
         }
+        item.m_fill_alpha = first->m_fill_alpha;
         text.m_content = Shared(content.toStdU16String());
         text.m_base_style = last->m_style;
         text.m_paragraph_style.m_alignment = first->m_alignment;
@@ -2224,6 +2275,7 @@ namespace {
         scope.m_has_x = !element.m_attributes.value(u"x"_s).isEmpty();
         scope.m_has_y = !element.m_attributes.value(u"y"_s).isEmpty();
         scope.m_is_first = is_first;
+        state.m_path.push_back(&element);
         auto& children = element.m_children;
         auto first = static_cast<const Element*>(nullptr);
         for(auto& child : children) {
@@ -2267,6 +2319,8 @@ namespace {
             ++state.m_lines.back().back().m_to;
             auto position = Position();
             place(element, scope, position, state);
+            state.m_cells.push_back(Cell(state.m_path, state.m_y.value_or(0),
+              make_cell_font(properties), std::nullopt));
             continue;
           }
           auto run = Run();
@@ -2276,12 +2330,99 @@ namespace {
           auto position = Position();
           place(element, scope, position, state);
           fill_run(element, properties, run, state);
+          state.m_cells.push_back(Cell(state.m_path, state.m_y.value_or(0),
+            make_cell_font(properties), state.m_row));
           if(!state.m_has_line) {
             state.m_lines.emplace_back();
             state.m_has_line = true;
           }
           state.m_lines.back().push_back(std::move(run));
         }
+        state.m_path.pop_back();
+      }
+
+      Font make_cell_font(const Properties& properties) const {
+        auto font = Font();
+        font.m_family = to_family(
+          get(properties, u"font-family"_s, DEFAULT_FAMILY)).toStdString();
+        font.m_style = to_style_name(
+          get(properties, u"font-style"_s, u"normal"_s),
+          get(properties, u"font-weight"_s, u"400"_s)).toStdString();
+        font.m_size = round(get_font_size(properties));
+        return font;
+      }
+
+      std::optional<Extent> measure(
+          const Element& element, const TextState& state) const {
+        auto extent = std::optional<Extent>();
+        for(auto& cell : state.m_cells) {
+          if(!std::ranges::contains(cell.m_path, &element)) {
+            continue;
+          }
+          auto metrics = m_measurer(cell.m_font);
+          if(!metrics) {
+            continue;
+          }
+          auto top = cell.m_baseline - metrics->m_ascent * cell.m_font.m_size;
+          auto bottom =
+            cell.m_baseline + metrics->m_descent * cell.m_font.m_size;
+          if(!extent) {
+            extent = Extent(top, bottom);
+          } else {
+            extent->m_top = std::min(extent->m_top, top);
+            extent->m_bottom = std::max(extent->m_bottom, bottom);
+          }
+        }
+        return extent;
+      }
+
+      bool space_lines(TextState& state) const {
+        auto rows = std::vector<Extent>(state.m_row + 1);
+        auto proportions = std::unordered_map<std::string, double>();
+        auto height = 0.0;
+        for(auto& cell : state.m_cells) {
+          if(!cell.m_row) {
+            continue;
+          }
+          auto extent = measure(*cell.m_path.back(), state);
+          if(!extent) {
+            continue;
+          }
+          auto& row = rows[*cell.m_row];
+          row.m_top = std::min(row.m_top, extent->m_top);
+          row.m_bottom = std::max(row.m_bottom, extent->m_bottom);
+          height = extent->m_bottom - extent->m_top;
+          if(cell.m_font.m_size != 0) {
+            proportions[cell.m_font.m_family] = height / cell.m_font.m_size;
+          }
+        }
+        auto tolerance = std::sqrt(height) / 1.35;
+        auto minimum = height / 2;
+        auto previous = rows.front().m_bottom;
+        auto inserted = std::size_t(0);
+        for(auto i = std::size_t(1); i < rows.size(); ++i) {
+          auto gap = rows[i].m_top - previous;
+          if(gap < -tolerance || (gap > tolerance && gap < minimum)) {
+            return false;
+          }
+          auto index = i + inserted - 1;
+          if(gap > tolerance && std::isfinite(gap) &&
+              index < state.m_lines.size() && !state.m_lines[index].empty()) {
+            auto& last = state.m_lines[index].back();
+            if(auto proportion = proportions.find(last.m_style.m_font.m_family);
+                proportion != proportions.end() && proportion->second != 0) {
+              auto spacer = last;
+              spacer.m_from = last.m_to;
+              spacer.m_style.m_font.m_size = round(gap / proportion->second);
+              state.m_lines.insert(state.m_lines.begin() +
+                static_cast<std::ptrdiff_t>(index + 1),
+                std::vector<Run>({std::move(spacer)}));
+              ++inserted;
+            }
+          }
+          previous = rows[i].m_bottom;
+        }
+        return true;
       }
 
       void place(const Element& element, Scope& scope, Position& position,
@@ -2332,6 +2473,7 @@ namespace {
               u"x"_s).isEmpty() || is_first)) {
             state.m_lines.emplace_back();
             state.m_has_line = true;
+            ++state.m_row;
             if(!is_first) {
               auto spacing = std::round(100 * (y - *state.m_y)) / 100;
               if(!state.m_line_spacing && !state.m_is_irregular) {
@@ -2422,6 +2564,7 @@ namespace {
           color.m_alpha = 0;
         } else if(strip_url(fill).isEmpty()) {
           color = resolve_color(fill, properties).value_or(Color(0, 0, 0, 1));
+          run.m_fill_alpha = color.m_alpha;
           color.m_alpha *= std::clamp(parse_fraction(
             get(properties, u"fill-opacity"_s, u"1"_s), 1), 0.0, 1.0);
         }
@@ -2501,6 +2644,17 @@ namespace {
         return std::nullopt;
       }
 
+      double get_paint_alpha(const Properties& properties) const {
+        auto fill = get(properties, u"fill"_s, u"#000"_s);
+        if(fill == u"none"_s || !strip_url(fill).isEmpty()) {
+          return 1;
+        }
+        if(auto color = resolve_color(fill, properties)) {
+          return color->m_alpha;
+        }
+        return 1;
+      }
+
       std::optional<Color> resolve_color(
           QStringView value, const Properties& properties) const {
         if(value.trimmed().compare(u"currentColor", Qt::CaseInsensitive) ==
@@ -2544,26 +2698,28 @@ namespace {
 
       std::optional<ImageFill> make_pattern(
           const Element& pattern, const Rect& bounds) {
-        auto source = &pattern;
-        auto visited = std::vector<const Element*>();
-        while(get_elements(*source).empty() &&
-            !std::ranges::contains(visited, source)) {
-          visited.push_back(source);
-          auto reference = source->m_attributes.value(u"href"_s);
-          auto next = reference.startsWith(u'#') ? find(reference.mid(1)) :
-            nullptr;
-          if(!next) {
-            break;
-          }
-          source = next;
+        if(std::ranges::contains(m_patterns, &pattern)) {
+          return std::nullopt;
         }
+        m_patterns.push_back(&pattern);
         auto children = std::vector<const Element*>();
-        for(auto child : get_elements(*source)) {
+        auto image_count = m_images.size();
+        auto image_ids = m_image_ids;
+        auto properties = inherit(pattern, m_root_properties);
+        for(auto child : get_elements(pattern)) {
           if(GRAPHICS.contains(child->m_name.toStdU16String()) &&
               get_own(*child, u"display"_s, u"inline"_s) != u"none"_s) {
-            children.push_back(child);
+            auto items = std::vector<Item>();
+            convert(*child, properties, false, items);
+            if(!items.empty()) {
+              children.push_back(child);
+            }
           }
         }
+        m_images.erase(m_images.begin() +
+          static_cast<std::ptrdiff_t>(image_count), m_images.end());
+        m_image_ids = std::move(image_ids);
+        m_patterns.pop_back();
         if(children.size() != 1) {
           return std::nullopt;
         }
@@ -2778,8 +2934,7 @@ namespace {
       void apply_stroke_attributes(
           const Properties& properties, Stroke& stroke) const {
         stroke.m_width = round(parse_length(
-          get(properties, u"stroke-width"_s, u"1"_s), get_diagonal()).value_or(
-            1));
+          get(properties, u"stroke-width"_s, u"1"_s), m_width).value_or(1));
         auto cap = get(properties, u"stroke-linecap"_s, u"butt"_s);
         if(cap == u"round"_s) {
           stroke.m_cap = StrokeCap::ROUND;
@@ -2879,7 +3034,8 @@ bool Rellu::is_svg(const QString& text) {
   return static_cast<bool>(parse(text));
 }
 
-void Rellu::read_svg(const QString& text, Document& document) {
+void Rellu::read_svg(const QString& text, Document& document,
+    const SvgFontMeasurer& measurer) {
   auto root = parse(text);
   if(!root) {
     throw std::invalid_argument("The text is not SVG markup.");
@@ -2888,7 +3044,7 @@ void Rellu::read_svg(const QString& text, Document& document) {
   collect_stylesheets(*root, rules);
   auto path = std::vector<const Element*>();
   cascade(*root, rules, path);
-  auto converter = Converter(*root);
+  auto converter = Converter(*root, measurer);
   auto items = converter.convert();
   if(items.empty()) {
     return;

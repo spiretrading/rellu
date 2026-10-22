@@ -354,6 +354,30 @@ TEST_SUITE("DocumentSession") {
     REQUIRE(read_manifest(other, "id") != copy_composite);
   }
 
+  TEST_CASE("instance") {
+    auto directory = QTemporaryDir();
+    REQUIRE(directory.isValid());
+    auto path = directory.filePath("Design.xd");
+    {
+      auto built = Document();
+      build_test_document(built);
+      write_xd(built, to_path(path));
+    }
+    auto document = Document();
+    import_xd(to_path(path), document);
+    auto session = DocumentSession(document, path, XdTextLayout());
+    auto instance = session.get_instance();
+    require_new_id(instance);
+    REQUIRE(instance != session.get_id());
+    session.save(directory.filePath("Copy.xd"));
+    REQUIRE(session.get_instance() == instance);
+    auto other = Document();
+    import_xd(to_path(path), other);
+    auto reopened = DocumentSession(other, path, XdTextLayout());
+    REQUIRE(reopened.get_id() == read_manifest(path, "uxdesign#id"));
+    REQUIRE(reopened.get_instance() != instance);
+  }
+
   TEST_CASE("save_metadata") {
     auto directory = QTemporaryDir();
     REQUIRE(directory.isValid());

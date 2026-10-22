@@ -158,6 +158,25 @@ TEST_SUITE("Clipboard") {
     REQUIRE(get_world_transform(document, focus) == make_translation(600, 50));
   }
 
+  TEST_CASE("placement_by_document") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto clipboard = Clipboard();
+    REQUIRE(clipboard.copy(document, {ids.m_loose}, estimate_text_bounds, {},
+      XdClipboardSource("A", "C:\\Designs\\A.xd")));
+    auto bounds = *get_world_bounds(document, ids.m_loose);
+    auto paste = [&] (std::string id) {
+      auto target = make_target({}, Rect(bounds.m_x - 50, bounds.m_y - 50,
+        bounds.m_width + 60, bounds.m_height + 60));
+      target.m_document = std::move(id);
+      REQUIRE(editor.execute(clipboard.make_paste_command(target)));
+      return *get_world_bounds(document, editor.get_selection().get_primary());
+    };
+    REQUIRE(paste("A") == bounds);
+    REQUIRE(paste("B") != bounds);
+  }
+
   TEST_CASE("pasteboard_into_artboard") {
     auto document = Document();
     auto ids = build_test_document(document);
@@ -444,6 +463,37 @@ TEST_SUITE("Clipboard") {
     auto again_editor = Editor(again);
     REQUIRE(again_editor.execute(same.make_paste_command()));
     REQUIRE(again.get_resources().m_components.contains(ids.m_component));
+  }
+
+  TEST_CASE("library_links") {
+    auto is_kept = [] (std::string reference) {
+      auto document = Document();
+      auto ids = build_test_document(document);
+      auto component =
+        document.get_resources().m_components.at(ids.m_component);
+      component.m_link = ComponentLink(std::move(reference), "Library", 0);
+      auto transaction = Transaction(document);
+      transaction.replace_component(component);
+      transaction.commit();
+      auto clipboard = Clipboard();
+      REQUIRE(clipboard.copy(document, {ids.m_instance}, estimate_text_bounds,
+        {}, XdClipboardSource("A", "C:\\Designs\\A.xd")));
+      auto other = Document();
+      auto editor = Editor(other);
+      auto target = PasteTarget();
+      target.m_document = "B";
+      REQUIRE(editor.execute(clipboard.make_paste_command(target)));
+      auto& components = other.get_resources().m_components;
+      REQUIRE(components.size() == 1);
+      return static_cast<bool>(components.begin()->second.m_link);
+    };
+    REQUIRE(is_kept("cloud-asset://library/element"));
+    REQUIRE(is_kept(R"({"libraryUrn":"urn:aaid:sc:US:1"})"));
+    REQUIRE(is_kept("xdcloud:///cloud-asset%3A%2F%2Flibrary"));
+    REQUIRE(!is_kept("{library"));
+    REQUIRE(!is_kept("https://xd.adobe.com/view/document"));
+    REQUIRE(!is_kept(
+      "data:text/plain;path=C%3A%5CA.xd;relativePath=A.xd,"));
   }
 
   TEST_CASE("system_clipboard") {
