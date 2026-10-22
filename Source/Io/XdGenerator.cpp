@@ -2,6 +2,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -21,6 +22,20 @@ namespace {
 
   std::string to_id(const NodeId& id) {
     return Rellu::to_string(id);
+  }
+
+  const TextStyle& find_text_style(const Text& text, std::size_t index) {
+    auto start = std::size_t(0);
+    for(auto& run : text.m_runs) {
+      if(index < start + run.m_length) {
+        return run.m_style;
+      }
+      start += run.m_length;
+    }
+    if(!text.m_runs.empty()) {
+      return text.m_runs.back().m_style;
+    }
+    return text.m_base_style;
   }
 
   double to_channel(double value) {
@@ -1748,7 +1763,8 @@ XdValue XdGenerator::make_layout(const Text& text) const {
         json.set("y", run.m_position.m_y);
         json.set("from", run.m_from);
         json.set("to", run.m_to);
-        if(run.m_font || run.m_color) {
+        auto shift = get_vertical_align(find_text_style(text, run.m_from));
+        if(run.m_font || run.m_color || shift != 0) {
           auto& style = json.set("style", XdValue::make_object());
           if(run.m_font) {
             style.set("font", make_font(*run.m_font));
@@ -1757,6 +1773,10 @@ XdValue XdGenerator::make_layout(const Text& text) const {
             auto& fill = style.set("fill", XdValue::make_object());
             fill.set("type", "solid");
             fill.set("color", make_json_color(*run.m_color));
+          }
+          if(shift != 0) {
+            style.set("textAttributes", XdValue::make_object()).set(
+              "verticalAlign", shift);
           }
         }
       }

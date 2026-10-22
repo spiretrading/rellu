@@ -207,6 +207,11 @@ namespace {
       }
     }
     if(auto attributes = style.get_object("textAttributes"_L1)) {
+      if(auto shift = attributes->get_json().value("verticalAlign"_L1);
+          shift.isDouble() &&
+          shift.toDouble() == get_vertical_align(covering)) {
+        attributes->consume("verticalAlign"_L1);
+      }
       auto decoration = attributes->get_json().value("decoration"_L1);
       if(decoration.isArray()) {
         auto is_underlined = false;

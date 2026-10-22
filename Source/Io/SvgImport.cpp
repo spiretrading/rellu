@@ -2833,6 +2833,10 @@ namespace {
           style.m_script = TextScript::SUPERSCRIPT;
         } else if(shift == u"sub"_s) {
           style.m_script = TextScript::SUBSCRIPT;
+        } else if(auto offset = parse_float(shift);
+            !std::isnan(offset) && offset != 0) {
+          style.m_script =
+            offset > 0 ? TextScript::SUPERSCRIPT : TextScript::SUBSCRIPT;
         }
         if(style.m_script != TextScript::NORMAL) {
           size = round(size / SCRIPT_SCALE);

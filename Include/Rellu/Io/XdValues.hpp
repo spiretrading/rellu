@@ -62,6 +62,14 @@ namespace Rellu {
   std::optional<TextScript> to_text_script(QStringView name);
 
   /**
+   * Returns the verticalAlign Adobe XD stores in the layout of a run of
+   * text: its baseline offset, positive upward, or 0 if it is not raised or
+   * lowered.
+   * @param style The run's style.
+   */
+  double get_vertical_align(const TextStyle& style);
+
+  /**
    * Reads a color of the form {mode: RGB, value: {r, g, b}, alpha}.
    * @param color The color's JSON.
    * @return The color, or <code>std::nullopt</code> if it is malformed.

@@ -469,6 +469,22 @@ TEST_SUITE("SvgImport") {
     REQUIRE(!b.get_text()->m_style.m_stroke->m_is_enabled);
   }
 
+  TEST_CASE("baseline_shifts") {
+    auto document = Document();
+    read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><text x="1" y="20"
+      font-size="20">A<tspan baseline-shift="5">B</tspan><tspan
+      baseline-shift="-30%">C</tspan><tspan baseline-shift="0">D</tspan>
+      </text></svg>)svg", document);
+    auto& runs = get_root(document).get_text()->m_runs;
+    REQUIRE(runs.size() == 4);
+    REQUIRE(runs[1].m_style.m_script == TextScript::SUPERSCRIPT);
+    REQUIRE(runs[1].m_style.m_font.m_size ==
+      std::round(20 / 0.5833 * 1e5) / 1e5);
+    REQUIRE(runs[2].m_style.m_script == TextScript::SUBSCRIPT);
+    REQUIRE(runs[3].m_style.m_script == TextScript::NORMAL);
+    REQUIRE(runs[3].m_style.m_font.m_size == 20);
+  }
+
   TEST_CASE("text_opacity") {
     auto read = [] (const QString& markup, Document& document) -> const Node& {
       read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg">)svg" + markup +

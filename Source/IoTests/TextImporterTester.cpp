@@ -1,3 +1,4 @@
+#include <format>
 #include <string>
 #include <doctest/doctest.h>
 #include "XdTestPackage.hpp"
@@ -168,6 +169,23 @@ TEST_SUITE("TextImporter") {
       StoredRun(0, 6, Point(0, 11), std::nullopt, std::nullopt)}));
     REQUIRE(paragraphs[1].m_lines[0].m_runs == std::vector<StoredRun>({
       StoredRun(7, 8, Point(5, 25), std::nullopt, std::nullopt)}));
+  }
+
+  TEST_CASE("script_layout") {
+    auto document = Document();
+    auto report = ImportReport();
+    auto range = make_range(1);
+    auto none = std::string(R"("textScript": "none")");
+    range.replace(range.find(none), none.size(),
+      R"("textScript": "superscript")");
+    auto shift = std::format("{}", 12 / 0.5833 * 0.3333);
+    auto& text = import_text(document, "[" + make_range(1) + "," + range + "]",
+      R"({"frame": {"type": "positioned"}, "paragraphs": [{"lines": [[{"x": 0,
+      "y": 11, "from": 0, "to": 1}, {"y": 11, "from": 1, "to": 2, "style": {
+      "textAttributes": {"verticalAlign": )" + shift + R"(}}}]]}],
+      "rawText": "AB"})", &report);
+    REQUIRE(text.m_runs.back().m_style.m_script == TextScript::SUPERSCRIPT);
+    REQUIRE(report.m_unconsumed.empty());
   }
 
   TEST_CASE("character_style_link") {

@@ -815,6 +815,39 @@ TEST_SUITE("XdWriter") {
     REQUIRE(paragraphs.size() == 1);
   }
 
+  TEST_CASE("script_layout") {
+    auto document = Document();
+    {
+      auto transaction = Transaction(document);
+      auto text = make_text_payload(u"AB");
+      text.m_runs.front().m_length = 1;
+      auto raised = text.m_base_style;
+      raised.m_script = TextScript::SUPERSCRIPT;
+      raised.m_font.m_size = 24;
+      auto lowered = text.m_base_style;
+      lowered.m_script = TextScript::SUBSCRIPT;
+      text.m_runs.push_back(TextRun(1, lowered));
+      text.m_runs.front().m_style = raised;
+      auto layout = StoredLayout();
+      auto& line = layout.m_paragraphs.emplace_back().m_lines.emplace_back();
+      line.m_runs.push_back(StoredRun(0, 1, Point(0, 14)));
+      line.m_runs.push_back(StoredRun(1, 2, Point(9, 14)));
+      text.m_layout = Shared(std::move(layout));
+      transaction.append(NodeId(), make_header("Text"), text);
+      transaction.commit();
+    }
+    auto pasteboard = XdPackage(write_xd(document)).read_pasteboard();
+    auto runs = pasteboard.value("children"_L1).toArray().first().toObject().
+      value("text"_L1).toObject().value("paragraphs"_L1).toArray().first().
+      toObject().value("lines"_L1).toArray().first().toArray();
+    auto shift = [&] (qsizetype index) {
+      return runs.at(index).toObject().value("style"_L1).toObject().value(
+        "textAttributes"_L1).toObject().value("verticalAlign"_L1).toDouble();
+    };
+    REQUIRE(shift(0) == 24 / 0.5833 * 0.3333);
+    REQUIRE(shift(1) == -(14 / 0.5833 * 0.3333));
+  }
+
   TEST_CASE("resources") {
     auto document = Document();
     auto built = build(document);
