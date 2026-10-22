@@ -1274,6 +1274,11 @@ XdValue XdGenerator::make_resources(
   library.set("groupData", make_group_data(resources.m_asset_groups));
   ux.set("documentLibrary", std::move(library));
   ux.set("gridDefaults", make_grid_defaults(resources.m_grid_defaults));
+  if(resources.m_color_profile == ColorProfile::UNMANAGED) {
+    ux.set("colorProfile", "unmanaged");
+  } else if(resources.m_color_profile == ColorProfile::SRGB) {
+    ux.set("colorProfile", "srgb");
+  }
   ux.set("symbols", make_placeholders(symbols.size()));
   ux.set("symbolsMetadata", XdValue::make_object()).set(
     "usingNestedSymbolSyncing", true);
@@ -1763,11 +1768,15 @@ XdValue XdGenerator::make_layout(const Text& text) const {
         json.set("y", run.m_position.m_y);
         json.set("from", run.m_from);
         json.set("to", run.m_to);
-        auto shift = get_vertical_align(find_text_style(text, run.m_from));
+        auto& covering = find_text_style(text, run.m_from);
+        auto shift = get_vertical_align(covering);
         if(run.m_font || run.m_color || shift != 0) {
           auto& style = json.set("style", XdValue::make_object());
           if(run.m_font) {
             style.set("font", make_font(*run.m_font));
+          } else if(shift != 0) {
+            style.set("font", XdValue::make_object()).set(
+              "size", get_script_size(covering));
           }
           if(run.m_color) {
             auto& fill = style.set("fill", XdValue::make_object());

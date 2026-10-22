@@ -100,6 +100,19 @@ namespace Rellu {
     bool operator ==(const CharacterStyle& style) const;
   };
 
+  /** Lists the color profiles a document's colors are managed with. */
+  enum class ColorProfile : unsigned char {
+
+    /** The document records no profile, which Adobe XD treats as UNMANAGED. */
+    NONE,
+
+    /** Colors are not managed. */
+    UNMANAGED,
+
+    /** Colors are managed as sRGB. */
+    SRGB
+  };
+
   /** The shared assets of a document. */
   struct Resources {
 
@@ -120,6 +133,9 @@ namespace Rellu {
 
     /** The grids given to artboards. */
     GridDefaults m_grid_defaults;
+
+    /** The color profile the document's colors are managed with. */
+    ColorProfile m_color_profile = ColorProfile::NONE;
 
     bool operator ==(const Resources&) const = default;
   };

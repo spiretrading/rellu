@@ -96,11 +96,15 @@ std::optional<TextScript> Rellu::to_text_script(QStringView name) {
   return std::nullopt;
 }
 
+double Rellu::get_script_size(const TextStyle& style) {
+  return static_cast<float>(style.m_font.m_size * 0.5833);
+}
+
 double Rellu::get_vertical_align(const TextStyle& style) {
   if(style.m_script == TextScript::NORMAL) {
     return 0;
   }
-  auto shift = style.m_font.m_size / 0.5833 * 0.3333;
+  auto shift = get_script_size(style) / 0.5833 * 0.3333;
   if(style.m_script == TextScript::SUBSCRIPT) {
     return -shift;
   }

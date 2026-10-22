@@ -184,7 +184,7 @@ TEST_SUITE("AppBar") {
     auto invite = find("Invite to Document");
     REQUIRE(play);
     REQUIRE(play->mapTo(&bar, QPoint(0, 0)) ==
-      QPoint(2560 - 12 - 70 - 10 - 32, 4));
+      QPoint(2560 - 12 - 70 - 6 - 40, 0));
     REQUIRE(device->mapTo(&bar, QPoint(0, 0)).x() ==
       play->mapTo(&bar, QPoint(0, 0)).x() - 46);
     REQUIRE(invite->mapTo(&bar, QPoint(0, 0)).x() ==

@@ -2,7 +2,10 @@
 #define RELLU_UI_FEATURE_CARDS_HPP
 #include <optional>
 #include <QObject>
+#include <QPointF>
 #include <QPointer>
+#include <QRectF>
+#include <QSizeF>
 #include <QString>
 #include <QTimer>
 #include <QWidget>
@@ -102,6 +105,14 @@ namespace Rellu {
    * @param widget The widget.
    */
   std::optional<Feature> get_feature(const QWidget& widget);
+
+  /**
+   * Returns the rectangle a feature's hover card opens around, given the
+   * rectangle of the widget it describes.
+   * @param feature The feature.
+   * @param widget The widget's rectangle.
+   */
+  QRectF get_card_anchor(Feature feature, const QRectF& widget);
 
   /**
    * Returns where a hover card opens around its anchor.

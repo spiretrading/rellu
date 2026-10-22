@@ -182,6 +182,27 @@ namespace {
     return Section(widget, layout, header);
   }
 
+  void set_field_tip(
+      const std::string& name, const QString& label, QWidget& input) {
+    if(name == "trigger" || name == "type" || name == "animation") {
+      input.setToolTip(translate("prototype", label));
+    }
+  }
+
+  QWidget* make_action_heading() {
+    auto row = new QWidget();
+    auto layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+    layout->addWidget(make_label("ACTION", "section_heading"));
+    auto info = new QLabel();
+    info->setPixmap(get_icon(Glyph::INFO).pixmap(QSize(14, 14)));
+    set_feature(*info, Feature::INTERACTION_ACTION_TYPE);
+    layout->addWidget(info);
+    layout->addStretch(1);
+    return row;
+  }
+
   QFrame* make_rule() {
     auto rule = new QFrame();
     rule->setObjectName("section_rule");
@@ -891,6 +912,7 @@ void PrototypeInspector::rebuild() {
       nullptr);
   auto add_field = [&] (QVBoxLayout& layout, const std::string& name,
       const QString& label, QWidget* input) {
+    set_field_tip(name, label, *input);
     m_fields.emplace_back(name, input);
     if(label.isEmpty()) {
       layout.addWidget(input);
@@ -1053,7 +1075,7 @@ void PrototypeInspector::rebuild() {
       add_field(*section.m_layout, "device", "Device", device);
     }
     section.m_layout->addWidget(make_rule());
-    section.m_layout->addWidget(make_label("ACTION", "section_heading"));
+    section.m_layout->addWidget(make_action_heading());
     auto type_index = get_type_index(base.m_action);
     auto type_kinds = get_types(type_index);
     auto types = std::vector<Option>();
@@ -1074,7 +1096,6 @@ void PrototypeInspector::rebuild() {
           apply(std::move(changed), "Action");
         }
       });
-    set_feature(*type, Feature::INTERACTION_ACTION_TYPE);
     add_field(*section.m_layout, "type", "Type", type);
     auto action = base.m_action;
     if(std::holds_alternative<PreviousArtboard>(action)) {
@@ -1323,7 +1344,7 @@ void PrototypeInspector::rebuild() {
       auto row = new QWidget();
       auto row_layout = new QHBoxLayout(row);
       row_layout->setContentsMargins(0, 0, 0, 0);
-      row_layout->addWidget(make_label("ACTION", "section_heading"));
+      row_layout->addWidget(make_action_heading());
       row_layout->addStretch(1);
       auto secondary = new QToolButton();
       secondary->setObjectName("icon_toggle");
@@ -1459,6 +1480,7 @@ void PrototypeInspector::build_placeholder(QVBoxLayout& layout) {
   auto add = [&] (const std::string& name, const QString& label,
       QWidget* input) {
     input->setEnabled(false);
+    set_field_tip(name, label, *input);
     m_fields.emplace_back(name, input);
     if(label.isEmpty()) {
       layout.addWidget(input);
@@ -1472,7 +1494,7 @@ void PrototypeInspector::build_placeholder(QVBoxLayout& layout) {
   };
   placeholder("trigger", "Trigger", "Tap");
   layout.addWidget(make_rule());
-  layout.addWidget(make_label("ACTION", "section_heading"));
+  layout.addWidget(make_action_heading());
   placeholder("type", "Type", "Transition");
   add("preserve_scroll", QString(),
     new QCheckBox(translate("prototype", "Preserve Scroll Position")));
@@ -1494,6 +1516,7 @@ void PrototypeInspector::build_mixed(
   auto& base = *selected.front();
   auto add = [&] (const std::string& name, const QString& label,
       QWidget* input) {
+    set_field_tip(name, label, *input);
     m_fields.emplace_back(name, input);
     if(label.isEmpty()) {
       layout.addWidget(input);
@@ -1605,7 +1628,7 @@ void PrototypeInspector::build_mixed(
     add("delay", "Delay", delay);
   }
   layout.addWidget(make_rule());
-  layout.addWidget(make_label("ACTION", "section_heading"));
+  layout.addWidget(make_action_heading());
   auto type_index = get_type_index(base.m_action);
   auto is_one_type = is_same([] (const Interaction& interaction) {
     return get_type_index(interaction.m_action);

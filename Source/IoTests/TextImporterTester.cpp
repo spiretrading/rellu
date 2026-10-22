@@ -178,7 +178,8 @@ TEST_SUITE("TextImporter") {
     auto none = std::string(R"("textScript": "none")");
     range.replace(range.find(none), none.size(),
       R"("textScript": "superscript")");
-    auto shift = std::format("{}", 12 / 0.5833 * 0.3333);
+    auto shift = std::format(
+      "{}", static_cast<float>(12 * 0.5833) / 0.5833 * 0.3333);
     auto& text = import_text(document, "[" + make_range(1) + "," + range + "]",
       R"({"frame": {"type": "positioned"}, "paragraphs": [{"lines": [[{"x": 0,
       "y": 11, "from": 0, "to": 1}, {"y": 11, "from": 1, "to": 2, "style": {

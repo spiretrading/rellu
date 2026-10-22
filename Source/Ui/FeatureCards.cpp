@@ -37,12 +37,14 @@ namespace {
   constexpr auto TEXT_SIZE = 14;
   constexpr auto LINK_ICON_SIZE = 12.0;
   constexpr auto LINK_ICON_GAP = 4.0;
+  constexpr auto LINE_HEIGHT = 1.25;
+  constexpr auto INFO_ANCHOR_SIZE = 20.0;
   const auto BACKGROUND = QColor(0xFF, 0xFF, 0xFF);
   const auto IMAGE_BACKGROUND = QColor(0xF5, 0xF5, 0xF5);
   const auto BORDER = QColor(0xCA, 0xCA, 0xCA);
   const auto TITLE = QColor(0x2C, 0x2C, 0x2C);
   const auto DESCRIPTION = QColor(0x4B, 0x4B, 0x4B);
-  const auto LINK = QColor(0x14, 0x73, 0xE6);
+  const auto LINK = QColor(0x18, 0x70, 0xE8);
   const auto LINE = QColor(0xCC, 0xCC, 0xCC);
   const auto PINK = QColor(0xFF, 0xC4, 0xD0);
   const auto BLUE = QColor(0x5B, 0x9B, 0xE6);
@@ -369,6 +371,9 @@ namespace {
   }
 
   double lay_out(QTextLayout& layout, double width) {
+    auto metrics = QFontMetricsF(layout.font());
+    auto line_height = LINE_HEIGHT * layout.font().pixelSize();
+    auto leading = (line_height - metrics.ascent() - metrics.descent()) / 2;
     layout.beginLayout();
     auto height = 0.0;
     while(true) {
@@ -377,8 +382,8 @@ namespace {
         break;
       }
       line.setLineWidth(width);
-      line.setPosition(QPointF(0, height));
-      height += line.height();
+      line.setPosition(QPointF(0, height + leading));
+      height += line_height;
     }
     layout.endLayout();
     return height;
@@ -401,24 +406,24 @@ namespace {
         auto screen = anchor.screen();
         auto ratio = screen->devicePixelRatio();
         auto origin = screen->geometry().topLeft();
-        auto inner = CARD_WIDTH - 2 * BORDER_WIDTH - 2 * BODY_SIDE;
+        auto inner = CARD_WIDTH - 2 * BODY_SIDE;
         m_title = std::make_unique<QTextLayout>(
-          m_card.m_title, make_font(TITLE_SIZE, QFont::Bold));
+          m_card.m_title, make_font(TITLE_SIZE, QFont::DemiBold));
         auto title_height = lay_out(*m_title, inner);
+        m_title_height = title_height;
         m_description = std::make_unique<QTextLayout>(
           m_card.m_description, make_font(TEXT_SIZE, QFont::Normal));
         auto description_height = lay_out(*m_description, inner);
         auto body = std::min(BODY_HEIGHT,
           title_height + DESCRIPTION_TOP + description_height);
-        auto link_font = make_font(TEXT_SIZE, QFont::Medium);
-        auto link_height = QFontMetricsF(link_font).height();
+        auto link_height = LINE_HEIGHT * TEXT_SIZE;
         auto height = 2 * BORDER_WIDTH + IMAGE_HEIGHT + BORDER_WIDTH +
           BODY_TOP + body + LINK_TOP + link_height + BOTTOM_MARGIN;
         m_body_height = body;
         m_size = QSizeF(CARD_WIDTH, height);
-        auto position = get_card_position(m_card,
+        auto position = get_card_position(m_card, get_card_anchor(feature,
           QRectF(QRect(anchor.mapToGlobal(QPoint(0, 0)) - origin,
-            anchor.size())), m_size);
+            anchor.size()))), m_size);
         auto available = QRectF(
           screen->availableGeometry().translated(-origin));
         position.setX(std::clamp(position.x(), available.left(),
@@ -445,9 +450,9 @@ namespace {
         auto text = translate("feature_card", "Learn how");
         auto top = m_box.top() + BORDER_WIDTH + IMAGE_HEIGHT + BORDER_WIDTH +
           BODY_TOP + m_body_height + LINK_TOP;
-        return QRectF(m_box.left() + BORDER_WIDTH + BODY_SIDE, top,
+        return QRectF(m_box.left() + BODY_SIDE, top,
           metrics.horizontalAdvance(text) + LINK_ICON_GAP + LINK_ICON_SIZE,
-          metrics.height());
+          LINE_HEIGHT * TEXT_SIZE);
       }
 
       const FeatureCard& get_card() const {
@@ -478,7 +483,7 @@ namespace {
         painter.setPen(QPen(BORDER, BORDER_WIDTH));
         painter.setBrush(Qt::NoBrush);
         painter.drawPath(shape);
-        auto left = m_box.left() + BORDER_WIDTH + BODY_SIDE;
+        auto left = m_box.left() + BODY_SIDE;
         auto top = image.bottom() + BORDER_WIDTH + BODY_TOP;
         painter.save();
         painter.setClipRect(QRectF(left, top, image.width(), m_body_height));
@@ -486,7 +491,7 @@ namespace {
         m_title->draw(&painter, QPointF(left, top));
         painter.setPen(DESCRIPTION);
         m_description->draw(&painter, QPointF(left,
-          top + m_title->boundingRect().height() + DESCRIPTION_TOP));
+          top + m_title_height + DESCRIPTION_TOP));
         painter.restore();
         auto link = get_link_rect();
         auto font = make_font(TEXT_SIZE, QFont::Medium);
@@ -494,12 +499,12 @@ namespace {
         auto text = translate("feature_card", "Learn how");
         painter.setFont(font);
         painter.setPen(LINK);
-        painter.drawText(QPointF(link.left(), link.top() + metrics.ascent()),
-          text);
+        auto baseline = link.top() + (link.height() + metrics.ascent() -
+          metrics.descent()) / 2;
+        painter.drawText(QPointF(link.left(), baseline), text);
         draw_link_icon(painter, QRectF(
           link.left() + metrics.horizontalAdvance(text) + LINK_ICON_GAP,
-          link.top() + metrics.ascent() - LINK_ICON_SIZE + 1, LINK_ICON_SIZE,
-          LINK_ICON_SIZE));
+          baseline - LINK_ICON_SIZE + 1, LINK_ICON_SIZE, LINK_ICON_SIZE));
       }
 
       void mouseReleaseEvent(QMouseEvent* event) override {
@@ -514,6 +519,7 @@ namespace {
       FeatureCard m_card;
       std::unique_ptr<QTextLayout> m_title;
       std::unique_ptr<QTextLayout> m_description;
+      double m_title_height = 0;
       double m_body_height = 0;
       QSizeF m_size;
       QImage m_shadow;
@@ -537,6 +543,23 @@ std::optional<Feature> Rellu::get_feature(const QWidget& widget) {
     return std::nullopt;
   }
   return static_cast<Feature>(value.toInt());
+}
+
+QRectF Rellu::get_card_anchor(Feature feature, const QRectF& widget) {
+  switch(feature) {
+    case Feature::COMPONENTS:
+    case Feature::TRANSFORM:
+    case Feature::LAYOUT:
+    case Feature::INTERACTION:
+    case Feature::INTERACTION_ACTION_TYPE:
+      return QRectF(widget.center().x() - INFO_ANCHOR_SIZE / 2,
+        widget.center().y() - INFO_ANCHOR_SIZE / 2, INFO_ANCHOR_SIZE,
+        INFO_ANCHOR_SIZE);
+    case Feature::REPEAT_GRID:
+      return widget.adjusted(-1, -2.0 / 3, 0, 0);
+    default:
+      return widget;
+  }
 }
 
 QPointF Rellu::get_card_position(

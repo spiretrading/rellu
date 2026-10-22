@@ -815,6 +815,22 @@ TEST_SUITE("XdWriter") {
     REQUIRE(paragraphs.size() == 1);
   }
 
+  TEST_CASE("color_profile") {
+    for(auto profile : {ColorProfile::NONE, ColorProfile::UNMANAGED,
+        ColorProfile::SRGB}) {
+      auto document = Document();
+      {
+        auto transaction = Transaction(document);
+        transaction.set_color_profile(profile);
+        transaction.commit();
+      }
+      auto bytes = write_xd(document);
+      auto imported = Document();
+      import_package(bytes, imported);
+      REQUIRE(imported.get_resources().m_color_profile == profile);
+    }
+  }
+
   TEST_CASE("script_layout") {
     auto document = Document();
     {
@@ -823,7 +839,7 @@ TEST_SUITE("XdWriter") {
       text.m_runs.front().m_length = 1;
       auto raised = text.m_base_style;
       raised.m_script = TextScript::SUPERSCRIPT;
-      raised.m_font.m_size = 24;
+      raised.m_font.m_size = 20;
       auto lowered = text.m_base_style;
       lowered.m_script = TextScript::SUBSCRIPT;
       text.m_runs.push_back(TextRun(1, lowered));
@@ -840,12 +856,16 @@ TEST_SUITE("XdWriter") {
     auto runs = pasteboard.value("children"_L1).toArray().first().toObject().
       value("text"_L1).toObject().value("paragraphs"_L1).toArray().first().
       toObject().value("lines"_L1).toArray().first().toArray();
-    auto shift = [&] (qsizetype index) {
-      return runs.at(index).toObject().value("style"_L1).toObject().value(
-        "textAttributes"_L1).toObject().value("verticalAlign"_L1).toDouble();
+    auto style = [&] (qsizetype index) {
+      return runs.at(index).toObject().value("style"_L1).toObject();
     };
-    REQUIRE(shift(0) == 24 / 0.5833 * 0.3333);
-    REQUIRE(shift(1) == -(14 / 0.5833 * 0.3333));
+    REQUIRE(style(0).value("font"_L1).toObject() ==
+      QJsonObject({{"size", 11.666000366210938}}));
+    REQUIRE(style(0).value("textAttributes"_L1).toObject() ==
+      QJsonObject({{"verticalAlign", 6.666000209254424}}));
+    REQUIRE(style(1).value("textAttributes"_L1).toObject().value(
+      "verticalAlign"_L1).toDouble() ==
+      -(static_cast<float>(14 * 0.5833) / 0.5833 * 0.3333));
   }
 
   TEST_CASE("resources") {

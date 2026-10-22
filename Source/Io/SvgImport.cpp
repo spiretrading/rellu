@@ -2841,7 +2841,7 @@ namespace {
         if(style.m_script != TextScript::NORMAL) {
           size = round(size / SCRIPT_SCALE);
         }
-        style.m_font.m_size = size;
+        style.m_font.m_size = to_single(size);
         style.m_is_underlined = run.m_decorations.contains(u"underline"_s);
         style.m_is_struck_through =
           run.m_decorations.contains(u"line-through"_s);

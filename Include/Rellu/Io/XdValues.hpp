@@ -62,6 +62,13 @@ namespace Rellu {
   std::optional<TextScript> to_text_script(QStringView name);
 
   /**
+   * Returns the font size Adobe XD stores in the layout of a run of text
+   * raised or lowered: the size it is drawn at.
+   * @param style The run's style.
+   */
+  double get_script_size(const TextStyle& style);
+
+  /**
    * Returns the verticalAlign Adobe XD stores in the layout of a run of
    * text: its baseline offset, positive upward, or 0 if it is not raised or
    * lowered.

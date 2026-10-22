@@ -439,6 +439,7 @@ namespace {
     merge(revision.m_character_styles, amendment.m_character_styles);
     merge(revision.m_asset_groups, amendment.m_asset_groups);
     merge(revision.m_grid_defaults, amendment.m_grid_defaults);
+    merge(revision.m_color_profile, amendment.m_color_profile);
     merge(revision.m_interactions, amendment.m_interactions);
     if(!revision.m_flows) {
       revision.m_home_artboard = std::move(amendment.m_home_artboard);
@@ -978,6 +979,14 @@ void Transaction::set_grid_defaults(GridDefaults defaults) {
     m_revision.m_grid_defaults = m_document->m_resources.m_grid_defaults;
   }
   m_document->m_resources.m_grid_defaults = std::move(defaults);
+}
+
+void Transaction::set_color_profile(ColorProfile profile) {
+  check_open();
+  if(!m_revision.m_color_profile) {
+    m_revision.m_color_profile = m_document->m_resources.m_color_profile;
+  }
+  m_document->m_resources.m_color_profile = profile;
 }
 
 void Transaction::touch_swatches() {

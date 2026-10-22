@@ -220,10 +220,10 @@ TEST_SUITE("EditActions") {
     fixture.m_edit_actions->set_editor(&other_editor);
     source = XdClipboardSource("B", "C:/Designs/Screens.xd");
     REQUIRE(actions.trigger("edit.paste"));
-    REQUIRE(messages == std::vector{QString("To paste linked assets across "
-      "documents, publish a library from 'Library.xd'. [Learn more|https://"
-      "www.adobe.com/go/xd_designsys_migration_links_not_migrated_learnmore]"
-      " ")});
+    REQUIRE(messages == std::vector{make_color_profile_message(),
+      QString("To paste linked assets across documents, publish a library "
+      "from 'Library.xd'. [Learn more|https://www.adobe.com/go/"
+      "xd_designsys_migration_links_not_migrated_learnmore] ")});
     fixture.m_edit_actions->set_editor(&editor);
     editor.get_selection().select(ids.m_ellipse);
     source = XdClipboardSource("A", "C:/Designs/Library.xd");
@@ -231,7 +231,64 @@ TEST_SUITE("EditActions") {
     fixture.m_edit_actions->set_editor(&other_editor);
     source = XdClipboardSource("B", "C:/Designs/Screens.xd");
     REQUIRE(actions.trigger("edit.paste"));
-    REQUIRE(messages.size() == 1);
+    REQUIRE(messages.size() == 3);
+    REQUIRE(messages.back() == make_color_profile_message());
+  }
+
+  TEST_CASE("color_profile_notice") {
+    auto fixture = Fixture();
+    auto& actions = fixture.m_actions;
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto source = XdClipboardSource("A", "C:/Designs/A.xd");
+    fixture.m_edit_actions->set_source_provider([&] { return source; });
+    auto messages = std::vector<QString>();
+    fixture.m_edit_actions->set_notice_handler([&] (const auto& message) {
+      messages.push_back(message);
+    });
+    fixture.m_edit_actions->set_editor(&editor);
+    editor.get_selection().select(ids.m_ellipse);
+    REQUIRE(actions.trigger("edit.copy"));
+    REQUIRE(actions.trigger("edit.paste"));
+    REQUIRE(messages.empty());
+    auto managed = Document();
+    {
+      auto transaction = Transaction(managed);
+      transaction.set_color_profile(ColorProfile::SRGB);
+      transaction.commit();
+    }
+    auto managed_editor = Editor(managed);
+    fixture.m_edit_actions->set_editor(&managed_editor);
+    source = XdClipboardSource("B", "C:/Designs/B.xd");
+    REQUIRE(actions.trigger("edit.paste"));
+    REQUIRE(messages.empty());
+    auto other = Document();
+    auto other_editor = Editor(other);
+    fixture.m_edit_actions->set_editor(&other_editor);
+    source = XdClipboardSource("C", "C:/Designs/C.xd");
+    REQUIRE(actions.trigger("edit.paste"));
+    REQUIRE(messages == std::vector{make_color_profile_message()});
+    QGuiApplication::clipboard()->setText(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect width="5"
+      height="5"/></svg>)");
+    REQUIRE(actions.trigger("edit.paste"));
+    REQUIRE(messages.size() == 2);
+    QGuiApplication::clipboard()->setText("Plain");
+    REQUIRE(actions.trigger("edit.paste"));
+    REQUIRE(messages.size() == 2);
+    QGuiApplication::clipboard()->clear();
+  }
+
+  TEST_CASE("color_profile_message") {
+    REQUIRE(make_color_profile_message() == "Colors of the pasted object may "
+      "look slightly different compared to the original. [Learn more about "
+      "Color Management.|https://www.adobe.com/go/xd_color_management]");
+    set_language(Language::FRENCH);
+    auto french = make_color_profile_message();
+    set_language(Language::ENGLISH);
+    REQUIRE(french.endsWith(
+      "|https://www.adobe.com/go/xd_color_management_fr]"));
   }
 
   TEST_CASE("linked_paste_message") {

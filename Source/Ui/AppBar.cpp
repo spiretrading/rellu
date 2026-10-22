@@ -82,9 +82,9 @@ namespace {
   constexpr auto ZOOM_CHEVRON_WIDTH = 8.0;
   constexpr auto ZOOM_CHEVRON_HEIGHT = 14.0 / 3;
   constexpr auto ZOOM_CHEVRON_TOP = 52.0 / 3;
-  constexpr auto ICON_BUTTON_TOP = 4;
-  constexpr auto ICON_BUTTON_SPACING = 14;
-  constexpr auto ZOOM_SPACING = 10;
+  constexpr auto PREVIEW_BUTTON_SIZE = 40;
+  constexpr auto ICON_BUTTON_SPACING = 6;
+  constexpr auto ZOOM_SPACING = 6;
   const auto ZOOM_LINE_COLOR = QColor(0xE4, 0xE4, 0xE4);
 
   class ZoomControl : public QWidget {
@@ -218,6 +218,7 @@ AppBar::AppBar(QWidget* parent)
       std::tuple(Glyph::PLAY, "Desktop Preview",
         std::optional(Feature::DESKTOP_PREVIEW))}) {
     auto button = make_icon_button(glyph, tip);
+    button->setFixedSize(PREVIEW_BUTTON_SIZE, PREVIEW_BUTTON_SIZE);
     button->setEnabled(false);
     if(feature) {
       set_feature(*button, *feature);
@@ -228,7 +229,7 @@ AppBar::AppBar(QWidget* parent)
     is_first = false;
     auto cell = new QWidget();
     auto cell_layout = new QVBoxLayout(cell);
-    cell_layout->setContentsMargins(0, ICON_BUTTON_TOP, 0, 0);
+    cell_layout->setContentsMargins(0, 0, 0, 0);
     cell_layout->setSpacing(0);
     cell_layout->addWidget(button);
     cell_layout->addStretch(1);

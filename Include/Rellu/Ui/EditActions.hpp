@@ -27,6 +27,12 @@ namespace Rellu {
   QString make_linked_paste_message(const std::vector<std::string>& documents);
 
   /**
+   * Makes the message Adobe XD shows after pasting into a document whose
+   * colors are unmanaged something from outside it, in its toast markup.
+   */
+  QString make_color_profile_message();
+
+  /**
    * Handles the edit, object and arrange actions of an ActionRegistry,
    * applied to the selection of an editor: the clipboard, history and
    * selection actions, and every action named after a command of a
@@ -153,8 +159,9 @@ namespace Rellu {
       void set_paste_handler(PasteHandler handler);
 
       /**
-       * Sets the function showing the message make_linked_paste_message
-       * makes after a paste, as Adobe XD shows it.
+       * Sets the function showing the messages make_color_profile_message
+       * and make_linked_paste_message make after a paste, as Adobe XD shows
+       * them.
        * @param handler The function.
        */
       void set_notice_handler(NoticeHandler handler);

@@ -320,6 +320,9 @@ std::vector<std::string> Rellu::find_differences(
   if(left_resources.m_grid_defaults != right_resources.m_grid_defaults) {
     collector.add("grid defaults differ");
   }
+  if(left_resources.m_color_profile != right_resources.m_color_profile) {
+    collector.add("color profiles differ");
+  }
   auto& left_prototype = left.get_prototype();
   auto& right_prototype = right.get_prototype();
   compare_lists(left_prototype.m_interactions, right_prototype.m_interactions,

@@ -190,6 +190,12 @@ namespace Rellu {
       void set_grid_defaults(GridDefaults defaults);
 
       /**
+       * Replaces the color profile the document's colors are managed with.
+       * @param profile The profile.
+       */
+      void set_color_profile(ColorProfile profile);
+
+      /**
        * Appends an interaction owned by an existing node.
        * @param interaction The interaction, whose id is generated if nil.
        * @return The interaction's id.

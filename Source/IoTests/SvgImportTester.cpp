@@ -425,7 +425,8 @@ TEST_SUITE("SvgImport") {
     REQUIRE(text->m_runs[0].m_length == 9);
     auto& four = text->m_runs[1].m_style;
     REQUIRE(four.m_script == TextScript::SUPERSCRIPT);
-    REQUIRE(four.m_font.m_size == std::round(20 / 0.5833 * 1e5) / 1e5);
+    REQUIRE(four.m_font.m_size ==
+      static_cast<float>(std::round(20 / 0.5833 * 1e5) / 1e5));
     REQUIRE(four.m_letter_spacing == 100);
     auto other = Document();
     read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><text x="1"
@@ -479,7 +480,7 @@ TEST_SUITE("SvgImport") {
     REQUIRE(runs.size() == 4);
     REQUIRE(runs[1].m_style.m_script == TextScript::SUPERSCRIPT);
     REQUIRE(runs[1].m_style.m_font.m_size ==
-      std::round(20 / 0.5833 * 1e5) / 1e5);
+      34.28767013549805);
     REQUIRE(runs[2].m_style.m_script == TextScript::SUBSCRIPT);
     REQUIRE(runs[3].m_style.m_script == TextScript::NORMAL);
     REQUIRE(runs[3].m_style.m_font.m_size == 20);

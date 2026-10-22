@@ -378,6 +378,12 @@ void Rellu::add_resource_importer(XdImporter& importer) {
         import.get_transaction().set_grid_defaults(std::move(grid_defaults));
       }
     }
+    if(auto profile = ux->get_json().value("colorProfile"_L1).toString();
+        profile == "unmanaged"_L1 || profile == "srgb"_L1) {
+      ux->consume("colorProfile"_L1);
+      import.get_transaction().set_color_profile(profile == "srgb"_L1 ?
+        ColorProfile::SRGB : ColorProfile::UNMANAGED);
+    }
     ux->ignore({"gridDefaults"_L1, "symbolsMetadata"_L1,
       "artboardGuidesGlobalSettings"_L1, "colorProfile"_L1});
   });

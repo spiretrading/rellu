@@ -172,6 +172,15 @@ namespace Rellu {
         const XdClipboardSource& target) const;
 
       /**
+       * Returns <code>true</code> iff what is held comes from outside a
+       * document, as Adobe XD tells before warning that the colors of a
+       * paste may differ: anything copied from another document or another
+       * application, except text pasted as plain text.
+       * @param document The id of the document pasted into.
+       */
+      bool is_from_other_document(const std::string& document) const;
+
+      /**
        * Makes a command labelled Paste Appearance giving nodes the
        * appearance of what is held, as Adobe XD's Paste Appearance does when
        * a single object or an image is held.

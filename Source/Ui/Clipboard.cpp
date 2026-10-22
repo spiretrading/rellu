@@ -1827,6 +1827,15 @@ std::unique_ptr<Command> Clipboard::make_paste_command(
   return std::make_unique<PasteCommand>(m_content, target);
 }
 
+bool Clipboard::is_from_other_document(const std::string& document) const {
+  if(!m_content || m_content->m_is_text) {
+    return false;
+  } else if(m_content->m_source.empty()) {
+    return m_content->m_is_foreign;
+  }
+  return m_content->m_source != document;
+}
+
 std::vector<std::string> Clipboard::get_linked_documents(
     const XdClipboardSource& target) const {
   auto documents = std::vector<std::string>();

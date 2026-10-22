@@ -154,6 +154,7 @@ namespace Rellu {
         std::optional<std::vector<CharacterStyle>> m_character_styles;
         std::optional<std::vector<AssetGroup>> m_asset_groups;
         std::optional<GridDefaults> m_grid_defaults;
+        std::optional<ColorProfile> m_color_profile;
         std::optional<std::vector<Interaction>> m_interactions;
         std::optional<NodeId> m_home_artboard;
         std::optional<std::vector<Flow>> m_flows;

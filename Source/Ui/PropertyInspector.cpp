@@ -1145,6 +1145,10 @@ namespace {
     grid_button->setChecked(is_grid);
     if(!is_grid) {
       set_feature(*grid_button, Feature::REPEAT_GRID);
+    } else if(auto ungroup = binding.m_actions ?
+        binding.m_actions->find("object.ungroup") : nullptr) {
+      grid_button->setToolTip(translate("inspector", "Ungroup Grid (%1)").
+        arg(to_xd_tool_tip_shortcut_text(ungroup->shortcut())));
     }
     row_layout->addWidget(grid_button);
     row_layout->addStretch(1);
@@ -1445,6 +1449,8 @@ namespace {
     auto row = make_row(layout);
     layout->addWidget(make_label("Responsive Resize", "row_label"), 1);
     if(auto toggle = make_switch(binding, "layout.responsive")) {
+      toggle->setToolTip(
+        translate("inspector", "Enable/Disable Constraints"));
       layout->addWidget(toggle);
     }
     frame.m_layout->addWidget(row);
@@ -1456,7 +1462,11 @@ namespace {
       }
       auto toggle_row = make_row(layout);
       layout->addWidget(make_label(label, "row_label"), 1);
-      layout->addWidget(make_switch(binding, path));
+      auto toggle = make_switch(binding, path);
+      toggle->setToolTip(translate("inspector",
+        std::string_view(path) == "layout.stack" ? "Enable/Disable Stack" :
+          "Enable/Disable Padding"));
+      layout->addWidget(toggle);
       frame.m_layout->addWidget(toggle_row);
       if(std::string_view(path) == "layout.padding" &&
           binding.m_find("layout.padding.top")) {
@@ -1472,8 +1482,8 @@ namespace {
           binding.m_find("layout.stack.orientation")) {
         auto stack = make_row(layout, 14);
         layout->addWidget(make_segments(binding, "layout.stack.orientation", {
-          Segment(1, Glyph::DISTRIBUTE_VERTICALLY, "Vertical"),
-          Segment(0, Glyph::DISTRIBUTE_HORIZONTALLY, "Horizontal")}));
+          Segment(1, Glyph::DISTRIBUTE_VERTICALLY, "Vertical Stack"),
+          Segment(0, Glyph::DISTRIBUTE_HORIZONTALLY, "Horizontal Stack")}));
         layout->addWidget(
           make_number(binding, "layout.stack.spacing", "Spacing"), 1);
         frame.m_layout->addWidget(stack);

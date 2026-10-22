@@ -83,6 +83,12 @@ QString Rellu::make_linked_paste_message(
       truncate_middle(name, MAXIMUM_NAME_LENGTH));
 }
 
+QString Rellu::make_color_profile_message() {
+  return translate("Colors of the pasted object may look slightly different "
+    "compared to the original. [Learn more about Color Management.|https://"
+    "www.adobe.com/go/xd_color_management]");
+}
+
 EditActions::EditActions(
     ActionRegistry& actions, const CommandRegistry& commands)
     : m_actions(&actions),
@@ -400,6 +406,14 @@ void EditActions::paste() {
     if(auto command = m_clipboard.make_paste_command(target);
         command && m_editor->execute(std::move(command))) {
       reveal_artboards();
+      if(m_notice_handler && m_clipboard.is_from_other_document(
+          target.m_document)) {
+        auto profile =
+          m_editor->get_document().get_resources().m_color_profile;
+        if(profile != ColorProfile::SRGB) {
+          m_notice_handler(make_color_profile_message());
+        }
+      }
       if(m_notice_handler && m_source_provider) {
         auto message = make_linked_paste_message(
           m_clipboard.get_linked_documents(m_source_provider()));

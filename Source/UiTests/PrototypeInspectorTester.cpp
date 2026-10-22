@@ -12,6 +12,7 @@
 #include <doctest/doctest.h>
 #include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Prototype/InteractionCommands.hpp"
+#include "Rellu/Ui/FeatureCards.hpp"
 #include "Rellu/Ui/PrototypeInspector.hpp"
 #include "../PrototypeTests/Stage.hpp"
 #include "FocusWindow.hpp"
@@ -95,6 +96,20 @@ TEST_SUITE("PrototypeInspector") {
     REQUIRE(trigger.currentText() == "Tap");
     REQUIRE(!trigger.isEnabled());
     REQUIRE(get<QComboBox>(inspector, "type").currentText() == "Transition");
+    REQUIRE(trigger.toolTip() == "Trigger");
+    REQUIRE(get<QComboBox>(inspector, "type").toolTip() == "Type");
+    REQUIRE(get<QComboBox>(inspector, "animation").toolTip() == "Animation");
+    REQUIRE(!get_feature(get<QComboBox>(inspector, "type")));
+    auto features = std::vector<Feature>();
+    for(auto label : inspector.findChildren<QLabel*>()) {
+      if(auto feature = get_feature(*label)) {
+        features.push_back(*feature);
+      }
+    }
+    REQUIRE(std::ranges::find(features, Feature::INTERACTION) !=
+      features.end());
+    REQUIRE(std::ranges::find(features, Feature::INTERACTION_ACTION_TYPE) !=
+      features.end());
     REQUIRE(get<QComboBox>(inspector, "destination").currentText() ==
       "(Choose a destination)");
     REQUIRE(get<QComboBox>(inspector, "animation").currentText() == "None");
