@@ -86,6 +86,23 @@ namespace Rellu {
        */
       void set_alert_handler(AlertHandler handler);
 
+      /**
+       * Sets the function called when an export remembers its options and
+       * folder for the next.
+       * @param handler The function.
+       */
+      void set_settings_handler(std::function<void ()> handler);
+
+      /**
+       * Restores the options and folder remembered by an earlier export.
+       * @param options The options.
+       * @param scale_text The size typed into the Export size field, or empty
+       *        for one of its choices.
+       * @param folder The folder, or empty for none.
+       */
+      void set_settings(const ExportOptions& options,
+        const QString& scale_text, const QString& folder);
+
       /** Returns the options of the latest export. */
       const ExportOptions& get_options() const;
 
@@ -125,6 +142,7 @@ namespace Rellu {
       PathProvider m_path_provider;
       DialogHandler m_dialog_handler;
       AlertHandler m_alert_handler;
+      std::function<void ()> m_settings_handler;
       ExportOptions m_options;
       QString m_scale_text;
       QString m_folder;

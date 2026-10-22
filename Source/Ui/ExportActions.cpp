@@ -98,6 +98,17 @@ void ExportActions::set_alert_handler(AlertHandler handler) {
   m_alert_handler = std::move(handler);
 }
 
+void ExportActions::set_settings_handler(std::function<void ()> handler) {
+  m_settings_handler = std::move(handler);
+}
+
+void ExportActions::set_settings(const ExportOptions& options,
+    const QString& scale_text, const QString& folder) {
+  m_options = options;
+  m_scale_text = scale_text;
+  m_folder = folder;
+}
+
 const ExportOptions& ExportActions::get_options() const {
   return m_options;
 }
@@ -149,6 +160,9 @@ void ExportActions::run(
   m_options = dialog.get_options();
   m_scale_text = dialog.get_scale_text();
   m_folder = dialog.get_folder();
+  if(m_settings_handler) {
+    m_settings_handler();
+  }
   auto& document = m_editor->get_document();
   auto name = QString();
   if(m_path_provider) {

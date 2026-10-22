@@ -1,6 +1,7 @@
 #include <memory>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QTemporaryDir>
 #include <QWidget>
@@ -108,6 +109,39 @@ TEST_SUITE("ExportActions") {
     });
     fixture.m_exports->export_nodes({icon}, false);
     REQUIRE(fixture.m_exports->get_options() == ExportOptions());
+  }
+
+  TEST_CASE("restored_settings") {
+    auto directory = QTemporaryDir();
+    auto fixture = Fixture();
+    auto icon = add_icon(fixture.m_document, "Icon");
+    fixture.m_exports->set_editor(&fixture.m_editor);
+    auto stored = 0;
+    fixture.m_exports->set_settings_handler([&] {
+      ++stored;
+    });
+    auto options = ExportOptions();
+    options.m_format = ExportFormat::JPG;
+    options.m_jpg_quality = 60;
+    options.m_scale = 0.25;
+    fixture.m_exports->set_settings(options, "1/4x", directory.path());
+    REQUIRE(fixture.m_exports->get_options() == options);
+    REQUIRE(fixture.m_exports->get_scale_text() == "1/4x");
+    REQUIRE(fixture.m_exports->get_folder() == directory.path());
+    fixture.m_exports->set_dialog_handler([&] (auto& dialog) {
+      REQUIRE(dialog.get_options() == options);
+      REQUIRE(dialog.get_scale_text() == "1/4x");
+      REQUIRE(dialog.get_folder() == directory.path());
+      dialog.reject();
+    });
+    fixture.m_exports->export_nodes({icon}, false);
+    REQUIRE(stored == 0);
+    fixture.m_exports->set_dialog_handler([&] (auto& dialog) {
+      dialog.submit();
+    });
+    fixture.m_exports->export_nodes({icon}, false);
+    REQUIRE(stored == 1);
+    REQUIRE(QFileInfo(directory.filePath("Icon.jpg")).exists());
   }
 
   TEST_CASE("failed_export") {
