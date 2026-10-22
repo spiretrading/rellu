@@ -40,10 +40,6 @@ QWidget#toolbar {
   background: #F5F5F5;
   border-right: 1px solid #E4E4E4;
 }
-QStackedWidget#left_panel {
-  background: #F5F5F5;
-  border-right: 1px solid #E4E4E4;
-}
 QWidget#assets_panel, QWidget#plugins_panel, QWidget#layers_panel,
 QWidget#assets_content, QScrollArea#assets_scroll {
   background: #F5F5F5;
@@ -71,7 +67,8 @@ QToolButton#toolbar_button:hover, QToolButton#app_bar_button:hover,
 QToolButton#panel_button:hover, QToolButton#zoom_presets:hover {
   background: #EAEAEA;
 }
-QToolButton#zoom_presets::menu-indicator {
+QToolButton#zoom_presets::menu-indicator,
+QToolButton#panel_button::menu-indicator {
   image: none;
   width: 0px;
 }

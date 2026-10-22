@@ -6,7 +6,7 @@
 
 using namespace Rellu;
 
-PaneResizer::PaneResizer(QWidget& pane, QWidget* parent)
+PaneResizer::PaneResizer(PaneFrame& pane, QWidget* parent)
     : QWidget(parent),
       m_pane(&pane),
       m_is_pressed(false),
@@ -14,9 +14,12 @@ PaneResizer::PaneResizer(QWidget& pane, QWidget* parent)
       m_press(0),
       m_origin(0),
       m_width(0) {
-  setCursor(Qt::SizeHorCursor);
+  setMouseTracking(true);
   setAttribute(Qt::WA_NoSystemBackground);
   pane.installEventFilter(this);
+  if(parent) {
+    parent->installEventFilter(this);
+  }
   place();
 }
 
@@ -33,15 +36,32 @@ void PaneResizer::place() {
     hide();
     return;
   }
-  auto geometry = m_pane->geometry();
-  setGeometry(geometry.x() + geometry.width() - BAND_WIDTH, geometry.y(),
-    BAND_WIDTH, geometry.height());
+  auto ratio = devicePixelRatio();
+  auto edge = m_pane->get_device_width();
+  auto band = static_cast<int>(std::lround(BAND_WIDTH * ratio));
+  auto left = static_cast<int>(std::floor((edge - band) / ratio));
+  auto right = static_cast<int>(std::ceil(edge / ratio));
+  auto x = m_pane->geometry().x();
+  setGeometry(x + left, 0, std::max(right - left, 0),
+    parentWidget()->height());
   show();
   raise();
 }
 
+bool PaneResizer::is_on_band(QPointF position) const {
+  if(!m_pane) {
+    return false;
+  }
+  auto ratio = devicePixelRatio();
+  auto offset = geometry().x() - m_pane->geometry().x() + position.x();
+  auto device = static_cast<int>(std::floor(offset * ratio + 1e-6));
+  auto edge = m_pane->get_device_width();
+  auto band = static_cast<int>(std::lround(BAND_WIDTH * ratio));
+  return device >= edge - band && device < edge;
+}
+
 bool PaneResizer::eventFilter(QObject* watched, QEvent* event) {
-  if(watched == m_pane) {
+  if(watched == m_pane || watched == parentWidget()) {
     auto type = event->type();
     if(type == QEvent::Resize || type == QEvent::Move ||
         type == QEvent::Show || type == QEvent::Hide) {
@@ -52,7 +72,9 @@ bool PaneResizer::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void PaneResizer::mousePressEvent(QMouseEvent* event) {
-  if(event->button() != Qt::LeftButton || !m_pane) {
+  if(event->button() != Qt::LeftButton || !m_pane ||
+      !is_on_band(event->position())) {
+    event->ignore();
     return;
   }
   m_is_pressed = true;
@@ -68,6 +90,11 @@ void PaneResizer::mousePressEvent(QMouseEvent* event) {
 
 void PaneResizer::mouseMoveEvent(QMouseEvent* event) {
   if(!m_is_pressed) {
+    if(is_on_band(event->position())) {
+      setCursor(Qt::SizeHorCursor);
+    } else {
+      setCursor(Qt::ArrowCursor);
+    }
     return;
   }
   auto x = event->globalPosition().x();
@@ -81,6 +108,12 @@ void PaneResizer::mouseMoveEvent(QMouseEvent* event) {
   }
   if(m_handler) {
     m_handler(m_width + (x - m_origin));
+  }
+}
+
+void PaneResizer::leaveEvent(QEvent*) {
+  if(!m_is_pressed) {
+    unsetCursor();
   }
 }
 

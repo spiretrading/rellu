@@ -302,7 +302,8 @@ MainWindow::MainWindow(QWidget* parent)
       m_actions(*this),
       m_app_bar(new AppBar()),
       m_toolbar(new Toolbar(make_xd_tools(), make_xd_panels())),
-      m_left_panel(new QStackedWidget()),
+      m_left_panel(new PaneFrame()),
+      m_canvas_frame(nullptr),
       m_assets(new AssetsPanel()),
       m_layers(new LayersPanel()),
       m_plugins(new PluginsPanel()),
@@ -591,12 +592,30 @@ void MainWindow::set_left_panel_width(double width) {
     return;
   }
   width = fit_pane_width(width, get_pane_space());
-  m_left_panel->setFixedWidth(static_cast<int>(std::lround(width)));
-  if(width == m_left_panel_width) {
+  if(width != m_left_panel_width) {
+    m_left_panel_width = width;
+    QSettings().setValue(LEFT_PANEL_WIDTH_KEY, m_left_panel_width);
+  }
+  apply_left_panel();
+}
+
+void MainWindow::apply_left_panel() {
+  auto ratio = devicePixelRatio();
+  auto width = static_cast<int>(std::lround(m_left_panel_width * ratio));
+  m_left_panel->set_device_width(width);
+  if(m_pane_resizer) {
+    m_pane_resizer->place();
+  }
+  if(!m_canvas_frame) {
     return;
   }
-  m_left_panel_width = width;
-  QSettings().setValue(LEFT_PANEL_WIDTH_KEY, m_left_panel_width);
+  if(m_left_panel->isVisibleTo(this)) {
+    auto origin = m_left_panel->mapTo(this, QPoint(0, 0));
+    m_canvas_frame->set_leading_edge(
+      static_cast<int>(std::lround(origin.x() * ratio)) + width);
+  } else {
+    m_canvas_frame->set_leading_edge(std::nullopt);
+  }
 }
 
 void MainWindow::place_caption_buttons() {
@@ -1070,8 +1089,7 @@ QMenuBar* MainWindow::make_layout() {
   body_layout->setSpacing(0);
   body_layout->addWidget(m_toolbar);
   m_left_panel->setObjectName("left_panel");
-  m_left_panel->setFixedWidth(
-    static_cast<int>(std::lround(m_left_panel_width)));
+  apply_left_panel();
   m_left_panel->addWidget(m_assets);
   m_left_panel->addWidget(m_layers);
   m_left_panel->addWidget(m_plugins);
@@ -1083,7 +1101,8 @@ QMenuBar* MainWindow::make_layout() {
   m_pane_resizer->set_width_provider([this] {
     return m_left_panel_width;
   });
-  body_layout->addWidget(new CanvasFrame(*m_view), 1);
+  m_canvas_frame = new CanvasFrame(*m_view);
+  body_layout->addWidget(m_canvas_frame, 1);
   m_inspector_frame->setObjectName("inspector_frame");
   m_inspector_frame->setAttribute(Qt::WA_StyledBackground);
   m_inspector_frame->setFixedWidth(PropertyInspector::WIDTH);
@@ -1304,6 +1323,7 @@ void MainWindow::show_panel(const std::string& name) {
   }
   m_left_panel->setVisible(!panel.empty());
   fit_left_panel();
+  apply_left_panel();
   for(auto candidate : {"assets", "layers", "plugins"}) {
     m_actions.get(get_panel_action(candidate)).setChecked(
       m_toolbar->get_panel() == candidate);
@@ -1375,8 +1395,7 @@ void MainWindow::restore_settings() {
   update_recent_files();
   m_left_panel_width = std::max(settings.value(LEFT_PANEL_WIDTH_KEY,
     LEFT_PANEL_WIDTH).toDouble(), 0.0);
-  m_left_panel->setFixedWidth(
-    static_cast<int>(std::lround(m_left_panel_width)));
+  apply_left_panel();
   if(!restoreGeometry(settings.value("main_window/geometry").toByteArray())) {
     if(auto screen = this->screen()) {
       auto area = screen->availableGeometry();

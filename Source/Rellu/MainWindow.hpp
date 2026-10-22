@@ -24,6 +24,7 @@
 #include "Rellu/Ui/ArtboardPresetsPanel.hpp"
 #include "Rellu/Ui/AssetsPanel.hpp"
 #include "Rellu/Ui/Banner.hpp"
+#include "Rellu/Ui/CanvasFrame.hpp"
 #include "Rellu/Ui/ComponentActions.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/EditActions.hpp"
@@ -32,6 +33,7 @@
 #include "Rellu/Ui/GuideActions.hpp"
 #include "Rellu/Ui/LastProperties.hpp"
 #include "Rellu/Ui/LayersPanel.hpp"
+#include "Rellu/Ui/PaneFrame.hpp"
 #include "Rellu/Ui/PaneResizer.hpp"
 #include "Rellu/Ui/PluginsPanel.hpp"
 #include "Rellu/Ui/PreviewWindow.hpp"
@@ -136,7 +138,8 @@ namespace Rellu {
       std::unique_ptr<ComponentDrop> m_component_drop;
       AppBar* m_app_bar;
       Toolbar* m_toolbar;
-      QStackedWidget* m_left_panel;
+      PaneFrame* m_left_panel;
+      CanvasFrame* m_canvas_frame;
       AssetsPanel* m_assets;
       LayersPanel* m_layers;
       PluginsPanel* m_plugins;
@@ -198,6 +201,7 @@ namespace Rellu {
       void update_document_state();
       void fit_left_panel();
       void set_left_panel_width(double width);
+      void apply_left_panel();
       double get_pane_space() const;
       void place_caption_buttons();
       void update_selection_actions();

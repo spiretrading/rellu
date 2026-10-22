@@ -25,6 +25,10 @@ TEST_SUITE("CanvasFrame") {
     REQUIRE(region.m_height * 1.5 == doctest::Approx(1977));
     REQUIRE(get_view_region(QRect(3, 5, 40, 30), QPoint(3, 5), 1) ==
       Rect(0, 0, 40, 30));
+    auto edged = get_view_region(
+      QRect(458, 74, 1812, 1318), QPoint(458, 74), 1.5, 686);
+    REQUIRE(edged.m_x * 1.5 == doctest::Approx(-1));
+    REQUIRE(edged.m_width * 1.5 == doctest::Approx(3405 - 686));
   }
 
   TEST_CASE("placement") {

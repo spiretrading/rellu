@@ -3,20 +3,22 @@
 #include <functional>
 #include <QPointer>
 #include <QWidget>
+#include "Rellu/Ui/PaneFrame.hpp"
 
 namespace Rellu {
 
   /**
-   * A band along the inside of a pane's right edge that resizes it as Adobe
-   * XD's left pane resizes: the pointer over the band shows the horizontal
-   * resize cursor, and once a drag moves DEAD_ZONE device pixels or more
-   * from the press, the pane follows the pointer's moves from where it
-   * crossed, live, until released.
+   * A band along the inside of a pane's right edge, BAND_WIDTH logical
+   * pixels wide rounded to device pixels and as tall as the pane's parent,
+   * that resizes the pane as Adobe XD's left pane resizes: the pointer over
+   * the band shows the horizontal resize cursor, and once a drag moves
+   * DEAD_ZONE device pixels or more from the press, the pane follows the
+   * pointer's moves from where it crossed, live, until released.
    */
   class PaneResizer : public QWidget {
     public:
 
-      /** The width of the band in logical pixels, inside the pane. */
+      /** The width of the band in logical pixels. */
       static constexpr auto BAND_WIDTH = 4;
 
       /** The distance in device pixels a drag moves before resizing. */
@@ -36,7 +38,14 @@ namespace Rellu {
        * @param pane The pane resized, a sibling of the resizer.
        * @param parent The pane's parent.
        */
-      PaneResizer(QWidget& pane, QWidget* parent);
+      PaneResizer(PaneFrame& pane, QWidget* parent);
+
+      /**
+       * Returns <code>true</code> iff a point lies on the band's device
+       * pixels.
+       * @param position The point in the resizer's logical pixels.
+       */
+      bool is_on_band(QPointF position) const;
 
       /**
        * Sets the function receiving the width a drag asks for.
@@ -59,9 +68,10 @@ namespace Rellu {
       void mousePressEvent(QMouseEvent* event) override;
       void mouseMoveEvent(QMouseEvent* event) override;
       void mouseReleaseEvent(QMouseEvent* event) override;
+      void leaveEvent(QEvent* event) override;
 
     private:
-      QPointer<QWidget> m_pane;
+      QPointer<PaneFrame> m_pane;
       WidthHandler m_handler;
       WidthProvider m_provider;
       bool m_is_pressed;

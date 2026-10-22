@@ -26,14 +26,21 @@ TEST_SUITE("PaneResizer") {
   TEST_CASE("pane_resizer") {
     auto parent = QWidget();
     parent.resize(800, 600);
-    auto pane = new QWidget(&parent);
-    pane->setGeometry(50, 0, 400, 600);
+    auto pane = new PaneFrame(&parent);
+    pane->move(50, 0);
+    pane->set_device_width(400);
+    pane->setFixedHeight(580);
     auto resizer = PaneResizer(*pane, &parent);
     parent.show();
     QCoreApplication::processEvents();
     REQUIRE(resizer.isVisible());
     REQUIRE(resizer.geometry() ==
       QRect(450 - PaneResizer::BAND_WIDTH, 0, PaneResizer::BAND_WIDTH, 600));
+    REQUIRE(!resizer.is_on_band(QPointF(-0.5, 10)));
+    REQUIRE(resizer.is_on_band(QPointF(0, 10)));
+    REQUIRE(resizer.is_on_band(QPointF(3.5, 10)));
+    REQUIRE(!resizer.is_on_band(QPointF(4, 10)));
+    move(resizer, 448);
     REQUIRE(resizer.cursor().shape() == Qt::SizeHorCursor);
     auto widths = std::vector<double>();
     resizer.set_width_handler([&] (auto width) {
@@ -86,7 +93,7 @@ TEST_SUITE("PaneResizer") {
     REQUIRE(widths == std::vector{1222.0 / 3 + 1});
     send(resizer, QEvent::MouseButtonRelease, 489, Qt::LeftButton,
       Qt::NoButton);
-    pane->setGeometry(50, 0, 300, 600);
+    pane->set_device_width(300);
     REQUIRE(resizer.geometry().x() == 350 - PaneResizer::BAND_WIDTH);
     pane->hide();
     REQUIRE(!resizer.isVisible());

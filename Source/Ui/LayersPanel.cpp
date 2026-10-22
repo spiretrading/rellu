@@ -30,6 +30,11 @@ using namespace Rellu;
 namespace {
   constexpr auto INDICATOR_WIDTH = 24;
   constexpr auto ICON_MARGIN = 6;
+  constexpr auto SEARCH_ICON_SIZE = 10;
+  constexpr auto SEARCH_TEXT_MARGIN = 17;
+  constexpr auto FILTER_SIZE = 12;
+  constexpr auto FILTER_INSET = 4;
+  constexpr auto SEARCH_TEXT_GAP = 2;
   const auto FILTERS = std::to_array<std::pair<LayerFilter, const char*>>({
     std::pair(LayerFilter::ALL, "All Items"),
     std::pair(LayerFilter::IMAGES, "Images"),
@@ -230,7 +235,7 @@ LayersPanel::LayersPanel(QWidget* parent)
   setObjectName("layers_panel");
   auto search = new QWidget();
   auto search_layout = new QHBoxLayout(search);
-  search_layout->setContentsMargins(12, 12, 13, 0);
+  search_layout->setContentsMargins(12, 12, 12, 0);
   search_layout->setSpacing(4);
   m_search->setObjectName("search_field");
   m_search->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
@@ -238,7 +243,12 @@ LayersPanel::LayersPanel(QWidget* parent)
   m_search->setAccessibleName(translate("layers", "Search Layers"));
   m_search->setClearButtonEnabled(true);
   m_search->installEventFilter(this);
-  m_search->addAction(get_icon(Glyph::SEARCH), QLineEdit::LeadingPosition);
+  m_search_icon = new QLabel(m_search);
+  m_search_icon->setObjectName("search_icon");
+  m_search_icon->setPixmap(get_icon(Glyph::SEARCH).pixmap(
+    QSize(SEARCH_ICON_SIZE, SEARCH_ICON_SIZE), devicePixelRatioF()));
+  m_search_icon->setFixedSize(SEARCH_ICON_SIZE, SEARCH_ICON_SIZE);
+  m_search_icon->setAttribute(Qt::WA_TransparentForMouseEvents);
   search_layout->addWidget(m_search, 1);
   connect(m_search, &QLineEdit::textChanged, this, [this] (const auto& text) {
     set_search(text);
@@ -247,8 +257,8 @@ LayersPanel::LayersPanel(QWidget* parent)
   m_filter_button->setAutoRaise(true);
   m_filter_button->setFocusPolicy(Qt::NoFocus);
   m_filter_button->setIcon(get_icon(Glyph::CHEVRON_DOWN));
-  m_filter_button->setIconSize(QSize(16, 16));
-  m_filter_button->setFixedSize(24, 24);
+  m_filter_button->setIconSize(QSize(FILTER_SIZE, FILTER_SIZE));
+  m_filter_button->setFixedSize(FILTER_SIZE, FILTER_SIZE);
   m_filter_button->setToolTip(translate("layers", "Filter"));
   m_filter_button->setAccessibleName(translate("layers", "Filter"));
   m_filter_button->setPopupMode(QToolButton::InstantPopup);
@@ -265,7 +275,8 @@ LayersPanel::LayersPanel(QWidget* parent)
   }
   m_filter_button->setMenu(filters);
   m_filter_button->setParent(m_search);
-  m_search->setTextMargins(0, 0, m_filter_button->width(), 0);
+  m_search->setTextMargins(SEARCH_TEXT_MARGIN, 0,
+    FILTER_SIZE + FILTER_INSET + SEARCH_TEXT_GAP, 0);
   auto heading = new QWidget();
   auto heading_layout = new QHBoxLayout(heading);
   heading_layout->setContentsMargins(12, 18, 16, 4);
@@ -494,8 +505,11 @@ void LayersPanel::show_context_menu(QTreeView& view, const QPoint& position) {
 
 bool LayersPanel::eventFilter(QObject* watched, QEvent* event) {
   if(watched == m_search && event->type() == QEvent::Resize) {
-    m_filter_button->move(m_search->width() - m_filter_button->width() - 1,
+    m_filter_button->move(
+      m_search->width() - m_filter_button->width() - FILTER_INSET,
       (m_search->height() - m_filter_button->height()) / 2);
+    m_search_icon->move(
+      0, (m_search->height() - m_search_icon->height()) / 2);
   }
   if(watched == m_search) {
     if(event->type() == QEvent::KeyPress &&

@@ -541,23 +541,30 @@ TEST_SUITE("LayersPanel") {
     REQUIRE(panel.get_search() == "back");
     REQUIRE(panel.get_results().model()->rowCount() == 2);
   }
+
   TEST_CASE("narrow_search_row") {
     auto panel = LayersPanel();
-    panel.resize(117, 400);
+    panel.resize(118, 400);
     panel.show();
     QCoreApplication::processEvents();
     auto field = panel.findChild<QLineEdit*>("search_field");
     REQUIRE(field);
     REQUIRE(field->mapTo(&panel, QPoint(0, 0)).x() == 12);
-    REQUIRE(field->width() == 117 - 12 - 13);
+    REQUIRE(field->width() == 118 - 12 - 12);
     auto buttons = field->findChildren<QToolButton*>();
     auto filter = std::find_if(buttons.begin(), buttons.end(),
       [] (const auto& button) {
         return button->menu() != nullptr;
       });
     REQUIRE(filter != buttons.end());
-    REQUIRE((*filter)->geometry().right() == field->width() - 2);
-    REQUIRE(field->textMargins().right() == (*filter)->width());
+    REQUIRE((*filter)->geometry().right() == field->width() - 4 - 1);
+    REQUIRE((*filter)->width() == 12);
+    REQUIRE(field->textMargins().left() == 17);
+    REQUIRE(field->textMargins().right() == 18);
+    REQUIRE(field->actions().empty());
+    auto icon = field->findChild<QLabel*>("search_icon");
+    REQUIRE(icon);
+    REQUIRE(icon->geometry().x() == 0);
     panel.hide();
   }
 }

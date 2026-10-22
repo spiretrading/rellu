@@ -1,5 +1,6 @@
 #ifndef RELLU_UI_CANVAS_FRAME_HPP
 #define RELLU_UI_CANVAS_FRAME_HPP
+#include <optional>
 #include <QPoint>
 #include <QRect>
 #include <QWidget>
@@ -23,9 +24,12 @@ namespace Rellu {
    * @param canvas The top left corner of the canvas in logical pixels of the
    *        window.
    * @param ratio The number of device pixels per logical pixel.
+   * @param edge The device pixel of the window at which the region begins
+   *        instead of the frame's left edge, or none.
    * @return The region in logical pixels relative to the canvas.
    */
-  Rect get_view_region(const QRect& frame, QPoint canvas, double ratio);
+  Rect get_view_region(const QRect& frame, QPoint canvas, double ratio,
+    std::optional<int> edge = std::nullopt);
 
   /**
    * Holds a Canvas, placing its top left corner on a whole device pixel of
@@ -47,12 +51,20 @@ namespace Rellu {
       /** Returns the canvas placed. */
       Canvas& get_canvas() const;
 
+      /**
+       * Sets the device pixel of the window at which the canvas's view
+       * region begins, as where a pane beside it ends.
+       * @param edge The device pixel, or none for the frame's left edge.
+       */
+      void set_leading_edge(std::optional<int> edge);
+
     protected:
       bool event(QEvent* event) override;
       void paintEvent(QPaintEvent* event) override;
 
     private:
       Canvas* m_canvas;
+      std::optional<int> m_edge;
 
       void place();
   };
