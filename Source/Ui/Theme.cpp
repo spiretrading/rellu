@@ -34,11 +34,11 @@ QWidget#menu_row {
 }
 QWidget#app_bar {
   background: #F5F5F5;
-  border-bottom: 1px solid #E4E4E4;
+  border-bottom: 2px solid #E4E4E4;
 }
 QWidget#toolbar {
   background: #F5F5F5;
-  border-right: 1px solid #E4E4E4;
+  border-right: 2px solid #E4E4E4;
 }
 QWidget#assets_panel, QWidget#plugins_panel, QWidget#layers_panel,
 QWidget#assets_content, QScrollArea#assets_scroll {
@@ -74,19 +74,8 @@ QToolButton#panel_button::menu-indicator {
 }
 QToolButton#workspace_button {
   border: none;
-  border-top: 2px solid transparent;
-  border-bottom: 2px solid transparent;
   background: transparent;
-  color: #8E8E8E;
-  font-size: 14px;
-  padding: 0px 2px;
-}
-QToolButton#workspace_button:checked {
-  color: #3F3F3F;
-  border-bottom: 2px solid #3F3F3F;
-}
-QToolButton#workspace_button:hover:!checked {
-  color: #6E6E6E;
+  font-size: 10pt;
 }
 QLabel#document_title {
   color: #3F3F3F;
@@ -109,11 +98,10 @@ QLabel#panel_heading {
 QLineEdit#search_field {
   background: transparent;
   border: none;
-  border-bottom: 1px solid #CACACA;
   color: #3F3F3F;
   placeholder-text-color: #666666;
   font-size: 12px;
-  padding: 4px 0px;
+  padding: 4px 0px 8px 0px;
 }
 QToolButton#section_toggle {
   border: none;
@@ -146,6 +134,9 @@ QTreeView#layers::item {
   height: 32px;
   border: none;
 }
+QTreeView#layers::item:first {
+  padding-left: 6px;
+}
 QTreeView#layers::item:selected, QTreeView#layers::branch:selected {
   background: #E0F0FA;
   color: #3F3F3F;
@@ -156,7 +147,7 @@ QTreeView#layers::branch:hover:!selected {
 }
 QLabel#layers_heading {
   color: #8E8E8E;
-  font-size: 11px;
+  font-size: 10px;
   letter-spacing: 1px;
 }
 QLabel#section_heading {
@@ -649,11 +640,9 @@ void Rellu::apply_theme(QApplication& application) {
   application.setPalette(make_light_palette());
   auto font = QFont("Segoe UI");
   font.setPixelSize(12);
-  font.setStyleStrategy(QFont::NoSubpixelAntialias);
   QApplication::setFont(font);
   auto menu_font = QFont("Segoe UI");
   menu_font.setPixelSize(14);
-  menu_font.setStyleStrategy(QFont::NoSubpixelAntialias);
   QApplication::setFont(menu_font, "QMenu");
   QApplication::setFont(menu_font, "QMenuBar");
   application.setStyleSheet(STYLE_SHEET);

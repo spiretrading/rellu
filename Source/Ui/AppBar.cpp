@@ -1,10 +1,13 @@
 #include <cmath>
 #include <utility>
+#include <QColor>
 #include <QEvent>
+#include <QFontMetricsF>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QPainter>
 #include <QResizeEvent>
 #include <QTimer>
 #include "Rellu/Ui/AppBar.hpp"
@@ -17,6 +20,52 @@ using namespace Rellu;
 namespace {
   constexpr auto ICON_BUTTON_SIZE = 32;
   constexpr auto ICON_SIZE = 20;
+  constexpr auto APP_BAR_MARGIN = 8;
+  constexpr auto WORKSPACE_LEFT = 66;
+  constexpr auto WORKSPACE_SPACING = 32;
+  constexpr auto WORKSPACE_BASELINE = 76.0 / 3;
+  constexpr auto WORKSPACE_TEXT_LEFT = -2.0 / 3;
+  constexpr auto INDICATOR_HEIGHT = 2;
+  const auto WORKSPACE_COLOR = QColor(0x8E, 0x8E, 0x8E);
+  const auto HOVERED_WORKSPACE_COLOR = QColor(0x6E, 0x6E, 0x6E);
+  const auto CURRENT_WORKSPACE_COLOR = QColor(0x3F, 0x3F, 0x3F);
+
+  class WorkspaceButton : public QToolButton {
+    public:
+      QSize sizeHint() const override {
+        return QSize(static_cast<int>(std::ceil(get_advance() - 1e-6)),
+          AppBar::HEIGHT - INDICATOR_HEIGHT);
+      }
+
+      QSize minimumSizeHint() const override {
+        return sizeHint();
+      }
+
+    protected:
+      void paintEvent(QPaintEvent*) override {
+        auto painter = QPainter(this);
+        painter.setFont(font());
+        if(isChecked()) {
+          painter.setPen(CURRENT_WORKSPACE_COLOR);
+        } else if(underMouse()) {
+          painter.setPen(HOVERED_WORKSPACE_COLOR);
+        } else {
+          painter.setPen(WORKSPACE_COLOR);
+        }
+        painter.drawText(
+          QPointF(WORKSPACE_TEXT_LEFT, WORKSPACE_BASELINE), text());
+        if(isChecked()) {
+          painter.setRenderHint(QPainter::Antialiasing);
+          painter.fillRect(QRectF(0, height() - INDICATOR_HEIGHT,
+            get_advance(), INDICATOR_HEIGHT), CURRENT_WORKSPACE_COLOR);
+        }
+      }
+
+    private:
+      double get_advance() const {
+        return QFontMetricsF(font()).horizontalAdvance(text());
+      }
+  };
   constexpr auto ZOOM_FIELD_WIDTH = 64;
 
   QToolButton* make_icon_button(Glyph glyph, const QString& tip) {
@@ -33,7 +82,7 @@ namespace {
   }
 
   QToolButton* make_workspace_button(const QString& label) {
-    auto button = new QToolButton();
+    auto button = new WorkspaceButton();
     button->setObjectName("workspace_button");
     button->setText(translate("app_bar", label));
     button->setAccessibleName(
@@ -41,7 +90,7 @@ namespace {
     button->setCheckable(true);
     button->setAutoRaise(true);
     button->setFocusPolicy(Qt::NoFocus);
-    button->setFixedHeight(AppBar::HEIGHT);
+    button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     return button;
   }
 }
@@ -64,7 +113,7 @@ AppBar::AppBar(QWidget* parent)
   setFixedHeight(HEIGHT);
   auto layout = new QGridLayout(this);
   layout->setSizeConstraint(QLayout::SetNoConstraint);
-  layout->setContentsMargins(8, 0, 12, 0);
+  layout->setContentsMargins(APP_BAR_MARGIN, 0, 12, 0);
   layout->setHorizontalSpacing(0);
   auto left = new QWidget();
   m_left = left;
@@ -74,10 +123,11 @@ AppBar::AppBar(QWidget* parent)
   auto home = make_icon_button(Glyph::HOME, "Home");
   home->setEnabled(false);
   left_layout->addWidget(home);
-  left_layout->addSpacing(20);
+  left_layout->addSpacing(
+    WORKSPACE_LEFT - APP_BAR_MARGIN - ICON_BUTTON_SIZE);
   for(auto button : {m_design, m_prototype, m_share}) {
-    left_layout->addWidget(button);
-    left_layout->addSpacing(22);
+    left_layout->addWidget(button, 0, Qt::AlignTop);
+    left_layout->addSpacing(WORKSPACE_SPACING);
   }
   left_layout->addStretch(1);
   auto middle = new QWidget();

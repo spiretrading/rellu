@@ -7,7 +7,9 @@
 #include <QStyle>
 #include <QStyleFactory>
 #include "Rellu/Model/Transaction.hpp"
+#include "Rellu/Ui/AppBar.hpp"
 #include "Rellu/Ui/Theme.hpp"
+#include "Rellu/Ui/Toolbar.hpp"
 #include "TestDocument.hpp"
 
 using namespace Rellu;
@@ -45,17 +47,29 @@ TEST_SUITE("Theme") {
     auto menu_bar_font = QApplication::font("QMenuBar");
     auto style_sheet = application.styleSheet();
     apply_theme(application);
-    auto is_grayscale = [] (const QFont& font) {
-      return (font.styleStrategy() & QFont::NoSubpixelAntialias) != 0;
-    };
-    REQUIRE(is_grayscale(QApplication::font()));
-    REQUIRE(is_grayscale(QApplication::font("QMenu")));
     auto field = QLineEdit();
     field.setObjectName("search_field");
     field.ensurePolished();
-    REQUIRE(is_grayscale(field.font()));
     REQUIRE(field.palette().color(QPalette::PlaceholderText) ==
       QColor(0x66, 0x66, 0x66));
+    auto bar = AppBar();
+    bar.resize(400, AppBar::HEIGHT);
+    auto bar_image = bar.grab().toImage();
+    REQUIRE(bar_image.pixelColor(200, AppBar::HEIGHT - 3) ==
+      QColor(0xF5, 0xF5, 0xF5));
+    REQUIRE(bar_image.pixelColor(200, AppBar::HEIGHT - 2) ==
+      QColor(0xE4, 0xE4, 0xE4));
+    REQUIRE(bar_image.pixelColor(200, AppBar::HEIGHT - 1) ==
+      QColor(0xE4, 0xE4, 0xE4));
+    auto toolbar = Toolbar(make_xd_tools(), make_xd_panels());
+    toolbar.resize(Toolbar::WIDTH, 600);
+    auto toolbar_image = toolbar.grab().toImage();
+    REQUIRE(toolbar_image.pixelColor(Toolbar::WIDTH - 3, 300) ==
+      QColor(0xF5, 0xF5, 0xF5));
+    REQUIRE(toolbar_image.pixelColor(Toolbar::WIDTH - 2, 300) ==
+      QColor(0xE4, 0xE4, 0xE4));
+    REQUIRE(toolbar_image.pixelColor(Toolbar::WIDTH - 1, 300) ==
+      QColor(0xE4, 0xE4, 0xE4));
     application.setStyleSheet(style_sheet);
     QApplication::setStyle(QStyleFactory::create(style));
     QApplication::setPalette(palette);

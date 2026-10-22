@@ -15,6 +15,7 @@
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPen>
 #include <QStyledItemDelegate>
 #include <QVBoxLayout>
 #include "Rellu/Commands/Components.hpp"
@@ -33,6 +34,14 @@ using namespace Rellu;
 namespace {
   constexpr auto INDICATOR_WIDTH = 24;
   constexpr auto ICON_MARGIN = 6;
+  constexpr auto NAME_PADDING = 6;
+  constexpr auto SEARCH_FIELD_HEIGHT = 30;
+  constexpr auto HEADING_HEIGHT = 14;
+  constexpr auto HEADING_INDENT = 7;
+  constexpr auto GROUP_HEADING_INDENT = 26;
+  const auto BACK_RECT = QRect(12, 20, 20, 20);
+  const auto BACK_COLOR = QColor(0x66, 0x66, 0x66);
+  constexpr auto BACK_WIDTH = 4.0 / 3;
   constexpr auto SEARCH_GLYPH_SIZE = 28.0 / 3;
   constexpr auto SEARCH_GLYPH_LEFT = 2.0 / 3;
   constexpr auto SEARCH_GLYPH_TOP = 28.0 / 3;
@@ -43,12 +52,24 @@ namespace {
   constexpr auto CHEVRON_TOP = 34.0 / 3;
   constexpr auto FILTER_INSET = 4;
   constexpr auto SEARCH_TEXT_GAP = 2;
+  const auto UNDERLINE_COLOR = QColor(0xCA, 0xCA, 0xCA);
   const auto FILTERS = std::to_array<std::pair<LayerFilter, const char*>>({
     std::pair(LayerFilter::ALL, "All Items"),
     std::pair(LayerFilter::IMAGES, "Images"),
     std::pair(LayerFilter::SHAPES, "Shapes"),
     std::pair(LayerFilter::TEXT, "Text"),
     std::pair(LayerFilter::VIDEO, "Video")});
+
+  QRectF get_underline_rect(const QWidget& field) {
+    auto ratio = field.devicePixelRatioF();
+    auto origin = QPointF(field.mapTo(field.window(), QPoint(0, 0))) * ratio;
+    auto left = std::lround(origin.x());
+    auto right = std::lround(origin.x() + field.width() * ratio);
+    auto bottom = std::lround(origin.y() + field.height() * ratio);
+    auto top = bottom - std::max(std::lround(ratio), 1L);
+    return QRectF((left - origin.x()) / ratio, (top - origin.y()) / ratio,
+      (right - left) / ratio, (bottom - top) / ratio);
+  }
 
   QRectF snap_glyph(
       const QWidget& field, double left, double top, double width,
@@ -73,6 +94,23 @@ namespace {
       CHEVRON_WIDTH, CHEVRON_HEIGHT);
     return right.translated(-width, 0);
   }
+
+  class BackButton : public QToolButton {
+    protected:
+      void paintEvent(QPaintEvent* event) override {
+        QToolButton::paintEvent(event);
+        auto painter = QPainter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        auto pen = QPen(BACK_COLOR, BACK_WIDTH);
+        pen.setCapStyle(Qt::FlatCap);
+        pen.setJoinStyle(Qt::MiterJoin);
+        painter.setPen(pen);
+        auto origin = QPointF(BACK_RECT.topLeft());
+        auto points = std::array{QPointF(20.75, 26.25) - origin,
+          QPointF(17, 30) - origin, QPointF(20.75, 33.75) - origin};
+        painter.drawPolyline(points.data(), static_cast<int>(points.size()));
+      }
+  };
 
   class SearchGlyphs : public QWidget {
     public:
@@ -100,6 +138,7 @@ namespace {
         }
         auto painter = QPainter(this);
         auto& field = *parentWidget();
+        painter.fillRect(get_underline_rect(field), UNDERLINE_COLOR);
         painter.drawPixmap(get_search_glyph_rect(field).topLeft(), m_icon);
         painter.drawPixmap(get_chevron_rect(field).topLeft(), m_chevron);
       }
@@ -292,7 +331,7 @@ LayersPanel::LayersPanel(QWidget* parent)
       m_search(new QLineEdit()),
       m_filter_button(new QToolButton()),
       m_search_glyphs(nullptr),
-      m_back(new QToolButton()),
+      m_back(new BackButton()),
       m_heading(new QLabel()),
       m_editor(nullptr),
       m_actions(nullptr),
@@ -308,6 +347,7 @@ LayersPanel::LayersPanel(QWidget* parent)
   search_layout->setSpacing(4);
   m_search->setObjectName("search_field");
   m_search->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+  m_search->setFixedHeight(SEARCH_FIELD_HEIGHT);
   m_search->setPlaceholderText(translate("layers", "All Items"));
   m_search->setAccessibleName(translate("layers", "Search Layers"));
   m_search->setClearButtonEnabled(true);
@@ -341,18 +381,20 @@ LayersPanel::LayersPanel(QWidget* parent)
       SEARCH_TEXT_GAP, 0);
   auto heading = new QWidget();
   auto heading_layout = new QHBoxLayout(heading);
-  heading_layout->setContentsMargins(12, 18, 16, 4);
-  heading_layout->setSpacing(4);
+  heading_layout->setContentsMargins(12, 23, 16, 1);
+  heading_layout->setSpacing(0);
   m_back->setObjectName("panel_button");
   m_back->setAutoRaise(true);
   m_back->setFocusPolicy(Qt::NoFocus);
-  m_back->setIcon(get_icon(Glyph::CHEVRON_LEFT));
-  m_back->setIconSize(QSize(14, 14));
-  m_back->setFixedSize(20, 20);
   m_back->setToolTip(translate("layers", "Back"));
-  heading_layout->addWidget(m_back);
+  m_back->setParent(heading);
+  m_back->setGeometry(BACK_RECT);
   m_heading->setObjectName("layers_heading");
+  m_heading->setFixedHeight(HEADING_HEIGHT);
+  m_heading->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+  m_heading->setContentsMargins(HEADING_INDENT, 0, 0, 0);
   heading_layout->addWidget(m_heading, 1);
+  m_back->raise();
   m_results_model = new ResultsModel(this);
   m_results_model->setSourceModel(m_model);
   m_view->setObjectName("layers");
@@ -602,8 +644,8 @@ bool LayersPanel::eventFilter(QObject* watched, QEvent* event) {
   if(!is_results && index.isValid() && index.column() == LayersModel::NAME) {
     auto rect = m_view->visualRect(index);
     if(m_view->itemsExpandable() && m_model->hasChildren(index) &&
-        position.x() < rect.left() + m_view->iconSize().width() +
-          ICON_MARGIN) {
+        position.x() < rect.left() + NAME_PADDING +
+          m_view->iconSize().width() + ICON_MARGIN) {
       if(event->type() == QEvent::MouseButtonPress) {
         auto id = m_model->get_id(index);
         set_current(id);
@@ -1089,16 +1131,20 @@ void LayersPanel::update_scope() {
   if(is_canvas) {
     m_heading->setText(translate("layers", "CANVAS"));
     m_back->setVisible(false);
+    m_heading->setContentsMargins(HEADING_INDENT, 0, 0, 0);
   } else if(m_scope.is_nil()) {
     m_heading->setText(translate("layers", "ARTBOARDS"));
     m_back->setVisible(false);
+    m_heading->setContentsMargins(HEADING_INDENT, 0, 0, 0);
   } else if(m_scope == LayersModel::PASTEBOARD) {
     m_heading->setText(translate("layers", "PASTEBOARD"));
     m_back->setVisible(true);
+    m_heading->setContentsMargins(GROUP_HEADING_INDENT, 0, 0, 0);
   } else {
     m_heading->setText(
       get_display_name(*document, document->get(m_scope)).toUpper());
     m_back->setVisible(true);
+    m_heading->setContentsMargins(GROUP_HEADING_INDENT, 0, 0, 0);
   }
 }
 

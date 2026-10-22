@@ -3,7 +3,10 @@
 #include <memory>
 #include <vector>
 #include <doctest/doctest.h>
+#include <QColor>
 #include <QCoreApplication>
+#include <QFont>
+#include <QImage>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLabel>
@@ -11,6 +14,7 @@
 #include <QMouseEvent>
 #include <QPalette>
 #include <QToolButton>
+#include <QTreeView>
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Ui/LayersPanel.hpp"
@@ -554,6 +558,7 @@ TEST_SUITE("LayersPanel") {
     REQUIRE(field);
     REQUIRE(field->mapTo(&panel, QPoint(0, 0)).x() == 12);
     REQUIRE(field->width() == 118 - 12 - 12);
+    REQUIRE(field->height() == 30);
     auto buttons = field->findChildren<QToolButton*>();
     auto filter = std::find_if(buttons.begin(), buttons.end(),
       [] (const auto& button) {
@@ -580,9 +585,49 @@ TEST_SUITE("LayersPanel") {
       return box;
     };
     auto half = image.width() / 2;
-    REQUIRE(bounds(QRect(0, 0, half, image.height())) == QRect(1, 9, 9, 9));
-    REQUIRE(bounds(QRect(half, 0, image.width() - half, image.height())) ==
+    auto line = image.height() - 1;
+    REQUIRE(bounds(QRect(0, 0, half, line)) == QRect(1, 9, 9, 9));
+    REQUIRE(bounds(QRect(half, 0, image.width() - half, line)) ==
       QRect(field->width() - 14, 11, 9, 6));
+    REQUIRE(bounds(QRect(0, line, image.width(), 1)) ==
+      QRect(0, line, image.width(), 1));
+    REQUIRE(image.pixelColor(half, line) == QColor(0xCA, 0xCA, 0xCA));
+    auto heading = panel.findChild<QLabel*>("layers_heading");
+    REQUIRE(heading);
+    REQUIRE(heading->mapTo(&panel, QPoint(0, 0)) == QPoint(12, 65));
+    REQUIRE(heading->height() == 14);
+    REQUIRE(heading->contentsMargins().left() == 7);
+    auto heading_font = QFont("Segoe UI");
+    heading_font.setPixelSize(10);
+    heading->setFont(heading_font);
+    REQUIRE(heading->fontMetrics().height() <= heading->height());
+    heading->setText("ARTBOARDS");
+    auto text = QImage(heading->size(), QImage::Format_ARGB32);
+    text.fill(Qt::white);
+    heading->render(&text);
+    auto ink = QRect();
+    for(auto y = 0; y != text.height(); ++y) {
+      for(auto x = 0; x != text.width(); ++x) {
+        if(text.pixelColor(x, y).value() < 200) {
+          ink |= QRect(x, y, 1, 1);
+        }
+      }
+    }
+    REQUIRE(!ink.isEmpty());
+    REQUIRE(ink.left() >= 7);
+    REQUIRE(ink.top() > 0);
+    REQUIRE(ink.bottom() < text.height() - 1);
+    auto tool_buttons = panel.findChildren<QToolButton*>();
+    auto back = std::find_if(tool_buttons.begin(), tool_buttons.end(),
+      [] (const auto& button) {
+        return button->toolTip() == "Back";
+      });
+    REQUIRE(back != tool_buttons.end());
+    REQUIRE((*back)->parentWidget() == heading->parentWidget());
+    REQUIRE((*back)->geometry() == QRect(12, 20, 20, 20));
+    auto view = panel.findChild<QTreeView*>("layers");
+    REQUIRE(view);
+    REQUIRE(view->mapTo(&panel, QPoint(0, 0)).y() == 80);
     panel.hide();
   }
 }

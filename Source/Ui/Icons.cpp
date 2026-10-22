@@ -25,6 +25,7 @@ namespace {
   constexpr auto WEIGHT = 1.5;
   const auto LAYER_INK = QColor(0xBD, 0xBD, 0xBD);
   const auto LAYER_LINE_INK = QColor(0x9A, 0x9A, 0x9A);
+  const auto ARTBOARD_INK = QColor(0x66, 0x66, 0x66);
 
   QPen make_pen(const QColor& color, double width = WEIGHT,
       Qt::PenCapStyle cap = Qt::FlatCap,
@@ -643,9 +644,13 @@ namespace {
         stroke_rect(painter, color, QRectF(8.75, 8.75, 6.5, 6.5));
         break;
       case Glyph::LAYER_ARTBOARD:
-        polyline(painter, color, {QPointF(14, 6.75), QPointF(6.75, 6.75),
-          QPointF(6.75, 17.25), QPointF(17.25, 17.25), QPointF(17.25, 10),
-          QPointF(14, 6.75)}, 1.4);
+        painter.setPen(make_pen(color, 1.5, Qt::FlatCap, Qt::MiterJoin));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPolygon(make_polygon({QPointF(6.75, 6.75),
+          QPointF(15, 6.75), QPointF(18.75, 10.5), QPointF(18.75, 18.75),
+          QPointF(6.75, 18.75)}));
+        fill_polygon(painter, color,
+          {QPointF(15, 6.75), QPointF(18.75, 10.5), QPointF(15, 10.5)});
         break;
       case Glyph::LAYER_RECTANGLE:
         fill_rect(painter, color, QRectF(6, 6, 12, 12));
@@ -919,7 +924,9 @@ namespace {
   }
 
   QColor get_layer_color(Glyph glyph) {
-    if(glyph == Glyph::LAYER_ARTBOARD || glyph == Glyph::LAYER_LINE ||
+    if(glyph == Glyph::LAYER_ARTBOARD) {
+      return ARTBOARD_INK;
+    } else if(glyph == Glyph::LAYER_LINE ||
         glyph == Glyph::LAYER_PATH || glyph == Glyph::LAYER_TEXT ||
         glyph == Glyph::LAYER_REFERENCE) {
       return LAYER_LINE_INK;

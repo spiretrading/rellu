@@ -78,20 +78,14 @@ namespace Rellu {
       QPointer<PaneFrame> m_pane;
       WidthHandler m_handler;
       WidthProvider m_provider;
-      QObject* m_enter_filter;
       bool m_is_pressed;
       bool m_is_dragging;
-      bool m_has_parent_cursor;
       double m_press;
       double m_origin;
       double m_width;
 
       QPoint get_pane_position() const;
       void update_cursor(QPointF position);
-      void press(double x);
-      void drag(double x);
-      void set_parent_cursor(bool is_band);
-      bool handle_parent_event(QEvent& event);
   };
 }
 

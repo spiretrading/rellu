@@ -1,11 +1,15 @@
 #include <array>
+#include <cmath>
 #include <vector>
 #include <doctest/doctest.h>
+#include <QColor>
 #include <QCoreApplication>
 #include <QFocusEvent>
+#include <QFontMetricsF>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QToolButton>
 #include "Rellu/Ui/AppBar.hpp"
 
 using namespace Rellu;
@@ -128,5 +132,32 @@ TEST_SUITE("AppBar") {
     bar.resize(2000, AppBar::HEIGHT);
     QCoreApplication::processEvents();
     REQUIRE(field->isVisible());
+  }
+  TEST_CASE("workspace_layout") {
+    auto bar = AppBar();
+    bar.resize(2000, AppBar::HEIGHT);
+    bar.show();
+    QCoreApplication::processEvents();
+    auto& design = bar.get_workspace_button(Workspace::DESIGN);
+    auto& prototype = bar.get_workspace_button(Workspace::PROTOTYPE);
+    auto& share = bar.get_workspace_button(Workspace::SHARE);
+    REQUIRE(design.mapTo(&bar, QPoint(0, 0)) == QPoint(66, 0));
+    REQUIRE(prototype.mapTo(&bar, QPoint(0, 0)).x() ==
+      66 + design.width() + 32);
+    REQUIRE(share.mapTo(&bar, QPoint(0, 0)).x() ==
+      prototype.mapTo(&bar, QPoint(0, 0)).x() + prototype.width() + 32);
+    for(auto button : {&design, &prototype, &share}) {
+      REQUIRE(button->height() == AppBar::HEIGHT - 2);
+      REQUIRE(button->width() == static_cast<int>(std::ceil(
+        QFontMetricsF(button->font()).horizontalAdvance(button->text()))));
+    }
+    auto image = design.grab().toImage();
+    auto bottom = design.height() - 1;
+    REQUIRE(image.pixelColor(0, bottom) == QColor(0x3F, 0x3F, 0x3F));
+    REQUIRE(image.pixelColor(0, bottom - 1) == QColor(0x3F, 0x3F, 0x3F));
+    REQUIRE(image.pixelColor(0, bottom - 2) != QColor(0x3F, 0x3F, 0x3F));
+    auto prototype_image = prototype.grab().toImage();
+    REQUIRE(prototype_image.pixelColor(0, bottom) !=
+      QColor(0x3F, 0x3F, 0x3F));
   }
 }
