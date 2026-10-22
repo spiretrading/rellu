@@ -46,6 +46,22 @@ namespace Rellu {
    * @param shortcut The shortcut.
    */
   QString to_xd_shortcut_text(const QKeySequence& shortcut);
+
+  /**
+   * Formats a shortcut the way Adobe XD's tool tips show it in a language,
+   * such as <code>Shift + Ctrl + Z</code>.
+   * @param shortcut The shortcut.
+   * @param language The language.
+   */
+  QString to_xd_tool_tip_shortcut_text(
+    const QKeySequence& shortcut, Language language);
+
+  /**
+   * Formats a shortcut the way Adobe XD's tool tips show it in the language
+   * of the user interface.
+   * @param shortcut The shortcut.
+   */
+  QString to_xd_tool_tip_shortcut_text(const QKeySequence& shortcut);
 }
 
 #endif

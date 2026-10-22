@@ -342,6 +342,29 @@ TEST_SUITE("LayersModel") {
     REQUIRE(model.get_id(QModelIndex()).is_nil());
   }
 
+  TEST_CASE("toggle_tool_tips") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto model = LayersModel();
+    model.set_document(&document);
+    auto tip = [&] (int column) {
+      return model.data(model.find(ids.m_label, column), Qt::ToolTipRole).
+        toString().toStdString();
+    };
+    REQUIRE(tip(LayersModel::VISIBILITY) == "Hide (Ctrl + ,)");
+    REQUIRE(tip(LayersModel::LOCK) == "Lock (Ctrl + L)");
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(ids.m_label).m_header;
+      header.m_is_visible = false;
+      header.m_is_locked = true;
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    REQUIRE(tip(LayersModel::VISIBILITY) == "Show (Ctrl + ,)");
+    REQUIRE(tip(LayersModel::LOCK) == "Unlock (Ctrl + L)");
+  }
+
   TEST_CASE("header_changes") {
     auto document = Document();
     auto ids = build_test_document(document);

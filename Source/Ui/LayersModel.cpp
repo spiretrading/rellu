@@ -9,6 +9,7 @@
 #include "Rellu/Ui/LayersModel.hpp"
 #include "Rellu/Ui/NodeDescription.hpp"
 #include "Rellu/Ui/Translation.hpp"
+#include "Rellu/Ui/XdMenus.hpp"
 #include "Icons.hpp"
 
 using namespace Rellu;
@@ -251,13 +252,15 @@ QVariant LayersModel::data(const QModelIndex& index, int role) const {
     } else if(role == Qt::DecorationRole) {
       return get_visibility_icon(header->m_is_visible);
     } else if(role == Qt::ToolTipRole) {
-      return translate("layers", header->m_is_visible ? "Visible" : "Hidden");
+      return translate("layers", header->m_is_visible ? "Hide (%1)" :
+        "Show (%1)").arg(to_xd_tool_tip_shortcut_text(QKeySequence("Ctrl+,")));
     }
   } else if(index.column() == LOCK) {
     if(role == Qt::DecorationRole && header->m_is_locked) {
       return get_lock_icon();
-    } else if(role == Qt::ToolTipRole && header->m_is_locked) {
-      return translate("layers", "Locked");
+    } else if(role == Qt::ToolTipRole) {
+      return translate("layers", header->m_is_locked ? "Unlock (%1)" :
+        "Lock (%1)").arg(to_xd_tool_tip_shortcut_text(QKeySequence("Ctrl+L")));
     }
   }
   return QVariant();

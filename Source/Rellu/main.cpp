@@ -7,6 +7,7 @@
 #include "Rellu/Ui/GreyscaleText.hpp"
 #include "Rellu/Ui/PixelHitFilter.hpp"
 #include "Rellu/Ui/Theme.hpp"
+#include "Rellu/Ui/ToolTips.hpp"
 #include "MainWindow.hpp"
 
 Q_IMPORT_PLUGIN(QGifPlugin)
@@ -24,6 +25,7 @@ int main(int argc, char** argv) {
   apply_theme(application);
   application.installEventFilter(new PixelHitFilter(&application));
   application.installEventFilter(new GreyscaleTextFilter(&application));
+  application.installEventFilter(new ToolTipFilter(&application));
   Clipboard::remove_stale_images(Clipboard::get_default_image_directory(),
     QApplication::clipboard()->mimeData());
   auto window = MainWindow();

@@ -1,9 +1,7 @@
 #include <utility>
-#include <QApplication>
-#include <QEvent>
-#include <QToolTip>
 #include <QVBoxLayout>
 #include "Rellu/Ui/Toolbar.hpp"
+#include "Rellu/Ui/ToolTips.hpp"
 #include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "Icons.hpp"
@@ -17,32 +15,6 @@ namespace {
   constexpr auto SPACING = 0;
   constexpr auto BOTTOM_MARGIN = 4;
   constexpr auto BORDER_WIDTH = 2;
-  constexpr auto TIP_GAP = 1;
-
-  class TipFilter : public QObject {
-    public:
-      using QObject::QObject;
-
-    protected:
-      bool eventFilter(QObject* watched, QEvent* event) override {
-        if(event->type() != QEvent::ToolTip || !watched->isWidgetType()) {
-          return QObject::eventFilter(watched, event);
-        }
-        auto& button = static_cast<QWidget&>(*watched);
-        if(button.toolTip().isEmpty()) {
-          return QObject::eventFilter(watched, event);
-        }
-        auto anchor = button.mapToGlobal(
-          QPoint(button.width() + TIP_GAP, button.height() / 2));
-        QToolTip::showText(anchor, button.toolTip(), &button, button.rect());
-        for(auto widget : QApplication::topLevelWidgets()) {
-          if(widget->inherits("QTipLabel") && widget->isVisible()) {
-            widget->move(anchor.x(), anchor.y() - widget->height() / 2);
-          }
-        }
-        return true;
-      }
-  };
 
   ToolEntry make_entry(std::string name, QString label, Glyph glyph,
       const char* shortcut) {
@@ -195,18 +167,18 @@ QToolButton* Toolbar::make_button(const ToolEntry& entry) {
   button->setFixedSize(BUTTON_SIZE, BUTTON_SIZE);
   button->setIconSize(QSize(ICON_SIZE, ICON_SIZE));
   button->setIcon(entry.m_icon);
-  button->installEventFilter(new TipFilter(button));
+  set_tool_tip_placement(*button, ToolTipPlacement::RIGHT);
   auto label = translate("toolbar", entry.m_label);
   button->setAccessibleName(label);
   if(entry.m_shortcut.isEmpty()) {
     button->setToolTip(label);
   } else {
     auto tip = QString("%1 (%2)").arg(entry.m_label,
-      to_xd_shortcut_text(entry.m_shortcut, Language::ENGLISH));
+      to_xd_tool_tip_shortcut_text(entry.m_shortcut, Language::ENGLISH));
     auto translation = translate("toolbar", tip);
     if(translation == tip) {
       translation = QString("%1 (%2)").arg(
-        label, to_xd_shortcut_text(entry.m_shortcut));
+        label, to_xd_tool_tip_shortcut_text(entry.m_shortcut));
     }
     button->setToolTip(translation);
   }

@@ -52,10 +52,10 @@ QScrollArea#inspector_scroll, QWidget#inspector_content {
   background: #F5F5F5;
 }
 QToolTip {
-  background: #FFFFFF;
+  background: #F0F0F0;
   color: #3F3F3F;
-  border: 1px solid #D0D0D0;
-  padding: 3px 6px;
+  border: 1px solid #CFCFCF;
+  padding: 5px 8px 7px 8px;
 }
 QToolButton#toolbar_button, QToolButton#app_bar_button,
 QToolButton#panel_button, QToolButton#zoom_presets {
@@ -63,12 +63,12 @@ QToolButton#panel_button, QToolButton#zoom_presets {
   border-radius: 4px;
   background: transparent;
 }
-QToolButton#toolbar_button:hover, QToolButton#app_bar_button:hover,
-QToolButton#panel_button:hover, QToolButton#zoom_presets:hover {
+QToolButton#panel_button:hover {
   background: #EAEAEA;
 }
 QToolButton#zoom_presets::menu-indicator,
-QToolButton#panel_button::menu-indicator {
+QToolButton#panel_button::menu-indicator,
+QToolButton#layers_filter::menu-indicator {
   image: none;
   width: 0px;
 }
@@ -81,14 +81,15 @@ QLabel#document_title {
   color: #3F3F3F;
   font-size: 14px;
 }
-QWidget#zoom_control {
-  border-bottom: 1px solid #CACACA;
+QToolButton#layers_filter {
+  border: none;
+  background: transparent;
 }
 QLineEdit#zoom_field {
   background: transparent;
   border: none;
   color: #3F3F3F;
-  font-size: 13px;
+  font-size: 12px;
 }
 QLabel#panel_heading {
   color: #6E6E6E;
@@ -231,9 +232,6 @@ QToolButton#icon_toggle {
   background: transparent;
   border: none;
   border-radius: 3px;
-}
-QToolButton#icon_toggle:hover {
-  background: #EAEAEA;
 }
 QToolButton#segment {
   background: #FAFAFA;

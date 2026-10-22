@@ -7,6 +7,7 @@
 #include <tuple>
 #include <utility>
 #include <QAbstractButton>
+#include <QAction>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -37,6 +38,7 @@
 #include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
 #include "Rellu/Ui/Translation.hpp"
+#include "Rellu/Ui/XdMenus.hpp"
 #include "Colors.hpp"
 #include "FieldKeys.hpp"
 #include "HyperlinkStatus.hpp"
@@ -470,6 +472,12 @@ namespace {
       const QString& tip, const char* action) {
     auto button = make_icon_button(glyph, tip);
     bind_action(binding, *button, action);
+    auto command =
+      binding.m_actions ? binding.m_actions->find(action) : nullptr;
+    if(command && !command->shortcut().isEmpty()) {
+      button->setToolTip(translate("inspector", tip + " (%1)").arg(
+        to_xd_tool_tip_shortcut_text(command->shortcut())));
+    }
     return button;
   }
 
@@ -1163,7 +1171,7 @@ namespace {
   void build_component(const Binding& binding, SectionFrame& frame) {
     if(!binding.m_find("component.name")) {
       frame.m_header->addWidget(make_action_button(
-        binding, Glyph::PLUS, "Make Component (Ctrl + K)",
+        binding, Glyph::PLUS, "Make Component",
         "object.make_component"));
       return;
     }

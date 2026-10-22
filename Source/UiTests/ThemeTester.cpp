@@ -70,6 +70,11 @@ TEST_SUITE("Theme") {
       QColor(0xE4, 0xE4, 0xE4));
     REQUIRE(toolbar_image.pixelColor(Toolbar::WIDTH - 1, 300) ==
       QColor(0xE4, 0xE4, 0xE4));
+    auto button = toolbar.find_button("rectangle");
+    button->setAttribute(Qt::WA_UnderMouse, true);
+    auto hovered = toolbar.grab().toImage();
+    auto corner = button->geometry().topLeft() + QPoint(3, 3);
+    REQUIRE(hovered.pixelColor(corner) == QColor(0xF5, 0xF5, 0xF5));
     application.setStyleSheet(style_sheet);
     QApplication::setStyle(QStyleFactory::create(style));
     QApplication::setPalette(palette);

@@ -621,13 +621,15 @@ TEST_SUITE("PropertyInspector") {
     auto buttons = align->findChildren<QToolButton*>();
     auto left = static_cast<QToolButton*>(nullptr);
     for(auto button : buttons) {
-      if(button->toolTip() == "Align Left") {
+      if(button->accessibleName() == "Align Left") {
         left = button;
       } else {
         REQUIRE(!button->isEnabled());
       }
     }
     REQUIRE(left);
+    REQUIRE(left->toolTip().toStdString() ==
+      "Align Left (Shift + Ctrl + Left)");
     REQUIRE(left->isEnabled());
     left->click();
     REQUIRE(triggered == 1);

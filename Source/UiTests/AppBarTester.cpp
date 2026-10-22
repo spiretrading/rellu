@@ -160,4 +160,36 @@ TEST_SUITE("AppBar") {
     REQUIRE(prototype_image.pixelColor(0, bottom) !=
       QColor(0x3F, 0x3F, 0x3F));
   }
+  TEST_CASE("right_layout") {
+    auto bar = AppBar();
+    bar.resize(2560, AppBar::HEIGHT);
+    bar.show();
+    QCoreApplication::processEvents();
+    auto zoom = bar.findChild<QWidget*>("zoom_control");
+    REQUIRE(zoom);
+    REQUIRE(zoom->mapTo(&bar, QPoint(0, 0)) == QPoint(2560 - 12 - 70, 0));
+    REQUIRE(zoom->size() == QSize(70, 32));
+    REQUIRE(zoom->toolTip() == "Zoom");
+    REQUIRE(bar.get_zoom_field().toolTip() == "Zoom");
+    auto find = [&] (const QString& name) {
+      for(auto button : bar.findChildren<QToolButton*>()) {
+        if(button->accessibleName() == name) {
+          return button;
+        }
+      }
+      return static_cast<QToolButton*>(nullptr);
+    };
+    auto play = find("Desktop Preview");
+    auto device = find("Device Preview");
+    auto invite = find("Invite to Document");
+    REQUIRE(play);
+    REQUIRE(play->mapTo(&bar, QPoint(0, 0)) ==
+      QPoint(2560 - 12 - 70 - 10 - 32, 4));
+    REQUIRE(device->mapTo(&bar, QPoint(0, 0)).x() ==
+      play->mapTo(&bar, QPoint(0, 0)).x() - 46);
+    REQUIRE(invite->mapTo(&bar, QPoint(0, 0)).x() ==
+      device->mapTo(&bar, QPoint(0, 0)).x() - 46);
+    auto image = zoom->grab().toImage();
+    REQUIRE(image.pixelColor(10, 31) == QColor(0xE4, 0xE4, 0xE4));
+  }
 }

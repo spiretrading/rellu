@@ -5,11 +5,15 @@
 #include <QFontMetricsF>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QLineEdit>
+#include <QIcon>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QTimer>
+#include <QToolButton>
+#include <QVBoxLayout>
 #include "Rellu/Ui/AppBar.hpp"
 #include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
@@ -66,7 +70,63 @@ namespace {
         return QFontMetricsF(font()).horizontalAdvance(text());
       }
   };
-  constexpr auto ZOOM_FIELD_WIDTH = 64;
+  constexpr auto ZOOM_WIDTH = 70;
+  constexpr auto ZOOM_HEIGHT = 32;
+  constexpr auto ZOOM_FIELD_LEFT = -1;
+  constexpr auto ZOOM_FIELD_TOP = 8;
+  constexpr auto ZOOM_FIELD_HEIGHT = 20;
+  constexpr auto ZOOM_BUTTON_WIDTH = 16;
+  constexpr auto ZOOM_CHEVRON_WIDTH = 8.0;
+  constexpr auto ZOOM_CHEVRON_HEIGHT = 14.0 / 3;
+  constexpr auto ZOOM_CHEVRON_TOP = 52.0 / 3;
+  constexpr auto ICON_BUTTON_TOP = 4;
+  constexpr auto ICON_BUTTON_SPACING = 14;
+  constexpr auto ZOOM_SPACING = 10;
+  const auto ZOOM_LINE_COLOR = QColor(0xE4, 0xE4, 0xE4);
+
+  class ZoomControl : public QWidget {
+    public:
+      ZoomControl(QLineEdit& field, QToolButton& presets)
+          : m_ratio(0) {
+        setObjectName("zoom_control");
+        setFixedSize(ZOOM_WIDTH, ZOOM_HEIGHT);
+        field.setParent(this);
+        presets.setParent(this);
+        field.setGeometry(ZOOM_FIELD_LEFT, ZOOM_FIELD_TOP,
+          ZOOM_WIDTH - ZOOM_BUTTON_WIDTH - ZOOM_FIELD_LEFT, ZOOM_FIELD_HEIGHT);
+        presets.setGeometry(
+          ZOOM_WIDTH - ZOOM_BUTTON_WIDTH, 0, ZOOM_BUTTON_WIDTH, ZOOM_HEIGHT);
+      }
+
+    protected:
+      void paintEvent(QPaintEvent*) override {
+        auto ratio = devicePixelRatioF();
+        if(ratio != m_ratio) {
+          m_ratio = ratio;
+          m_chevron = make_fitted_glyph(Glyph::CHEVRON_DOWN, QSize(
+            static_cast<int>(std::lround(ZOOM_CHEVRON_WIDTH * ratio)),
+            static_cast<int>(std::lround(ZOOM_CHEVRON_HEIGHT * ratio))),
+            ratio);
+        }
+        auto origin = QPointF(mapTo(window(), QPoint(0, 0))) * ratio;
+        auto left = std::lround(origin.x());
+        auto right = std::lround(origin.x() + width() * ratio);
+        auto bottom = std::lround(origin.y() + height() * ratio);
+        auto line = std::max(std::lround(ratio), 1L);
+        auto painter = QPainter(this);
+        painter.fillRect(QRectF((left - origin.x()) / ratio,
+          (bottom - line - origin.y()) / ratio, (right - left) / ratio,
+          line / ratio), ZOOM_LINE_COLOR);
+        auto chevron_left = right - m_chevron.width();
+        auto chevron_top = std::lround(origin.y() + ZOOM_CHEVRON_TOP * ratio);
+        painter.drawPixmap(QPointF((chevron_left - origin.x()) / ratio,
+          (chevron_top - origin.y()) / ratio), m_chevron);
+      }
+
+    private:
+      double m_ratio;
+      QPixmap m_chevron;
+  };
 
   QToolButton* make_icon_button(Glyph glyph, const QString& tip) {
     auto button = new QToolButton();
@@ -145,31 +205,35 @@ AppBar::AppBar(QWidget* parent)
   m_right = right;
   auto right_layout = new QHBoxLayout(right);
   right_layout->setContentsMargins(0, 0, 0, 0);
-  right_layout->setSpacing(10);
+  right_layout->setSpacing(0);
   right_layout->addStretch(1);
+  auto is_first = true;
   for(auto [glyph, tip] : {std::pair(Glyph::INVITE, "Invite to Document"),
       std::pair(Glyph::DEVICE, "Device Preview"),
       std::pair(Glyph::PLAY, "Desktop Preview")}) {
     auto button = make_icon_button(glyph, tip);
     button->setEnabled(false);
-    right_layout->addWidget(button);
+    if(!is_first) {
+      right_layout->addSpacing(ICON_BUTTON_SPACING);
+    }
+    is_first = false;
+    auto cell = new QWidget();
+    auto cell_layout = new QVBoxLayout(cell);
+    cell_layout->setContentsMargins(0, ICON_BUTTON_TOP, 0, 0);
+    cell_layout->setSpacing(0);
+    cell_layout->addWidget(button);
+    cell_layout->addStretch(1);
+    right_layout->addWidget(cell);
   }
-  right_layout->addSpacing(4);
-  auto zoom = new QWidget();
-  zoom->setObjectName("zoom_control");
-  zoom->setAttribute(Qt::WA_StyledBackground);
-  auto zoom_layout = new QHBoxLayout(zoom);
-  zoom_layout->setContentsMargins(0, 0, 0, 0);
-  zoom_layout->setSpacing(0);
+  right_layout->addSpacing(ZOOM_SPACING);
   m_zoom_field->setObjectName("zoom_field");
   m_zoom_field->setAccessibleName(translate("app_bar", "Zoom"));
-  m_zoom_field->setFixedWidth(ZOOM_FIELD_WIDTH);
+  m_zoom_field->setToolTip(translate("app_bar", "Zoom"));
   m_zoom_field->setFrame(false);
   m_zoom_field->installEventFilter(this);
-  zoom_layout->addWidget(m_zoom_field);
   auto presets = make_icon_button(Glyph::CHEVRON_DOWN, "Zoom");
-  presets->setFixedSize(24, 24);
-  presets->setIconSize(QSize(16, 16));
+  presets->setIcon(QIcon());
+  presets->setCursor(Qt::ArrowCursor);
   presets->setPopupMode(QToolButton::InstantPopup);
   presets->setObjectName("zoom_presets");
   auto menu = new QMenu(presets);
@@ -186,8 +250,9 @@ AppBar::AppBar(QWidget* parent)
     });
   }
   presets->setMenu(menu);
-  zoom_layout->addWidget(presets);
-  right_layout->addWidget(zoom);
+  auto zoom = new ZoomControl(*m_zoom_field, *presets);
+  zoom->setToolTip(translate("app_bar", "Zoom"));
+  right_layout->addWidget(zoom, 0, Qt::AlignTop);
   layout->addWidget(left, 0, 0);
   layout->addWidget(middle, 0, 1, Qt::AlignCenter);
   layout->addWidget(right, 0, 2);

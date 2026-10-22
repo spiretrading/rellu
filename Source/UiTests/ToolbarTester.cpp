@@ -1,12 +1,9 @@
-#include <cstdlib>
 #include <string>
 #include <vector>
 #include <doctest/doctest.h>
-#include <QApplication>
 #include <QCoreApplication>
-#include <QHelpEvent>
 #include <QToolButton>
-#include <QToolTip>
+#include "Rellu/Ui/ToolTips.hpp"
 #include "Rellu/Ui/Toolbar.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 
@@ -121,22 +118,8 @@ TEST_SUITE("Toolbar") {
     auto& panels = toolbar.get_panels();
     REQUIRE(toolbar.find_button(panels.back().m_name)->geometry().bottom() ==
       800 - 4 - 1);
-    auto rectangle = toolbar.find_button("rectangle");
-    auto center = rectangle->rect().center();
-    auto help = QHelpEvent(
-      QEvent::ToolTip, center, rectangle->mapToGlobal(center));
-    QCoreApplication::sendEvent(rectangle, &help);
-    auto tip = static_cast<QWidget*>(nullptr);
-    for(auto widget : QApplication::topLevelWidgets()) {
-      if(widget->inherits("QTipLabel") && widget->isVisible()) {
-        tip = widget;
-      }
-    }
-    REQUIRE(tip);
-    REQUIRE(tip->x() == rectangle->mapToGlobal(QPoint(41, 0)).x());
-    REQUIRE(std::abs(tip->geometry().center().y() -
-      rectangle->mapToGlobal(QPoint(0, 20)).y()) <= 1);
-    QToolTip::hideText();
+    REQUIRE(get_tool_tip_placement(*toolbar.find_button("rectangle")) ==
+      ToolTipPlacement::RIGHT);
     toolbar.hide();
   }
 }

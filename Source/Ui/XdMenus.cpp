@@ -307,6 +307,40 @@ namespace {
       name.starts_with("file.recent.") ||
       name.starts_with("edit.preferences.") || name.starts_with("help.");
   }
+
+  QString format_shortcut(const QKeySequence& shortcut, Language language,
+      const QString& separator) {
+    if(shortcut.isEmpty()) {
+      return QString();
+    }
+    auto name = [&] (std::string_view key) {
+      auto text = localize("shortcut", key, language);
+      return QString::fromUtf8(
+        text.data(), static_cast<qsizetype>(text.size()));
+    };
+    auto combination = shortcut[0];
+    auto modifiers = combination.keyboardModifiers();
+    auto text = QString();
+    if(modifiers & Qt::ShiftModifier) {
+      text += name("Shift") + separator;
+    }
+    if(modifiers & Qt::ControlModifier) {
+      text += name("Ctrl") + separator;
+    }
+    if(modifiers & Qt::AltModifier) {
+      text += name("Alt") + separator;
+    }
+    if(modifiers & Qt::MetaModifier) {
+      text += name("Win") + separator;
+    }
+    auto key = combination.key();
+    for(auto& entry : KEY_NAMES) {
+      if(entry.first == key) {
+        return text + name(entry.second);
+      }
+    }
+    return text + QKeySequence(key).toString(QKeySequence::PortableText);
+  }
 }
 
 void Rellu::add_xd_menus(ActionRegistry& actions) {
@@ -349,37 +383,18 @@ void Rellu::update_document_actions(
 
 QString Rellu::to_xd_shortcut_text(
     const QKeySequence& shortcut, Language language) {
-  if(shortcut.isEmpty()) {
-    return QString();
-  }
-  auto name = [&] (std::string_view key) {
-    auto text = localize("shortcut", key, language);
-    return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
-  };
-  auto combination = shortcut[0];
-  auto modifiers = combination.keyboardModifiers();
-  auto text = QString();
-  if(modifiers & Qt::ShiftModifier) {
-    text += name("Shift") + '+';
-  }
-  if(modifiers & Qt::ControlModifier) {
-    text += name("Ctrl") + '+';
-  }
-  if(modifiers & Qt::AltModifier) {
-    text += name("Alt") + '+';
-  }
-  if(modifiers & Qt::MetaModifier) {
-    text += name("Win") + '+';
-  }
-  auto key = combination.key();
-  for(auto& entry : KEY_NAMES) {
-    if(entry.first == key) {
-      return text + name(entry.second);
-    }
-  }
-  return text + QKeySequence(key).toString(QKeySequence::PortableText);
+  return format_shortcut(shortcut, language, "+");
 }
 
 QString Rellu::to_xd_shortcut_text(const QKeySequence& shortcut) {
   return to_xd_shortcut_text(shortcut, get_language());
+}
+
+QString Rellu::to_xd_tool_tip_shortcut_text(
+    const QKeySequence& shortcut, Language language) {
+  return format_shortcut(shortcut, language, " + ");
+}
+
+QString Rellu::to_xd_tool_tip_shortcut_text(const QKeySequence& shortcut) {
+  return to_xd_tool_tip_shortcut_text(shortcut, get_language());
 }

@@ -57,7 +57,7 @@ namespace {
 
   QToolButton* find_button(QWidget& section, const QString& tip) {
     for(auto button : section.findChildren<QToolButton*>()) {
-      if(button->toolTip() == tip) {
+      if(button->accessibleName() == tip) {
         return button;
       }
     }

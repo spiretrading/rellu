@@ -372,10 +372,10 @@ LayersPanel::LayersPanel(QWidget* parent)
   connect(m_search, &QLineEdit::textChanged, this, [this] (const auto& text) {
     set_search(text);
   });
-  m_filter_button->setObjectName("panel_button");
+  m_filter_button->setObjectName("layers_filter");
+  m_filter_button->setCursor(Qt::ArrowCursor);
   m_filter_button->setAutoRaise(true);
   m_filter_button->setFocusPolicy(Qt::NoFocus);
-  m_filter_button->setToolTip(translate("layers", "Filter"));
   m_filter_button->setAccessibleName(translate("layers", "Filter"));
   m_filter_button->setPopupMode(QToolButton::InstantPopup);
   auto filters = new QMenu(m_filter_button);
