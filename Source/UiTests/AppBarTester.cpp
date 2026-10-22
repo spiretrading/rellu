@@ -148,7 +148,7 @@ TEST_SUITE("AppBar") {
       prototype.mapTo(&bar, QPoint(0, 0)).x() + prototype.width() + 32);
     for(auto button : {&design, &prototype, &share}) {
       REQUIRE(button->height() == AppBar::HEIGHT - 2);
-      REQUIRE(button->width() == static_cast<int>(std::ceil(
+      REQUIRE(button->width() == static_cast<int>(std::lround(
         QFontMetricsF(button->font()).horizontalAdvance(button->text()))));
     }
     auto image = design.grab().toImage();

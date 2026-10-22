@@ -1,4 +1,7 @@
 #include <utility>
+#include <QApplication>
+#include <QEvent>
+#include <QToolTip>
 #include <QVBoxLayout>
 #include "Rellu/Ui/Toolbar.hpp"
 #include "Rellu/Ui/Translation.hpp"
@@ -9,10 +12,37 @@ using namespace Rellu;
 
 namespace {
   constexpr auto BUTTON_SIZE = 40;
-  constexpr auto ICON_SIZE = 20;
-  constexpr auto TOP_MARGIN = 8;
-  constexpr auto SPACING = 6;
-  constexpr auto BOTTOM_MARGIN = 10;
+  constexpr auto ICON_SIZE = 22;
+  constexpr auto TOP_MARGIN = 4;
+  constexpr auto SPACING = 0;
+  constexpr auto BOTTOM_MARGIN = 4;
+  constexpr auto BORDER_WIDTH = 2;
+  constexpr auto TIP_GAP = 1;
+
+  class TipFilter : public QObject {
+    public:
+      using QObject::QObject;
+
+    protected:
+      bool eventFilter(QObject* watched, QEvent* event) override {
+        if(event->type() != QEvent::ToolTip || !watched->isWidgetType()) {
+          return QObject::eventFilter(watched, event);
+        }
+        auto& button = static_cast<QWidget&>(*watched);
+        if(button.toolTip().isEmpty()) {
+          return QObject::eventFilter(watched, event);
+        }
+        auto anchor = button.mapToGlobal(
+          QPoint(button.width() + TIP_GAP, button.height() / 2));
+        QToolTip::showText(anchor, button.toolTip(), &button, button.rect());
+        for(auto widget : QApplication::topLevelWidgets()) {
+          if(widget->inherits("QTipLabel") && widget->isVisible()) {
+            widget->move(anchor.x(), anchor.y() - widget->height() / 2);
+          }
+        }
+        return true;
+      }
+  };
 
   ToolEntry make_entry(std::string name, QString label, Glyph glyph,
       const char* shortcut) {
@@ -55,7 +85,7 @@ Toolbar::Toolbar(std::vector<ToolEntry> tools, std::vector<ToolEntry> panels,
   setAttribute(Qt::WA_StyledBackground);
   setFixedWidth(WIDTH);
   auto layout = new QVBoxLayout(this);
-  layout->setContentsMargins(0, TOP_MARGIN, 0, BOTTOM_MARGIN);
+  layout->setContentsMargins(0, TOP_MARGIN, BORDER_WIDTH, BOTTOM_MARGIN);
   layout->setSpacing(SPACING);
   for(auto& tool : m_tools) {
     auto button = make_button(tool);
@@ -165,6 +195,7 @@ QToolButton* Toolbar::make_button(const ToolEntry& entry) {
   button->setFixedSize(BUTTON_SIZE, BUTTON_SIZE);
   button->setIconSize(QSize(ICON_SIZE, ICON_SIZE));
   button->setIcon(entry.m_icon);
+  button->installEventFilter(new TipFilter(button));
   auto label = translate("toolbar", entry.m_label);
   button->setAccessibleName(label);
   if(entry.m_shortcut.isEmpty()) {

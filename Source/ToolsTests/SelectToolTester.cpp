@@ -355,11 +355,51 @@ TEST_SUITE("SelectTool") {
     REQUIRE(selection.get_nodes() == std::vector{board.m_locked});
     drag(tools, Point(380, 420), Point(460, 480));
     REQUIRE(selection.is_empty());
-    drag(tools, Point(50, 50), Point(400, 400));
-    REQUIRE(selection.is_empty());
+    drag(tools, Point(50, 50), Point(380, 380));
+    REQUIRE(selection.get_nodes() == std::vector{board.m_group});
+    REQUIRE(editor.get_context().get_artboard() == board.m_artboard);
     drag(tools, Point(50, 50), Point(720, 520));
-    REQUIRE(selection.get_nodes() == std::vector{board.m_artboard});
+    REQUIRE(selection.get_nodes() ==
+      std::vector{board.m_group, board.m_rectangle, board.m_locked});
     REQUIRE(editor.get_history().get_undo_count() == 0);
+  }
+
+  TEST_CASE("marquee_artboards") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto make_artboard = [&] (const Rect& frame) {
+      auto artboard = Artboard();
+      artboard.m_frame = frame;
+      return transaction.append(NodeId(), make_header("Board"), artboard);
+    };
+    auto first = make_artboard(Rect(100, 100, 200, 200));
+    auto child = add_rectangle(transaction, first, Rect(20, 20, 40, 40));
+    auto second = make_artboard(Rect(400, 100, 200, 200));
+    auto empty = make_artboard(Rect(100, 400, 100, 100));
+    auto loose = add_rectangle(transaction, NodeId(), Rect(700, 150, 40, 40));
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto& selection = editor.get_selection();
+    drag(tools, Point(50, 50), Point(450, 350));
+    REQUIRE(selection.get_nodes() == std::vector{first, second});
+    drag(tools, Point(50, 380), Point(250, 550));
+    REQUIRE(selection.get_nodes() == std::vector{empty});
+    drag(tools, Point(50, 50), Point(350, 350));
+    REQUIRE(selection.get_nodes() == std::vector{child});
+    drag(tools, Point(110, 110), Point(800, 200));
+    REQUIRE(selection.get_nodes() == std::vector{child, loose});
+    drag(tools, Point(650, 50), Point(800, 250), Qt::ShiftModifier);
+    REQUIRE(selection.get_nodes() == std::vector{child});
+    click(tools, Point(900, 700));
+    REQUIRE(selection.is_empty());
+    drag(tools, Point(50, 380), Point(250, 550));
+    drag(tools, Point(50, 50), Point(350, 350), Qt::ShiftModifier);
+    REQUIRE(selection.get_nodes() == std::vector{first, empty});
+    drag(tools, Point(50, 380), Point(250, 550), Qt::ShiftModifier);
+    REQUIRE(selection.get_nodes() == std::vector{first});
   }
 
   TEST_CASE("marquee_order") {

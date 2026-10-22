@@ -139,7 +139,10 @@ namespace Rellu {
       bool m_is_applied;
       bool m_is_copied;
       NodeId m_scope;
-      std::vector<NodeId> m_base;
+      std::vector<NodeId> m_stashed;
+      std::vector<NodeId> m_stashed_artboards;
+      std::vector<NodeId> m_previous_selection;
+      std::vector<NodeId> m_previous_artboards;
       Rect m_marquee;
       ToolCursor m_cursor;
       SelectionHandles m_handles;

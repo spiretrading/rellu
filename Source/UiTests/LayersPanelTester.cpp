@@ -146,6 +146,37 @@ TEST_SUITE("LayersPanel") {
     REQUIRE(!view.rootIndex().isValid());
   }
 
+  TEST_CASE("context_rows") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto panel = LayersPanel();
+    panel.set_editor(&editor);
+    panel.resize(300, 600);
+    auto& model = panel.get_model();
+    auto& view = panel.get_view();
+    REQUIRE(view.indentation() == 20);
+    auto palette = view.palette();
+    palette.setColor(QPalette::Base, QColor(0xF5, 0xF5, 0xF5));
+    view.setPalette(palette);
+    editor.get_selection().select(ids.m_label);
+    REQUIRE(editor.get_context().enter(ids.m_card));
+    panel.show();
+    QCoreApplication::processEvents();
+    auto color_of = [&] (const NodeId& id) {
+      auto rect = view.visualRect(model.find(id));
+      auto image = view.viewport()->grab().toImage();
+      return image.pixelColor(1, rect.center().y());
+    };
+    REQUIRE(color_of(ids.m_card) == QColor(0xFF, 0xFF, 0xFF));
+    REQUIRE(color_of(ids.m_background) == QColor(0xFF, 0xFF, 0xFF));
+    REQUIRE(color_of(ids.m_ellipse) == QColor(0xF5, 0xF5, 0xF5));
+    editor.get_context().exit();
+    QCoreApplication::processEvents();
+    REQUIRE(color_of(ids.m_card) == QColor(0xF5, 0xF5, 0xF5));
+    panel.hide();
+  }
+
   TEST_CASE("pasteboard") {
     set_language(Language::GERMAN);
     auto document = Document();
@@ -620,7 +651,7 @@ TEST_SUITE("LayersPanel") {
     auto tool_buttons = panel.findChildren<QToolButton*>();
     auto back = std::find_if(tool_buttons.begin(), tool_buttons.end(),
       [] (const auto& button) {
-        return button->toolTip() == "Back";
+        return button->toolTip() == "Artboards";
       });
     REQUIRE(back != tool_buttons.end());
     REQUIRE((*back)->parentWidget() == heading->parentWidget());

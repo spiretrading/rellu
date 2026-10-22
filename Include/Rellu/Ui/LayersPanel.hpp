@@ -229,6 +229,7 @@ namespace Rellu {
       LayerFilter m_filter;
       Subscription m_subscription;
       Subscription m_document_subscription;
+      Subscription m_context_subscription;
       NodeId m_current;
       NodeId m_scope;
       bool m_is_synchronizing;

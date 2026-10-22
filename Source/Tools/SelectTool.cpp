@@ -2,8 +2,10 @@
 #include <cmath>
 #include <numbers>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <variant>
+#include <vector>
 #include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
@@ -59,6 +61,27 @@ namespace {
     private:
       DuplicateCommand m_duplicate;
   };
+
+  std::vector<NodeId> get_symmetric_difference(
+      const std::vector<NodeId>& left, const std::vector<NodeId>& right) {
+    auto result = std::vector<NodeId>();
+    auto counts = std::unordered_map<NodeId, int>();
+    for(auto list : {&left, &right}) {
+      auto seen = std::unordered_set<NodeId>(list->begin(), list->end());
+      for(auto& id : seen) {
+        ++counts[id];
+      }
+    }
+    auto added = std::unordered_set<NodeId>();
+    for(auto list : {&left, &right}) {
+      for(auto& id : *list) {
+        if(counts[id] == 1 && added.insert(id).second) {
+          result.push_back(id);
+        }
+      }
+    }
+    return result;
+  }
 
   bool is_shift(Qt::KeyboardModifiers modifiers) {
     return modifiers.testFlag(Qt::ShiftModifier);
@@ -576,10 +599,17 @@ void SelectTool::press(ToolContext& context, const PointerEvent& event) {
   }
   m_gesture = Gesture::PENDING;
   m_is_marquee_pending = true;
-  if(is_shift(modifiers)) {
-    m_base = selection.get_nodes();
+  m_stashed = selection.get_nodes();
+  if(!m_stashed.empty() && std::all_of(m_stashed.begin(), m_stashed.end(),
+      [&] (const auto& id) {
+        return is_artboard(document, id);
+      })) {
+    m_stashed_artboards = m_stashed;
+    m_stashed.clear();
+    m_previous_selection.clear();
+    m_previous_artboards.clear();
   } else {
-    m_base.clear();
+    m_stashed_artboards.clear();
   }
   if(!edit.get_container().is_nil()) {
     auto box = get_selection_box(document,
@@ -590,11 +620,7 @@ void SelectTool::press(ToolContext& context, const PointerEvent& event) {
       }
     }
   }
-  if(!edit.get_container().is_nil()) {
-    m_scope = edit.get_container();
-  } else {
-    m_scope = background;
-  }
+  m_scope = edit.get_container();
   if(!background.is_nil()) {
     edit.set_artboard(background);
   }
@@ -908,7 +934,11 @@ void SelectTool::cancel(ToolContext& context) {
   } else if(m_gesture == Gesture::MOVE && m_is_applied) {
     editor.undo();
   } else if(m_gesture == Gesture::MARQUEE) {
-    editor.get_selection().select(m_base);
+    if(m_stashed_artboards.empty()) {
+      editor.get_selection().select(m_stashed);
+    } else {
+      editor.get_selection().select(m_stashed_artboards);
+    }
   }
   m_is_applied = false;
   m_clicked = NodeId();
@@ -1102,31 +1132,72 @@ void SelectTool::update_marquee(
   auto& hit_tester = context.get_hit_tester();
   m_marquee =
     make_rect(m_press_document, context.to_document(event.m_position));
-  auto hits = hit_tester.query(m_scope, m_marquee);
+  auto artboards = std::vector<NodeId>();
+  auto is_enclosed = false;
+  auto nodes = std::vector<NodeId>();
   if(m_scope.is_nil()) {
-    auto enclosed = hit_tester.query(m_scope, m_marquee, true);
-    auto artboards = std::unordered_set<NodeId>(
-      enclosed.begin(), enclosed.end());
-    std::erase_if(hits, [&] (const auto& id) {
-      return is_artboard(document, id) && !artboards.contains(id);
-    });
+    auto enclosed = hit_tester.query(NodeId(), m_marquee, true);
+    for(auto& id : hit_tester.query(NodeId(), m_marquee)) {
+      if(is_artboard(document, id)) {
+        artboards.push_back(id);
+        if(std::find(enclosed.begin(), enclosed.end(), id) !=
+            enclosed.end()) {
+          is_enclosed = true;
+        }
+        auto children = hit_tester.query(id, m_marquee);
+        nodes.insert(nodes.end(), children.begin(), children.end());
+      } else {
+        nodes.push_back(id);
+      }
+    }
+  } else {
+    nodes = hit_tester.query(m_scope, m_marquee);
+  }
+  auto is_multiple = is_enclosed && artboards.size() > 1;
+  if(is_multiple) {
+    nodes = artboards;
+  }
+  auto is_artboard_mode = false;
+  if(is_shift(event.m_modifiers)) {
+    if(m_stashed_artboards.empty() && is_multiple) {
+      nodes = artboards;
+      is_artboard_mode = true;
+    } else if((is_enclosed && m_stashed_artboards.size() == 1) ||
+        m_stashed_artboards.size() > 1) {
+      artboards = get_symmetric_difference(artboards, m_stashed_artboards);
+      nodes = artboards;
+      is_artboard_mode = true;
+    } else {
+      nodes = get_symmetric_difference(nodes, m_stashed);
+    }
+  } else if(is_multiple || (is_enclosed && nodes.empty())) {
+    nodes = artboards;
+    is_artboard_mode = true;
+  }
+  auto& previous =
+    is_artboard_mode ? m_previous_artboards : m_previous_selection;
+  auto reached = std::unordered_set<NodeId>(nodes.begin(), nodes.end());
+  auto ordered = std::vector<NodeId>();
+  auto members = std::unordered_set<NodeId>();
+  for(auto& id : previous) {
+    if(reached.contains(id) && members.insert(id).second) {
+      ordered.push_back(id);
+    }
+  }
+  for(auto& id : nodes) {
+    if(members.insert(id).second) {
+      ordered.push_back(id);
+    }
+  }
+  m_previous_selection = ordered;
+  if(is_artboard_mode) {
+    m_previous_artboards = ordered;
+  } else {
+    m_previous_artboards = artboards;
   }
   auto& selection = context.get_editor().get_selection();
-  auto nodes = m_base;
-  auto members = std::unordered_set<NodeId>(nodes.begin(), nodes.end());
-  auto reached = std::unordered_set<NodeId>(hits.begin(), hits.end());
-  for(auto& id : selection.get_nodes()) {
-    if(reached.contains(id) && members.insert(id).second) {
-      nodes.push_back(id);
-    }
-  }
-  for(auto& id : hits) {
-    if(members.insert(id).second) {
-      nodes.push_back(id);
-    }
-  }
-  if(selection.get_nodes() != nodes) {
-    selection.select(nodes);
+  if(selection.get_nodes() != ordered) {
+    selection.select(ordered);
   }
 }
 
@@ -1193,7 +1264,8 @@ void SelectTool::finish(ToolContext& context) {
   m_is_marquee_pending = false;
   m_marquee = Rect(0, 0, 0, 0);
   m_nodes.clear();
-  m_base.clear();
+  m_stashed.clear();
+  m_stashed_artboards.clear();
 }
 
 void SelectTool::draw_context(

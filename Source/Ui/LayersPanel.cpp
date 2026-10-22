@@ -2,6 +2,7 @@
 #include <array>
 #include <cmath>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -41,6 +42,8 @@ namespace {
   constexpr auto GROUP_HEADING_INDENT = 26;
   const auto BACK_RECT = QRect(12, 20, 20, 20);
   const auto BACK_COLOR = QColor(0x66, 0x66, 0x66);
+  const auto CONTEXT_BACKGROUND = QColor(0xFF, 0xFF, 0xFF);
+  constexpr auto INDENTATION = 20;
   constexpr auto BACK_WIDTH = 4.0 / 3;
   constexpr auto SEARCH_GLYPH_SIZE = 28.0 / 3;
   constexpr auto SEARCH_GLYPH_LEFT = 2.0 / 3;
@@ -97,8 +100,7 @@ namespace {
 
   class BackButton : public QToolButton {
     protected:
-      void paintEvent(QPaintEvent* event) override {
-        QToolButton::paintEvent(event);
+      void paintEvent(QPaintEvent*) override {
         auto painter = QPainter(this);
         painter.setRenderHint(QPainter::Antialiasing);
         auto pen = QPen(BACK_COLOR, BACK_WIDTH);
@@ -109,6 +111,20 @@ namespace {
         auto points = std::array{QPointF(20.75, 26.25) - origin,
           QPointF(17, 30) - origin, QPointF(20.75, 33.75) - origin};
         painter.drawPolyline(points.data(), static_cast<int>(points.size()));
+      }
+  };
+
+  class ContextTreeView : public QTreeView {
+    public:
+      std::function<bool (const QModelIndex&)> m_is_in_context;
+
+    protected:
+      void drawRow(QPainter* painter, const QStyleOptionViewItem& option,
+          const QModelIndex& index) const override {
+        if(m_is_in_context && m_is_in_context(index)) {
+          painter->fillRect(option.rect, CONTEXT_BACKGROUND);
+        }
+        QTreeView::drawRow(painter, option, index);
       }
   };
 
@@ -325,7 +341,7 @@ namespace {
 LayersPanel::LayersPanel(QWidget* parent)
     : QWidget(parent),
       m_model(new LayersModel(this)),
-      m_view(new QTreeView()),
+      m_view(new ContextTreeView()),
       m_results_model(nullptr),
       m_results(new QTreeView()),
       m_search(new QLineEdit()),
@@ -386,7 +402,8 @@ LayersPanel::LayersPanel(QWidget* parent)
   m_back->setObjectName("panel_button");
   m_back->setAutoRaise(true);
   m_back->setFocusPolicy(Qt::NoFocus);
-  m_back->setToolTip(translate("layers", "Back"));
+  m_back->setToolTip(translate("layers", "Artboards"));
+  m_back->setAccessibleName(translate("layers", "Layers back"));
   m_back->setParent(heading);
   m_back->setGeometry(BACK_RECT);
   m_heading->setObjectName("layers_heading");
@@ -410,7 +427,7 @@ LayersPanel::LayersPanel(QWidget* parent)
     view->setSelectionBehavior(QAbstractItemView::SelectRows);
     view->setEditTriggers(QAbstractItemView::NoEditTriggers);
     view->setAllColumnsShowFocus(true);
-    view->setIndentation(16);
+    view->setIndentation(INDENTATION);
     view->setIconSize(QSize(16, 16));
     view->setFrameShape(QFrame::NoFrame);
     view->setMouseTracking(true);
@@ -429,6 +446,19 @@ LayersPanel::LayersPanel(QWidget* parent)
         show_context_menu(*view, position);
       });
   }
+  static_cast<ContextTreeView*>(m_view)->m_is_in_context =
+    [this] (const QModelIndex& index) {
+      if(!m_editor) {
+        return false;
+      }
+      auto& container = m_editor->get_context().get_container();
+      if(container.is_nil()) {
+        return false;
+      }
+      auto id = m_model->get_id(index);
+      return id == container ||
+        is_ancestor(m_editor->get_document(), container, id);
+    };
   m_view->setDragDropMode(QAbstractItemView::InternalMove);
   m_view->setDefaultDropAction(Qt::MoveAction);
   m_view->setDropIndicatorShown(true);
@@ -844,6 +874,7 @@ QTreeView& LayersPanel::get_view() {
 void LayersPanel::set_document(Document* document) {
   m_subscription.release();
   m_document_subscription.release();
+  m_context_subscription.release();
   m_editor = nullptr;
   m_model->set_rename_handler(nullptr);
   m_model->set_move_handler(nullptr);
@@ -867,6 +898,7 @@ Editor* LayersPanel::get_editor() const {
 void LayersPanel::set_editor(Editor* editor) {
   m_subscription.release();
   m_document_subscription.release();
+  m_context_subscription.release();
   m_editor = nullptr;
   if(!editor) {
     m_model->set_rename_handler(nullptr);
@@ -905,6 +937,9 @@ void LayersPanel::set_editor(Editor* editor) {
     });
   m_subscription = m_editor->get_selection().subscribe([this] {
     synchronize();
+  });
+  m_context_subscription = m_editor->get_context().subscribe([this] {
+    m_view->viewport()->update();
   });
   synchronize();
 }

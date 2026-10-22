@@ -26,6 +26,7 @@ namespace {
   const auto LAYER_INK = QColor(0xBD, 0xBD, 0xBD);
   const auto LAYER_LINE_INK = QColor(0x9A, 0x9A, 0x9A);
   const auto ARTBOARD_INK = QColor(0x66, 0x66, 0x66);
+  const auto RECTANGLE_INK = QColor(0xC4, 0xC4, 0xC4);
 
   QPen make_pen(const QColor& color, double width = WEIGHT,
       Qt::PenCapStyle cap = Qt::FlatCap,
@@ -653,7 +654,9 @@ namespace {
           {QPointF(15, 6.75), QPointF(18.75, 10.5), QPointF(15, 10.5)});
         break;
       case Glyph::LAYER_RECTANGLE:
-        fill_rect(painter, color, QRectF(6, 6, 12, 12));
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(color);
+        painter.drawRoundedRect(QRectF(6, 4.5, 15, 15), 1, 1);
         break;
       case Glyph::LAYER_ELLIPSE:
         painter.setPen(Qt::NoPen);
@@ -926,6 +929,8 @@ namespace {
   QColor get_layer_color(Glyph glyph) {
     if(glyph == Glyph::LAYER_ARTBOARD) {
       return ARTBOARD_INK;
+    } else if(glyph == Glyph::LAYER_RECTANGLE) {
+      return RECTANGLE_INK;
     } else if(glyph == Glyph::LAYER_LINE ||
         glyph == Glyph::LAYER_PATH || glyph == Glyph::LAYER_TEXT ||
         glyph == Glyph::LAYER_REFERENCE) {

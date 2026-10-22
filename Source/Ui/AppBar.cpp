@@ -33,7 +33,7 @@ namespace {
   class WorkspaceButton : public QToolButton {
     public:
       QSize sizeHint() const override {
-        return QSize(static_cast<int>(std::ceil(get_advance() - 1e-6)),
+        return QSize(static_cast<int>(std::lround(get_advance())),
           AppBar::HEIGHT - INDICATOR_HEIGHT);
       }
 
