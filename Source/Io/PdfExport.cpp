@@ -34,6 +34,7 @@ namespace {
   constexpr auto RASTER_SCALE = 4.0;
   constexpr auto SHADOW_SCALE = 2.0;
   constexpr auto BLUR_SCALE = 1.0;
+  constexpr auto LARGE_SHADOW_BLUR = 16.0;
   constexpr auto BACKDROP_SCALE = 0.5;
   constexpr auto TOLERANCE = 0.01;
   constexpr auto EQUIVALENT_Y_OFFSET = 0.015;
@@ -724,6 +725,7 @@ namespace {
       std::unordered_map<qint64, int> m_images;
       std::unique_ptr<CanvasRenderer> m_renderer;
       std::unique_ptr<OffscreenRenderer> m_offscreen;
+      std::optional<Rect> m_run;
 
       int get_state(PdfDictionary dictionary) {
         auto key = dictionary.to_string();
@@ -758,7 +760,7 @@ namespace {
 
       Clip make_clip(const Device& device, const std::optional<Rect>& clip) {
         auto result = Clip();
-        if(clip) {
+        if(clip && !(m_run && *clip == *m_run)) {
           auto rect = device.get_transform().map(*clip);
           if(device.is_page() || !rect.contains(device.get_bounds())) {
             result.add(rect);
@@ -772,11 +774,42 @@ namespace {
           device.get_initial(), clip.get_bounds(device.get_bounds())));
       }
 
+      const std::optional<Rect>& get_clip(std::size_t index) const {
+        static const auto NONE = std::optional<Rect>();
+        auto& command = (*m_list)[index];
+        if(auto fill = std::get_if<FillCommand>(&command)) {
+          return fill->m_clip;
+        } else if(auto blur = std::get_if<BackdropBlurCommand>(&command)) {
+          return blur->m_clip;
+        } else if(auto layer = std::get_if<BeginLayerCommand>(&command)) {
+          return layer->m_clip;
+        }
+        return NONE;
+      }
+
+      bool is_run(const Device& device, const std::optional<Rect>& clip) {
+        if(!clip || (m_run && *clip == *m_run)) {
+          return false;
+        }
+        return !device.get_transform().map(*clip).contains(device.get_bounds());
+      }
+
       void draw(Device& device, std::size_t begin, std::size_t end) {
         auto& list = *m_list;
         for(auto i = begin; i < end; ++i) {
           auto& command = list[i];
-          if(auto fill = std::get_if<FillCommand>(&command)) {
+          if(is_run(device, get_clip(i))) {
+            auto clip = *get_clip(i);
+            auto last = i;
+            while(last < end && get_clip(last) == clip) {
+              if(std::holds_alternative<BeginLayerCommand>(list[last])) {
+                last = std::min(m_ends[last], end);
+              }
+              ++last;
+            }
+            draw_run(device, i, last, clip);
+            i = last - 1;
+          } else if(auto fill = std::get_if<FillCommand>(&command)) {
             draw_fill(device, *fill, i);
           } else if(auto blur = std::get_if<BackdropBlurCommand>(&command)) {
             auto last = i + 1;
@@ -796,6 +829,47 @@ namespace {
             i = last;
           }
         }
+      }
+
+      void draw_run(Device& device, std::size_t begin, std::size_t end,
+          const Rect& rect) {
+        auto clip = make_clip(device, rect);
+        auto area = round_out(clip.get_bounds(device.get_bounds()));
+        if(area.is_empty()) {
+          return;
+        }
+        auto form = Device(make_translation(-area.m_x, -area.m_y) *
+          device.get_transform(), Matrix(),
+          Rect(0, 0, area.m_width, area.m_height), false);
+        auto previous = std::exchange(m_run, rect);
+        draw(form, begin, end);
+        m_run = previous;
+        draw_form(device, form, clip, area,
+          get_fill_state(1, BlendMode::NORMAL));
+      }
+
+      void draw_form(Device& device, Device& form, const Clip& clip,
+          const Rect& area, int state) {
+        auto stream = form.get_stream();
+        if(stream.empty()) {
+          return;
+        }
+        auto dictionary = PdfDictionary("XObject");
+        dictionary.add("Subtype", "/Form");
+        dictionary.add("Resources", form.get_resources());
+        dictionary.add("BBox", to_pdf_array({"0", "0",
+          to_pdf_number(area.m_width), to_pdf_number(area.m_height)}));
+        dictionary.add(
+          "Group", "<</Type /Group\n/S /Transparency\n/I true>>");
+        auto id = m_file.reserve();
+        m_file.write_stream(id, std::move(dictionary), std::move(stream));
+        if(!device.update_clip(clip)) {
+          return;
+        }
+        device.update_matrix(make_translation(area.m_x, area.m_y));
+        device.update_drawing(Color(0, 0, 0, 1), -1, state);
+        device.add_object(id);
+        device.get_content() += std::format("/X{} Do\n", id);
       }
 
       void draw_fill(Device& device, const FillCommand& fill,
@@ -839,8 +913,13 @@ namespace {
             device, *gradient, ctm, get_clip_bounds(device, clip));
         } else if(auto image = std::get_if<ImagePaint>(&fill.m_paint)) {
           alpha = image->m_opacity;
-          shader = get_image_shader(device, *image->m_image,
-            device.get_initial() * ctm * image->m_transform,
+          auto source = *image->m_image;
+          auto transform = image->m_transform;
+          if(m_run) {
+            crop(source, transform, fill.m_transform, *m_run);
+          }
+          shader = get_image_shader(device, source,
+            device.get_initial() * ctm * transform,
             get_clip_bounds(device, clip));
         }
         if(shader >= 0) {
@@ -948,7 +1027,7 @@ namespace {
       void draw_layer(Device& device, std::size_t begin, std::size_t end) {
         auto& layer = std::get<BeginLayerCommand>((*m_list)[begin]);
         if(layer.m_blur > 0) {
-          draw_raster(device, begin, end + 1, layer.m_clip, BLUR_SCALE);
+          draw_blur(device, begin, end, layer);
           return;
         }
         auto is_form = layer.m_opacity < 1 ||
@@ -970,29 +1049,10 @@ namespace {
           device.get_transform(), Matrix(),
           Rect(0, 0, area.m_width, area.m_height), false);
         draw_effects(form, begin, end);
-        auto stream = form.get_stream();
-        if(stream.empty()) {
-          return;
-        }
         auto opacity =
           std::lround(std::clamp(layer.m_opacity, 0.0, 1.0) * 255) / 255.0;
-        auto state = get_fill_state(opacity, layer.m_blend_mode);
-        auto dictionary = PdfDictionary("XObject");
-        dictionary.add("Subtype", "/Form");
-        dictionary.add("Resources", form.get_resources());
-        dictionary.add("BBox", to_pdf_array({"0", "0",
-          to_pdf_number(area.m_width), to_pdf_number(area.m_height)}));
-        dictionary.add(
-          "Group", "<</Type /Group\n/S /Transparency\n/I true>>");
-        auto id = m_file.reserve();
-        m_file.write_stream(id, std::move(dictionary), std::move(stream));
-        if(!device.update_clip(clip)) {
-          return;
-        }
-        device.update_matrix(make_translation(area.m_x, area.m_y));
-        device.update_drawing(Color(0, 0, 0, 1), -1, state);
-        device.add_object(id);
-        device.get_content() += std::format("/X{} Do\n", id);
+        draw_form(device, form, clip, area,
+          get_fill_state(opacity, layer.m_blend_mode));
       }
 
       void draw_effects(Device& device, std::size_t begin, std::size_t end) {
@@ -1084,19 +1144,19 @@ namespace {
         if(!bounds || shadow.m_color.m_alpha <= 0) {
           return;
         }
-        auto cast = Rect(bounds->m_x + shadow.m_offset.m_x,
-          bounds->m_y + shadow.m_offset.m_y, bounds->m_width,
-          bounds->m_height);
-        auto region = to_effect_region(device,
-          inflate(cast, 3 * shadow.m_radius + 1 / SHADOW_SCALE),
-          SHADOW_SCALE);
+        auto blur = 2 * shadow.m_radius;
+        auto scale = blur >= LARGE_SHADOW_BLUR ? BLUR_SCALE : SHADOW_SCALE;
+        auto shift = 1 - blur / 2;
+        auto region = inflate(Rect(bounds->m_x + shadow.m_offset.m_x + shift,
+          bounds->m_y + shadow.m_offset.m_y + shift, bounds->m_width,
+          bounds->m_height), 3 * blur + 1);
         auto source = Rect(region.m_x - shadow.m_offset.m_x,
           region.m_y - shadow.m_offset.m_y, region.m_width, region.m_height);
         auto image = colorize(render(blur_slice(begin, end, shadow.m_radius),
-          source, SHADOW_SCALE), shadow.m_color);
+          source, scale), shadow.m_color);
         if(is_visible(image)) {
-          draw_pattern_image(device, image, region.get_top_left(),
-            SHADOW_SCALE, make_clip(device, clip));
+          draw_pattern_image(device, image, region.get_top_left(), scale,
+            make_clip(device, clip));
         }
       }
 
@@ -1107,7 +1167,9 @@ namespace {
         if(!bounds || shadow.m_color.m_alpha <= 0) {
           return;
         }
-        auto region = to_effect_region(device, *bounds, SHADOW_SCALE);
+        auto region = Rellu::unite(*bounds, Rect(
+          bounds->m_x + shadow.m_offset.m_x, bounds->m_y + shadow.m_offset.m_y,
+          bounds->m_width, bounds->m_height));
         auto content = render(slice(begin, end), region, SHADOW_SCALE);
         auto source = Rect(region.m_x - shadow.m_offset.m_x,
           region.m_y - shadow.m_offset.m_y, region.m_width, region.m_height);
@@ -1122,10 +1184,36 @@ namespace {
           }
         }
         auto image = colorize(content, shadow.m_color);
-        if(is_visible(image)) {
-          draw_pattern_image(device, image, region.get_top_left(),
-            SHADOW_SCALE, make_clip(device, clip));
+        if(!is_visible(image)) {
+          return;
         }
+        auto shape = make_clip(device, clip);
+        if(end == begin + 1) {
+          if(auto fill = std::get_if<FillCommand>(&(*m_list)[begin])) {
+            shape.add(fill->m_path,
+              device.get_transform() * fill->m_transform);
+          }
+        } else {
+          shape.add(device.get_transform().map(*bounds));
+        }
+        draw_pattern_image(
+          device, image, region.get_top_left(), SHADOW_SCALE, shape);
+      }
+
+      void draw_blur(Device& device, std::size_t begin, std::size_t end,
+          const BeginLayerCommand& layer) {
+        auto bounds = get_list_bounds(*m_list, m_ends, begin + 1, end);
+        if(!bounds) {
+          return;
+        }
+        auto amount = layer.m_blur;
+        auto shift = 1 - 3 * amount;
+        auto region = inflate(Rect(bounds->m_x + shift, bounds->m_y + shift,
+          bounds->m_width, bounds->m_height), 6 * amount + 1);
+        auto image =
+          to_straight(render(slice(begin, end + 1), region, BLUR_SCALE));
+        draw_pattern_image(device, image, region.get_top_left(), BLUR_SCALE,
+          make_clip(device, layer.m_clip));
       }
 
       void draw_raster(Device& device, std::size_t begin, std::size_t end,
@@ -1180,6 +1268,28 @@ namespace {
         device.get_content() += std::format("/X{} Do\n", id);
       }
 
+      void crop(QImage& image, Matrix& transform, const Matrix& placement,
+          const Rect& clip) {
+        auto inverse = invert(placement * transform);
+        if(!inverse) {
+          return;
+        }
+        auto visible = map_bounds(*inverse, clip);
+        auto left = std::max(0, static_cast<int>(std::floor(visible.m_x)) - 1);
+        auto top = std::max(0, static_cast<int>(std::floor(visible.m_y)) - 1);
+        auto right = std::min(image.width(),
+          static_cast<int>(std::ceil(visible.get_right())) + 1);
+        auto bottom = std::min(image.height(),
+          static_cast<int>(std::ceil(visible.get_bottom())) + 1);
+        if(right <= left || bottom <= top ||
+            (left == 0 && top == 0 && right == image.width() &&
+              bottom == image.height())) {
+          return;
+        }
+        image = image.copy(left, top, right - left, bottom - top);
+        transform = transform * make_translation(left, top);
+      }
+
       void draw_pattern_image(Device& device, const QImage& image,
           Point origin, double scale, const Clip& clip) {
         if(!device.update_clip(clip)) {
@@ -1188,12 +1298,12 @@ namespace {
         auto matrix = device.get_transform() *
           make_translation(origin.m_x, origin.m_y) *
           make_scale(1 / scale, 1 / scale);
+        auto state = get_fill_state(1, BlendMode::NORMAL);
         auto shader = get_image_shader(device, image,
           device.get_initial() * matrix, get_clip_bounds(device, clip));
         device.add_pattern(shader);
         device.update_matrix(matrix);
-        device.update_drawing(
-          Color(0, 0, 0, 1), shader, get_fill_state(1, BlendMode::NORMAL));
+        device.update_drawing(Color(0, 0, 0, 1), shader, state);
         device.get_content() += std::format("0 0 {} {} re\nf\n",
           image.width(), image.height());
       }

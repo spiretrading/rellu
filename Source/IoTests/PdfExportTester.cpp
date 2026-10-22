@@ -387,25 +387,123 @@ TEST_SUITE("PdfExport") {
       std::to_string(forms.front()) + " Do\nQ\n"));
   }
 
-  TEST_CASE("shadow") {
+  TEST_CASE("drop_shadow") {
     auto document = Document();
     auto transaction = Transaction(document);
     auto artboard = transaction.append(
-      NodeId(), make_header(), make_artboard(Rect(0, 0, 200, 100)));
-    auto shape = make_shape(Rect(0, 0, 50, 40), make_color(255, 0, 0));
-    shape.m_style.m_effects.push_back(
-      DropShadow(Point(3, 3), 6, make_color(0, 0, 0, 0.5)));
-    transaction.append(artboard, make_header(make_translation(50, 30)), shape);
+      NodeId(), make_header(), make_artboard(Rect(0, 0, 800, 600)));
+    auto add = [&] (double x, double blur, Point offset) {
+      auto shape = make_shape(Rect(0, 0, 60, 60), make_color(48, 128, 224));
+      shape.m_style.m_effects.push_back(
+        DropShadow(offset, blur, make_color(0, 0, 0, 0.16)));
+      transaction.append(
+        artboard, make_header(make_translation(x, 60)), shape);
+    };
+    add(100.5, 0.5, Point(0, 0));
+    add(300, 3, Point(0, 0));
+    add(520, 10, Point(0, 0));
+    add(660, 3, Point(5, -7));
     transaction.commit();
     auto pdf = parse(write_pdf(document, {artboard}));
-    auto masks = pdf.find("/ColorSpace /DeviceGray");
-    REQUIRE(!masks.empty());
     auto contents = pdf.get_contents(0);
-    REQUIRE(contains(contents, "q\n2 0 0 2 "));
-    REQUIRE(contains(contents, "/Pattern CS/Pattern cs/P"));
-    REQUIRE(contains(contents, "q\n4 0 0 4 200 120 cm\n1 0 0 RG 1 0 0 rg\n"));
-    REQUIRE(contents.find("2 0 0 2 ") < contents.find("4 0 0 4 200 120 cm"));
+    REQUIRE(contains(contents, "q\n2 0 0 2 388 226 cm\n"));
+    REQUIRE(contains(contents, " scn\n/G3 gs\n0 0 136 136 re\nf\nQ\n"));
+    REQUIRE(contains(contents, "q\n2 0 0 2 1116 156 cm\n"));
+    REQUIRE(contains(contents, " scn\n/G3 gs\n0 0 196 196 re\nf\nQ\n"));
+    REQUIRE(contains(contents, "q\n4 0 0 4 1800 -40 cm\n"));
+    REQUIRE(contains(contents, " scn\n/G3 gs\n0 0 182 182 re\nf\nQ\n"));
+    REQUIRE(contains(contents, "q\n2 0 0 2 2576 128 cm\n"));
+    REQUIRE(contents.find("2 0 0 2 1116 156 cm") <
+      contents.find("4 0 0 4 1200 240 cm"));
+    REQUIRE(!pdf.find("/ColorSpace /DeviceGray").empty());
     REQUIRE(pdf.find("<</ca 0\n").empty());
+  }
+
+  TEST_CASE("object_blur") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = transaction.append(
+      NodeId(), make_header(), make_artboard(Rect(0, 0, 800, 600)));
+    auto shape = make_shape(Rect(0, 0, 60, 60), make_color(224, 64, 128));
+    shape.m_style.m_effects.push_back(Blur(1));
+    transaction.append(artboard, make_header(make_translation(40, 220)),
+      shape);
+    transaction.commit();
+    auto contents = pdf_contents(document, artboard);
+    REQUIRE(contains(contents, "q\n4 0 0 4 124 844 cm\n"
+      "/Pattern CS/Pattern cs/P"));
+    REQUIRE(contains(contents, " scn\n/G3 gs\n0 0 74 74 re\nf\nQ\n"));
+  }
+
+  TEST_CASE("inner_shadow") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = transaction.append(
+      NodeId(), make_header(), make_artboard(Rect(0, 0, 800, 600)));
+    auto shape = make_shape(Rect(0, 0, 80, 80), make_color(240, 192, 64));
+    shape.m_style.m_effects.push_back(
+      InnerShadow(Point(2, 2), 2, make_color(0, 0, 0, 0.5)));
+    transaction.append(artboard, make_header(make_translation(580, 220)),
+      shape);
+    transaction.commit();
+    auto contents = pdf_contents(document, artboard);
+    REQUIRE(contains(contents, "q\n4 0 0 4 2320 880 cm\n"
+      ".9412 .7529 .251 RG .9412 .7529 .251 rg\n/G3 gs\n0 0 80 80 re\nf\n"
+      "Q\nQ\nq\n2320 880 320 320 re\nW* n\nq\n2 0 0 2 2320 880 cm\n"));
+    REQUIRE(contains(contents, " scn\n/G3 gs\n0 0 164 164 re\nf\nQ\nQ\n"));
+  }
+
+  TEST_CASE("rect_mask") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = transaction.append(
+      NodeId(), make_header(), make_artboard(Rect(0, 0, 800, 600)));
+    auto group = Group();
+    group.m_mask = Mask(std::vector<MaskShape>(
+      {MaskShape(Matrix(), RectangleShape(Rect(0, 0, 80, 80)))}));
+    auto masked = transaction.append(
+      artboard, make_header(make_translation(610, 390)), group);
+    auto shape = make_shape(Rect(0, 0, 120, 120), make_color(0, 0, 0));
+    auto fill = ImageFill();
+    fill.m_image = add_image(transaction, QSize(48, 48), QColor(0, 128, 0));
+    fill.m_size = Size(48, 48);
+    shape.m_style.m_fill = fill;
+    transaction.append(
+      masked, make_header(make_translation(-20, -20)), shape);
+    transaction.commit();
+    auto pdf = parse(write_pdf(document, {artboard}));
+    auto forms = pdf.find("/Subtype /Form");
+    REQUIRE(forms.size() == 1);
+    REQUIRE(contains(pdf.m_objects.at(forms.front()).m_dictionary,
+      "/BBox [0 0 320 320]\n"));
+    REQUIRE(contains(pdf.m_objects.at(forms.front()).m_stream,
+      "q\n4 0 0 4 -80 -80 cm\n/Pattern CS/Pattern cs/P"));
+    REQUIRE(contains(pdf.get_contents(0), "q\n2440 1560 320 320 re\nW* n\n"
+      "q\n1 0 0 1 2440 1560 cm\n/G3 gs\n/X" + std::to_string(forms.front()) +
+      " Do\nQ\nQ\n"));
+    REQUIRE(pdf.find("/Width 34\n/Height 34\n").size() == 1);
+    REQUIRE(contains(pdf.m_objects.at(pdf.find("/BBox [-1 -1 33 33]").at(0)).
+      m_dictionary, "/XStep 34\n/YStep 34\n"));
+  }
+
+  TEST_CASE("node_page") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = transaction.append(
+      NodeId(), make_header(), make_artboard(Rect(0, 0, 800, 600)));
+    auto shape = make_shape(Rect(0, 0, 60, 60), make_color(48, 128, 224));
+    shape.m_style.m_effects.push_back(
+      DropShadow(Point(0, 0), 3, make_color(0, 0, 0, 0.16)));
+    auto node = transaction.append(
+      artboard, make_header(make_translation(300, 60)), shape);
+    transaction.commit();
+    auto pdf = parse(write_pdf(document, {node}));
+    REQUIRE(contains(pdf.m_objects.at(pdf.find("/Type /Page\n").at(0)).
+      m_dictionary, "/MediaBox [0 0 78 78]"));
+    REQUIRE(pdf.get_contents(0).starts_with(".25 0 0 -.25 0 78 cm\nq\n"
+      "2 0 0 2 -48 -48 cm\n"));
+    REQUIRE(contains(pdf.get_contents(0), "Q\nq\n4 0 0 4 36 36 cm\n"
+      ".1882 .502 .8784 RG .1882 .502 .8784 rg\n/G3 gs\n0 0 60 60 re\nf\nQ\n"));
   }
 
   TEST_CASE("write_pdf_export") {
