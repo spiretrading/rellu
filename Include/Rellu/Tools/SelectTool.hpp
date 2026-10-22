@@ -66,8 +66,12 @@ namespace Rellu {
    * A repeat grid or stack selected
    * alone is also edited through LayoutHandles, and a double click enters
    * both a repeat grid and the cell clicked. Stack items dragged make room
-   * for each other until dropped. Artboard guides are created, moved and
-   * deleted through ArtboardGuides. Each drag is one undoable step.
+   * for each other until dropped. What is dropped, and what each nudge
+   * moves, goes onto or off artboards as settle_nodes moves it, by the
+   * pointer's position, as part of the same step, and the active artboard
+   * becomes the one holding the selection. Artboard guides are created,
+   * moved and deleted through ArtboardGuides. Each drag is one undoable
+   * step.
    */
   class SelectTool : public Tool {
     public:
@@ -155,6 +159,8 @@ namespace Rellu {
       void update_hover(ToolContext& context, const PointerEvent& event);
       void resize_nudge(ToolContext& context, std::vector<NodeId> nodes,
         Point direction, Qt::KeyboardModifiers modifiers);
+      void settle(ToolContext& context, std::vector<NodeId> nodes,
+        Point pointer, bool is_dropped);
       void finish(ToolContext& context);
       void draw_hover(const ToolContext& context, const NodeId& hover,
         CanvasOverlay& overlay) const;

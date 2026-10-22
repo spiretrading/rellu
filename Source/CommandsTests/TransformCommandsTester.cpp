@@ -761,4 +761,150 @@ TEST_SUITE("TransformCommands") {
     REQUIRE(document.get(loose).m_parent == board);
     REQUIRE(history.get_undo_count() == 1);
   }
+
+  TEST_CASE("translate_off_artboard") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 400, 300);
+    auto board =
+      transaction.append(NodeId(), make_header("Artboard"), artboard);
+    auto shape = transaction.append(board,
+      make_header("Shape", make_translation(10, 10)),
+      make_rectangle_shape(40, 40));
+    auto loose = transaction.append(NodeId(),
+      make_header("Loose", make_translation(500, 10)),
+      make_rectangle_shape(40, 40));
+    transaction.commit();
+    document.clear_history();
+    auto history = History(document);
+    require_undoable(history, std::make_unique<TranslateCommand>(
+      std::vector{shape}, Point(360, 0)));
+    REQUIRE(document.get(shape).m_parent == board);
+    require_undoable(history, std::make_unique<TranslateCommand>(
+      std::vector{shape}, Point(40, 0)));
+    REQUIRE(history.get_undo_label() == "Move");
+    REQUIRE(document.get(shape).m_parent.is_nil());
+    REQUIRE(document.get_canvas() == std::vector{board, loose, shape});
+    REQUIRE(*get_world_bounds(document, shape) == Rect(410, 10, 40, 40));
+    require_undoable(history, std::make_unique<TranslateCommand>(
+      std::vector{loose}, Point(-450, 0)));
+    REQUIRE(document.get(board).m_children == std::vector{loose});
+    REQUIRE(*get_world_bounds(document, loose) == Rect(50, 10, 40, 40));
+  }
+
+  TEST_CASE("settle_command") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 400, 300);
+    auto board =
+      transaction.append(NodeId(), make_header("Artboard"), artboard);
+    auto lower = transaction.append(board,
+      make_header("Lower", make_translation(10, 10)),
+      make_rectangle_shape(40, 40));
+    auto middle = transaction.append(board,
+      make_header("Middle", make_translation(60, 10)),
+      make_rectangle_shape(40, 40));
+    auto upper = transaction.append(board,
+      make_header("Upper", make_translation(110, 10)),
+      make_rectangle_shape(40, 40));
+    transaction.commit();
+    document.clear_history();
+    auto history = History(document);
+    auto nodes = std::vector{upper, lower};
+    REQUIRE(history.merge(std::make_unique<TranslateCommand>(
+      nodes, Point(500, 0), "Move", false)));
+    REQUIRE(document.get(lower).m_parent == board);
+    REQUIRE(history.merge(std::make_unique<SettleCommand>(
+      nodes, std::nullopt, estimate_text_bounds)));
+    REQUIRE(history.get_undo_count() == 1);
+    REQUIRE(history.get_undo_label() == "Move");
+    REQUIRE(document.get_canvas() == std::vector{board, lower, upper});
+    REQUIRE(document.get(board).m_children == std::vector{middle});
+    REQUIRE(*get_world_bounds(document, upper) == Rect(610, 10, 40, 40));
+    REQUIRE(history.undo());
+    REQUIRE(document.get(board).m_children ==
+      std::vector{lower, middle, upper});
+    REQUIRE(*get_world_bounds(document, upper) == Rect(110, 10, 40, 40));
+  }
+
+  TEST_CASE("find_artboard_parent") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 100, 100);
+    auto left =
+      transaction.append(NodeId(), make_header("Left"), artboard);
+    artboard.m_frame = Rect(100, 0, 100, 100);
+    auto right =
+      transaction.append(NodeId(), make_header("Right"), artboard);
+    auto shape = transaction.append(left,
+      make_header("Shape", make_translation(80, 10)),
+      make_rectangle_shape(40, 40));
+    auto loose = transaction.append(NodeId(),
+      make_header("Loose", make_translation(80, 50)),
+      make_rectangle_shape(40, 40));
+    auto edge = transaction.append(NodeId(),
+      make_header("Edge", make_translation(200, 10)),
+      make_rectangle_shape(40, 40));
+    transaction.commit();
+    REQUIRE(find_artboard_parent(document, shape) == left);
+    REQUIRE(find_artboard_parent(document, shape, Point(150, 50)) == left);
+    REQUIRE(find_artboard_parent(document, loose) == right);
+    REQUIRE(find_artboard_parent(document, loose, Point(50, 70)) == left);
+    REQUIRE(find_artboard_parent(document, loose, Point(150, 20)) == right);
+    REQUIRE(find_artboard_parent(document, loose, Point(300, 20)) == right);
+    REQUIRE(find_artboard_parent(document, edge).is_nil());
+  }
+
+  TEST_CASE("settle_nested") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 400, 300);
+    auto board =
+      transaction.append(NodeId(), make_header("Artboard"), artboard);
+    auto group = transaction.append(board, make_header("Group"), Group());
+    auto first = transaction.append(group,
+      make_header("First", make_translation(10, 10)),
+      make_rectangle_shape(40, 40));
+    auto second = transaction.append(group,
+      make_header("Second", make_translation(60, 10)),
+      make_rectangle_shape(40, 40));
+    transaction.commit();
+    document.clear_history();
+    auto history = History(document);
+    require_undoable(history, std::make_unique<TranslateCommand>(
+      std::vector{first}, Point(500, 0)));
+    REQUIRE(document.get(group).m_parent == board);
+    require_undoable(history, std::make_unique<TranslateCommand>(
+      std::vector{second}, Point(500, 0)));
+    REQUIRE(document.get(group).m_parent.is_nil());
+    REQUIRE(document.get(group).m_children == std::vector{first, second});
+    REQUIRE(*get_world_bounds(document, second) == Rect(560, 10, 40, 40));
+  }
+
+  TEST_CASE("settle_moved_artboard") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 100, 100);
+    auto board =
+      transaction.append(NodeId(), make_header("Artboard"), artboard);
+    auto loose = transaction.append(NodeId(),
+      make_header("Loose", make_translation(150, 10)),
+      make_rectangle_shape(40, 40));
+    auto far = transaction.append(NodeId(),
+      make_header("Far", make_translation(500, 10)),
+      make_rectangle_shape(40, 40));
+    transaction.commit();
+    document.clear_history();
+    auto history = History(document);
+    require_undoable(history, std::make_unique<TranslateCommand>(
+      std::vector{board}, Point(100, 0)));
+    REQUIRE(document.get(board).m_children == std::vector{loose});
+    REQUIRE(document.get(far).m_parent.is_nil());
+    REQUIRE(*get_world_bounds(document, loose) == Rect(150, 10, 40, 40));
+  }
 }

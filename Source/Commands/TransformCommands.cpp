@@ -558,6 +558,50 @@ namespace {
       }
     }
   }
+
+  NodeId find_top_level(const Document& document, const NodeId& id) {
+    auto node = document.find(id);
+    while(node) {
+      if(node->m_parent.is_nil()) {
+        if(document.is_on_canvas(node->get_id())) {
+          return node->get_id();
+        }
+        return NodeId();
+      }
+      auto& parent = document.get(node->m_parent);
+      if(parent.get_artboard()) {
+        return node->get_id();
+      }
+      node = &parent;
+    }
+    return NodeId();
+  }
+
+  NodeId choose_artboard(const Document& document, const NodeId& parent,
+      const Rect& bounds, const std::vector<NodeId>& candidates,
+      std::optional<Point> pointer) {
+    if(candidates.size() == 1) {
+      return candidates.front();
+    } else if(candidates.empty()) {
+      return NodeId();
+    } else if(std::find(candidates.begin(), candidates.end(), parent) !=
+        candidates.end()) {
+      return parent;
+    }
+    if(pointer) {
+      auto& canvas = document.get_canvas();
+      for(auto i = canvas.rbegin(); i != canvas.rend(); ++i) {
+        auto artboard = document.get(*i).get_artboard();
+        if(artboard && artboard->m_frame.contains(*pointer)) {
+          if(overlaps(bounds, artboard->m_frame)) {
+            return *i;
+          }
+          break;
+        }
+      }
+    }
+    return candidates.back();
+  }
 }
 
 void Rellu::set_transform(const Document& document, Transaction& transaction,
@@ -664,14 +708,120 @@ void Rellu::update_artboard_contents(
   }
 }
 
+NodeId Rellu::find_artboard_parent(const Document& document,
+    const NodeId& id, std::optional<Point> pointer,
+    const TextMeasurer& measurer) {
+  auto& node = document.get(id);
+  auto bounds = get_world_bounds(document, id, BoundsType::GEOMETRY, measurer);
+  if(!bounds) {
+    return node.m_parent;
+  }
+  auto candidates = std::vector<NodeId>();
+  for(auto& child : document.get_canvas()) {
+    auto artboard = document.get(child).get_artboard();
+    if(child != id && artboard && overlaps(*bounds, artboard->m_frame)) {
+      candidates.push_back(child);
+    }
+  }
+  return choose_artboard(document, node.m_parent, *bounds, candidates,
+    pointer);
+}
+
+void Rellu::settle_nodes(const Document& document, Transaction& transaction,
+    const std::vector<NodeId>& nodes, std::optional<Point> pointer,
+    const TextMeasurer& measurer) {
+  auto targets = std::vector<std::pair<NodeId, NodeId>>();
+  auto is_listed = [&] (const NodeId& id) {
+    return std::any_of(targets.begin(), targets.end(),
+      [&] (const auto& target) { return target.first == id; });
+  };
+  auto artboards = std::vector<NodeId>();
+  auto checked = std::vector<NodeId>();
+  for(auto& id : nodes) {
+    auto top = find_top_level(document, id);
+    if(top.is_nil() ||
+        std::find(checked.begin(), checked.end(), top) != checked.end()) {
+      continue;
+    }
+    checked.push_back(top);
+    if(document.get(top).get_artboard()) {
+      artboards.push_back(top);
+      continue;
+    }
+    auto parent = find_artboard_parent(document, top, pointer, measurer);
+    if(parent != document.get(top).m_parent) {
+      targets.emplace_back(top, parent);
+    }
+  }
+  if(!artboards.empty()) {
+    for(auto& child : document.get_canvas()) {
+      if(document.get(child).get_artboard() || is_listed(child)) {
+        continue;
+      }
+      auto bounds =
+        get_world_bounds(document, child, BoundsType::GEOMETRY, measurer);
+      if(!bounds) {
+        continue;
+      }
+      auto candidates = std::vector<NodeId>();
+      for(auto& artboard : artboards) {
+        if(overlaps(*bounds, document.get(artboard).get_artboard()->m_frame)) {
+          candidates.push_back(artboard);
+        }
+      }
+      sort_by_z_order(document, candidates);
+      auto parent =
+        choose_artboard(document, NodeId(), *bounds, candidates, pointer);
+      if(!parent.is_nil()) {
+        targets.emplace_back(child, parent);
+      }
+    }
+  }
+  auto moved = std::vector<NodeId>();
+  for(auto& target : targets) {
+    moved.push_back(target.first);
+  }
+  sort_by_z_order(document, moved);
+  for(auto& id : moved) {
+    auto i = std::find_if(targets.begin(), targets.end(),
+      [&] (const auto& target) { return target.first == id; });
+    auto count = document.get_children(i->second).size();
+    ReparentCommand(std::vector{id}, i->second, count).apply(
+      document, transaction);
+  }
+}
+
+SettleCommand::SettleCommand(std::vector<NodeId> nodes,
+  std::optional<Point> pointer, TextMeasurer measurer) noexcept
+  : m_nodes(std::move(nodes)),
+    m_pointer(pointer),
+    m_measurer(std::move(measurer)) {}
+
+const std::vector<NodeId>& SettleCommand::get_nodes() const {
+  return m_nodes;
+}
+
+std::string SettleCommand::get_label() const {
+  return "Move";
+}
+
+void SettleCommand::apply(const Document& document, Transaction& transaction) {
+  settle_nodes(document, transaction, m_nodes, m_pointer, m_measurer);
+}
+
 TranslateCommand::TranslateCommand(std::vector<NodeId> nodes, Point delta)
   : TranslateCommand(std::move(nodes), delta, "Move") {}
 
 TranslateCommand::TranslateCommand(
   std::vector<NodeId> nodes, Point delta, std::string label) noexcept
+  : TranslateCommand(std::move(nodes), delta, std::move(label), true) {}
+
+TranslateCommand::TranslateCommand(std::vector<NodeId> nodes, Point delta,
+  std::string label, bool is_settled) noexcept
   : m_nodes(std::move(nodes)),
     m_delta(delta),
-    m_label(std::move(label)) {}
+    m_label(std::move(label)),
+    m_is_settled(is_settled) {}
 
 const std::vector<NodeId>& TranslateCommand::get_nodes() const {
   return m_nodes;
@@ -690,9 +840,15 @@ void TranslateCommand::apply(
   for(auto& id : get_top_level(document, m_nodes)) {
     translate_node(document, transaction, id, m_delta);
   }
+  if(m_is_settled) {
+    settle_nodes(document, transaction, m_nodes);
+  }
 }
 
 bool TranslateCommand::merge(const Command& command) {
+  if(auto settle = dynamic_cast<const SettleCommand*>(&command)) {
+    return settle->get_nodes() == m_nodes;
+  }
   auto translation = dynamic_cast<const TranslateCommand*>(&command);
   if(!translation || translation->m_label != m_label ||
       translation->m_nodes != m_nodes) {

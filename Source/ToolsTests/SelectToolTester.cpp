@@ -816,6 +816,50 @@ TEST_SUITE("SelectTool") {
     REQUIRE(!document.find(copy));
   }
 
+  TEST_CASE("drag_off_artboard") {
+    auto document = Document();
+    auto board = build_board(document);
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    auto& history = editor.get_history();
+    auto& context = editor.get_context();
+    editor.get_selection().select(board.m_rectangle);
+    REQUIRE(context.get_artboard() == board.m_artboard);
+    drag(tools, Point(450, 175), Point(850, 175));
+    REQUIRE(document.get(board.m_rectangle).m_parent.is_nil());
+    REQUIRE(document.get_canvas().back() == board.m_rectangle);
+    REQUIRE(get_bounds(document, board.m_rectangle) ==
+      Rect(800, 150, 100, 50));
+    REQUIRE(history.get_undo_count() == 1);
+    REQUIRE(history.get_undo_label() == "Move");
+    REQUIRE(context.get_artboard().is_nil());
+    REQUIRE(editor.undo());
+    REQUIRE(document.get(board.m_rectangle).m_parent == board.m_artboard);
+    drag(tools, Point(450, 175), Point(740, 175));
+    REQUIRE(get_bounds(document, board.m_rectangle).m_x == 690);
+    REQUIRE(document.get(board.m_rectangle).m_parent == board.m_artboard);
+    type(tools, Qt::Key_Right, Qt::ShiftModifier);
+    REQUIRE(document.get(board.m_rectangle).m_parent.is_nil());
+    REQUIRE(history.get_undo_label() == "Nudge Right");
+    REQUIRE(context.get_artboard().is_nil());
+    type(tools, Qt::Key_Left);
+    REQUIRE(document.get(board.m_rectangle).m_parent == board.m_artboard);
+    REQUIRE(document.get(board.m_artboard).m_children.back() ==
+      board.m_rectangle);
+    REQUIRE(context.get_artboard() == board.m_artboard);
+    REQUIRE(editor.undo());
+    REQUIRE(editor.undo());
+    REQUIRE(document.get(board.m_rectangle).m_parent == board.m_artboard);
+    REQUIRE(get_bounds(document, board.m_rectangle).m_x == 690);
+    drag(tools, Point(740, 175), Point(900, 175), Qt::AltModifier);
+    auto copy = editor.get_selection().get_primary();
+    REQUIRE(copy != board.m_rectangle);
+    REQUIRE(document.get(copy).m_parent.is_nil());
+    REQUIRE(document.get(board.m_rectangle).m_parent == board.m_artboard);
+    REQUIRE(history.get_undo_label() == "Duplicate");
+  }
+
   TEST_CASE("flip") {
     auto document = Document();
     auto board = build_board(document);

@@ -1,6 +1,7 @@
 #ifndef RELLU_COMMANDS_TRANSFORM_COMMANDS_HPP
 #define RELLU_COMMANDS_TRANSFORM_COMMANDS_HPP
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include "Rellu/Commands/Bounds.hpp"
@@ -98,7 +99,72 @@ namespace Rellu {
   void update_artboard_contents(
     const Document& document, Transaction& transaction, const NodeId& id);
 
-  /** Moves nodes by a displacement in document space. */
+  /**
+   * Finds the parent Adobe XD gives a node on the pasteboard or directly
+   * in an artboard once it is moved: the only artboard its bounds overlap,
+   * or among several its parent, else the topmost one under the pointer
+   * that its bounds overlap, else the topmost one; and the pasteboard for
+   * a node of an artboard that overlaps none.
+   * @param document The document holding the node.
+   * @param id The node's id.
+   * @param pointer The pointer's position in document space, or none.
+   * @param measurer The function measuring text.
+   * @return The artboard, or nil for the pasteboard.
+   */
+  NodeId find_artboard_parent(const Document& document, const NodeId& id,
+    std::optional<Point> pointer = std::nullopt,
+    const TextMeasurer& measurer = estimate_text_bounds);
+
+  /**
+   * Moves nodes that were moved onto or off artboards as Adobe XD does once
+   * an edit ends: the node on the canvas or directly in an artboard holding
+   * each node goes on top of the parent find_artboard_parent finds, and
+   * the nodes on the pasteboard that a moved artboard overlaps go into it,
+   * every node keeping where it appears on the canvas and the nodes moved
+   * keeping their order.
+   * @param document The document holding the nodes.
+   * @param transaction The open transaction on the <i>document</i>.
+   * @param nodes The nodes moved.
+   * @param pointer The pointer's position in document space, or none.
+   * @param measurer The function measuring text.
+   */
+  void settle_nodes(const Document& document, Transaction& transaction,
+    const std::vector<NodeId>& nodes,
+    std::optional<Point> pointer = std::nullopt,
+    const TextMeasurer& measurer = estimate_text_bounds);
+
+  /**
+   * Moves nodes onto or off artboards as settle_nodes does, labelled Move,
+   * as Adobe XD does once a drag or nudge ends.
+   */
+  class SettleCommand : public Command {
+    public:
+
+      /**
+       * Constructs a SettleCommand.
+       * @param nodes The nodes moved.
+       * @param pointer The pointer's position in document space, or none.
+       * @param measurer The function measuring text.
+       */
+      SettleCommand(std::vector<NodeId> nodes, std::optional<Point> pointer,
+        TextMeasurer measurer) noexcept;
+
+      /** Returns the nodes moved. */
+      const std::vector<NodeId>& get_nodes() const;
+
+      std::string get_label() const override;
+      void apply(const Document& document, Transaction& transaction) override;
+
+    private:
+      std::vector<NodeId> m_nodes;
+      std::optional<Point> m_pointer;
+      TextMeasurer m_measurer;
+  };
+
+  /**
+   * Moves nodes by a displacement in document space, then onto or off
+   * artboards as settle_nodes does unless told otherwise.
+   */
   class TranslateCommand : public Command {
     public:
 
@@ -118,6 +184,17 @@ namespace Rellu {
       TranslateCommand(
         std::vector<NodeId> nodes, Point delta, std::string label) noexcept;
 
+      /**
+       * Constructs a TranslateCommand.
+       * @param nodes The nodes to move.
+       * @param delta The displacement.
+       * @param label The label naming the operation.
+       * @param is_settled Whether the nodes are then moved onto or off
+       *        artboards.
+       */
+      TranslateCommand(std::vector<NodeId> nodes, Point delta,
+        std::string label, bool is_settled) noexcept;
+
       /** Returns the nodes moved. */
       const std::vector<NodeId>& get_nodes() const;
 
@@ -129,7 +206,7 @@ namespace Rellu {
 
       /**
        * Adds the displacement of a TranslateCommand with the same label
-       * moving the same nodes.
+       * moving the same nodes, or takes a SettleCommand of the same nodes.
        */
       bool merge(const Command& command) override;
 
@@ -137,6 +214,7 @@ namespace Rellu {
       std::vector<NodeId> m_nodes;
       Point m_delta;
       std::string m_label;
+      bool m_is_settled;
   };
 
   /** Applies a mapping in document space to nodes, as by resize_nodes. */
