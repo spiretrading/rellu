@@ -1,5 +1,6 @@
 #include <cmath>
 #include <utility>
+#include <QEnterEvent>
 #include <QEvent>
 #include <QMouseEvent>
 #include "Rellu/Ui/PaneResizer.hpp"
@@ -32,7 +33,8 @@ void PaneResizer::set_width_provider(WidthProvider provider) {
 }
 
 void PaneResizer::place() {
-  if(!m_pane || !m_pane->isVisibleTo(parentWidget())) {
+  if(!m_pane || !parentWidget()->isAncestorOf(m_pane) ||
+      !m_pane->isVisibleTo(parentWidget())) {
     hide();
     return;
   }
@@ -41,23 +43,42 @@ void PaneResizer::place() {
   auto band = static_cast<int>(std::lround(BAND_WIDTH * ratio));
   auto left = static_cast<int>(std::floor((edge - band) / ratio));
   auto right = static_cast<int>(std::ceil(edge / ratio));
-  auto x = m_pane->geometry().x();
-  setGeometry(x + left, 0, std::max(right - left, 0),
-    parentWidget()->height());
+  auto position = get_pane_position();
+  setGeometry(position.x() + left, position.y(), std::max(right - left, 0),
+    std::max(parentWidget()->height() - position.y(), 0));
   show();
   raise();
 }
 
 bool PaneResizer::is_on_band(QPointF position) const {
-  if(!m_pane) {
+  if(!m_pane || !parentWidget()->isAncestorOf(m_pane)) {
     return false;
   }
   auto ratio = devicePixelRatio();
-  auto offset = geometry().x() - m_pane->geometry().x() + position.x();
+  auto offset = geometry().x() - get_pane_position().x() + position.x();
   auto device = static_cast<int>(std::floor(offset * ratio + 1e-6));
   auto edge = m_pane->get_device_width();
   auto band = static_cast<int>(std::lround(BAND_WIDTH * ratio));
   return device >= edge - band && device < edge;
+}
+
+QPoint PaneResizer::get_pane_position() const {
+  return m_pane->mapTo(parentWidget(), QPoint(0, 0));
+}
+
+void PaneResizer::update_cursor(QPointF position) {
+  if(is_on_band(position)) {
+    setCursor(Qt::SizeHorCursor);
+  } else {
+    setCursor(Qt::ArrowCursor);
+  }
+}
+
+bool PaneResizer::event(QEvent* event) {
+  if(event->type() == QEvent::Enter && !m_is_pressed) {
+    update_cursor(static_cast<QEnterEvent*>(event)->position());
+  }
+  return QWidget::event(event);
 }
 
 bool PaneResizer::eventFilter(QObject* watched, QEvent* event) {
@@ -90,11 +111,7 @@ void PaneResizer::mousePressEvent(QMouseEvent* event) {
 
 void PaneResizer::mouseMoveEvent(QMouseEvent* event) {
   if(!m_is_pressed) {
-    if(is_on_band(event->position())) {
-      setCursor(Qt::SizeHorCursor);
-    } else {
-      setCursor(Qt::ArrowCursor);
-    }
+    update_cursor(event->position());
     return;
   }
   auto x = event->globalPosition().x();

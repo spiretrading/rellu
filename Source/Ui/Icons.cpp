@@ -7,12 +7,14 @@
 #include <utility>
 #include <variant>
 #include <QFont>
+#include <QImage>
 #include <QIconEngine>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPainterPathStroker>
 #include <QPixmap>
 #include <QPolygonF>
+#include <QRect>
 #include "Colors.hpp"
 #include "Icons.hpp"
 
@@ -934,6 +936,27 @@ const QIcon& Rellu::get_icon(Glyph glyph) {
       glyph, QIcon(new GlyphEngine(glyph, std::nullopt))).first;
   }
   return i->second;
+}
+
+QPixmap Rellu::make_fitted_glyph(Glyph glyph, QSize size, double ratio) {
+  constexpr auto RESOLUTION = 128;
+  auto image = get_icon(glyph).pixmap(QSize(RESOLUTION, RESOLUTION), 1).
+    toImage().convertToFormat(QImage::Format_ARGB32_Premultiplied);
+  auto bounds = QRect();
+  for(auto y = 0; y != image.height(); ++y) {
+    for(auto x = 0; x != image.width(); ++x) {
+      if(qAlpha(image.pixel(x, y)) != 0) {
+        bounds |= QRect(x, y, 1, 1);
+      }
+    }
+  }
+  if(bounds.isEmpty() || size.isEmpty()) {
+    return QPixmap();
+  }
+  auto fitted = QPixmap::fromImage(image.copy(bounds).scaled(
+    size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+  fitted.setDevicePixelRatio(ratio);
+  return fitted;
 }
 
 QIcon Rellu::make_icon(Glyph glyph, const QColor& color) {

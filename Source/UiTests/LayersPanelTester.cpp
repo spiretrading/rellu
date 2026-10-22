@@ -1,12 +1,15 @@
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <vector>
 #include <doctest/doctest.h>
 #include <QCoreApplication>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMouseEvent>
+#include <QPalette>
 #include <QToolButton>
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Localization/Localization.hpp"
@@ -558,13 +561,19 @@ TEST_SUITE("LayersPanel") {
       });
     REQUIRE(filter != buttons.end());
     REQUIRE((*filter)->geometry().right() == field->width() - 4 - 1);
-    REQUIRE((*filter)->width() == 12);
+    auto ratio = field->devicePixelRatioF();
+    REQUIRE((*filter)->width() ==
+      static_cast<int>(std::ceil(std::lround(28.0 / 3 * ratio) / ratio)));
     REQUIRE(field->textMargins().left() == 17);
-    REQUIRE(field->textMargins().right() == 18);
+    REQUIRE(field->textMargins().right() == (*filter)->width() + 4 + 2);
     REQUIRE(field->actions().empty());
     auto icon = field->findChild<QLabel*>("search_icon");
     REQUIRE(icon);
-    REQUIRE(icon->geometry().x() == 0);
+    REQUIRE(icon->geometry().x() == 1);
+    auto glyph = icon->pixmap();
+    REQUIRE(glyph.width() == std::lround(28.0 / 3 * ratio));
+    REQUIRE(field->palette().color(QPalette::PlaceholderText) ==
+      QColor(0x66, 0x66, 0x66));
     panel.hide();
   }
 }

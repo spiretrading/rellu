@@ -1,6 +1,7 @@
 #include <vector>
 #include <doctest/doctest.h>
 #include <QCoreApplication>
+#include <QEnterEvent>
 #include <QMouseEvent>
 #include <QWidget>
 #include "Rellu/Ui/PaneResizer.hpp"
@@ -97,5 +98,26 @@ TEST_SUITE("PaneResizer") {
     REQUIRE(resizer.geometry().x() == 350 - PaneResizer::BAND_WIDTH);
     pane->hide();
     REQUIRE(!resizer.isVisible());
+  }
+  TEST_CASE("pane_resizer_over_ancestor") {
+    auto window = QWidget();
+    window.resize(800, 600);
+    auto body = new QWidget(&window);
+    body->setGeometry(0, 74, 800, 500);
+    auto pane = new PaneFrame(body);
+    pane->move(50, 0);
+    pane->set_device_width(300);
+    pane->setFixedHeight(500);
+    auto resizer = PaneResizer(*pane, &window);
+    window.show();
+    QCoreApplication::processEvents();
+    REQUIRE(resizer.geometry() == QRect(
+      350 - PaneResizer::BAND_WIDTH, 74, PaneResizer::BAND_WIDTH, 526));
+    auto enter = QEnterEvent(QPointF(1, 10), QPointF(1, 10), QPointF(1, 10));
+    QCoreApplication::sendEvent(&resizer, &enter);
+    REQUIRE(resizer.cursor().shape() == Qt::SizeHorCursor);
+    window.resize(800, 640);
+    QCoreApplication::processEvents();
+    REQUIRE(resizer.geometry().height() == 566);
   }
 }

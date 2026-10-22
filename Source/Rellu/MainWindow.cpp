@@ -1094,7 +1094,7 @@ QMenuBar* MainWindow::make_layout() {
   m_left_panel->addWidget(m_layers);
   m_left_panel->addWidget(m_plugins);
   body_layout->addWidget(m_left_panel);
-  m_pane_resizer = new PaneResizer(*m_left_panel, body);
+  m_pane_resizer = new PaneResizer(*m_left_panel, this);
   m_pane_resizer->set_width_handler([this] (auto width) {
     set_left_panel_width(width);
   });
@@ -1119,6 +1119,7 @@ QMenuBar* MainWindow::make_layout() {
   body_layout->addWidget(m_inspector_frame);
   layout->addWidget(body, 1);
   setCentralWidget(central);
+  apply_left_panel();
   m_banners = std::make_unique<BannerHost>(*central);
   return bar;
 }

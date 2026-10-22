@@ -2,6 +2,8 @@
 #define RELLU_UI_ICONS_HPP
 #include <QColor>
 #include <QIcon>
+#include <QPixmap>
+#include <QSize>
 #include "Rellu/Model/Node.hpp"
 
 namespace Rellu {
@@ -125,6 +127,16 @@ namespace Rellu {
    * @param color The color to paint it in.
    */
   QIcon make_icon(Glyph glyph, const QColor& color);
+
+  /**
+   * Draws a glyph in its normal color so that what it paints fills a size
+   * in device pixels exactly.
+   * @param glyph The glyph to paint.
+   * @param size The size in device pixels of what the glyph paints.
+   * @param ratio The number of device pixels per logical pixel.
+   * @return The pixmap of the <i>size</i> at the <i>ratio</i>.
+   */
+  QPixmap make_fitted_glyph(Glyph glyph, QSize size, double ratio);
 
   /**
    * Returns the icon listing a node in the layers panel.

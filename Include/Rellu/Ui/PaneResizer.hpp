@@ -9,7 +9,9 @@ namespace Rellu {
 
   /**
    * A band along the inside of a pane's right edge, BAND_WIDTH logical
-   * pixels wide rounded to device pixels and as tall as the pane's parent,
+   * pixels wide rounded to device pixels and reaching from the pane's top
+   * to the bottom of the resizer's parent, the pointer over each of whose
+   * device pixels always shows the same cursor,
    * that resizes the pane as Adobe XD's left pane resizes: the pointer over
    * the band shows the horizontal resize cursor, and once a drag moves
    * DEAD_ZONE device pixels or more from the press, the pane follows the
@@ -35,8 +37,9 @@ namespace Rellu {
 
       /**
        * Constructs a PaneResizer over a pane's right edge.
-       * @param pane The pane resized, a sibling of the resizer.
-       * @param parent The pane's parent.
+       * @param pane The pane resized.
+       * @param parent The widget holding the resizer, the pane's parent or
+       *        one of its ancestors.
        */
       PaneResizer(PaneFrame& pane, QWidget* parent);
 
@@ -64,6 +67,7 @@ namespace Rellu {
       void place();
 
     protected:
+      bool event(QEvent* event) override;
       bool eventFilter(QObject* watched, QEvent* event) override;
       void mousePressEvent(QMouseEvent* event) override;
       void mouseMoveEvent(QMouseEvent* event) override;
@@ -79,6 +83,9 @@ namespace Rellu {
       double m_press;
       double m_origin;
       double m_width;
+
+      QPoint get_pane_position() const;
+      void update_cursor(QPointF position);
   };
 }
 
