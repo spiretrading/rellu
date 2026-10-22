@@ -400,7 +400,7 @@ TEST_SUITE("SelectTool") {
     REQUIRE(editor.get_selection().get_nodes() == std::vector{board.m_group});
     REQUIRE(get_bounds(document, board.m_group) == Rect(170, 161, 100, 40));
     REQUIRE(history.get_undo_count() == 1);
-    REQUIRE(history.get_undo_label() == "Move");
+    REQUIRE(history.get_undo_label() == "Move Object");
     tools.press(make_event(
       Point(180, 170), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
     drag_to(tools, Point(180, 170), Point(220, 175), Qt::ShiftModifier);
@@ -837,7 +837,7 @@ TEST_SUITE("SelectTool") {
     REQUIRE(get_bounds(document, board.m_rectangle) ==
       Rect(800, 150, 100, 50));
     REQUIRE(history.get_undo_count() == 1);
-    REQUIRE(history.get_undo_label() == "Move");
+    REQUIRE(history.get_undo_label() == "Move Object");
     REQUIRE(context.get_artboard().is_nil());
     REQUIRE(editor.undo());
     REQUIRE(document.get(board.m_rectangle).m_parent == board.m_artboard);
@@ -1062,6 +1062,41 @@ TEST_SUITE("SelectTool") {
     REQUIRE(editor.get_history().get_undo_count() == 1);
     editor.undo();
     REQUIRE(get_bounds(document, first).m_y == 100);
+  }
+
+  TEST_CASE("stack_drag_off_artboard") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 600, 400);
+    auto board =
+      transaction.append(NodeId(), make_header("Board"), artboard);
+    auto group = Group();
+    group.m_stack = Stack(Orientation::VERTICAL);
+    auto stack = transaction.append(
+      board, make_header("Stack", make_translation(100, 100)), group);
+    auto last = add_rectangle(transaction, stack, Rect(0, 90, 100, 20));
+    auto middle = add_rectangle(transaction, stack, Rect(0, 50, 100, 30));
+    auto first = add_rectangle(transaction, stack, Rect(0, 0, 100, 40));
+    auto payload = *document.get(stack).get_group();
+    payload.m_stack->m_spacing.emplace(first, 10);
+    payload.m_stack->m_spacing.emplace(middle, 10);
+    transaction.replace_payload(stack, payload);
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    editor.get_context().enter(stack);
+    click(tools, Point(150, 120));
+    REQUIRE(editor.get_selection().get_nodes() == std::vector{first});
+    drag(tools, Point(150, 120), Point(900, 120));
+    REQUIRE(document.get(stack).m_parent == board);
+    REQUIRE(document.get(first).m_parent == stack);
+    REQUIRE(document.get(stack).m_children ==
+      std::vector{last, middle, first});
+    REQUIRE(get_bounds(document, first) == Rect(100, 100, 100, 40));
+    REQUIRE(editor.get_history().get_undo_count() == 0);
   }
 
   TEST_CASE("stack_nudge") {

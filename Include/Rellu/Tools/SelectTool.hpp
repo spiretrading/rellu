@@ -66,7 +66,8 @@ namespace Rellu {
    * A repeat grid or stack selected
    * alone is also edited through LayoutHandles, and a double click enters
    * both a repeat grid and the cell clicked. Stack items dragged make room
-   * for each other until dropped. Once what is dragged is dropped, it goes
+   * for each other until dropped, then return to their stack's line,
+   * keeping only their new order. Once what is dragged is dropped, it goes
    * onto or off artboards as the history settles it, and the active
    * artboard becomes the one holding the selection. Artboard guides are
    * created, moved and deleted through ArtboardGuides. Each drag is one

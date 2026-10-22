@@ -537,6 +537,21 @@ namespace {
     }
     return NodeId();
   }
+
+  bool is_document_link(const ComponentLink& link) {
+    auto reference = QByteArray::fromStdString(link.m_reference);
+    if(reference.startsWith("xdcloud:///")) {
+      reference = QByteArray::fromPercentEncoding(reference.mid(11));
+    }
+    if(reference.startsWith("cloud-asset://")) {
+      return false;
+    } else if(reference.startsWith('{')) {
+      auto error = QJsonParseError();
+      QJsonDocument::fromJson(reference, &error);
+      return error.error != QJsonParseError::NoError;
+    }
+    return true;
+  }
 }
 
 struct Clipboard::Content {
@@ -567,6 +582,7 @@ struct Clipboard::Content {
   bool m_is_text = false;
   std::string m_prefix;
   std::string m_source;
+  std::string m_path;
   QByteArray m_mark;
   QByteArray m_xd;
 
@@ -1153,21 +1169,6 @@ class Clipboard::PasteCommand : public Command {
       }
     }
 
-    static bool is_document_link(const ComponentLink& link) {
-      auto reference = QByteArray::fromStdString(link.m_reference);
-      if(reference.startsWith("xdcloud:///")) {
-        reference = QByteArray::fromPercentEncoding(reference.mid(11));
-      }
-      if(reference.startsWith("cloud-asset://")) {
-        return false;
-      } else if(reference.startsWith('{')) {
-        auto error = QJsonParseError();
-        QJsonDocument::fromJson(reference, &error);
-        return error.error != QJsonParseError::NoError;
-      }
-      return true;
-    }
-
     static std::pair<NodeHeader, Payload> make_copy(
         const Content::Entry& entry, const Mapping& mapping) {
       auto header = entry.m_header;
@@ -1573,6 +1574,7 @@ bool Clipboard::copy(const Document& document,
     }
   }
   content->m_source = source.m_id;
+  content->m_path = source.m_path;
   content->m_xd = write_xd_clipboard(document, items,
     content->get_bounds().value_or(Rect(0, 0, 0, 0)), layout, folder,
     source);
@@ -1753,6 +1755,29 @@ std::unique_ptr<Command> Clipboard::make_paste_command(
     return nullptr;
   }
   return std::make_unique<PasteCommand>(m_content, target);
+}
+
+std::vector<std::string> Clipboard::get_linked_documents(
+    const XdClipboardSource& target) const {
+  auto documents = std::vector<std::string>();
+  if(!m_content || m_content->m_source == target.m_id) {
+    return documents;
+  }
+  for(auto& component : m_content->m_components) {
+    auto reference = m_content->m_path;
+    if(component.m_link) {
+      if(!is_document_link(*component.m_link)) {
+        continue;
+      }
+      reference = component.m_link->m_reference;
+    }
+    if(!reference.empty() && reference != target.m_path &&
+        std::find(documents.begin(), documents.end(), reference) ==
+          documents.end()) {
+      documents.push_back(reference);
+    }
+  }
+  return documents;
 }
 
 std::unique_ptr<Command> Clipboard::make_paste_appearance_command(

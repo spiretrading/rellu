@@ -135,6 +135,7 @@ namespace Rellu {
       Subscription m_subscription;
       Subscription m_tool_subscription;
       Subscription m_text_subscription;
+      Subscription m_selection_subscription;
       double m_zoom;
       Point m_offset;
       double m_level;
@@ -162,6 +163,7 @@ namespace Rellu {
       TextTool* get_text_tool() const;
       void update_text_editing();
       void update_edited_text();
+      void update_ghosts();
       bool forward(QMouseEvent* event, auto handler);
       bool start_rename(Point position);
       void finish_rename(bool is_committed);

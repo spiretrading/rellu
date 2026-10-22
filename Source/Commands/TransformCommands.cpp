@@ -712,8 +712,13 @@ NodeId Rellu::find_artboard_parent(const Document& document,
     const NodeId& id, std::optional<Point> pointer,
     const TextMeasurer& measurer) {
   auto& node = document.get(id);
-  auto bounds = get_world_bounds(document, id, BoundsType::GEOMETRY, measurer);
-  if(!bounds || bounds->m_width == 0 && bounds->m_height == 0) {
+  auto outline =
+    get_world_bounds(document, id, BoundsType::GEOMETRY, measurer);
+  if(!outline || outline->m_width == 0 && outline->m_height == 0) {
+    return node.m_parent;
+  }
+  auto bounds = get_world_bounds(document, id, BoundsType::VISUAL, measurer);
+  if(!bounds) {
     return node.m_parent;
   }
   auto candidates = std::vector<NodeId>();
@@ -759,7 +764,8 @@ std::vector<NodeId> Rellu::get_settled_nodes(
 
 std::vector<NodeId> Rellu::settle_nodes(const Document& document,
     Transaction& transaction, const std::vector<NodeId>& nodes,
-    std::optional<Point> pointer, const TextMeasurer& measurer) {
+    std::optional<Point> pointer, const TextMeasurer& measurer,
+    const SettleExemption& exemption) {
   auto targets = std::vector<std::pair<NodeId, NodeId>>();
   auto is_listed = [&] (const NodeId& id) {
     return std::any_of(targets.begin(), targets.end(),
@@ -779,7 +785,9 @@ std::vector<NodeId> Rellu::settle_nodes(const Document& document,
       continue;
     }
     auto parent = find_artboard_parent(document, top, pointer, measurer);
-    if(parent != document.get(top).m_parent) {
+    auto& current = document.get(top).m_parent;
+    if(parent != current && !(parent.is_nil() && exemption &&
+        exemption(document, top))) {
       targets.emplace_back(top, parent);
     }
   }
@@ -789,7 +797,7 @@ std::vector<NodeId> Rellu::settle_nodes(const Document& document,
         continue;
       }
       auto bounds =
-        get_world_bounds(document, child, BoundsType::GEOMETRY, measurer);
+        get_world_bounds(document, child, BoundsType::VISUAL, measurer);
       if(!bounds) {
         continue;
       }

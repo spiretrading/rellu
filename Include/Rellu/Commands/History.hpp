@@ -28,7 +28,8 @@ namespace Rellu {
    * the recomputed layouts it called for, as refresh_layouts makes them, and
    * the nodes it moved onto or off artboards, as settle_nodes moves those
    * get_settled_nodes lists along with those the settle provider lists, by
-   * the pointer's position, as Adobe XD does once each edit ends. The
+   * the pointer's position, as Adobe XD does once each edit ends; a step
+   * that moves nodes onto or off artboards is closed to merging. The
    * most recent step stays open to merging until it is sealed, undone or
    * followed by another step. Once a History is attached, the document must
    * be undone, redone and cleared only through it.
@@ -50,6 +51,15 @@ namespace Rellu {
        */
       using SettleObserver =
         std::function<void (const std::vector<NodeId>& nodes)>;
+
+      /**
+       * The type of function testing whether a node of an artboard stays in
+       * it when settling would move it to the pasteboard.
+       * @param document The document holding the node.
+       * @param id The node's id.
+       */
+      using SettleExemption =
+        std::function<bool (const Document& document, const NodeId& id)>;
 
       /**
        * Constructs a History of the changes to a document from now on, the
@@ -95,6 +105,13 @@ namespace Rellu {
        * @param observer The function, or empty for none.
        */
       void set_settle_observer(SettleObserver observer);
+
+      /**
+       * Sets the test of the nodes of artboards that stay in them when
+       * settling would move them to the pasteboard.
+       * @param exemption The test, or empty for none.
+       */
+      void set_settle_exemption(SettleExemption exemption);
 
       /**
        * Defers settling nodes onto or off artboards while a gesture making
@@ -250,6 +267,7 @@ namespace Rellu {
       std::optional<Point> m_pointer;
       SettleProvider m_settle_provider;
       SettleObserver m_settle_observer;
+      SettleExemption m_settle_exemption;
       std::optional<std::size_t> m_settle_hold;
       std::vector<NodeId> m_pending;
       ChangeSet m_changes;
@@ -261,8 +279,8 @@ namespace Rellu {
       std::size_t get_depth() const;
       void push(Step step);
       void synchronize();
-      void refresh();
-      void settle(std::vector<NodeId> nodes);
+      bool refresh();
+      bool settle(std::vector<NodeId> nodes);
       void on_change(const ChangeSet& changes);
   };
 }

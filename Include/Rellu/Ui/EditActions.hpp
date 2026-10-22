@@ -17,6 +17,16 @@
 namespace Rellu {
 
   /**
+   * Makes the message Adobe XD shows after pasting components linked to
+   * other documents, in its toast markup, naming the document when there
+   * is one.
+   * @param documents The references to the documents, as
+   *        Clipboard::get_linked_documents returns them.
+   * @return The message, or empty if there are no documents.
+   */
+  QString make_linked_paste_message(const std::vector<std::string>& documents);
+
+  /**
    * Handles the edit, object and arrange actions of an ActionRegistry,
    * applied to the selection of an editor: the clipboard, history and
    * selection actions, and every action named after a command of a
@@ -60,6 +70,12 @@ namespace Rellu {
        * is copied from.
        */
       using SourceProvider = std::function<XdClipboardSource ()>;
+
+      /**
+       * The type of function showing a message in a toast.
+       * @param message The message, in Adobe XD's toast markup.
+       */
+      using NoticeHandler = std::function<void (const QString& message)>;
 
       /**
        * Sets the handlers of the actions, which are disabled until an
@@ -136,6 +152,13 @@ namespace Rellu {
        */
       void set_paste_handler(PasteHandler handler);
 
+      /**
+       * Sets the function showing the message make_linked_paste_message
+       * makes after a paste, as Adobe XD shows it.
+       * @param handler The function.
+       */
+      void set_notice_handler(NoticeHandler handler);
+
       /** Updates the text and enabled state of every action. */
       void update();
 
@@ -146,6 +169,7 @@ namespace Rellu {
       Clipboard m_clipboard;
       ErrorHandler m_error_handler;
       PasteHandler m_paste_handler;
+      NoticeHandler m_notice_handler;
       ViewProvider m_view_provider;
       RevealHandler m_reveal_handler;
       Workspace m_workspace;

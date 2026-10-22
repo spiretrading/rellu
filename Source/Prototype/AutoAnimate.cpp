@@ -1,6 +1,9 @@
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
+#include <vector>
+#include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Prototype/AutoAnimate.hpp"
@@ -71,6 +74,45 @@ std::vector<LayerMatch> Rellu::match_layers(
     }
   }
   return matches;
+}
+
+bool Rellu::is_auto_animate_matched(
+    const Document& document, const NodeId& id) {
+  auto node = document.find(id);
+  if(!node || node->m_parent.is_nil()) {
+    return false;
+  }
+  auto artboard = node->m_parent;
+  if(!document.get(artboard).get_artboard()) {
+    return false;
+  }
+  auto linked = std::vector<NodeId>();
+  for(auto& interaction : document.get_prototype().m_interactions) {
+    auto transition =
+      std::get_if<ArtboardTransition>(&interaction.m_action);
+    if(!transition ||
+        transition->m_animation.m_transition != Transition::AUTO_ANIMATE) {
+      continue;
+    }
+    auto source = find_artboard(document, interaction.m_owner);
+    auto destination = find_artboard(document, transition->m_destination);
+    if(source == artboard && !destination.is_nil()) {
+      linked.push_back(destination);
+    } else if(destination == artboard && !source.is_nil()) {
+      linked.push_back(source);
+    }
+  }
+  for(auto& other : linked) {
+    if(other == artboard) {
+      continue;
+    }
+    for(auto& match : match_layers(document, artboard, other)) {
+      if(match.m_from == id) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 AutoAnimation::AutoAnimation(Document& document, const NodeId& from,

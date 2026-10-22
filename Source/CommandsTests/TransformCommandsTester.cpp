@@ -955,4 +955,107 @@ TEST_SUITE("TransformCommands") {
     REQUIRE(document.get(drawn).m_parent == board);
     REQUIRE(*get_world_bounds(document, drawn) == Rect(380, 100, 40, 40));
   }
+  TEST_CASE("settled_bounds") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 375, 667);
+    auto board =
+      transaction.append(NodeId(), make_header("A"), artboard);
+    artboard.m_frame = Rect(1000, 0, 375, 667);
+    auto header = make_header("B");
+    header.m_is_visible = false;
+    auto hidden = transaction.append(NodeId(), header, artboard);
+    auto plain = transaction.append(board,
+      make_header("Plain", make_translation(100, 10)),
+      make_rectangle_shape(50, 50));
+    auto stroked_shape = make_rectangle_shape(50, 50);
+    auto stroke = Stroke();
+    stroke.m_width = 20;
+    stroke.m_alignment = StrokeAlignment::OUTSIDE;
+    stroked_shape.m_style.m_stroke = stroke;
+    auto stroked = transaction.append(board,
+      make_header("Stroked", make_translation(100, 100)), stroked_shape);
+    auto shadowed_shape = make_rectangle_shape(50, 50);
+    auto shadow = DropShadow();
+    shadow.m_offset = Point(-30, 0);
+    shadowed_shape.m_style.m_effects.push_back(shadow);
+    auto shadowed = transaction.append(board,
+      make_header("Shadowed", make_translation(100, 200)), shadowed_shape);
+    auto loose = transaction.append(NodeId(),
+      make_header("Loose", make_translation(500, 10)),
+      make_rectangle_shape(50, 50));
+    transaction.commit();
+    document.clear_history();
+    auto history = History(document);
+    require_undoable(history, std::make_unique<TranslateCommand>(
+      std::vector{plain}, Point(274.5, 0)));
+    REQUIRE(document.get(plain).m_parent == board);
+    require_undoable(history, std::make_unique<TranslateCommand>(
+      std::vector{plain}, Point(0.5, 0)));
+    REQUIRE(document.get(plain).m_parent.is_nil());
+    require_undoable(history, std::make_unique<TranslateCommand>(
+      std::vector{stroked}, Point(280, 0)));
+    REQUIRE(document.get(stroked).m_parent == board);
+    require_undoable(history, std::make_unique<TranslateCommand>(
+      std::vector{shadowed}, Point(280, 0)));
+    REQUIRE(document.get(shadowed).m_parent.is_nil());
+    require_undoable(history, std::make_unique<TranslateCommand>(
+      std::vector{loose}, Point(600, 0)));
+    REQUIRE(document.get(loose).m_parent == hidden);
+    REQUIRE(document.get_canvas() == std::vector{board, hidden, plain,
+      shadowed});
+  }
+
+  TEST_CASE("settle_exemption") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 375, 667);
+    auto board =
+      transaction.append(NodeId(), make_header("A"), artboard);
+    auto kept = transaction.append(board,
+      make_header("Kept", make_translation(10, 10)),
+      make_rectangle_shape(50, 50));
+    auto moved = transaction.append(board,
+      make_header("Moved", make_translation(10, 100)),
+      make_rectangle_shape(50, 50));
+    transaction.commit();
+    document.clear_history();
+    auto history = History(document);
+    history.set_settle_exemption([&] (const auto&, const auto& id) {
+      return id == kept;
+    });
+    require_undoable(history, std::make_unique<TranslateCommand>(
+      std::vector{kept, moved}, Point(500, 0)));
+    REQUIRE(document.get(kept).m_parent == board);
+    REQUIRE(document.get(moved).m_parent.is_nil());
+  }
+
+  TEST_CASE("settling_nudges") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 375, 667);
+    auto board =
+      transaction.append(NodeId(), make_header("A"), artboard);
+    auto shape = transaction.append(board,
+      make_header("R", make_translation(372, 10)),
+      make_rectangle_shape(50, 50));
+    transaction.commit();
+    document.clear_history();
+    auto history = History(document);
+    auto nodes = std::vector{shape};
+    for(auto i = 0; i != 4; ++i) {
+      REQUIRE(history.merge(make_nudge_command(nodes, Point(1, 0))));
+    }
+    REQUIRE(document.get(shape).m_parent.is_nil());
+    REQUIRE(history.get_undo_count() == 2);
+    REQUIRE(history.undo());
+    REQUIRE(get_world_bounds(document, shape)->m_x == 375);
+    REQUIRE(document.get(shape).m_parent.is_nil());
+    REQUIRE(history.undo());
+    REQUIRE(get_world_bounds(document, shape)->m_x == 372);
+    REQUIRE(document.get(shape).m_parent == board);
+  }
 }

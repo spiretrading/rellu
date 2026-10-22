@@ -142,6 +142,7 @@ DocumentView::~DocumentView() {
   m_text_timer.stop();
   m_caret_timer.stop();
   m_text_subscription.release();
+  m_selection_subscription.release();
   m_tool_subscription.release();
   m_tools.reset();
   m_own_editor.reset();
@@ -156,6 +157,7 @@ void DocumentView::set_document(std::unique_ptr<Document> document) {
   get_renderer().set_draw_list(nullptr);
   get_renderer().set_overlay(CanvasOverlay());
   m_text_subscription.release();
+  m_selection_subscription.release();
   m_tool_subscription.release();
   m_tools.reset();
   m_own_editor.reset();
@@ -597,6 +599,7 @@ void DocumentView::attach_tools() {
     return;
   }
   m_text_subscription.release();
+  m_selection_subscription.release();
   m_tool_subscription.release();
   m_tools.reset();
   m_editor = editor;
@@ -606,11 +609,15 @@ void DocumentView::attach_tools() {
   }
   update_cursor();
   update_edited_text();
+  update_ghosts();
   if(!editor) {
     return;
   }
   m_text_subscription = editor->get_text_selection().subscribe([this] {
     update_edited_text();
+  });
+  m_selection_subscription = editor->get_selection().subscribe([this] {
+    update_ghosts();
   });
   m_tools = std::make_unique<ToolManager>(
     *editor, make_text_measurer(get_default_font_library()));
@@ -659,6 +666,18 @@ void DocumentView::update_edited_text() {
     id = m_editor->get_text_selection().get_node();
   }
   m_scene->set_edited_text(id);
+  update();
+}
+
+void DocumentView::update_ghosts() {
+  if(!m_scene) {
+    return;
+  }
+  auto ids = std::vector<NodeId>();
+  if(m_editor) {
+    ids = m_editor->get_selection().get_nodes();
+  }
+  m_scene->set_ghosts(std::move(ids));
   update();
 }
 

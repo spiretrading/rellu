@@ -36,6 +36,16 @@ namespace Rellu {
     const Document& document, const NodeId& from, const NodeId& to);
 
   /**
+   * Tests whether a node of an artboard has a counterpart, as match_layers
+   * pairs layers, in another artboard that an auto-animate interaction
+   * links its artboard to or from, which keeps Adobe XD from moving it to
+   * the pasteboard.
+   * @param document The document holding the node.
+   * @param id The node's id.
+   */
+  bool is_auto_animate_matched(const Document& document, const NodeId& id);
+
+  /**
    * Plays Adobe XD's auto-animate between two trees of a document by
    * changing the tree animated to: its layers matched in the other tree
    * move, turn, scale, resize, morph and change color and opacity from

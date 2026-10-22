@@ -496,6 +496,48 @@ TEST_SUITE("Clipboard") {
       "data:text/plain;path=C%3A%5CA.xd;relativePath=A.xd,"));
   }
 
+  TEST_CASE("linked_documents") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto path = std::string("C:/Designs/A.xd");
+    auto clipboard = Clipboard();
+    REQUIRE(clipboard.get_linked_documents(XdClipboardSource()).empty());
+    REQUIRE(clipboard.copy(document, {ids.m_instance}, estimate_text_bounds,
+      {}, XdClipboardSource("A", path)));
+    auto target = XdClipboardSource("B", "C:/Designs/B.xd");
+    REQUIRE(clipboard.get_linked_documents(target) == std::vector{path});
+    REQUIRE(clipboard.get_linked_documents(
+      XdClipboardSource("A", path)).empty());
+    REQUIRE(clipboard.get_linked_documents(
+      XdClipboardSource("C", path)).empty());
+    auto data = clipboard.make_mime_data();
+    auto xd = QMimeData();
+    for(auto& format : data->formats()) {
+      if(format.contains("com.adobe.xd")) {
+        xd.setData(format, data->data(format));
+      }
+    }
+    auto foreign = Clipboard();
+    REQUIRE(foreign.load(xd));
+    REQUIRE(foreign.get_linked_documents(target) == std::vector{path});
+    auto unsaved = Clipboard();
+    REQUIRE(unsaved.copy(document, {ids.m_instance}, estimate_text_bounds,
+      {}, XdClipboardSource("A", "")));
+    REQUIRE(unsaved.get_linked_documents(target).empty());
+    {
+      auto component = document.get_resources().m_components.at(
+        ids.m_component);
+      component.m_link = ComponentLink("{\"id\":\"1\"}", "Library", 0);
+      auto transaction = Transaction(document);
+      transaction.replace_component(component);
+      transaction.commit();
+    }
+    auto library = Clipboard();
+    REQUIRE(library.copy(document, {ids.m_instance}, estimate_text_bounds,
+      {}, XdClipboardSource("A", path)));
+    REQUIRE(library.get_linked_documents(target).empty());
+  }
+
   TEST_CASE("system_clipboard") {
     auto document = Document();
     auto ids = build_test_document(document);

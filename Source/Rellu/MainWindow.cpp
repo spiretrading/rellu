@@ -1021,6 +1021,7 @@ QMenuBar* MainWindow::make_layout() {
   body_layout->addWidget(m_inspector_frame);
   layout->addWidget(body, 1);
   setCentralWidget(central);
+  m_banners = std::make_unique<BannerHost>(*central);
   return bar;
 }
 
@@ -1062,6 +1063,9 @@ void MainWindow::add_actions() {
   });
   m_edit_actions->set_error_handler([this] (const auto& message) {
     QMessageBox::warning(this, "Rellu", message);
+  });
+  m_edit_actions->set_notice_handler([this] (const auto& message) {
+    m_banners->show(message);
   });
   m_actions.set_handler("edit.rename", [this] {
     if(!m_session) {

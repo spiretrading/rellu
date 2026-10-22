@@ -2,12 +2,22 @@
 #include <chrono>
 #include <cstdint>
 #include <utility>
+#include "Rellu/Geometry/Path.hpp"
 #include "Rellu/Scene/Scene.hpp"
 
 using namespace Rellu;
 
 namespace {
   constexpr auto MAXIMUM_DEPTH = 256;
+  constexpr auto GHOST_EXTENT = 1e6;
+
+  void add_rect(Path& path, const Rect& rect) {
+    path.move_to(Point(rect.get_left(), rect.get_top()));
+    path.line_to(Point(rect.get_right(), rect.get_top()));
+    path.line_to(Point(rect.get_right(), rect.get_bottom()));
+    path.line_to(Point(rect.get_left(), rect.get_bottom()));
+    path.close();
+  }
   constexpr auto DRAWN = ChangeMask::VISIBILITY | ChangeMask::TRANSFORM |
     ChangeMask::OPACITY | ChangeMask::BLEND_MODE | ChangeMask::ISOLATION |
     ChangeMask::GEOMETRY | ChangeMask::STYLE | ChangeMask::TEXT |
@@ -19,6 +29,7 @@ Scene::Scene(Document& document, double tolerance)
     m_builder(document, tolerance),
     m_drawing(std::make_shared<Drawing>()),
     m_view(m_drawing),
+    m_is_ghost_dirty(false),
     m_is_changed(true),
     m_index_rate(0),
     m_subscription(document.subscribe([this] (const auto& changes) {
@@ -84,6 +95,64 @@ void Scene::set_edited_text(const NodeId& id) {
       mark(changed, false);
     }
   }
+}
+
+const std::vector<NodeId>& Scene::get_ghosts() const {
+  return m_ghosts;
+}
+
+void Scene::set_ghosts(std::vector<NodeId> ids) {
+  if(ids == m_ghosts) {
+    return;
+  }
+  m_ghosts = std::move(ids);
+  m_is_ghost_dirty = true;
+  m_is_changed = true;
+}
+
+void Scene::build_ghosts() {
+  m_ghost_lists.clear();
+  for(auto& id : m_ghosts) {
+    auto node = m_document->find(id);
+    if(!node || node->get_artboard()) {
+      continue;
+    }
+    auto artboard = static_cast<const Node*>(nullptr);
+    auto ancestor = m_document->find(node->m_parent);
+    for(auto depth = 0; ancestor && depth != MAXIMUM_DEPTH; ++depth) {
+      if(ancestor->get_artboard()) {
+        artboard = ancestor;
+        break;
+      }
+      ancestor = m_document->find(ancestor->m_parent);
+    }
+    if(!artboard || !artboard->m_parent.is_nil()) {
+      continue;
+    }
+    auto content = m_builder.build_unclipped(id);
+    if(content.empty()) {
+      continue;
+    }
+    auto& frame = artboard->get_artboard()->m_frame;
+    auto outline = Path();
+    outline.set_fill_rule(FillRule::EVEN_ODD);
+    add_rect(outline, inflate(frame, GHOST_EXTENT));
+    add_rect(outline, frame);
+    auto layer = BeginLayerCommand();
+    layer.m_opacity = GHOST_OPACITY;
+    layer.m_mask =
+      LayerMask(std::make_shared<const Path>(std::move(outline)), Matrix());
+    auto list = DrawList();
+    list.reserve(content.size() + 2);
+    list.push_back(std::move(layer));
+    for(auto& command : content) {
+      list.push_back(std::move(command));
+    }
+    list.push_back(EndLayerCommand());
+    m_ghost_lists[artboard->get_id()].push_back(
+      std::make_shared<const DrawList>(std::move(list)));
+  }
+  m_is_ghost_dirty = false;
 }
 
 const std::shared_ptr<const Drawing>& Scene::get_drawing() const {
@@ -344,7 +413,14 @@ std::vector<DrawRegion> Scene::update(
     ++count;
   }
   m_is_changed = count != dirty.size();
-  if(count == 0 && !is_reordered) {
+  if(count != 0 && !m_ghosts.empty()) {
+    m_is_ghost_dirty = true;
+  }
+  auto is_ghosted = m_is_ghost_dirty;
+  if(is_ghosted) {
+    build_ghosts();
+  }
+  if(count == 0 && !is_reordered && !is_ghosted) {
     return {};
   }
   auto built = std::unordered_set<NodeId>();
@@ -355,6 +431,9 @@ std::vector<DrawRegion> Scene::update(
   lists.reserve(m_drawing->get_lists().size() + count);
   auto ranges = std::vector<std::pair<NodeId, std::size_t>>();
   for(auto& id : canvas) {
+    if(auto ghosts = m_ghost_lists.find(id); ghosts != m_ghost_lists.end()) {
+      lists.insert(lists.end(), ghosts->second.begin(), ghosts->second.end());
+    }
     auto& fragment = m_fragments.at(id).m_lists;
     if(built.contains(id)) {
       ranges.emplace_back(id, lists.size());

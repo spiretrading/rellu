@@ -148,4 +148,45 @@ TEST_SUITE("AutoAnimate") {
     animation.finish();
     REQUIRE(document.get_children(trees.m_from).size() == 3);
   }
+  TEST_CASE("auto_animate_matched") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto white = make_color(255, 255, 255);
+    auto red = make_color(255, 0, 0);
+    auto a = add_board(transaction, "A", Rect(0, 0, 375, 667), white);
+    auto b = add_board(transaction, "B", Rect(500, 0, 375, 667), white);
+    auto c = add_board(transaction, "C", Rect(1000, 0, 375, 667), white);
+    auto r = add_box(transaction, a, "R", Rect(10, 10, 50, 50), red);
+    auto other = add_box(transaction, a, "Other", Rect(10, 100, 50, 50), red);
+    add_box(transaction, b, "R", Rect(10, 10, 50, 50), red);
+    add_box(transaction, c, "Other", Rect(10, 10, 50, 50), red);
+    auto unlinked = add_box(transaction, c, "R2", Rect(10, 100, 50, 50), red);
+    add_box(transaction, a, "R2", Rect(10, 200, 50, 50), red);
+    transaction.commit();
+    REQUIRE(!is_auto_animate_matched(document, r));
+    {
+      auto link = Transaction(document);
+      link.add_interaction(Interaction(NodeId(), b, TapTrigger(),
+        ArtboardTransition(a,
+          Animation(Transition::AUTO_ANIMATE, Easing::EASE_OUT, 0.4),
+          false)));
+      link.add_interaction(Interaction(NodeId(), c, TapTrigger(),
+        ArtboardTransition(b,
+          Animation(Transition::DISSOLVE, Easing::EASE_OUT, 0.4), false)));
+      link.commit();
+    }
+    REQUIRE(is_auto_animate_matched(document, r));
+    REQUIRE(!is_auto_animate_matched(document, other));
+    REQUIRE(!is_auto_animate_matched(document, unlinked));
+    {
+      auto link = Transaction(document);
+      link.add_interaction(Interaction(NodeId(), other, TapTrigger(),
+        ArtboardTransition(c,
+          Animation(Transition::AUTO_ANIMATE, Easing::EASE_OUT, 0.4),
+          false)));
+      link.commit();
+    }
+    REQUIRE(is_auto_animate_matched(document, other));
+    REQUIRE(is_auto_animate_matched(document, unlinked));
+  }
 }

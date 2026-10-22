@@ -1,6 +1,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -12,6 +13,8 @@
 #include <QImage>
 #include <doctest/doctest.h>
 #include "Rellu/Model/Transaction.hpp"
+#include "Rellu/Rendering/CanvasRenderer.hpp"
+#include "Rellu/Rendering/OffscreenRenderer.hpp"
 #include "Rellu/Scene/Scene.hpp"
 
 using namespace Rellu;
@@ -396,6 +399,54 @@ TEST_SUITE("Scene") {
     REQUIRE(is_rebuilt_equal(document, scene));
     REQUIRE(scene.get_drawing()->get_bounds() == Rect(0, 0, 230, 100));
     REQUIRE(scene.update().empty());
+  }
+
+  TEST_CASE("ghosts") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto loose = transaction.append(NodeId(),
+      make_header(make_translation(-50, 0)),
+      make_shape(Rect(0, 0, 20, 20), make_color(0, 0, 255)));
+    auto board = transaction.append(
+      NodeId(), make_header(), make_artboard(Rect(0, 0, 100, 100)));
+    auto shape = transaction.append(board,
+      make_header(make_translation(90, 10)),
+      make_shape(Rect(0, 0, 20, 20), make_color(255, 0, 0)));
+    transaction.commit();
+    auto scene = Scene(document, TOLERANCE);
+    scene.update();
+    auto lists = scene.get_drawing()->get_lists();
+    REQUIRE(lists.size() == 2);
+    scene.set_ghosts({shape, board, loose});
+    REQUIRE(!scene.is_current());
+    auto damage = scene.update();
+    REQUIRE(is_touching(damage, Rect(100, 10, 10, 20)));
+    auto& ghosted = scene.get_drawing()->get_lists();
+    REQUIRE(ghosted.size() == 3);
+    REQUIRE(ghosted[0] == lists[0]);
+    REQUIRE(ghosted[2] == lists[1]);
+    auto& ghost = *ghosted[1];
+    auto& layer = std::get<BeginLayerCommand>(ghost.front());
+    REQUIRE(layer.m_opacity == Scene::GHOST_OPACITY);
+    REQUIRE(layer.m_mask);
+    REQUIRE(std::holds_alternative<EndLayerCommand>(ghost.back()));
+    auto& fill = std::get<FillCommand>(ghost[1]);
+    REQUIRE(!fill.m_clip);
+    auto renderer = CanvasRenderer();
+    renderer.set_background(QColor(228, 228, 228));
+    renderer.set_drawing(scene.get_drawing());
+    auto offscreen = OffscreenRenderer(renderer);
+    auto image = offscreen.render(QSize(200, 100), 1);
+    auto inside = image.pixelColor(95, 20);
+    REQUIRE(inside == QColor(255, 0, 0));
+    auto outside = image.pixelColor(105, 20);
+    REQUIRE(std::abs(outside.red() - 241) <= 1);
+    REQUIRE(std::abs(outside.green() - 114) <= 1);
+    REQUIRE(std::abs(outside.blue() - 114) <= 1);
+    REQUIRE(image.pixelColor(150, 20) == QColor(228, 228, 228));
+    scene.set_ghosts({});
+    scene.update();
+    REQUIRE(scene.get_drawing()->get_lists() == lists);
   }
 
   TEST_CASE("edit") {

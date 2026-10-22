@@ -23,6 +23,7 @@
 #include "Rellu/Ui/AppBar.hpp"
 #include "Rellu/Ui/ArtboardPresetsPanel.hpp"
 #include "Rellu/Ui/AssetsPanel.hpp"
+#include "Rellu/Ui/Banner.hpp"
 #include "Rellu/Ui/ComponentActions.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/EditActions.hpp"
@@ -123,6 +124,7 @@ namespace Rellu {
       ActionRegistry m_actions;
       CommandRegistry m_commands;
       std::unique_ptr<EditActions> m_edit_actions;
+      std::unique_ptr<BannerHost> m_banners;
       std::unique_ptr<ComponentActions> m_component_actions;
       std::unique_ptr<TextActions> m_text_actions;
       std::unique_ptr<GuideActions> m_guide_actions;

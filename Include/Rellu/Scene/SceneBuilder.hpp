@@ -192,6 +192,14 @@ namespace Rellu {
       DrawList build(const NodeId& id, SceneDependencies& dependencies);
 
       /**
+       * Converts a node and its descendants as build does, but clipped
+       * neither to its artboard nor to the scroll groups holding it.
+       * @param id The node's id.
+       * @return The node's drawing, empty if there is no such node.
+       */
+      DrawList build_unclipped(const NodeId& id);
+
+      /**
        * Converts a node and its descendants as they appear within their
        * ancestors into draw lists that together draw what build converts the
        * node into, but for text whose rasterizing is deferred, reusing the

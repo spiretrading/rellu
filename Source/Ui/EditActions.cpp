@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 #include <QClipboard>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QKeySequence>
 #include <QMimeData>
@@ -39,6 +40,19 @@ namespace {
     }
   }
 
+  QString truncate_middle(const QString& text, qsizetype length) {
+    constexpr auto ELLIPSIS = qsizetype(3);
+    length = std::max(length, qsizetype(5));
+    auto points = text.toUcs4();
+    if(points.size() <= length) {
+      return text;
+    }
+    auto head = (length - ELLIPSIS + 1) / 2;
+    auto tail = (length - ELLIPSIS) / 2;
+    return QString::fromUcs4(points.constData(), head) + "..." +
+      QString::fromUcs4(points.constData() + points.size() - tail, tail);
+  }
+
   QString make_history_text(const QString& text, const std::string& label) {
     if(label.empty()) {
       return translate("menu", text);
@@ -46,6 +60,27 @@ namespace {
     return translate("menu", text + " %1").arg(
       escape(translate("history", QString::fromStdString(label))));
   }
+}
+
+QString Rellu::make_linked_paste_message(
+    const std::vector<std::string>& documents) {
+  constexpr auto MAXIMUM_NAME_LENGTH = qsizetype(20);
+  if(documents.empty()) {
+    return QString();
+  }
+  auto name = QString();
+  if(documents.size() == 1) {
+    name = QFileInfo(QString::fromStdString(documents.front())).fileName();
+  }
+  if(name.isEmpty()) {
+    return translate("To paste linked assets across documents, publish a "
+      "library from source documents. [Learn more|https://www.adobe.com/go/"
+      "xd_designsys_migration_links_not_migrated_learnmore] ");
+  }
+  return translate("To paste linked assets across documents, publish a "
+    "library from '%1'. [Learn more|https://www.adobe.com/go/"
+    "xd_designsys_migration_links_not_migrated_learnmore] ").arg(
+      truncate_middle(name, MAXIMUM_NAME_LENGTH));
 }
 
 EditActions::EditActions(
@@ -173,6 +208,10 @@ void EditActions::set_error_handler(ErrorHandler handler) {
 void EditActions::set_paste_handler(PasteHandler handler) {
   m_paste_handler = std::move(handler);
   update();
+}
+
+void EditActions::set_notice_handler(NoticeHandler handler) {
+  m_notice_handler = std::move(handler);
 }
 
 void EditActions::update() {
@@ -361,6 +400,13 @@ void EditActions::paste() {
     if(auto command = m_clipboard.make_paste_command(target);
         command && m_editor->execute(std::move(command))) {
       reveal_artboards();
+      if(m_notice_handler && m_source_provider) {
+        auto message = make_linked_paste_message(
+          m_clipboard.get_linked_documents(m_source_provider()));
+        if(!message.isEmpty()) {
+          m_notice_handler(message);
+        }
+      }
     }
   });
 }

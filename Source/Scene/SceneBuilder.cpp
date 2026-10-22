@@ -594,6 +594,18 @@ DrawList SceneBuilder::build(const NodeId& id) {
   return list;
 }
 
+DrawList SceneBuilder::build_unclipped(const NodeId& id) {
+  ++m_generation;
+  auto list = DrawList();
+  if(auto node = m_document->find(id)) {
+    if(auto placement = get_placement(node->m_parent, 0)) {
+      placement->m_clip = std::nullopt;
+      add_node(id, *placement, 0, list);
+    }
+  }
+  return list;
+}
+
 DrawList SceneBuilder::build(
     const NodeId& id, SceneDependencies& dependencies) {
   dependencies.m_keys.clear();

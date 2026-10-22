@@ -159,6 +159,19 @@ namespace Rellu {
         const PasteTarget& target = {}) const;
 
       /**
+       * Returns the documents the components held are linked to that a
+       * paste into another document leaves unlinked, as Adobe XD warns of
+       * them after pasting: the document each was copied from, or the one
+       * it is linked to, but not a library or the document pasted into.
+       * @param target The document pasted into.
+       * @return The references to the documents, each once, in the order
+       *         of the components held, empty when pasting into the
+       *         document copied from.
+       */
+      std::vector<std::string> get_linked_documents(
+        const XdClipboardSource& target) const;
+
+      /**
        * Makes a command labelled Paste Appearance giving nodes the
        * appearance of what is held, as Adobe XD's Paste Appearance does when
        * a single object or an image is held.

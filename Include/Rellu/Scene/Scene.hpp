@@ -30,6 +30,9 @@ namespace Rellu {
   class Scene {
     public:
 
+      /** The opacity of the parts of ghosts outside their artboards. */
+      static constexpr auto GHOST_OPACITY = 0.5;
+
       /**
        * Constructs a Scene, which converts the canvas on its first update.
        * @param document The document drawn and observed, which must outlive
@@ -92,6 +95,17 @@ namespace Rellu {
        * @param id The text node, or nil for none.
        */
       void set_edited_text(const NodeId& id);
+
+      /** Returns the nodes drawn as ghosts. */
+      const std::vector<NodeId>& get_ghosts() const;
+
+      /**
+       * Sets the nodes inside artboards whose parts outside their artboards
+       * are also drawn, at GHOST_OPACITY beneath their artboards, as Adobe
+       * XD draws the nodes selected, taking effect on the following updates.
+       * @param ids The nodes.
+       */
+      void set_ghosts(std::vector<NodeId> ids);
 
       /** Returns the drawing, which changes only when updated. */
       const std::shared_ptr<const Drawing>& get_drawing() const;
@@ -159,6 +173,10 @@ namespace Rellu {
       std::vector<NodeId> m_canvas;
       std::vector<NodeId> m_removed;
       std::deque<NodeId> m_rasterized;
+      std::vector<NodeId> m_ghosts;
+      std::unordered_map<NodeId, std::vector<std::shared_ptr<const DrawList>>>
+        m_ghost_lists;
+      bool m_is_ghost_dirty;
       bool m_is_changed;
       double m_index_rate;
       Subscription m_subscription;
@@ -166,6 +184,7 @@ namespace Rellu {
       Scene(const Scene&) = delete;
       Scene& operator =(const Scene&) = delete;
       void on_change(const ChangeSet& changes);
+      void build_ghosts();
       void mark(const NodeId& id, bool is_moved);
       void mark_dependents(const NodeId& key);
       void forget(const NodeId& id, Fragment& fragment);

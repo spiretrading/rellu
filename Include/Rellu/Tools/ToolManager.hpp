@@ -24,7 +24,8 @@ namespace Rellu {
    * during a gesture replay the most recent pointer move, so that
    * constraints apply at once. The pointer's position is the history's,
    * and the history settles nodes onto or off artboards only once the left
-   * button is released, as Adobe XD ends each drag's edit on release.
+   * button is released, as Adobe XD ends each drag's edit on release, and
+   * keeps a node is_auto_animate_matched accepts in its artboard.
    * Tools are registered by name; the select,
    * rectangle, ellipse, polygon, line, pen, path_edit, artboard, zoom, text
    * and prototype tools are registered from the start.

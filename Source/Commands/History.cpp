@@ -78,6 +78,10 @@ void History::set_settle_observer(SettleObserver observer) {
   m_settle_observer = std::move(observer);
 }
 
+void History::set_settle_exemption(SettleExemption exemption) {
+  m_settle_exemption = std::move(exemption);
+}
+
 void History::hold_settling() {
   if(m_settle_hold) {
     return;
@@ -161,7 +165,7 @@ const Command* History::execute(std::unique_ptr<Command> command) {
     synchronize();
     return nullptr;
   }
-  refresh();
+  auto is_settled = refresh();
   if(m_document->get_undo_count() <= get_depth()) {
     synchronize();
     return nullptr;
@@ -169,7 +173,7 @@ const Command* History::execute(std::unique_ptr<Command> command) {
   auto label = command->get_label();
   auto result = command.get();
   push(Step(std::move(label), std::move(command), std::any()));
-  m_is_open = true;
+  m_is_open = !is_settled;
   m_signal();
   synchronize();
   return result;
@@ -193,8 +197,9 @@ const Command* History::merge(std::unique_ptr<Command> command) {
       throw;
     }
   }();
+  auto is_settled = false;
   if(is_recorded) {
-    refresh();
+    is_settled = refresh();
     is_recorded = m_document->get_undo_count() == get_depth();
   } else {
     m_changes = ChangeSet();
@@ -207,6 +212,9 @@ const Command* History::merge(std::unique_ptr<Command> command) {
     auto& step = m_undo.back();
     step.m_label = step.m_command->get_label();
     result = step.m_command.get();
+    if(is_settled) {
+      m_is_open = false;
+    }
   } else {
     m_undo.pop_back();
     m_is_open = false;
@@ -413,7 +421,7 @@ void History::synchronize() {
   m_signal();
 }
 
-void History::refresh() {
+bool History::refresh() {
   auto changes = std::exchange(m_changes, ChangeSet());
   auto guard = Guard(m_is_applying);
   refresh_components(*m_document, changes);
@@ -437,13 +445,14 @@ void History::refresh() {
         m_pending.push_back(id);
       }
     }
-  } else {
-    settle(std::move(nodes));
-    m_changes = ChangeSet();
+    return false;
   }
+  auto is_settled = settle(std::move(nodes));
+  m_changes = ChangeSet();
+  return is_settled;
 }
 
-void History::settle(std::vector<NodeId> nodes) {
+bool History::settle(std::vector<NodeId> nodes) {
   if(m_settle_provider) {
     for(auto& id : m_settle_provider()) {
       if(m_document->find(id) &&
@@ -453,18 +462,19 @@ void History::settle(std::vector<NodeId> nodes) {
     }
   }
   if(nodes.empty()) {
-    return;
+    return false;
   }
   auto transaction = Transaction(*m_document);
-  auto moved = settle_nodes(
-    *m_document, transaction, nodes, m_pointer, m_layout.m_measurer);
+  auto moved = settle_nodes(*m_document, transaction, nodes, m_pointer,
+    m_layout.m_measurer, m_settle_exemption);
   if(moved.empty()) {
-    return;
+    return false;
   }
   transaction.amend();
   if(m_settle_observer) {
     m_settle_observer(moved);
   }
+  return true;
 }
 
 void History::on_change(const ChangeSet& changes) {

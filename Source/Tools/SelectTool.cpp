@@ -271,6 +271,38 @@ namespace {
     return std::find(items.begin(), items.end(), id) != items.end();
   }
 
+  Point get_cross_offset(const Document& document,
+      const std::vector<NodeId>& nodes, Point delta) {
+    if(nodes.empty()) {
+      return Point(0, 0);
+    }
+    auto parent = document.get(nodes.front()).m_parent;
+    auto container = document.find(parent);
+    auto group = container ? container->get_group() : nullptr;
+    if(!group || !group->m_stack) {
+      return Point(0, 0);
+    }
+    auto items = get_stack_items(document, parent);
+    for(auto& id : nodes) {
+      if(document.get(id).m_parent != parent ||
+          std::find(items.begin(), items.end(), id) == items.end()) {
+        return Point(0, 0);
+      }
+    }
+    auto world = get_world_transform(document, parent);
+    auto axis = Point(world.m_c, world.m_d);
+    if(group->m_stack->m_orientation == Orientation::HORIZONTAL) {
+      axis = Point(world.m_a, world.m_b);
+    }
+    auto length = std::hypot(axis.m_x, axis.m_y);
+    if(length == 0) {
+      return Point(0, 0);
+    }
+    axis = Point(axis.m_x / length, axis.m_y / length);
+    auto along = delta.m_x * axis.m_x + delta.m_y * axis.m_y;
+    return Point(delta.m_x - along * axis.m_x, delta.m_y - along * axis.m_y);
+  }
+
   NodeId find_clipped_hit(
       const ToolContext& context, Point point, double tolerance) {
     auto& document = context.get_document();
@@ -1059,7 +1091,7 @@ void SelectTool::update_move(ToolContext& context, const PointerEvent& event) {
     return;
   }
   context.get_editor().merge(
-    std::make_unique<TranslateCommand>(m_nodes, step));
+    std::make_unique<TranslateCommand>(m_nodes, step, "Move Object"));
   m_delta = delta;
   m_is_applied = true;
 }
@@ -1134,6 +1166,11 @@ void SelectTool::update_hover(
 void SelectTool::drop(ToolContext& context, const PointerEvent& event) {
   auto& editor = context.get_editor();
   auto& document = context.get_document();
+  auto offset = get_cross_offset(document, m_nodes, m_delta);
+  if(offset != Point(0, 0)) {
+    editor.merge(std::make_unique<TranslateCommand>(
+      m_nodes, Point(-offset.m_x, -offset.m_y), "Move Object"));
+  }
   editor.get_history().set_pointer(context.to_document(event.m_position));
   editor.get_history().release_settling();
   auto primary = editor.get_selection().get_primary();

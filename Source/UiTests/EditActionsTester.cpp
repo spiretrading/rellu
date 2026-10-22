@@ -198,6 +198,70 @@ TEST_SUITE("EditActions") {
     REQUIRE(other.get(foreign).get_shape());
   }
 
+  TEST_CASE("linked_paste_notice") {
+    auto fixture = Fixture();
+    auto& actions = fixture.m_actions;
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto source = XdClipboardSource("A", "C:/Designs/Library.xd");
+    fixture.m_edit_actions->set_source_provider([&] { return source; });
+    auto messages = std::vector<QString>();
+    fixture.m_edit_actions->set_notice_handler([&] (const auto& message) {
+      messages.push_back(message);
+    });
+    fixture.m_edit_actions->set_editor(&editor);
+    editor.get_selection().select(ids.m_instance);
+    REQUIRE(actions.trigger("edit.copy"));
+    REQUIRE(actions.trigger("edit.paste"));
+    REQUIRE(messages.empty());
+    auto other = Document();
+    auto other_editor = Editor(other);
+    fixture.m_edit_actions->set_editor(&other_editor);
+    source = XdClipboardSource("B", "C:/Designs/Screens.xd");
+    REQUIRE(actions.trigger("edit.paste"));
+    REQUIRE(messages == std::vector{QString("To paste linked assets across "
+      "documents, publish a library from 'Library.xd'. [Learn more|https://"
+      "www.adobe.com/go/xd_designsys_migration_links_not_migrated_learnmore]"
+      " ")});
+    fixture.m_edit_actions->set_editor(&editor);
+    editor.get_selection().select(ids.m_ellipse);
+    source = XdClipboardSource("A", "C:/Designs/Library.xd");
+    REQUIRE(actions.trigger("edit.copy"));
+    fixture.m_edit_actions->set_editor(&other_editor);
+    source = XdClipboardSource("B", "C:/Designs/Screens.xd");
+    REQUIRE(actions.trigger("edit.paste"));
+    REQUIRE(messages.size() == 1);
+  }
+
+  TEST_CASE("linked_paste_message") {
+    REQUIRE(make_linked_paste_message({}).isEmpty());
+    REQUIRE(make_linked_paste_message({"D:/Work/Kit.xd"}) ==
+      "To paste linked assets across documents, publish a library from "
+      "'Kit.xd'. [Learn more|https://www.adobe.com/go/"
+      "xd_designsys_migration_links_not_migrated_learnmore] ");
+    REQUIRE(make_linked_paste_message({"D:/Work/Kit.xd", "D:/Ui.xd"}) ==
+      "To paste linked assets across documents, publish a library from "
+      "source documents. [Learn more|https://www.adobe.com/go/"
+      "xd_designsys_migration_links_not_migrated_learnmore] ");
+    REQUIRE(make_linked_paste_message({"D:/A1234567890123456789.xd"}) ==
+      "To paste linked assets across documents, publish a library from "
+      "'A12345678...56789.xd'. [Learn more|https://www.adobe.com/go/"
+      "xd_designsys_migration_links_not_migrated_learnmore] ");
+    REQUIRE(make_linked_paste_message({"D:/A123456789012345.xd"}) ==
+      "To paste linked assets across documents, publish a library from "
+      "'A123456789012345.xd'. [Learn more|https://www.adobe.com/go/"
+      "xd_designsys_migration_links_not_migrated_learnmore] ");
+    set_language(Language::GERMAN);
+    auto german = make_linked_paste_message({"D:/Work/Kit.xd"});
+    set_language(Language::ENGLISH);
+    REQUIRE(german == QString::fromUtf8("Um verkn\xC3\xBCpfte Elemente in "
+      "verschiedenen Dokumenten zu verwenden, m\xC3\xBCssen Sie aus "
+      "\xE2\x80\x9EKit.xd\xE2\x80\x9C heraus eine Bibliothek ver\xC3\xB6"
+      "ffentlichen. [Weitere Infos|https://www.adobe.com/go/"
+      "xd_designsys_migration_links_not_migrated_learnmore_de] "));
+  }
+
   TEST_CASE("duplicate") {
     auto fixture = Fixture();
     auto& actions = fixture.m_actions;

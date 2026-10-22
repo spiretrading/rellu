@@ -1,5 +1,6 @@
 #ifndef RELLU_COMMANDS_TRANSFORM_COMMANDS_HPP
 #define RELLU_COMMANDS_TRANSFORM_COMMANDS_HPP
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -101,8 +102,18 @@ namespace Rellu {
     const Document& document, Transaction& transaction, const NodeId& id);
 
   /**
+   * The type of function testing whether a node of an artboard stays in it
+   * when it would otherwise move to the pasteboard.
+   * @param document The document holding the node.
+   * @param id The node's id.
+   */
+  using SettleExemption =
+    std::function<bool (const Document& document, const NodeId& id)>;
+
+  /**
    * Finds the parent Adobe XD gives a node on the pasteboard or directly
-   * in an artboard once it is moved: the only artboard its bounds overlap,
+   * in an artboard once it is moved: the only artboard its bounds, the
+   * area its stroke paints included, overlap,
    * or among several its parent, else the topmost one under the pointer
    * that its bounds overlap, else the topmost one; and the pasteboard for
    * a node of an artboard that overlaps none.
@@ -134,18 +145,21 @@ namespace Rellu {
    * goes on top of the parent find_artboard_parent finds, and the nodes on
    * the pasteboard that an artboard listed overlaps go into it, every node
    * keeping where it appears on the canvas and the nodes moved keeping
-   * their order.
+   * their order, except that a node the exemption accepts stays in its
+   * artboard rather than moving to the pasteboard.
    * @param document The document holding the nodes.
    * @param transaction The open transaction on the <i>document</i>.
    * @param nodes The nodes edited.
    * @param pointer The pointer's position in document space, or none.
    * @param measurer The function measuring text.
+   * @param exemption The exemption, or empty for none.
    * @return The nodes moved, in z order.
    */
   std::vector<NodeId> settle_nodes(const Document& document,
     Transaction& transaction, const std::vector<NodeId>& nodes,
     std::optional<Point> pointer = std::nullopt,
-    const TextMeasurer& measurer = estimate_text_bounds);
+    const TextMeasurer& measurer = estimate_text_bounds,
+    const SettleExemption& exemption = {});
 
   /** Moves nodes by a displacement in document space. */
   class TranslateCommand : public Command {

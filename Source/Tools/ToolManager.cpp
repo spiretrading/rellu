@@ -3,6 +3,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include "Rellu/Prototype/AutoAnimate.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Tools/ArtboardGrids.hpp"
 #include "Rellu/Tools/ArtboardGuides.hpp"
@@ -59,6 +60,7 @@ ToolManager::ToolManager(Editor& editor, TextMeasurer measurer)
       m_tool(nullptr),
       m_has_move(false) {
   m_context.set_text_measurer(std::move(measurer));
+  editor.get_history().set_settle_exemption(is_auto_animate_matched);
   add_tool("select", std::make_unique<SelectTool>());
   add_tool("rectangle", std::make_unique<ShapeTool>(ShapeKind::RECTANGLE));
   add_tool("ellipse", std::make_unique<ShapeTool>(ShapeKind::ELLIPSE));
