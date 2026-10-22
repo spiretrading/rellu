@@ -153,7 +153,7 @@ namespace {
       CornerRadii(1, 2, 3, 4);
     rectangle.m_style.m_stroke = Stroke(make_color(0, 0, 0), 2,
       StrokeAlignment::INSIDE, StrokeCap::ROUND, StrokeJoin::BEVEL, 4,
-      std::vector<double>{2, 1}, true);
+      std::vector<double>{2, 1}, true, 3);
     rectangle.m_style.m_effects.push_back(
       DropShadow(Point(0, 3), 6, make_color(0, 0, 0, 0.5), true));
     rectangle.m_style.m_effects.push_back(
@@ -234,7 +234,9 @@ namespace {
     grid.m_repeat_grid = RepeatGrid(Size(50, 50), 10, 10, 2, 3, Size(110, 170));
     built.m_grid =
       transaction.append(built.m_artboard, make_header("Grid"), grid);
-    built.m_cell = transaction.append(built.m_grid, make_header(""), Group());
+    auto cell = make_header("");
+    cell.m_is_naming_disabled = true;
+    built.m_cell = transaction.append(built.m_grid, cell, Group());
     auto series = make_text_payload(u"One");
     series.m_repeat_data = {u"One", u"Two"};
     built.m_cell_text =
@@ -380,6 +382,9 @@ TEST_SUITE("XdWriter") {
       shape.m_geometry = PolygonShape(count, Size(100, 100));
       ids.push_back(transaction.append(board, make_header("Polygon"), shape));
     }
+    auto star = Shape();
+    star.m_geometry = PolygonShape(5, Size(303, 303), 0, 50);
+    ids.push_back(transaction.append(board, make_header("Polygon"), star));
     transaction.commit();
     auto package = XdPackage(write_xd(document));
     auto expected = std::vector<std::vector<Point>>({
@@ -390,7 +395,11 @@ TEST_SUITE("XdWriter") {
         Point(0, 50), Point(25, 0)},
       {Point(70.711, 0), Point(100, 29.289), Point(100, 70.711),
         Point(70.711, 100), Point(29.289, 100), Point(0, 70.711),
-        Point(0, 29.289), Point(29.289, 0)}});
+        Point(0, 29.289), Point(29.289, 0)},
+      {Point(151.5, 0), Point(189.375, 112.681), Point(303, 115.736),
+        Point(212.783, 188.431), Point(245.132, 303), Point(151.5, 235.247),
+        Point(57.868, 303), Point(90.217, 188.431), Point(0, 115.736),
+        Point(113.625, 112.681)}});
     for(auto i = std::size_t(0); i != ids.size(); ++i) {
       auto shape = find_written(package, ids[i]).value("shape"_L1).toObject();
       auto points = shape.value("points"_L1).toArray();
@@ -481,6 +490,7 @@ TEST_SUITE("XdWriter") {
     REQUIRE(stroke.value("cap"_L1) == "round"_L1);
     REQUIRE(stroke.value("join"_L1) == "bevel"_L1);
     REQUIRE(stroke.value("dash"_L1).toArray().size() == 2);
+    REQUIRE(stroke.value("dashOffset"_L1).toDouble() == 3);
     auto filters = style.value("filters"_L1).toArray();
     REQUIRE(filters.size() == 2);
     REQUIRE(filters.at(0).toObject().value("type"_L1) == "dropShadow"_L1);
@@ -595,6 +605,32 @@ TEST_SUITE("XdWriter") {
       to_string(document.get(built.m_reference).get_reference()->m_source));
   }
 
+  TEST_CASE("disabled_naming") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto header = make_header("");
+    header.m_is_naming_disabled = true;
+    auto id = transaction.append(
+      NodeId(), header, make_text_payload(u"Current"));
+    auto plain = make_header("");
+    auto plain_id =
+      transaction.append(NodeId(), plain, make_text_payload(u"Plain"));
+    transaction.commit();
+    auto bytes = write_xd(document);
+    auto package = XdPackage(bytes);
+    auto written = find_written(package, id);
+    REQUIRE(!written.contains("name"_L1));
+    REQUIRE(get_ux(written).value("disableNaming"_L1).toBool());
+    REQUIRE(!get_ux(find_written(package, plain_id)).contains(
+      "disableNaming"_L1));
+    auto imported = Document();
+    import_package(bytes, imported);
+    auto& node = imported.get(id).m_header;
+    REQUIRE(node.m_is_naming_disabled);
+    REQUIRE(node.m_name.empty());
+    REQUIRE(!imported.get(plain_id).m_header.m_is_naming_disabled);
+  }
+
   TEST_CASE("repeat_grid_cells") {
     auto document = Document();
     auto built = build(document);
@@ -668,6 +704,7 @@ TEST_SUITE("XdWriter") {
         NodeId(), make_header("Repeat Grid 1"), payload);
       for(auto i = 0; i != 3; ++i) {
         auto header = make_header("");
+        header.m_is_naming_disabled = true;
         header.m_transform = make_translation(i * 44, 0);
         cells.push_back(transaction.append(grid, header, Group()));
         texts.push_back(transaction.append(

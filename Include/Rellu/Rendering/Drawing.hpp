@@ -85,6 +85,16 @@ namespace Rellu {
         const Rect& region, double scale, DrawSequence& commands) const;
 
       /**
+       * Returns the regions of the backdrop blurs whose drawing changes
+       * along with regions whose drawing changed, by reading them directly
+       * or through other backdrop blurs.
+       * @param regions The regions whose drawing changed.
+       * @param scale The number of pixels per document unit drawn at.
+       */
+      std::vector<DrawRegion> get_readers(
+        const std::vector<DrawRegion>& regions, double scale) const;
+
+      /**
        * Tests whether no command draws within a region, so that the region
        * shows only what lies beneath the drawing.
        * @param region The region in document coordinates.

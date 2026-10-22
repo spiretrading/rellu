@@ -156,7 +156,8 @@ namespace {
   Shape make_outline(const Path& path, const Style& style) {
     auto& stroke = *style.m_stroke;
     auto geometry = StrokeGeometry(stroke.m_width, stroke.m_alignment,
-      stroke.m_cap, stroke.m_join, stroke.m_miter_limit, stroke.m_dashes, 0);
+      stroke.m_cap, stroke.m_join, stroke.m_miter_limit, stroke.m_dashes,
+      stroke.m_dash_offset);
     auto polygons = outline_stroke(path, geometry, OUTLINE_TOLERANCE);
     auto outline = Shape();
     outline.m_geometry = PathShape(Shared(fit_curves(

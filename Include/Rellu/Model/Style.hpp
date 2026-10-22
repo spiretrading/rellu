@@ -9,6 +9,7 @@
 #include "Rellu/Geometry/Gradient.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Geometry/Point.hpp"
+#include "Rellu/Geometry/Rect.hpp"
 #include "Rellu/Geometry/Size.hpp"
 #include "Rellu/Geometry/Stroke.hpp"
 #include "Rellu/Model/NodeId.hpp"
@@ -54,6 +55,16 @@ namespace Rellu {
 
     bool operator ==(const GradientFill&) const = default;
   };
+
+  /**
+   * Returns the transform Adobe XD draws a radial gradient in bounding box
+   * units through.
+   * @param fill The gradient fill, whose geometry is a RadialGradient.
+   * @param bounds The bounds of the region filled, of positive size.
+   * @return The transform from the gradient's geometry to the coordinates of
+   *         the region filled.
+   */
+  Matrix get_radial_transform(const GradientFill& fill, const Rect& bounds);
 
   /** Lists the ways an image is fit to the shape it fills. */
   enum class ScaleBehavior : unsigned char {
@@ -159,6 +170,9 @@ namespace Rellu {
     /** Whether the stroke is drawn. */
     bool m_is_enabled = true;
 
+    /** The distance into the dash pattern at which the line starts. */
+    double m_dash_offset = 0;
+
     bool operator ==(const Stroke& stroke) const;
   };
 
@@ -237,6 +251,21 @@ namespace Rellu {
     bool operator ==(const Style&) const = default;
   };
 
+  inline Matrix get_radial_transform(
+      const GradientFill& fill, const Rect& bounds) {
+    auto& center = std::get<RadialGradient>(fill.m_geometry).m_center;
+    auto width = bounds.m_width;
+    auto height = bounds.m_height;
+    auto aspect = height / width;
+    auto origin = Point(center.m_x * width, center.m_y * height);
+    return make_translation(
+      bounds.m_x + origin.m_x, bounds.m_y + origin.m_y) *
+      make_scale(1 / aspect, 1) * make_translation(-center.m_x, -center.m_y) *
+      fill.m_transform * make_translation(center.m_x, center.m_y) *
+      make_scale(aspect, aspect) * make_scale(width, width) *
+      make_translation(-center.m_x, -center.m_y);
+  }
+
   inline bool ImageFill::operator ==(const ImageFill& fill) const {
     return m_image == fill.m_image && m_size == fill.m_size &&
       m_scale_behavior == fill.m_scale_behavior &&
@@ -273,7 +302,8 @@ namespace Rellu {
       m_join == stroke.m_join &&
       equals(m_miter_limit, stroke.m_miter_limit) &&
       equals(m_dashes, stroke.m_dashes) &&
-      m_is_enabled == stroke.m_is_enabled;
+      m_is_enabled == stroke.m_is_enabled &&
+      equals(m_dash_offset, stroke.m_dash_offset);
   }
 
   inline bool DropShadow::operator ==(const DropShadow& shadow) const {

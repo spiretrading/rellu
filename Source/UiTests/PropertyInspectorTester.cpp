@@ -326,8 +326,11 @@ TEST_SUITE("PropertyInspector") {
     enter(inspector, "appearance.opacity", "-30");
     REQUIRE(document.get(ids.m_background).m_header.m_opacity == 0);
     REQUIRE(history.get_undo_count() == 1);
+    REQUIRE(get_text(inspector, "transform.x") == "10");
     enter(inspector, "transform.x", "30");
     REQUIRE(get_text(inspector, "transform.x") == "30");
+    REQUIRE(get_world_transform(document, ids.m_background).m_tx == 130);
+    REQUIRE(document.get(ids.m_background).m_header.m_transform.m_tx == 20);
     enter(inspector, "transform.x", "35");
     REQUIRE(get_text(inspector, "transform.x") == "35");
     REQUIRE(history.get_undo_count() == 2);
@@ -351,8 +354,8 @@ TEST_SUITE("PropertyInspector") {
     REQUIRE(editor.undo());
     REQUIRE(get_text(inspector, "transform.width") == "100");
     REQUIRE(editor.undo());
-    REQUIRE(get_text(inspector, "transform.x") == "0");
-    REQUIRE(get_line(inspector, "transform.x").text() == "0");
+    REQUIRE(get_text(inspector, "transform.x") == "10");
+    REQUIRE(get_line(inspector, "transform.x").text() == "10");
     REQUIRE(editor.undo());
     REQUIRE(document.get(ids.m_background).m_header.m_opacity == 1);
   }

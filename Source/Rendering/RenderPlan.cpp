@@ -64,17 +64,17 @@ namespace {
   struct Target {
     int m_texture;
     QPoint m_origin;
-    int m_scale;
+    double m_scale;
     QSize m_size;
     QRect m_cell;
 
-    QSize get_extent() const {
-      return m_size * m_scale;
+    QSizeF get_extent() const {
+      return QSizeF(m_size) * m_scale;
     }
 
     QRect get_area() const {
       if(m_cell.isEmpty()) {
-        return QRect(m_origin, get_extent());
+        return QRect(m_origin, get_extent().toSize());
       }
       return QRect(
         m_origin + m_cell.topLeft() * m_scale, m_cell.size() * m_scale);
@@ -255,8 +255,8 @@ namespace {
       std::uint32_t get_count(std::size_t command) const;
       int round(int value) const;
       QSize get_bucket(QSize size) const;
-      Target allocate(QSize size, QPoint origin, int scale);
-      Target allocate_texture(QSize size, QPoint origin, int scale);
+      Target allocate(QSize size, QPoint origin, double scale);
+      Target allocate_texture(QSize size, QPoint origin, double scale);
       Target allocate_cells(const std::vector<QRect>& regions, int scale,
         std::vector<Target>& cells);
       void release(const Target& target);
@@ -706,11 +706,12 @@ namespace {
     return QSize(round(size.width()), round(size.height()));
   }
 
-  Target Planner::allocate(QSize size, QPoint origin, int scale) {
+  Target Planner::allocate(QSize size, QPoint origin, double scale) {
     return allocate_texture(get_bucket(size), origin, scale);
   }
 
-  Target Planner::allocate_texture(QSize size, QPoint origin, int scale) {
+  Target Planner::allocate_texture(
+      QSize size, QPoint origin, double scale) {
     auto& textures = m_plan->m_textures;
     auto match = std::find_if(m_free.begin(), m_free.end(), [&] (auto index) {
       return textures[index] == size;
@@ -1054,7 +1055,7 @@ namespace {
         auto region = round_out(Rellu::get_bounds(
           *command.m_path, m_view * command.m_transform)) &
           get_bounds(operation.m_first, operation.m_count) &
-          QRect(target.m_origin, target.get_extent());
+          QRect(target.m_origin, target.get_extent().toSize());
         if(index == 0) {
           region &= QRect(QPoint(0, 0), m_size);
         }
@@ -1336,7 +1337,11 @@ namespace {
         (region.height() + scale - 1) / scale);
     };
     while(level < factor) {
-      level *= 2;
+      if(factor % (2 * level) == 0) {
+        level *= 2;
+      } else {
+        level = factor;
+      }
       auto destination =
         allocate(get_size(level), region.topLeft(), level);
       add_blur_pass(current, get_size(level / 2), destination, Point(0, 0),
@@ -1445,20 +1450,25 @@ namespace {
 
   Target Planner::blur_boxes(
       const Target& source, const QRect& region, double radius) {
+    auto resolution = std::max(1.0, m_scale);
     auto factor = 1;
-    while(factor < MAXIMUM_DOWNSAMPLING && (2 * factor <= m_scale + 1e-6 ||
-        get_box_size(radius / factor) > MAXIMUM_BOX_SIZE)) {
+    while(factor < MAXIMUM_DOWNSAMPLING &&
+        get_box_size(radius / (resolution * factor)) > MAXIMUM_BOX_SIZE) {
       factor *= 2;
     }
-    auto get_size = [] (const QRect& area, int scale) {
-      return QSize((area.width() + scale - 1) / scale,
-        (area.height() + scale - 1) / scale);
+    auto get_size = [] (const QRect& area, double scale) {
+      return QSize(static_cast<int>(std::ceil(area.width() / scale - 1e-9)),
+        static_cast<int>(std::ceil(area.height() / scale - 1e-9)));
     };
     auto current = source;
     auto texels = region.size();
-    auto level = 1;
-    while(level < factor) {
-      level *= 2;
+    auto level = 1.0;
+    while(level < resolution * factor) {
+      if(level == 1 && resolution > 1) {
+        level = resolution;
+      } else {
+        level *= 2;
+      }
       auto destination =
         allocate(get_size(region, level), region.topLeft(), level);
       add_blur_pass(current, texels, destination, Point(0, 0), 0, false, 0);
@@ -1468,7 +1478,7 @@ namespace {
       current = destination;
       texels = get_size(region, level);
     }
-    auto size = std::max(1, get_box_size(radius / factor));
+    auto size = std::max(1, get_box_size(radius / level));
     auto half = size / 2;
     auto windows = std::array<std::pair<int, int>, 3>();
     if(size % 2 == 1) {
@@ -1477,12 +1487,12 @@ namespace {
       windows = {std::pair(-half, half - 1), std::pair(-half + 1, half),
         std::pair(-half, half)};
     }
-    auto margin = (3 * half + 1) * factor;
+    auto margin = static_cast<int>(std::ceil((3 * half + 1) * level));
     auto padding = region.adjusted(-margin, -margin, margin, margin);
     for(auto axis = 0; axis != 2; ++axis) {
       for(auto i = std::size_t(0); i != windows.size(); ++i) {
         auto destination =
-          allocate(get_size(padding, factor), padding.topLeft(), factor);
+          allocate(get_size(padding, level), padding.topLeft(), level);
         auto step = Point(1.0 / current.m_size.width(), 0);
         if(axis == 1) {
           step = Point(0, 1.0 / current.m_size.height());
@@ -1497,7 +1507,7 @@ namespace {
           release(current);
         }
         current = destination;
-        texels = get_size(padding, factor);
+        texels = get_size(padding, level);
       }
     }
     return current;

@@ -74,6 +74,31 @@ TEST_SUITE("Drawing") {
     REQUIRE(commands == DrawSequence({&(*list)[0], &(*list)[2]}));
   }
 
+  TEST_CASE("readers") {
+    auto blur = [] (const Rect& rect) {
+      return BackdropBlurCommand(share(make_rectangle(rect)), Matrix(), 2, 0,
+        std::nullopt);
+    };
+    auto first = make_list({make_fill(Rect(0, 0, 400, 100)),
+      blur(Rect(0, 0, 50, 50)), blur(Rect(40, 0, 50, 50))});
+    auto second = make_list({blur(Rect(300, 0, 50, 50)),
+      make_shadow(Point(0, 0), 2), blur(Rect(150, 0, 50, 50)),
+      EndLayerCommand()});
+    auto drawing = Drawing();
+    drawing.set_lists({first, second});
+    auto readers = drawing.get_readers(
+      {DrawRegion(Rect(10, 10, 5, 5), 0)}, 100);
+    REQUIRE(readers.size() == 2);
+    REQUIRE(is_touching(readers, Rect(0, 0, 50, 50)));
+    REQUIRE(is_touching(readers, Rect(80, 0, 10, 50)));
+    REQUIRE(!is_touching(readers, Rect(150, 0, 50, 50)));
+    REQUIRE(!is_touching(readers, Rect(300, 0, 50, 50)));
+    REQUIRE(drawing.get_readers(
+      {DrawRegion(Rect(160, 10, 5, 5), 0)}, 100).empty());
+    REQUIRE(drawing.get_readers(
+      {DrawRegion(Rect(310, 10, 5, 5), 0)}, 100).size() == 1);
+  }
+
   TEST_CASE("damage") {
     auto a = make_fill(Rect(0, 0, 10, 10));
     auto c = make_fill(Rect(0, 200, 10, 10));

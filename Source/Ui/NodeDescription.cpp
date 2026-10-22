@@ -1,6 +1,8 @@
 #include <concepts>
+#include <utility>
 #include <variant>
 #include "Rellu/Commands/AssetCommands.hpp"
+#include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Ui/NodeDescription.hpp"
 #include "Rellu/Ui/Translation.hpp"
@@ -8,23 +10,12 @@
 using namespace Rellu;
 
 namespace {
-  constexpr auto TEXT_NAME_LENGTH = 40;
-
-  QString get_text_name(const Text& text) {
-    auto content = QString::fromStdU16String(*text.m_content);
-    auto end = content.indexOf(QChar('\n'));
-    auto carriage = content.indexOf(QChar('\r'));
-    if(carriage >= 0 && (end < 0 || carriage < end)) {
-      end = carriage;
+  QString normalize_name(QString name) {
+    if(auto end = name.indexOf(QChar('\v')); end >= 0) {
+      name.truncate(end);
     }
-    if(end >= 0) {
-      content.truncate(end);
-    }
-    if(content.size() > TEXT_NAME_LENGTH) {
-      content.truncate(TEXT_NAME_LENGTH);
-      content += "...";
-    }
-    return content.trimmed();
+    return name.replace(QChar('\n'), QChar(' ')).
+      replace(QChar('\r'), QChar(' ')).replace(QChar(0x2028), QChar(' '));
   }
 }
 
@@ -49,11 +40,12 @@ QString Rellu::get_display_name(const Document& document, const Node& node) {
   } else if(!displayed->m_header.m_name.empty()) {
     name = QString::fromStdString(displayed->m_header.m_name);
   } else if(auto text = displayed->get_text()) {
-    name = get_text_name(*text);
+    name = QString::fromStdString(make_text_name(*text->m_content));
   }
   if(name.isEmpty()) {
     name = get_type_name(*displayed);
   }
+  name = normalize_name(std::move(name));
   auto group = displayed ? displayed->get_group() : nullptr;
   if(!group || !group->m_component_instance) {
     return name;

@@ -592,6 +592,12 @@ TEST_SUITE("PreviewPlayer") {
     REQUIRE(player->get_scroll() == 0);
     player->scroll(Point(60, 100), Point(0, -50));
     REQUIRE(player->get_overlays().back().m_scroll == 360);
+    player->set_window_height(765);
+    REQUIRE(player->get_overlays().back().m_scroll == 135);
+    REQUIRE(player->get_layers().back().m_scroll == 135);
+    player->set_window_height(468);
+    REQUIRE(player->get_overlays().back().m_scroll == 135);
+    player->set_window_height(540);
     auto unbounded = make_player(document, scene.m_long);
     REQUIRE(unbounded->trigger(show_sheet));
     tap(*unbounded, Point(60, 10));

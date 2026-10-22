@@ -115,6 +115,18 @@ namespace Rellu {
   Path outline_stroke(
     const Path& path, const StrokeGeometry& stroke, double tolerance);
 
+  /**
+   * Returns the line along which a stroke's dashes run, each dash an open
+   * subpath of straight lines, as outline_stroke lays them out.
+   * @param path The path the stroke follows.
+   * @param stroke The stroke whose dash pattern and offset are laid out; a
+   *        stroke drawn solid follows every subpath of the <i>path</i>.
+   * @param tolerance The maximum distance, which must be positive, between
+   *        the curves of the <i>path</i> and their approximation.
+   */
+  Path dash_line(
+    const Path& path, const StrokeGeometry& stroke, double tolerance);
+
   inline bool StrokeGeometry::operator ==(const StrokeGeometry& stroke) const {
     return equals(m_width, stroke.m_width) &&
       m_alignment == stroke.m_alignment && m_cap == stroke.m_cap &&

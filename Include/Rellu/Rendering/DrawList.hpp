@@ -100,6 +100,12 @@ namespace Rellu {
      * beyond which a MITER join is drawn as a BEVEL.
      */
     double m_miter_limit = 4;
+
+    /**
+     * Whether the line is drawn only as a hairline, a wider stroke being
+     * drawn by filling the FillCommand's path.
+     */
+    bool m_is_hairline_only = false;
   };
 
   /** Fills the region enclosed by a path under the path's fill rule. */

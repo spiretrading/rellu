@@ -1,8 +1,10 @@
+#include <numbers>
 #include <optional>
 #include <string>
 #include <variant>
 #include <vector>
 #include <doctest/doctest.h>
+#include "Rellu/Geometry/SvgPath.hpp"
 #include "Rellu/Ui/PropertyDescriptor.hpp"
 #include "TestDocument.hpp"
 
@@ -217,8 +219,8 @@ TEST_SUITE("PropertyDescriptor") {
     REQUIRE(get_sections(properties) == std::vector<std::string>({"align",
       "boolean", "component", "transform", "layout", "appearance", "geometry",
       "fill", "stroke", "effects", "export"}));
-    REQUIRE(get_text(properties, "transform.x") == "4");
-    REQUIRE(get_text(properties, "transform.y") == "6");
+    REQUIRE(get_text(properties, "transform.x") == "-57.91");
+    REQUIRE(get_text(properties, "transform.y") == "26");
     REQUIRE(get_text(properties, "transform.width") == "100");
     REQUIRE(get_text(properties, "transform.rotation") == "28.65");
     REQUIRE(get_text(properties, "transform.fixed_position") == "No");
@@ -362,6 +364,76 @@ TEST_SUITE("PropertyDescriptor") {
     REQUIRE(get_text(properties, "stroke.width") == "2");
     REQUIRE(get_text(properties, "stroke.color") == "#000000");
     REQUIRE(get_text(properties, "transform.width") == "80");
+  }
+
+  TEST_CASE("nested_position") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(200, 100, 800, 600);
+    auto board = transaction.append(NodeId(), make_header("G board"), artboard);
+    auto add_group = [&] (const NodeId& parent, double x, double y) {
+      auto header = make_header("Group");
+      header.m_transform = make_translation(x, y);
+      return transaction.append(parent, header, Group());
+    };
+    auto add = [&] (const NodeId& parent, const Matrix& transform,
+        ShapeGeometry geometry) {
+      auto header = make_header("Shape");
+      header.m_transform = transform;
+      auto shape = Shape();
+      shape.m_geometry = std::move(geometry);
+      return transaction.append(parent, header, shape);
+    };
+    auto first_group = add_group(board, 60, 80);
+    auto first = add(first_group, make_translation(10, 20),
+      RectangleShape(Rect(0, 0, 50, 40)));
+    auto second = add(first_group, make_translation(80, 50),
+      RectangleShape(Rect(0, 0, 40, 40)));
+    auto outer = add_group(board, 220, 40);
+    auto inner = add_group(outer, 30, 140);
+    auto nested = add(inner, make_translation(60, 50),
+      RectangleShape(Rect(0, 0, 30, 30)));
+    auto loose_group = add_group(NodeId(), 900, 150);
+    auto loose = add(loose_group, make_translation(70, 60),
+      RectangleShape(Rect(0, 0, 20, 20)));
+    auto rotation = make_rotation(std::numbers::pi / 6, Point(50, 25));
+    auto rectangle = add(board, rotation, RectangleShape(Rect(0, 0, 100, 50)));
+    auto ellipse =
+      add(board, rotation, EllipseShape(Point(50, 25), 50, 25));
+    auto path = add(board, rotation,
+      PathShape(Shared(*parse_svg_path("M0 0 L100 0 L100 50"))));
+    auto rotated_group = add_group(board, 100, 80);
+    add(rotated_group, Matrix(), RectangleShape(Rect(0, 0, 10, 10)));
+    auto rotated = add(rotated_group, make_translation(20, 30) * rotation,
+      RectangleShape(Rect(0, 0, 100, 50)));
+    transaction.commit();
+    auto get_frame = [&] (const NodeId& id) {
+      auto properties = extract_properties(document, id);
+      return get_text(properties, "transform.x") + ", " +
+        get_text(properties, "transform.y") + ", " +
+        get_text(properties, "transform.width") + ", " +
+        get_text(properties, "transform.height");
+    };
+    REQUIRE(get_frame(first_group) == "70, 100, 110, 70");
+    REQUIRE(get_frame(first) == "70, 100, 50, 40");
+    REQUIRE(get_frame(second) == "140, 130, 40, 40");
+    REQUIRE(get_frame(nested) == "310, 230, 30, 30");
+    REQUIRE(get_frame(loose) == "970, 210, 20, 20");
+    REQUIRE(get_frame(rectangle) == "-5.8, -21.65, 100, 50");
+    REQUIRE(get_frame(ellipse) == "-5.8, -21.65, 100, 50");
+    REQUIRE(get_frame(path) == "-5.8, -21.65, 100, 50");
+    REQUIRE(get_frame(rotated) == "114.2, 88.35, 100, 50");
+    REQUIRE(get_frame(rotated_group) == "100, 80, 125.8, 101.65");
+    REQUIRE(get_frame(board) == "200, 100, 800, 600");
+    auto properties =
+      extract_common_properties(document, std::vector{first, nested});
+    REQUIRE(get_text(properties, "transform.x") == "70");
+    REQUIRE(get_text(properties, "transform.y") == "100");
+    properties =
+      extract_common_properties(document, std::vector{first, loose});
+    REQUIRE(get_text(properties, "transform.x") == "270");
+    REQUIRE(get_text(properties, "transform.y") == "200");
   }
 
   TEST_CASE("missing_node") {

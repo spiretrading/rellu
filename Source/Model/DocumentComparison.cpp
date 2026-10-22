@@ -68,6 +68,8 @@ namespace {
     collector.check(left.m_name == right.m_name, subject, "name");
     collector.check(left.m_has_custom_name == right.m_has_custom_name,
       subject, "custom name");
+    collector.check(left.m_is_naming_disabled == right.m_is_naming_disabled,
+      subject, "disabled naming");
     collector.check(
       left.m_is_visible == right.m_is_visible, subject, "visibility");
     collector.check(left.m_is_locked == right.m_is_locked, subject, "lock");

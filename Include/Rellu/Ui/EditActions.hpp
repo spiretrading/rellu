@@ -56,6 +56,12 @@ namespace Rellu {
         std::function<bool (const QMimeData& data, bool is_applied)>;
 
       /**
+       * The type of function returning the document the editor's selection
+       * is copied from.
+       */
+      using SourceProvider = std::function<XdClipboardSource ()>;
+
+      /**
        * Sets the handlers of the actions, which are disabled until an
        * editor is set. The registry must already have Adobe XD's menus.
        * @param actions The registry holding the actions.
@@ -111,6 +117,13 @@ namespace Rellu {
       void set_text_measurer(TextMeasurer measurer);
 
       /**
+       * Sets the function identifying the document what is copied comes
+       * from.
+       * @param provider The function.
+       */
+      void set_source_provider(SourceProvider provider);
+
+      /**
        * Sets the function reporting an operation that failed.
        * @param handler The function to call.
        */
@@ -137,6 +150,7 @@ namespace Rellu {
       RevealHandler m_reveal_handler;
       Workspace m_workspace;
       TextMeasurer m_measurer;
+      SourceProvider m_source_provider;
       QMetaObject::Connection m_clipboard_connection;
       Subscription m_selection_subscription;
       Subscription m_history_subscription;
@@ -149,6 +163,7 @@ namespace Rellu {
       void set_action(
         const std::string& name, std::function<void ()> handler);
       void run(auto operation);
+      bool remove_interactions();
       bool is_available(const std::string& name) const;
       bool copy_selection();
       void cut();

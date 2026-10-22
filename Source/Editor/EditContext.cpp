@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <utility>
 #include <variant>
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Editor/EditContext.hpp"
@@ -31,7 +32,8 @@ namespace {
 }
 
 EditContext::EditContext(Document& document)
-    : m_document(&document) {
+    : m_document(&document),
+      m_is_prototyping(false) {
   m_subscription = document.subscribe([this] (const ChangeSet& changes) {
     on_change(changes);
   });
@@ -51,6 +53,85 @@ const NodeId& EditContext::get_hover() const {
 
 const InteractionId& EditContext::get_interaction() const {
   return m_interaction;
+}
+
+const std::vector<InteractionId>& EditContext::get_interactions() const {
+  return m_interactions;
+}
+
+const NodeId& EditContext::get_interaction_owner() const {
+  return m_interaction_owner;
+}
+
+bool EditContext::is_prototyping() const {
+  return m_is_prototyping;
+}
+
+std::optional<InteractionSelection>
+    EditContext::get_interaction_selection() const {
+  if(!m_is_prototyping) {
+    return std::nullopt;
+  }
+  return InteractionSelection(m_interactions, m_pending);
+}
+
+void EditContext::set_prototyping(bool is_prototyping) {
+  m_is_prototyping = is_prototyping;
+}
+
+void EditContext::restore_interactions(const NodeId& owner,
+    const std::optional<InteractionSelection>& selection) {
+  if(!m_is_prototyping) {
+    return;
+  }
+  if(!selection) {
+    set_interactions(owner, {});
+    return;
+  }
+  auto& stored = m_document->get_prototype().m_interactions;
+  auto interactions = std::vector<InteractionId>();
+  auto pending = std::vector<Interaction>();
+  for(auto& id : selection->m_interactions) {
+    auto existing = std::ranges::find(stored, id, &Interaction::m_id);
+    if(existing != stored.end()) {
+      if(m_document->find(existing->m_owner)) {
+        interactions.push_back(id);
+      }
+      continue;
+    }
+    auto entry =
+      std::ranges::find(selection->m_pending, id, &Interaction::m_id);
+    if(entry != selection->m_pending.end() &&
+        m_document->find(entry->m_owner)) {
+      interactions.push_back(id);
+      pending.push_back(*entry);
+    }
+  }
+  set_interactions(owner, std::move(interactions));
+  set_pending(std::move(pending));
+}
+
+const std::optional<Interaction>& EditContext::get_last_edited() const {
+  return m_last_edited;
+}
+
+void EditContext::set_last_edited(std::optional<Interaction> interaction) {
+  m_last_edited = std::move(interaction);
+}
+
+const std::vector<Interaction>& EditContext::get_pending() const {
+  return m_pending;
+}
+
+void EditContext::set_pending(std::vector<Interaction> interactions) {
+  std::erase_if(interactions, [&] (const auto& interaction) {
+    return !std::ranges::contains(m_interactions, interaction.m_id);
+  });
+  if(interactions == m_pending) {
+    return;
+  }
+  m_pending = std::move(interactions);
+  m_signal();
 }
 
 NodeId EditContext::get_scope() const {
@@ -115,10 +196,34 @@ void EditContext::set_hover(const NodeId& hover) {
 }
 
 void EditContext::set_interaction(const InteractionId& interaction) {
-  if(interaction == m_interaction) {
+  if(interaction.is_nil()) {
+    set_interactions(NodeId(), {});
     return;
   }
-  m_interaction = interaction;
+  auto owner = NodeId();
+  for(auto& candidate : m_document->get_prototype().m_interactions) {
+    if(candidate.m_id == interaction) {
+      owner = candidate.m_owner;
+    }
+  }
+  set_interactions(owner, {interaction});
+}
+
+void EditContext::set_interactions(
+    const NodeId& owner, std::vector<InteractionId> interactions) {
+  if(owner == m_interaction_owner && interactions == m_interactions) {
+    return;
+  }
+  m_interaction_owner = owner;
+  m_interactions = std::move(interactions);
+  std::erase_if(m_pending, [&] (const auto& interaction) {
+    return !std::ranges::contains(m_interactions, interaction.m_id);
+  });
+  if(m_interactions.empty()) {
+    m_interaction = InteractionId();
+  } else {
+    m_interaction = m_interactions.front();
+  }
   m_signal();
 }
 

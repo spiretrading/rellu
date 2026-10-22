@@ -143,6 +143,12 @@ namespace Rellu {
      */
     bool m_has_custom_name = false;
 
+    /**
+     * Whether the node keeps its name rather than taking the one Adobe XD
+     * derives for it, as from a text's content.
+     */
+    bool m_is_naming_disabled = false;
+
     /** Whether the node is drawn. */
     bool m_is_visible = true;
 
@@ -259,6 +265,7 @@ namespace Rellu {
   inline bool NodeHeader::operator ==(const NodeHeader& header) const {
     return m_id == header.m_id && m_name == header.m_name &&
       m_has_custom_name == header.m_has_custom_name &&
+      m_is_naming_disabled == header.m_is_naming_disabled &&
       m_is_visible == header.m_is_visible &&
       m_is_locked == header.m_is_locked &&
       m_transform == header.m_transform &&

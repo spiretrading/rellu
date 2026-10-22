@@ -299,7 +299,8 @@ namespace {
       json.set("uxdesign#cornerCount", polygon->m_corner_count);
       auto& points = json.set("points", XdValue::make_array());
       auto vertices = polygon->m_vertices.empty() ? make_polygon_points(
-        polygon->m_corner_count, polygon->m_size) : polygon->m_vertices;
+        polygon->m_corner_count, polygon->m_size, polygon->m_star_ratio) :
+        polygon->m_vertices;
       for(auto& vertex : vertices) {
         auto& point = points.append(XdValue::make_object());
         point.set("x", vertex.m_x);
@@ -474,6 +475,9 @@ namespace {
       for(auto dash : stroke.m_dashes) {
         dashes.append(dash);
       }
+    }
+    if(stroke.m_dash_offset != 0) {
+      json.set("dashOffset", stroke.m_dash_offset);
     }
     return json;
   }
@@ -1435,6 +1439,9 @@ XdValue XdGenerator::make_ux(const Node& node) const {
       !key.empty()) {
     ux.set("nameL10N", key);
   }
+  if(header.m_is_naming_disabled) {
+    ux.set("disableNaming", true);
+  }
   if(!node.get_reference() && !node.get_artboard() &&
       header.m_rotation != 0) {
     ux.set("rotation", header.m_rotation);
@@ -1455,10 +1462,6 @@ XdValue XdGenerator::make_ux(const Node& node) const {
   if(!node.m_parent.is_nil()) {
     if(auto parent = m_document->find(node.m_parent)) {
       if(auto group = parent->get_group()) {
-        if(group->m_repeat_grid && node.get_group() &&
-            header.m_name.empty()) {
-          ux.set("disableNaming", true);
-        }
         if(group->m_stack) {
           if(auto spacing = group->m_stack->m_spacing.find(id);
               spacing != group->m_stack->m_spacing.end()) {

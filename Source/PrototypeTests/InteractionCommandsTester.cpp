@@ -1,5 +1,7 @@
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <vector>
 #include <doctest/doctest.h>
 #include "Rellu/Commands/ComponentCommands.hpp"
 #include "Rellu/Commands/Components.hpp"
@@ -177,6 +179,117 @@ TEST_SUITE("InteractionCommands") {
     add(Interaction(NodeId(), scene.m_rectangle, TapTrigger(),
       ArtboardTransition(second, make_default_animation())));
     REQUIRE(find_default_interaction(document, scene.m_rectangle).is_nil());
+  }
+
+  TEST_CASE("wired_interactions") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto second = add_artboard(document, "Second");
+    auto drawn = make_wired_interaction(
+      document, scene.m_rectangle, second, false, nullptr);
+    REQUIRE(drawn.m_owner == scene.m_rectangle);
+    REQUIRE(std::holds_alternative<DragTrigger>(drawn.m_trigger));
+    REQUIRE(drawn.m_action == Action(ArtboardTransition(second, Animation(
+      Transition::AUTO_ANIMATE, Easing::EASE_OUT, DEFAULT_DURATION))));
+    auto first = make_wired_interaction(
+      document, scene.m_ellipse, second, false, nullptr);
+    REQUIRE(std::holds_alternative<TapTrigger>(first.m_trigger));
+    REQUIRE(first.m_action ==
+      Action(ArtboardTransition(second, make_empty_animation())));
+    auto last = Interaction(NodeId(), scene.m_rectangle, TapTrigger(),
+      Overlay(NodeId(), Point(5, 5), make_default_animation()));
+    auto overlaid = make_wired_interaction(
+      document, scene.m_rectangle, second, false, &last);
+    REQUIRE(std::holds_alternative<KeyTrigger>(overlaid.m_trigger));
+    REQUIRE(overlaid.m_action == Action(
+      Overlay(second, Point(0, 0), make_default_animation())));
+    auto scrolled = retarget_interaction(document, drawn, scene.m_ellipse);
+    REQUIRE(std::holds_alternative<TapTrigger>(scrolled.m_trigger));
+    auto scroll = std::get_if<ScrollTransition>(&scrolled.m_action);
+    REQUIRE(scroll);
+    REQUIRE(scroll->m_destination == scene.m_group);
+    REQUIRE(scroll->m_animation.m_transition == Transition::DISSOLVE);
+    auto previous = Interaction(NodeId(), scene.m_rectangle, KeyTrigger("A"),
+      PreviousArtboard());
+    REQUIRE(retarget_interaction(document, previous, second).m_action ==
+      Action(ArtboardTransition(second, make_empty_animation())));
+  }
+
+  TEST_CASE("wire_labels") {
+    auto owner = generate_node_id();
+    auto transition = Action(
+      ArtboardTransition(generate_node_id(), make_default_animation()));
+    auto make = [&] (Trigger trigger) {
+      return Interaction(generate_node_id(), owner, std::move(trigger),
+        transition);
+    };
+    auto keys = make(KeyTrigger("Ctrl+K"));
+    auto late = make(TimeTrigger(2));
+    auto early = make(TimeTrigger(1));
+    auto tap = make(TapTrigger());
+    auto pad = make(KeyTrigger("\xF0\x9F\x8E\xAE A", KeyDevice::GAMEPAD));
+    auto blank = make(KeyTrigger());
+    auto other = make(KeyTrigger());
+    auto wire = std::vector<const Interaction*>({&keys, &late, &early, &tap});
+    REQUIRE(label_interactions(wire) == std::vector<std::string>({"Tap",
+      "Time - 1", "Time - 2", "Keys \xE2\x80\x94 Ctrl+K"}));
+    REQUIRE(summarize_wire(wire) ==
+      "Tap, Time (2), Keys \xE2\x80\x94 Ctrl+K");
+    REQUIRE(summarize_wire({&keys, &keys}) ==
+      "Keys \xE2\x80\x94 Ctrl+K (2)");
+    wire.push_back(&pad);
+    REQUIRE(label_interactions(wire).back() == "Keys \xE2\x80\x94 A");
+    REQUIRE(summarize_wire(wire) == "Tap, Time (2), Keys (2)");
+    REQUIRE(label_interactions({&blank, &other}) ==
+      std::vector<std::string>({"Keys & Gamepad - 1", "Keys & Gamepad - 2"}));
+    REQUIRE(summarize_wire({&blank}) == "Keys & Gamepad");
+    REQUIRE(summarize_wire({&blank, &other}) == "Keys & Gamepad (2)");
+  }
+
+  TEST_CASE("wires") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto second = add_artboard(document, "Second");
+    auto destination = std::get<ArtboardTransition>(get_interactions(
+      document, scene.m_rectangle).front()->m_action).m_destination;
+    auto history = History(document);
+    auto add = [&] (Trigger trigger, Action action) {
+      auto command = std::make_unique<AddInteractionCommand>(Interaction(
+        NodeId(), scene.m_rectangle, std::move(trigger), std::move(action)));
+      auto id = command->get_interaction().m_id;
+      REQUIRE(history.execute(std::move(command)));
+      return id;
+    };
+    auto keys = add(KeyTrigger("B"),
+      ArtboardTransition(destination, make_default_animation()));
+    auto back = add(DragTrigger(), PreviousArtboard());
+    auto link = add(HoverTrigger(), Hyperlink("https://example.com"));
+    auto other = add(TimeTrigger(1),
+      ArtboardTransition(second, make_default_animation()));
+    auto ids = [&] (const InteractionId& id) {
+      auto result = std::vector<InteractionId>();
+      for(auto& interaction : document.get_prototype().m_interactions) {
+        if(interaction.m_id == id) {
+          for(auto member : get_wire(document, interaction)) {
+            result.push_back(member->m_id);
+          }
+        }
+      }
+      return result;
+    };
+    REQUIRE(ids(keys) == std::vector({scene.m_interaction, keys}));
+    REQUIRE(ids(link) == std::vector({back, link}));
+    REQUIRE(ids(other) == std::vector({other}));
+    REQUIRE(get_wire_destination(
+      *get_interactions(document, scene.m_rectangle)[2]).is_nil());
+    REQUIRE(find_default_interaction(document, scene.m_rectangle).is_nil());
+    REQUIRE(find_next_interaction(document, {keys}) == scene.m_interaction);
+    REQUIRE(find_next_interaction(document, {scene.m_interaction}) == keys);
+    REQUIRE(find_next_interaction(
+      document, {scene.m_interaction, keys}).is_nil());
+    REQUIRE(find_next_interaction(document, {back}) == link);
+    REQUIRE(find_next_interaction(document, {keys, back}).is_nil());
+    REQUIRE(find_next_interaction(document, {other}).is_nil());
   }
 
   TEST_CASE("scroll_offset") {

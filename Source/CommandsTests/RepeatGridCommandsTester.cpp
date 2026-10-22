@@ -71,6 +71,8 @@ TEST_SUITE("RepeatGridCommands") {
     REQUIRE(node.m_children.size() == 1);
     auto cell = node.m_children.front();
     REQUIRE(get_transform(document, cell) == make_translation(-10, -10));
+    REQUIRE(document.get(cell).m_header.m_name.empty());
+    REQUIRE(document.get(cell).m_header.m_is_naming_disabled);
     REQUIRE(document.get(cell).m_children ==
       std::vector{board.m_rectangle, board.m_text});
     REQUIRE(get_world_bounds(document, board.m_rectangle) ==
@@ -83,6 +85,7 @@ TEST_SUITE("RepeatGridCommands") {
       std::vector{board.m_group}));
     auto card = static_cast<const RepeatGridCommand&>(*group).get_grid();
     REQUIRE(document.get(card).m_children == std::vector{board.m_group});
+    REQUIRE(!document.get(board.m_group).m_header.m_is_naming_disabled);
     REQUIRE(get_world_bounds(document, board.m_group) ==
       Rect(300, 150, 30, 30));
   }

@@ -33,7 +33,7 @@ TEST_SUITE("PreviewWindow") {
       transaction.commit();
     }
     REQUIRE(find_preview_start(document, std::vector<NodeId>()) ==
-      scene.m_menu);
+      scene.m_home);
     {
       auto transaction = Transaction(document);
       transaction.set_flows({Flow(scene.m_long, "Flow 1")});
@@ -41,6 +41,14 @@ TEST_SUITE("PreviewWindow") {
     }
     REQUIRE(find_preview_start(document, std::vector<NodeId>()) ==
       scene.m_long);
+    {
+      auto transaction = Transaction(document);
+      transaction.set_flows(
+        {Flow(scene.m_long, "Flow 1"), Flow(scene.m_second, "Flow 2")});
+      transaction.commit();
+    }
+    REQUIRE(find_preview_start(document, std::vector<NodeId>()) ==
+      scene.m_second);
     REQUIRE(find_preview_start(Document(), std::vector<NodeId>()).is_nil());
   }
 

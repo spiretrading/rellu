@@ -1,6 +1,7 @@
 #ifndef RELLU_RENDERING_CANVAS_OVERLAY_HPP
 #define RELLU_RENDERING_CANVAS_OVERLAY_HPP
 #include <memory>
+#include <optional>
 #include <vector>
 #include <QImage>
 #include "Rellu/Geometry/Color.hpp"
@@ -48,7 +49,10 @@ namespace Rellu {
     bool m_is_snapped = true;
   };
 
-  /** An image drawn over the canvas with one of its pixels per pixel. */
+  /**
+   * An image drawn over the canvas with one of its pixels per pixel, or
+   * stretched over a size.
+   */
   struct OverlayImage {
 
     /** The non-null image. */
@@ -59,6 +63,12 @@ namespace Rellu {
      * at the nearest whole pixel.
      */
     Point m_position = Point(0, 0);
+
+    /**
+     * The size in logical units the image is stretched over, rounded to
+     * whole pixels, or none to draw it one of its pixels per pixel.
+     */
+    std::optional<Size> m_size;
   };
 
   /** What is drawn over the canvas in screen space, images below shapes. */

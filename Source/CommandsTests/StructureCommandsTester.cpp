@@ -338,6 +338,26 @@ TEST_SUITE("StructureCommands") {
       m_name == "Rectangle 1");
   }
 
+  TEST_CASE("duplicate_disabled_naming") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(scene.m_rectangle).m_header;
+      header.m_name = "Rectangle 1";
+      header.m_has_custom_name = false;
+      header.m_is_naming_disabled = true;
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    auto history = History(document);
+    auto command = history.execute(
+      std::make_unique<DuplicateCommand>(std::vector{scene.m_rectangle}));
+    auto& copy = document.get(command->get_selection()->front()).m_header;
+    REQUIRE(copy.m_name == "Rectangle 1");
+    REQUIRE(copy.m_is_naming_disabled);
+  }
+
   TEST_CASE("duplicate_mask_names") {
     auto document = Document();
     auto scene = build_scene(document);

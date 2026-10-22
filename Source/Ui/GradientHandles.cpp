@@ -40,6 +40,13 @@ namespace {
       make_scale(bounds.m_width, bounds.m_height);
   }
 
+  Matrix get_radial_mapping(const GradientFill& fill, const Rect& bounds) {
+    if(bounds.m_width > 0 && bounds.m_height > 0) {
+      return get_radial_transform(fill, bounds);
+    }
+    return get_box(bounds) * fill.m_transform;
+  }
+
   Matrix get_unit_to_view(const GradientFrame& frame) {
     return frame.m_to_view * get_box(frame.m_bounds);
   }
@@ -104,7 +111,7 @@ namespace {
 
   Ellipse get_ellipse(const GradientFill& fill, const Rect& bounds) {
     auto& radial = std::get<RadialGradient>(fill.m_geometry);
-    auto mapping = get_box(bounds) * fill.m_transform;
+    auto mapping = get_radial_mapping(fill, bounds);
     auto scale_x = std::hypot(mapping.m_a, mapping.m_b);
     auto scale_y = scale_x > 0 ? mapping.get_determinant() / scale_x : 0;
     return Ellipse(mapping.map(radial.m_center),
@@ -153,7 +160,7 @@ namespace {
   double get_radial_offset(
       const GradientFill& fill, const Rect& bounds, Point local) {
     auto& radial = std::get<RadialGradient>(fill.m_geometry);
-    auto inverse = invert(get_box(bounds) * fill.m_transform);
+    auto inverse = invert(get_radial_mapping(fill, bounds));
     if(!inverse || !(radial.m_radius > 0)) {
       return 0;
     }

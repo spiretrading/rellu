@@ -355,6 +355,54 @@ TEST_SUITE("StrokeGeometry") {
     REQUIRE(!contains(outside_outline, Point(0.5, 0.5)));
   }
 
+  TEST_CASE("xd_dash_corners") {
+    struct Case {
+      double m_height;
+      std::vector<double> m_dashes;
+      bool m_is_corner_filled;
+      bool m_is_closing_filled;
+    };
+    for(auto& entry : {Case(80, {10, 5}, true, true),
+        Case(80, {16, 8}, true, true), Case(80, {40, 20}, true, true),
+        Case(80, {8, 2}, true, false), Case(80, {7, 3}, true, false),
+        Case(80, {5, 15}, true, false), Case(80, {12, 8}, true, false),
+        Case(80, {4, 4}, true, false), Case(80, {6, 2}, true, false),
+        Case(80, {8, 4}, false, true), Case(80, {5, 10}, false, false),
+        Case(81, {6, 6}, false, true), Case(82, {4, 4}, false, true)}) {
+      auto rectangle = make_rectangle(Rect(0, 0, 120, entry.m_height));
+      auto outline = outline_stroke(rectangle,
+        make_dashed_stroke(4, StrokeCap::BUTT, entry.m_dashes, 0), 0.01);
+      CAPTURE(entry.m_height);
+      CAPTURE(entry.m_dashes);
+      REQUIRE(contains(outline, Point(-1, -1)) == entry.m_is_corner_filled);
+      REQUIRE(contains(outline, Point(-1, 1)) == entry.m_is_closing_filled);
+      REQUIRE(contains(outline, Point(1, -1)));
+    }
+  }
+
+  TEST_CASE("dash_line") {
+    auto line = make_path({Point(0, 0), Point(30, 0)}, false);
+    auto expected = Path();
+    expected.move_to(Point(0, 0));
+    expected.line_to(Point(10, 0));
+    expected.move_to(Point(15, 0));
+    expected.line_to(Point(25, 0));
+    REQUIRE(dash_line(line,
+      make_dashed_stroke(1, StrokeCap::BUTT, {10, 5}, 0), 0.01) == expected);
+    auto rectangle = make_rectangle(Rect(0, 0, 10, 10));
+    auto solid = dash_line(rectangle, make_stroke(1, StrokeCap::BUTT), 0.01);
+    REQUIRE(count_subpaths(solid) == 1);
+    REQUIRE(solid.get_segments().back().m_type == SegmentType::CLOSE);
+    auto joined = dash_line(rectangle,
+      make_dashed_stroke(1, StrokeCap::BUTT, {4, 2}, 0), 0.01);
+    REQUIRE(count_subpaths(joined) == 6);
+    REQUIRE(joined.get_segments().front().m_points[0] == Point(0, 4));
+    auto wedged = dash_line(rectangle,
+      make_dashed_stroke(1, StrokeCap::BUTT, {5, 5}, 0), 0.01);
+    REQUIRE(count_subpaths(wedged) == 4);
+    REQUIRE(wedged.get_segments().front().m_points[0] == Point(0, 0));
+  }
+
   TEST_CASE("open_alignment") {
     auto corner =
       make_path({Point(0, 0), Point(10, 0), Point(10, 10)}, false);

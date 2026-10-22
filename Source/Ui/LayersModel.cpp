@@ -5,7 +5,6 @@
 #include <utility>
 #include <QColor>
 #include <QFont>
-#include <QRegularExpression>
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Ui/LayersModel.hpp"
 #include "Rellu/Ui/NodeDescription.hpp"
@@ -16,7 +15,6 @@ using namespace Rellu;
 
 namespace {
   constexpr auto MAXIMUM_RUNS = 32;
-  const auto LINE_BREAK = QRegularExpression(R"(\v)");
 
   struct Span {
     std::size_t m_first;
@@ -226,10 +224,7 @@ QVariant LayersModel::data(const QModelIndex& index, int role) const {
     return QVariant();
   }
   if(index.column() == NAME) {
-    if(role == Qt::DisplayRole) {
-      auto name = get_display_name(*m_document, *node);
-      return name.left(name.indexOf(LINE_BREAK));
-    } else if(role == Qt::EditRole) {
+    if(role == Qt::DisplayRole || role == Qt::EditRole) {
       return get_display_name(*m_document, *node);
     } else if(role == Qt::DecorationRole) {
       if(!displayed) {

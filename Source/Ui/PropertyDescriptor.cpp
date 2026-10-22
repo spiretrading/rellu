@@ -11,6 +11,7 @@
 #include <string_view>
 #include <tuple>
 #include <utility>
+#include <vector>
 #include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/Layouts.hpp"
@@ -147,19 +148,67 @@ namespace {
     return Placement(source, resolution->m_transform);
   }
 
+  std::optional<Rect> get_box(const Document& document, const Node& node,
+      const TextMeasurer& measurer) {
+    auto group = node.get_group();
+    if(!group || group->m_mask || group->m_repeat_grid ||
+        group->m_scroll_group) {
+      return Rellu::get_local_bounds(
+        document, node.get_id(), BoundsType::GEOMETRY, measurer);
+    }
+    auto box = std::optional<Rect>();
+    for(auto& id : node.m_children) {
+      auto child = document.find(id);
+      if(!child || !child->m_header.m_is_visible) {
+        continue;
+      }
+      if(auto bounds = get_box(document, *child, measurer)) {
+        auto mapped = get_transform(document, id).map(*bounds);
+        box = box ? unite(*box, mapped) : mapped;
+      }
+    }
+    return box;
+  }
+
   std::optional<Rect> get_node_frame(
       const Document& document, const Node& node, const Matrix& transform,
       const TextMeasurer& measurer) {
     if(auto artboard = node.get_artboard()) {
       return artboard->m_frame;
     }
-    auto bounds = Rellu::get_local_bounds(
-      document, node.get_id(), BoundsType::GEOMETRY, measurer);
+    auto bounds = get_box(document, node, measurer);
     if(!bounds) {
       return std::nullopt;
     }
     auto origin = transform.map(bounds->get_top_left());
     return Rect(origin.m_x, origin.m_y, bounds->m_width, bounds->m_height);
+  }
+
+  Point get_artboard_origin(
+      const Document& document, const std::vector<NodeId>& nodes) {
+    if(nodes.empty()) {
+      return Point(0, 0);
+    }
+    auto artboard = find_artboard(document, nodes.front());
+    if(artboard.is_nil()) {
+      return Point(0, 0);
+    }
+    for(auto& id : nodes) {
+      if(id == artboard || find_artboard(document, id) != artboard) {
+        return Point(0, 0);
+      }
+    }
+    return document.get(artboard).get_artboard()->m_frame.get_top_left();
+  }
+
+  Point get_position(const Document& document, const NodeId& id,
+      const TextMeasurer& measurer) {
+    auto nodes = std::vector{id};
+    if(auto frame = get_frame(document, nodes, measurer)) {
+      return frame->get_top_left();
+    }
+    return get_world_transform(document, id).map(Point(0, 0)) -
+      get_artboard_origin(document, nodes);
   }
 
   bool is_line(const Node& node) {
@@ -216,10 +265,7 @@ namespace {
     }
     auto& definition = component->second;
     auto is_linked = static_cast<bool>(definition.m_link);
-    auto name = get_display_name(document, node);
-    name.replace(QChar('\n'), QChar(' ')).replace(QChar('\r'), QChar(' ')).
-      replace(QChar(0x2028), QChar(' '));
-    add(section, "name", "Name", name);
+    add(section, "name", "Name", get_display_name(document, node));
     auto states = QStringList({translate("inspector", "Default State")});
     auto index = 0;
     for(auto& state : definition.m_states) {
@@ -259,7 +305,7 @@ namespace {
         get_orientation(*node.get_artboard()), ORIENTATIONS));
       return section;
     }
-    auto origin = frame ? frame->get_top_left() : transform.map(Point(0, 0));
+    auto origin = get_position(document, node.get_id(), measurer);
     if(frame) {
       auto [is_width_fixed, is_height_fixed] =
         get_fixed_dimensions(displayed);
@@ -903,31 +949,35 @@ std::vector<PropertyDescriptor> Rellu::extract_common_properties(
 
 std::optional<Rect> Rellu::get_frame(const Document& document,
     const std::vector<NodeId>& nodes, const TextMeasurer& measurer) {
-  if(nodes.size() == 1) {
-    auto node = document.find(nodes.front());
-    if(!node) {
-      return std::nullopt;
-    }
-    return get_node_frame(document, *node,
-      get_transform(document, node->get_id()), measurer);
+  auto node = nodes.size() == 1 ? document.find(nodes.front()) : nullptr;
+  if(node && node->get_artboard()) {
+    return node->get_artboard()->m_frame;
   }
-  auto bounds = get_world_bounds(
-    document, nodes, BoundsType::GEOMETRY, measurer);
-  if(!bounds || nodes.empty()) {
-    return bounds;
-  }
-  auto artboard = find_artboard(document, nodes.front());
-  if(artboard.is_nil()) {
-    return bounds;
-  }
+  auto bounds = std::optional<Rect>();
   for(auto& id : nodes) {
-    if(id == artboard || find_artboard(document, id) != artboard) {
-      return bounds;
+    auto selected = document.find(id);
+    if(!selected) {
+      continue;
+    }
+    if(auto box = get_box(document, *selected, measurer)) {
+      auto mapped = get_world_transform(document, id).map(*box);
+      bounds = bounds ? unite(*bounds, mapped) : mapped;
     }
   }
-  auto& frame = document.get(artboard).get_artboard()->m_frame;
-  return Rect(bounds->m_x - frame.m_x, bounds->m_y - frame.m_y,
-    bounds->m_width, bounds->m_height);
+  if(!bounds) {
+    return bounds;
+  }
+  auto origin = get_artboard_origin(document, nodes);
+  bounds->m_x -= origin.m_x;
+  bounds->m_y -= origin.m_y;
+  if(node) {
+    if(auto frame = get_node_frame(document, *node,
+        get_transform(document, node->get_id()), measurer)) {
+      bounds->m_width = frame->m_width;
+      bounds->m_height = frame->m_height;
+    }
+  }
+  return bounds;
 }
 
 const PropertyDescriptor* Rellu::find_property(

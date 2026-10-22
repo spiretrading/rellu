@@ -244,12 +244,56 @@ Path Rellu::make_polygon(int corner_count, const Rect& bounds,
     make_polygon_vertices(corner_count, bounds, star_ratio), corner_radius);
 }
 
-std::vector<Point> Rellu::make_polygon_points(int corner_count, Size size) {
-  auto points = make_polygon_vertices(
-    corner_count, Rect(0, 0, size.m_width, size.m_height));
+std::vector<Point> Rellu::make_polygon_points(
+    int corner_count, Size size, double star_ratio) {
+  auto points = std::vector<Point>();
+  if(corner_count < 3) {
+    return points;
+  }
+  auto to_single = [] (double value) {
+    return static_cast<double>(static_cast<float>(value));
+  };
+  auto start = to_single(-std::numbers::pi / 2);
+  auto step = to_single(std::numbers::pi / corner_count);
+  if(corner_count % 2 == 0) {
+    start = to_single(start + step);
+  }
+  auto inner = to_single(to_single(std::cos(std::numbers::pi / corner_count)) *
+    to_single(star_ratio / 100));
+  auto is_star = star_ratio < 100;
+  if(!is_star) {
+    step = to_single(2 * std::numbers::pi / corner_count);
+  }
+  auto left = 0.0;
+  auto top = 0.0;
+  auto right = 0.0;
+  auto bottom = 0.0;
+  auto angle = start;
+  for(auto i = 0; i != corner_count; ++i) {
+    auto corner =
+      Point(to_single(std::cos(angle)), to_single(std::sin(angle)));
+    angle = to_single(angle + step);
+    if(i == 0) {
+      left = right = corner.m_x;
+      top = bottom = corner.m_y;
+    } else {
+      left = std::min(left, corner.m_x);
+      top = std::min(top, corner.m_y);
+      right = std::max(right, corner.m_x);
+      bottom = std::max(bottom, corner.m_y);
+    }
+    points.push_back(corner);
+    if(is_star) {
+      points.push_back(Point(to_single(to_single(std::cos(angle)) * inner),
+        to_single(to_single(std::sin(angle)) * inner)));
+      angle = to_single(angle + step);
+    }
+  }
+  auto x_scale = to_single(size.m_width / to_single(right - left));
+  auto y_scale = to_single(size.m_height / to_single(bottom - top));
   for(auto& point : points) {
-    point = Point(static_cast<float>(point.m_x),
-      static_cast<float>(point.m_y));
+    point = Point(to_single(to_single(point.m_x - left) * x_scale),
+      to_single(to_single(point.m_y - top) * y_scale));
   }
   return points;
 }

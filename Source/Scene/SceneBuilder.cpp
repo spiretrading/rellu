@@ -268,7 +268,8 @@ namespace {
 
   StrokeGeometry to_geometry(const Stroke& stroke) {
     return StrokeGeometry(stroke.m_width, stroke.m_alignment, stroke.m_cap,
-      stroke.m_join, stroke.m_miter_limit, stroke.m_dashes, 0);
+      stroke.m_join, stroke.m_miter_limit, stroke.m_dashes,
+      stroke.m_dash_offset);
   }
 
   std::optional<Path> offset(const ShapeGeometry& geometry, double distance) {
@@ -1433,6 +1434,10 @@ void SceneBuilder::add_shape(
       stroke->m_stroke = StrokeLine(line, style.m_stroke->m_width,
         style.m_stroke->m_cap, style.m_stroke->m_join,
         style.m_stroke->m_miter_limit);
+    } else if(outline.m_dashes) {
+      stroke->m_stroke = StrokeLine(outline.m_dashes,
+        style.m_stroke->m_width, style.m_stroke->m_cap,
+        style.m_stroke->m_join, style.m_stroke->m_miter_limit, true);
     }
   }
   auto is_inside = style.m_stroke &&
@@ -1475,6 +1480,7 @@ SceneBuilder::Outline& SceneBuilder::get_outline(
     outline.m_line = nullptr;
     outline.m_stroke = nullptr;
     outline.m_layered = nullptr;
+    outline.m_dashes = nullptr;
     outline.m_tolerance = 0;
   }
   outline.m_generation = m_generation;
@@ -1488,6 +1494,7 @@ SceneBuilder::Outline& SceneBuilder::get_outline(
       4 * outline.m_tolerance >= tolerance)) {
     outline.m_line = nullptr;
     outline.m_layered = nullptr;
+    outline.m_dashes = nullptr;
     auto geometry = to_geometry(*stroke);
     if(stroke->m_alignment != StrokeAlignment::CENTER &&
         stroke->m_dashes.empty()) {
@@ -1514,6 +1521,13 @@ SceneBuilder::Outline& SceneBuilder::get_outline(
     } else {
       outline.m_stroke = std::make_shared<const Path>(
         outline_stroke(*outline.m_path, geometry, tolerance));
+    }
+    if(!stroke->m_dashes.empty() &&
+        (stroke->m_alignment == StrokeAlignment::CENTER ||
+          is_open(*outline.m_path))) {
+      auto dashed = make_dash_path(shape.m_geometry, stroke->m_alignment);
+      outline.m_dashes = std::make_shared<const Path>(dash_line(
+        dashed ? *dashed : *outline.m_path, geometry, tolerance));
     }
     if(!outline.m_line && stroke->m_alignment != StrokeAlignment::CENTER &&
         stroke->m_dashes.empty() && is_closed(*outline.m_path)) {

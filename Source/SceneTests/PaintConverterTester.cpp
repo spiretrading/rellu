@@ -73,13 +73,37 @@ TEST_SUITE("PaintConverter") {
     radial.m_geometry = RadialGradient();
     auto circular =
       std::get<GradientPaint>(*converter.convert(radial, outline));
-    REQUIRE(circular.m_transform == make_translation(10, 20) *
-      make_scale(40, 8) * make_translation(0.25, 0));
+    require_near(circular.m_transform.map(Point(0.5, 0.5)), Point(31.25, 24));
+    require_near(circular.m_transform.map(Point(1, 0.5)), Point(51.25, 24));
+    require_near(circular.m_transform.map(Point(0.5, 1)), Point(31.25, 28));
     fill.m_units = GradientUnits::USER_SPACE;
     auto user = std::get<GradientPaint>(*converter.convert(fill, outline));
     REQUIRE(user.m_transform == make_translation(0.25, 0));
     fill.m_stops.clear();
     REQUIRE(!converter.convert(fill, outline));
+  }
+
+  TEST_CASE("radial_transform") {
+    auto document = Document();
+    auto converter = PaintConverter(document);
+    auto fill = GradientFill();
+    fill.m_geometry = RadialGradient(Point(0.4f, 0.375), 0.75,
+      Point(0.4f, 0.375));
+    fill.m_stops = {GradientStop(0, make_color(255, 0, 0)),
+      GradientStop(1, make_color(0, 0, 255))};
+    fill.m_transform = Matrix(0.4f, 0, 0, 1, 0.3f, 0);
+    auto paint = std::get<GradientPaint>(
+      *converter.convert(fill, make_rectangle(Rect(0, 0, 200, 80))));
+    auto require_close = [] (Point actual, Point expected) {
+      CAPTURE(actual);
+      CAPTURE(expected);
+      REQUIRE(std::abs(actual.m_x - expected.m_x) < 1e-4);
+      REQUIRE(std::abs(actual.m_y - expected.m_y) < 1e-4);
+    };
+    auto& transform = paint.m_transform;
+    require_close(transform.map(Point(0.4, 0.375)), Point(80.15, 30));
+    require_close(transform.map(Point(1.15, 0.375)), Point(140.15, 30));
+    require_close(transform.map(Point(0.4, 1.125)), Point(80.15, 90));
   }
 
   TEST_CASE("image") {

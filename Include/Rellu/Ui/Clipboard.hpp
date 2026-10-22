@@ -3,11 +3,13 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 #include <QMimeData>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Command.hpp"
 #include "Rellu/Geometry/Rect.hpp"
+#include "Rellu/Io/XdClipboard.hpp"
 #include "Rellu/Io/XdGenerator.hpp"
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/NodeId.hpp"
@@ -38,6 +40,12 @@ namespace Rellu {
      * leaves artboards lacking a grid without one.
      */
     bool m_is_prototyping = false;
+
+    /**
+     * The id of the document pasted into, or empty if unknown. Components
+     * copied from another document are pasted as new local components.
+     */
+    std::string m_document;
   };
 
   /**
@@ -100,11 +108,13 @@ namespace Rellu {
        * @param nodes The nodes to copy.
        * @param measurer The function measuring text.
        * @param layout The function providing the stored layout of text.
+       * @param source The document the nodes are copied from.
        * @return <code>true</code> iff anything was copied.
        */
       bool copy(const Document& document, const std::vector<NodeId>& nodes,
         const TextMeasurer& measurer = estimate_text_bounds,
-        const XdTextLayout& layout = {});
+        const XdTextLayout& layout = {},
+        const XdClipboardSource& source = {});
 
       /** Discards what is held. */
       void clear();

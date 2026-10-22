@@ -326,6 +326,7 @@ std::optional<Stroke> Rellu::read_stroke(XdObject& stroke) {
       result.m_dashes.push_back(dash.toDouble());
     }
   }
+  result.m_dash_offset = stroke.get_number("dashOffset"_L1, 0);
   return result;
 }
 

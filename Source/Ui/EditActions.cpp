@@ -2,6 +2,7 @@
 #include <exception>
 #include <memory>
 #include <utility>
+#include <vector>
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QKeySequence>
@@ -9,6 +10,7 @@
 #include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
+#include "Rellu/Prototype/InteractionCommands.hpp"
 #include "Rellu/Ui/EditActions.hpp"
 #include "Rellu/Ui/Translation.hpp"
 
@@ -75,6 +77,14 @@ EditActions::EditActions(
     }
     if(name == "edit.duplicate") {
       set_action(name, [this] { duplicate(); });
+    } else if(name == "edit.delete") {
+      set_action(name, [this, name] {
+        run([&] {
+          if(!remove_interactions() && is_available(name)) {
+            m_editor->execute(*m_commands, name);
+          }
+        });
+      });
     } else {
       set_action(name, [this, name] {
         run([&] {
@@ -152,6 +162,10 @@ void EditActions::set_text_measurer(TextMeasurer measurer) {
   m_measurer = std::move(measurer);
 }
 
+void EditActions::set_source_provider(SourceProvider provider) {
+  m_source_provider = std::move(provider);
+}
+
 void EditActions::set_error_handler(ErrorHandler handler) {
   m_error_handler = std::move(handler);
 }
@@ -209,6 +223,10 @@ void EditActions::update() {
       m_actions->get(name).setText(translate("menu", "Ungroup"));
     }
   }
+  if(m_workspace == Workspace::PROTOTYPE &&
+      !m_editor->get_context().get_interactions().empty()) {
+    m_actions->set_enabled("edit.delete", true);
+  }
 }
 
 void EditActions::set_action(
@@ -231,6 +249,52 @@ void EditActions::run(auto operation) {
   update();
 }
 
+bool EditActions::remove_interactions() {
+  if(m_workspace != Workspace::PROTOTYPE) {
+    return false;
+  }
+  auto& document = m_editor->get_document();
+  auto& selection = m_editor->get_selection();
+  auto& edit = m_editor->get_context();
+  if(selection.get_size() != 1 ||
+      edit.get_interaction_owner() != selection.get_primary()) {
+    return false;
+  }
+  auto removed = std::vector<InteractionId>();
+  for(auto& id : edit.get_interactions()) {
+    if(std::ranges::any_of(document.get_prototype().m_interactions,
+        [&] (const auto& interaction) {
+          return interaction.m_id == id;
+        })) {
+      removed.push_back(id);
+    }
+  }
+  if(removed.empty()) {
+    if(edit.get_pending().empty()) {
+      return false;
+    }
+    edit.set_interactions(selection.get_primary(), {});
+    return true;
+  }
+  auto next = find_next_interaction(document, removed);
+  auto commands = std::vector<std::unique_ptr<Command>>();
+  for(auto& id : removed) {
+    commands.push_back(std::make_unique<RemoveInteractionCommand>(id));
+  }
+  auto is_recorded = m_editor->execute(
+    std::make_unique<CompositeCommand>("Delete", std::move(commands))) !=
+      nullptr;
+  auto chosen = std::vector<InteractionId>();
+  if(!next.is_nil()) {
+    chosen.push_back(next);
+  }
+  edit.set_interactions(selection.get_primary(), std::move(chosen));
+  if(is_recorded) {
+    m_editor->update_selection();
+  }
+  return true;
+}
+
 bool EditActions::is_available(const std::string& name) const {
   return (name != "object.reset_main_state" &&
     name != "object.transform.flip_horizontally" &&
@@ -239,8 +303,12 @@ bool EditActions::is_available(const std::string& name) const {
 }
 
 bool EditActions::copy_selection() {
+  auto source = XdClipboardSource();
+  if(m_source_provider) {
+    source = m_source_provider();
+  }
   if(!m_clipboard.copy(m_editor->get_document(),
-      m_editor->get_selection().get_nodes(), m_measurer)) {
+      m_editor->get_selection().get_nodes(), m_measurer, {}, source)) {
     return false;
   }
   remember_text(*m_editor);
@@ -287,6 +355,9 @@ void EditActions::paste() {
     target.m_container = m_editor->get_context().get_container();
     target.m_view = get_view();
     target.m_is_prototyping = m_workspace == Workspace::PROTOTYPE;
+    if(m_source_provider) {
+      target.m_document = m_source_provider().m_id;
+    }
     if(auto command = m_clipboard.make_paste_command(target);
         command && m_editor->execute(std::move(command))) {
       reveal_artboards();

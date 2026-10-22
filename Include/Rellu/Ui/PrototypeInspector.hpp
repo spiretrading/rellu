@@ -21,8 +21,9 @@ namespace Rellu {
   /**
    * The property inspector of Adobe XD's Prototype mode, editing the
    * interactions of the selected node: the INTERACTION section with its +
-   * adding an interaction like the one last edited, a row per interaction
-   * when there are several, and the Trigger and, under ACTION, the Type,
+   * adding an interaction like the one last edited, a row labelled by
+   * trigger per interaction on the wire of the one being edited when the
+   * wire has several, and the Trigger and, under ACTION, the Type,
    * Destination, Animation, Easing and Duration of the one being edited,
    * with the fields particular to its trigger and action (the delay of a
    * time trigger, the keys of a key trigger, the address of a hyperlink,
@@ -40,7 +41,9 @@ namespace Rellu {
    * Audio Playback and Speech Playback actions are listed but unavailable,
    * as is Scroll To for an artboard or a trigger other than Tap or Keys &
    * Gamepad. Selecting a node edits the interaction Adobe XD selects, and
-   * the one being edited is the edit context's interaction. Easing and
+   * the one being edited is the edit context's interaction. As in Adobe XD,
+   * an interaction lacking the destination its action needs is kept out of
+   * the document, edited as a pending wire until it gets one. Easing and
    * Duration are disabled without an animation, and Duration hidden for a
    * drag. Each change is one undoable step. Without an interaction to edit,
    * the fields show Adobe XD's placeholder values, disabled. As in Adobe XD,
@@ -139,9 +142,11 @@ namespace Rellu {
       ReleaseHandler m_release_handler;
       Subscription m_subscription;
       Subscription m_selection_subscription;
+      Subscription m_context_subscription;
       NodeId m_node;
       InteractionId m_current;
-      std::optional<Interaction> m_last;
+      std::vector<InteractionId> m_selected;
+      std::vector<Interaction> m_pending;
       bool m_is_pending;
       std::optional<Interaction> m_preview;
       QScrollArea* m_scroll;
@@ -151,7 +156,18 @@ namespace Rellu {
 
       void schedule();
       void rebuild();
-      void apply(Interaction interaction);
+      void apply(Interaction interaction, const std::string& label);
+      void stage(Interaction interaction,
+        std::vector<std::unique_ptr<Command>>& commands,
+        std::vector<Interaction>& pending);
+      void commit(const std::string& label,
+        std::vector<std::unique_ptr<Command>> commands,
+        std::vector<Interaction> pending);
+      void apply_all(const std::string& label,
+        const std::function<Interaction (Interaction)>& change);
+      void build_mixed(const std::vector<const Interaction*>& selected,
+        QVBoxLayout& layout);
+      void build_placeholder(QVBoxLayout& layout);
       void preview(const Interaction& base, Interaction interaction);
       void discard_preview();
       void release();

@@ -210,6 +210,42 @@ TEST_SUITE("TileCache") {
     REQUIRE(tiled.render() == Harness(drawing, 4096, view).render());
   }
 
+  TEST_CASE("background_blur") {
+    auto stripes = std::vector<std::shared_ptr<const Path>>();
+    for(auto i = 0; i != 10; ++i) {
+      stripes.push_back(share(make_rectangle(Rect(20 * i, 0, 10, 160))));
+    }
+    auto panel = share(make_ellipse(Point(80, 70), 60, 50));
+    auto make_list = [&] (Point offset) {
+      auto list = std::make_shared<DrawList>();
+      for(auto i = 0; i != 10; ++i) {
+        list->push_back(FillCommand(stripes[i], Matrix(),
+          SolidPaint(make_color(25 * i, 255 - 25 * i, 100))));
+      }
+      list->push_back(make_fill(make_ellipse(Point(70, 60) + offset, 12, 12),
+        make_color(0, 0, 0)));
+      list->push_back(
+        BackdropBlurCommand(panel, Matrix(), 9, 0.05, std::nullopt));
+      return list;
+    };
+    for(auto& view : {make_scale(1, 1),
+        make_translation(3.4, 7.6) * make_scale(1.5, 1.5),
+        make_translation(-20, -10) * make_scale(2.5, 2.5),
+        make_translation(5.5, 2.25) * make_scale(0.75, 0.75)}) {
+      auto drawing = std::make_shared<Drawing>();
+      drawing->set_lists({make_list(Point(0, 0))});
+      auto tiled = Harness(drawing, 16, view);
+      auto whole = Harness(drawing, 4096, view);
+      REQUIRE(tiled.render() == whole.render());
+      auto damage = drawing->set_lists({make_list(Point(5, 3))});
+      tiled.m_renderer.invalidate(damage);
+      whole.m_renderer.invalidate(damage);
+      auto image = tiled.render();
+      REQUIRE(image == whole.render());
+      REQUIRE(image == Harness(drawing, 4096, view).render());
+    }
+  }
+
   TEST_CASE("rotated_stroke") {
     auto line = make_rectangle(Rect(0, 0, 100, 60));
     auto stroke = FillCommand(share(outline_stroke(line, StrokeGeometry(1,

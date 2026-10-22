@@ -2,6 +2,7 @@
 #define RELLU_IO_XD_CLIPBOARD_HPP
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 #include <QByteArray>
@@ -33,6 +34,16 @@ namespace Rellu {
     std::optional<Point> m_offset;
   };
 
+  /** Identifies the document nodes are copied from. */
+  struct XdClipboardSource {
+
+    /** The document's id, or empty to identify no document. */
+    std::string m_id;
+
+    /** The path of the document's file, or empty if it has none. */
+    std::string m_path;
+  };
+
   /** What reading Adobe XD's clipboard format provides beyond the nodes. */
   struct XdClipboardContent {
 
@@ -45,6 +56,12 @@ namespace Rellu {
 
     /** The region in document coordinates the nodes covered when copied. */
     std::optional<Rect> m_bounds;
+
+    /**
+     * The id of the document the nodes were copied from, or empty if it is
+     * not recorded.
+     */
+    std::string m_document;
   };
 
   /**
@@ -57,12 +74,14 @@ namespace Rellu {
    * @param layout The function providing the stored layout of text.
    * @param directory The folder receiving a file for each image the nodes
    *        use, which the data refers to, or empty to refer to no image.
+   * @param source The document the nodes are copied from.
    * @return The clipboard data.
    */
   QByteArray write_xd_clipboard(const Document& document,
     const std::vector<XdClipboardItem>& items, const Rect& bounds,
     const XdTextLayout& layout = {},
-    const std::filesystem::path& directory = {});
+    const std::filesystem::path& directory = {},
+    const XdClipboardSource& source = {});
 
   /**
    * Reads data in Adobe XD's clipboard format into a document, which

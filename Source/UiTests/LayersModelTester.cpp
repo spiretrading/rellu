@@ -268,7 +268,8 @@ TEST_SUITE("LayersModel") {
     require_node(ids.m_artboard, "Home", NodeKind::ARTBOARD, false);
     require_node(ids.m_card, "Card", NodeKind::GROUP, false);
     require_node(ids.m_background, "Background", NodeKind::SHAPE, false);
-    require_node(ids.m_label, "Hello world", NodeKind::TEXT, false);
+    require_node(
+      ids.m_label, "Hello world Second line", NodeKind::TEXT, false);
     require_node(ids.m_ellipse, "Ellipse", NodeKind::SHAPE, false);
     require_node(ids.m_instance, "Button", NodeKind::GROUP, false);
     require_node(ids.m_reference, "Fill", NodeKind::SHAPE, true);
@@ -298,6 +299,30 @@ TEST_SUITE("LayersModel") {
     REQUIRE(std::find(recorder.m_events.begin(), recorder.m_events.end(),
       "data Forms / Inputs / Button") != recorder.m_events.end());
     REQUIRE(get_name(model, model.find(ids.m_card)) == "Card");
+  }
+
+  TEST_CASE("text_names") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto transaction = Transaction(document);
+    auto named = transaction.append(ids.m_artboard,
+      make_header("One\nTwo\rThree\xE2\x80\xA8" "Four\vFive"),
+      make_text(u"One"));
+    auto unnamed = transaction.append(ids.m_artboard, make_header(""),
+      make_text(u"First line\nSecond\u2028line"));
+    auto long_content = std::u16string(250, u'a') + u"\nbcdefghij";
+    auto cut = transaction.append(
+      ids.m_artboard, make_header(""), make_text(long_content));
+    transaction.commit();
+    auto model = LayersModel();
+    model.set_document(&document);
+    auto index = model.find(named);
+    REQUIRE(get_name(model, index) == "One Two Three Four");
+    REQUIRE(model.data(index, Qt::EditRole).toString() ==
+      "One Two Three Four");
+    REQUIRE(get_name(model, model.find(unnamed)) == "First line Second line");
+    REQUIRE(get_name(model, model.find(cut)) ==
+      QString(250, 'a') + " bcdef");
   }
 
   TEST_CASE("find") {
@@ -446,7 +471,8 @@ TEST_SUITE("LayersModel") {
     require_matches(model, document);
     REQUIRE(document.undo());
     require_matches(model, document);
-    REQUIRE(get_name(model, model.find(ids.m_label)) == "Hello world");
+    REQUIRE(get_name(model, model.find(ids.m_label)) ==
+      "Hello world Second line");
     REQUIRE(document.redo());
     require_matches(model, document);
   }

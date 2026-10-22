@@ -74,6 +74,52 @@ TEST_SUITE("Editor") {
     REQUIRE(document.get(copy).m_header.m_name == "Rectangle");
   }
 
+  TEST_CASE("interaction_history") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto editor = Editor(document);
+    auto registry = make_registry();
+    auto& edit = editor.get_context();
+    auto& selection = editor.get_selection();
+    edit.set_prototyping(true);
+    selection.select(scene.m_rectangle);
+    edit.set_interactions(scene.m_rectangle, {scene.m_interaction});
+    auto pending = Interaction(generate_node_id(), scene.m_rectangle,
+      TapTrigger(), ArtboardTransition());
+    auto before = edit.get_interaction_selection();
+    edit.set_interactions(scene.m_rectangle, {pending.m_id});
+    edit.set_pending({pending});
+    editor.record("Create Wire", before);
+    REQUIRE(editor.get_history().get_undo_label() == "Create Wire");
+    selection.select(scene.m_ellipse);
+    edit.set_interactions(scene.m_ellipse, {});
+    REQUIRE(editor.execute(registry, "edit.delete"));
+    REQUIRE(editor.undo());
+    REQUIRE(selection.get_nodes() == std::vector{scene.m_ellipse});
+    REQUIRE(edit.get_interactions().empty());
+    REQUIRE(edit.get_interaction_owner() == scene.m_ellipse);
+    REQUIRE(editor.undo());
+    REQUIRE(selection.get_nodes() == std::vector{scene.m_rectangle});
+    REQUIRE(edit.get_interactions() == std::vector{scene.m_interaction});
+    REQUIRE(edit.get_pending().empty());
+    REQUIRE(editor.redo());
+    REQUIRE(edit.get_interactions() == std::vector{pending.m_id});
+    REQUIRE(edit.get_pending() == std::vector{pending});
+    edit.set_prototyping(false);
+    REQUIRE(editor.undo());
+    REQUIRE(edit.get_pending() == std::vector{pending});
+    edit.set_prototyping(true);
+    REQUIRE(editor.redo());
+    selection.select(scene.m_rectangle);
+    edit.set_prototyping(false);
+    REQUIRE(editor.execute(registry, "edit.delete"));
+    edit.set_prototyping(true);
+    edit.set_interactions(NodeId(), {scene.m_interaction});
+    REQUIRE(editor.undo());
+    REQUIRE(edit.get_interactions().empty());
+    REQUIRE(edit.get_interaction_owner() == scene.m_rectangle);
+  }
+
   TEST_CASE("merge") {
     auto document = Document();
     auto scene = build_scene(document);

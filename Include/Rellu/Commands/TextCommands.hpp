@@ -20,6 +20,13 @@ namespace Rellu {
   /** Computes the layout Adobe XD stores for a text payload. */
   using TextLayouter = std::function<StoredLayout (const Text& text)>;
 
+  /**
+   * Finds, in ascending order, the indices of a text's content at which its
+   * lines wrap within a paragraph.
+   */
+  using TextWrapFinder =
+    std::function<std::vector<std::size_t> (const Text& text)>;
+
   /** A range of a text's content in UTF-16 code units. */
   struct TextRange {
 
@@ -199,6 +206,17 @@ namespace Rellu {
    * @return The edited text.
    */
   Text edit_paragraph_style(const Text& text, const ParagraphStyleEdit& edit);
+
+  /**
+   * Inserts a line feed into a text's content at each of a set of indices,
+   * each extending the run ending at or containing its index. The stored
+   * layout is discarded.
+   * @param text The text.
+   * @param indices The indices of the original content, in ascending order.
+   * @return The edited text.
+   */
+  Text insert_line_breaks(
+    const Text& text, const std::vector<std::size_t>& indices);
 
   /**
    * Tests whether a style edit can change where text breaks and lies.
@@ -403,13 +421,14 @@ namespace Rellu {
   /**
    * Switches text nodes between Auto Width, Auto Height and Fixed Size,
    * keeping where their text appears, labelled Convert To Auto Width,
-   * Convert To Auto Height or Convert To Fixed Size.
+   * Convert To Auto Height or Convert To Fixed Size. Switching to Auto Width
+   * keeps the lines too, breaking the content where they wrap.
    */
   class SetTextFrameCommand : public Command {
     public:
 
       /**
-       * Constructs a SetTextFrameCommand.
+       * Constructs a SetTextFrameCommand that finds no wraps.
        * @param nodes The nodes to change; those that are not text are left
        *        unchanged.
        * @param kind The frame to switch to.
@@ -418,6 +437,17 @@ namespace Rellu {
       SetTextFrameCommand(std::vector<NodeId> nodes, TextFrameKind kind,
         TextMeasurer measurer) noexcept;
 
+      /**
+       * Constructs a SetTextFrameCommand.
+       * @param nodes The nodes to change; those that are not text are left
+       *        unchanged.
+       * @param kind The frame to switch to.
+       * @param measurer The function measuring text.
+       * @param finder The function finding where lines wrap.
+       */
+      SetTextFrameCommand(std::vector<NodeId> nodes, TextFrameKind kind,
+        TextMeasurer measurer, TextWrapFinder finder) noexcept;
+
       std::string get_label() const override;
       void apply(const Document& document, Transaction& transaction) override;
 
@@ -425,6 +455,7 @@ namespace Rellu {
       std::vector<NodeId> m_nodes;
       TextFrameKind m_kind;
       TextMeasurer m_measurer;
+      TextWrapFinder m_finder;
   };
 }
 

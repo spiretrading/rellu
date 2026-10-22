@@ -161,6 +161,35 @@ TEST_SUITE("HeaderImporter") {
       "00000000-0000-0000-0000-000000000005")).m_header.m_has_custom_name);
   }
 
+  TEST_CASE("disabled_naming") {
+    auto document = Document();
+    auto report = import_nodes(R"([
+      {"type": "text", "id": "00000000-0000-0000-0000-000000000001",
+       "meta": {"ux": {"disableNaming": true}},
+       "style": {"font": {"postscriptName": "Roboto-Regular",
+         "family": "Roboto", "style": "Regular", "size": 12}},
+       "text": {"frame": {"type": "positioned"}, "rawText": "Body"}},
+      {"type": "text", "id": "00000000-0000-0000-0000-000000000002",
+       "style": {"font": {"postscriptName": "Roboto-Regular",
+         "family": "Roboto", "style": "Regular", "size": 12}},
+       "text": {"frame": {"type": "positioned"}, "rawText": "Body"}},
+      {"type": "group", "id": "00000000-0000-0000-0000-000000000003",
+       "meta": {"ux": {"disableNaming": true}}, "group": {"children": []}}
+      ])", document);
+    REQUIRE(report.m_unconsumed.empty());
+    auto& disabled = document.get(
+      *parse_node_id("00000000-0000-0000-0000-000000000001")).m_header;
+    REQUIRE(disabled.m_is_naming_disabled);
+    REQUIRE(!disabled.m_has_custom_name);
+    REQUIRE(disabled.m_name.empty());
+    auto& named = document.get(
+      *parse_node_id("00000000-0000-0000-0000-000000000002")).m_header;
+    REQUIRE(!named.m_is_naming_disabled);
+    REQUIRE(named.m_name == "Body");
+    REQUIRE(document.get(*parse_node_id(
+      "00000000-0000-0000-0000-000000000003")).m_header.m_is_naming_disabled);
+  }
+
   TEST_CASE("defaults") {
     auto document = Document();
     import_nodes(R"([{"type": "shape",
@@ -170,6 +199,7 @@ TEST_SUITE("HeaderImporter") {
       "height": 1}}])", document);
     auto& header = document.get(RECTANGLE_ID).m_header;
     REQUIRE(header.m_name.empty());
+    REQUIRE(!header.m_is_naming_disabled);
     REQUIRE(header.m_is_visible);
     REQUIRE(!header.m_is_locked);
     REQUIRE(header.m_transform.is_identity());

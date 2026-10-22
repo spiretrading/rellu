@@ -1,7 +1,10 @@
 #include <algorithm>
+#include <iterator>
 #include <stdexcept>
+#include <string>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 #include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Geometry/Matrix.hpp"
 #include "Rellu/Model/Transaction.hpp"
@@ -239,6 +242,42 @@ std::string Rellu::make_text_name(std::u16string_view content) {
     append_utf8(name, code);
   }
   return name;
+}
+
+Text Rellu::insert_line_breaks(
+    const Text& text, const std::vector<std::size_t>& indices) {
+  auto result = text;
+  result.m_layout = std::nullopt;
+  if(indices.empty()) {
+    return result;
+  }
+  auto& content = *text.m_content;
+  auto broken = std::u16string();
+  broken.reserve(content.size() + indices.size());
+  auto start = std::size_t(0);
+  for(auto& index : indices) {
+    auto end = std::clamp(index, start, content.size());
+    broken.append(content, start, end - start);
+    broken.push_back(u'\n');
+    start = end;
+  }
+  broken.append(content, start);
+  result.m_content = Shared(std::move(broken));
+  if(result.m_runs.empty()) {
+    return result;
+  }
+  auto next = indices.begin();
+  auto end = std::size_t(0);
+  for(auto i = std::size_t(0); i + 1 < result.m_runs.size(); ++i) {
+    end += text.m_runs[i].m_length;
+    while(next != indices.end() && *next <= end) {
+      ++result.m_runs[i].m_length;
+      ++next;
+    }
+  }
+  result.m_runs.back().m_length +=
+    static_cast<std::size_t>(std::distance(next, indices.end()));
+  return result;
 }
 
 TextStyle Rellu::edit_style(TextStyle style, const TextStyleEdit& edit) {
@@ -640,6 +679,13 @@ SetTextFrameCommand::SetTextFrameCommand(std::vector<NodeId> nodes,
     m_kind(kind),
     m_measurer(std::move(measurer)) {}
 
+SetTextFrameCommand::SetTextFrameCommand(std::vector<NodeId> nodes,
+  TextFrameKind kind, TextMeasurer measurer, TextWrapFinder finder) noexcept
+  : m_nodes(std::move(nodes)),
+    m_kind(kind),
+    m_measurer(std::move(measurer)),
+    m_finder(std::move(finder)) {}
+
 std::string SetTextFrameCommand::get_label() const {
   if(m_kind == TextFrameKind::AUTO_WIDTH) {
     return "Convert To Auto Width";
@@ -669,7 +715,11 @@ void SetTextFrameCommand::apply(
       if(is_positioned) {
         continue;
       }
+      if(m_finder) {
+        payload = insert_line_breaks(text, m_finder(text));
+      }
       payload.m_frame = PositionedFrame();
+      payload.m_repeat_data.clear();
       auto alignment = text.m_paragraph_style.m_alignment;
       if(alignment == TextAlignment::CENTER) {
         offset.m_x = width / 2;
@@ -694,11 +744,15 @@ void SetTextFrameCommand::apply(
         offset = bounds.get_top_left();
       }
     }
+    auto header = node.m_header;
+    if(!header.m_has_custom_name && !header.m_is_naming_disabled &&
+        payload.m_content->size() != text.m_content->size()) {
+      header.m_name = make_text_name(*payload.m_content);
+    }
+    header.m_transform =
+      header.m_transform * make_translation(offset.m_x, offset.m_y);
     transaction.replace_payload(id, std::move(payload));
-    if(offset != Point(0, 0)) {
-      auto header = node.m_header;
-      header.m_transform =
-        header.m_transform * make_translation(offset.m_x, offset.m_y);
+    if(!(header == node.m_header)) {
       transaction.replace_header(std::move(header));
     }
   }

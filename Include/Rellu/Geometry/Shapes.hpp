@@ -126,13 +126,17 @@ namespace Rellu {
     double star_ratio = 100);
 
   /**
-   * Returns the points Adobe XD stores for the corners of the regular
-   * polygon it draws for a corner count, in single precision.
+   * Returns the points Adobe XD stores for the vertices of the regular
+   * polygon or star it draws for a corner count, in single precision.
    * @param corner_count The number of corners, at least 3; fewer produce no
    *        points.
    * @param size The size of the box the corners span.
+   * @param star_ratio The distance of the inner vertices from the center as
+   *        a percentage of the distance to the middle of an edge, 100 or
+   *        more for a polygon without inner vertices.
    */
-  std::vector<Point> make_polygon_points(int corner_count, Size size);
+  std::vector<Point> make_polygon_points(
+    int corner_count, Size size, double star_ratio = 100);
 
   /**
    * Returns the aspect of the regular polygon Adobe XD draws for a corner

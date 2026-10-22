@@ -876,6 +876,18 @@ std::vector<LineGeometry> Rellu::measure_lines(
   return lines;
 }
 
+std::vector<std::size_t> Rellu::find_wraps(
+    const Text& text, const FontLibrary& library) {
+  auto wraps = std::vector<std::size_t>();
+  auto lines = measure_lines(text, library);
+  for(auto i = std::size_t(1); i < lines.size(); ++i) {
+    if(!lines[i - 1].m_is_paragraph_end) {
+      wraps.push_back(lines[i].m_start);
+    }
+  }
+  return wraps;
+}
+
 std::vector<TextFill> Rellu::outline(const TextLayout& layout) {
   auto fills = std::vector<TextFill>();
   auto get_fill = [&] (std::size_t first, Color color) -> TextFill& {

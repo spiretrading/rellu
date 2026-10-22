@@ -293,7 +293,8 @@ namespace {
 
 QByteArray Rellu::write_xd_clipboard(const Document& document,
     const std::vector<XdClipboardItem>& items, const Rect& bounds,
-    const XdTextLayout& layout, const std::filesystem::path& directory) {
+    const XdTextLayout& layout, const std::filesystem::path& directory,
+    const XdClipboardSource& source) {
   auto ids = std::vector<NodeId>();
   for(auto& item : items) {
     ids.push_back(item.m_id);
@@ -361,6 +362,18 @@ QByteArray Rellu::write_xd_clipboard(const Document& document,
         times.insert(ux.value("symbolId").toString(), time);
       }
     }
+    if(!source.m_path.empty()) {
+      auto path = QString::fromStdString(source.m_path);
+      for(auto i = qsizetype(0); i != symbols.size(); ++i) {
+        auto object = symbols.at(i).toObject();
+        auto ux = get_ux(object);
+        if(!ux.contains("linkedElementRef")) {
+          ux.insert("linkedElementRef", path);
+          set_ux(object, ux);
+          symbols.replace(i, object);
+        }
+      }
+    }
     children = mark_instances(children, times).toArray();
     auto ux = QJsonObject();
     ux.insert("symbols", mark_instances(symbols, times));
@@ -378,6 +391,11 @@ QByteArray Rellu::write_xd_clipboard(const Document& document,
     ux.insert("artboardId", artboard_ids);
   }
   ux.insert("groupItems", false);
+  if(!source.m_id.empty()) {
+    ux.insert("docId", QString::fromStdString(source.m_id));
+    ux.insert("docPath", QString::fromStdString(source.m_path));
+    ux.insert("isCloudDocument", false);
+  }
   auto meta = QJsonObject();
   meta.insert("ux", ux);
   auto root = make_content(children);
@@ -402,9 +420,10 @@ XdClipboardContent Rellu::read_xd_clipboard(
   auto root = parsed.object();
   root.insert("children", restore_ids(root.value("children")));
   root.insert("resources", restore_ids(root.value("resources")));
-  auto offsets = root.value("meta").toObject().value("ux").toObject().value(
-    "artboardOffset").toArray();
+  auto root_ux = root.value("meta").toObject().value("ux").toObject();
+  auto offsets = root_ux.value("artboardOffset").toArray();
   auto content = XdClipboardContent();
+  content.m_document = root_ux.value("docId").toString().toStdString();
   auto pasteboard = QJsonArray();
   auto artwork = QJsonArray();
   auto pasteboard_entry = QJsonObject();

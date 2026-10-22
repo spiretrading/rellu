@@ -37,10 +37,7 @@ namespace {
     if(!displayed) {
       return nullptr;
     }
-    auto shown = get_display_name(document, *displayed);
-    shown.replace(QChar('\n'), QChar(' ')).replace(QChar('\r'), QChar(' ')).
-      replace(QChar(0x2028), QChar(' '));
-    if(*name == shown) {
+    if(*name == get_display_name(document, *displayed)) {
       return nullptr;
     }
     return std::make_unique<RenameCommand>(

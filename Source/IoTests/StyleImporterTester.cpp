@@ -178,7 +178,7 @@ TEST_SUITE("StyleImporter") {
     auto report = import_nodes(make_shape(R"({"stroke": {"type": "solid",
       "color": {"mode": "RGB", "value": {"r": 255, "g": 170, "b": 0}},
       "width": 2, "align": "outside", "cap": "round", "join": "bevel",
-      "miterLimit": 10, "dash": [6, 3]}})"), document);
+      "miterLimit": 10, "dash": [6, 3], "dashOffset": 7}})"), document);
     REQUIRE(report.m_unconsumed.empty());
     auto& stroke = *get_style(document).m_stroke;
     REQUIRE(stroke.m_color == make_color(255, 170, 0));
@@ -188,6 +188,7 @@ TEST_SUITE("StyleImporter") {
     REQUIRE(stroke.m_join == StrokeJoin::BEVEL);
     REQUIRE(stroke.m_miter_limit == 10);
     REQUIRE(stroke.m_dashes == std::vector<double>({6, 3}));
+    REQUIRE(stroke.m_dash_offset == 7);
     REQUIRE(stroke.m_is_enabled);
   }
 

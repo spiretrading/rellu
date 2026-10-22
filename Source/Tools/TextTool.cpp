@@ -779,7 +779,8 @@ void TextTool::apply(
   }
   m_last_edit = kind;
   auto name = std::optional<std::string>();
-  if(!node.m_header.m_has_custom_name) {
+  if(!node.m_header.m_has_custom_name &&
+      !node.m_header.m_is_naming_disabled) {
     name = make_text_name(*text.m_content);
   }
   text.m_layout = Shared(store_layout(text, *m_library));

@@ -152,6 +152,16 @@ namespace {
 }
 
 TEST_SUITE("OffscreenRenderer") {
+  TEST_CASE("export_limit") {
+    REQUIRE(is_exportable(QSize(20000, 12800)));
+    REQUIRE(is_exportable(QSize(16000, 16000)));
+    REQUIRE(is_exportable(QSize(1, 256000000)));
+    REQUIRE(!is_exportable(QSize(20000, 12801)));
+    REQUIRE(!is_exportable(QSize(16000, 16001)));
+    REQUIRE(!is_exportable(QSize(24000, 24000)));
+    REQUIRE(!is_exportable(QSize(0, 100)));
+  }
+
   TEST_CASE("default_backend") {
     auto renderer = QuadrantRenderer();
     auto offscreen = OffscreenRenderer(renderer);

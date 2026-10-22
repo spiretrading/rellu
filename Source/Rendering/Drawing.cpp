@@ -27,6 +27,7 @@ namespace {
     Rect m_bounds;
     double m_margin;
     bool m_is_reading;
+    bool m_is_blurring;
   };
 
   Rect translate(const Rect& rect, Point offset) {
@@ -155,8 +156,9 @@ namespace {
     auto add = [&] (const Extent& extent, std::uint32_t first,
         std::uint32_t end, bool is_reading) {
       if(stack.empty()) {
-        items.push_back(
-          Item(first, end, extent.m_bounds, extent.m_margin, is_reading));
+        items.push_back(Item(first, end, extent.m_bounds, extent.m_margin,
+          is_reading, std::holds_alternative<BackdropBlurCommand>(
+            list[first])));
       } else {
         auto& top = stack.back().m_extent;
         top.m_bounds = unite(top.m_bounds, extent.m_bounds);
@@ -406,6 +408,7 @@ struct Drawing::Entry {
   std::shared_ptr<const DrawList> m_list;
   std::vector<Item> m_items;
   std::vector<std::uint32_t> m_readers;
+  std::vector<std::uint32_t> m_blurs;
   Index m_index;
   Rect m_bounds;
   double m_margin;
@@ -426,6 +429,9 @@ Drawing::Entry::Entry(std::shared_ptr<const DrawList> list)
     auto& item = m_items[i];
     if(item.m_is_reading) {
       m_readers.push_back(i);
+    }
+    if(item.m_is_blurring) {
+      m_blurs.push_back(i);
     }
     m_bounds = unite(m_bounds, item.m_bounds);
     m_margin = std::max(m_margin, item.m_margin);
@@ -653,6 +659,43 @@ Rect Drawing::query(
     }
   }
   return area;
+}
+
+std::vector<DrawRegion> Drawing::get_readers(
+    const std::vector<DrawRegion>& regions, double scale) const {
+  auto readers = std::vector<DrawRegion>();
+  if(!(scale > 0)) {
+    return readers;
+  }
+  auto areas = std::vector<Rect>();
+  for(auto& region : regions) {
+    if(!region.m_bounds.is_empty()) {
+      areas.push_back(grow(region.m_bounds, region.m_margin / scale));
+    }
+  }
+  auto is_found = std::vector<std::vector<bool>>();
+  for(auto& entry : m_entries) {
+    is_found.emplace_back(entry->m_blurs.size(), false);
+  }
+  auto checked = std::size_t(0);
+  while(checked != areas.size()) {
+    auto area = areas[checked];
+    ++checked;
+    for(auto i = std::size_t(0); i != m_entries.size(); ++i) {
+      auto& entry = *m_entries[i];
+      for(auto j = std::size_t(0); j != entry.m_blurs.size(); ++j) {
+        auto& item = entry.m_items[entry.m_blurs[j]];
+        if(is_found[i][j] ||
+            !is_touching(item.m_bounds, item.m_margin, scale, area)) {
+          continue;
+        }
+        is_found[i][j] = true;
+        readers.push_back(DrawRegion(item.m_bounds, item.m_margin));
+        areas.push_back(grow(item.m_bounds, item.m_margin / scale));
+      }
+    }
+  }
+  return readers;
 }
 
 bool Drawing::is_empty(const Rect& region, double scale) const {

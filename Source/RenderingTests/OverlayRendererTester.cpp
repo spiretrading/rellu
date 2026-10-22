@@ -72,4 +72,22 @@ TEST_SUITE("OverlayRenderer") {
     REQUIRE(cleared.pixelColor(5, 5) == WHITE);
     REQUIRE(cleared.pixelColor(20, 20) == WHITE);
   }
+
+  TEST_CASE("stretched_image") {
+    auto renderer = CanvasRenderer();
+    renderer.set_background(WHITE);
+    auto overlay = CanvasOverlay();
+    auto image = std::make_shared<QImage>(1, 1, QImage::Format_RGBA8888);
+    image->fill(BLUE);
+    overlay.m_images.push_back(
+      OverlayImage(image, Point(4, 6), Size(10, 5)));
+    renderer.set_overlay(std::move(overlay));
+    auto offscreen = OffscreenRenderer(renderer);
+    auto rendered = offscreen.render(QSize(40, 40), 2);
+    REQUIRE(rendered.pixelColor(8, 12) == BLUE);
+    REQUIRE(rendered.pixelColor(27, 21) == BLUE);
+    REQUIRE(rendered.pixelColor(28, 21) == WHITE);
+    REQUIRE(rendered.pixelColor(27, 22) == WHITE);
+    REQUIRE(rendered.pixelColor(7, 12) == WHITE);
+  }
 }

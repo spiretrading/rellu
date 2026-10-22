@@ -20,6 +20,11 @@ std::optional<Paint> PaintConverter::convert(
     auto geometry = gradient->m_geometry;
     if(gradient->m_units == GradientUnits::OBJECT_BOUNDING_BOX) {
       auto bounds = get_bounds(outline);
+      if(std::holds_alternative<RadialGradient>(geometry) &&
+          bounds.m_width > 0 && bounds.m_height > 0) {
+        return GradientPaint(std::move(geometry), gradient->m_stops,
+          get_radial_transform(*gradient, bounds));
+      }
       transform = make_translation(bounds.m_x, bounds.m_y) *
         make_scale(bounds.m_width, bounds.m_height) * transform;
       if(auto linear = std::get_if<LinearGradient>(&geometry)) {

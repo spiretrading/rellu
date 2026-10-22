@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
@@ -11,6 +13,58 @@
 using namespace Rellu;
 
 namespace {
+  constexpr auto KEYS_LABEL = "%1 \xE2\x80\x94 %2";
+  constexpr auto KEYS_COUNT_LABEL = "%1 \xE2\x80\x94 %2 (%3)";
+  constexpr auto COUNT_LABEL = "%1 (%2)";
+  constexpr auto GAMEPAD_PREFIX = std::string_view("\xF0\x9F\x8E\xAE ");
+
+  std::string format_text(
+      std::string_view pattern, const std::vector<std::string>& arguments) {
+    auto text = std::string();
+    for(auto i = std::size_t(0); i < pattern.size(); ++i) {
+      if(pattern[i] == '%' && i + 1 < pattern.size() &&
+          pattern[i + 1] >= '1' && pattern[i + 1] <= '9') {
+        auto index = static_cast<std::size_t>(pattern[i + 1] - '1');
+        if(index < arguments.size()) {
+          text += arguments[index];
+        }
+        ++i;
+      } else {
+        text += pattern[i];
+      }
+    }
+    return text;
+  }
+
+  std::string strip_gamepad(const std::string& keys) {
+    auto text = keys;
+    if(auto position = text.find(GAMEPAD_PREFIX);
+        position != std::string::npos) {
+      text.erase(position, GAMEPAD_PREFIX.size());
+    }
+    return text;
+  }
+
+  std::string get_trigger_name(const Trigger& trigger) {
+    if(std::holds_alternative<DragTrigger>(trigger)) {
+      return std::string(localize("prototype", "Drag"));
+    } else if(std::holds_alternative<HoverTrigger>(trigger)) {
+      return std::string(localize("prototype", "Hover"));
+    } else if(std::holds_alternative<TimeTrigger>(trigger)) {
+      return std::string(localize("prototype", "Time"));
+    } else if(std::holds_alternative<KeyTrigger>(trigger)) {
+      return std::string(localize("prototype", "Keys & Gamepad"));
+    }
+    return std::string(localize("prototype", "Tap"));
+  }
+
+  const ComponentInstance* get_instance(const Node& node) {
+    if(auto group = node.get_group(); group && group->m_component_instance) {
+      return &*group->m_component_instance;
+    }
+    return nullptr;
+  }
+
   const Interaction* find_interaction(
       const Document& document, const InteractionId& id) {
     for(auto& interaction : document.get_prototype().m_interactions) {
@@ -216,6 +270,75 @@ Interaction Rellu::make_default_interaction(
   return interaction;
 }
 
+bool Rellu::is_complete(
+    const Document& document, const Interaction& interaction) {
+  auto& action = interaction.m_action;
+  if(auto link = std::get_if<Hyperlink>(&action)) {
+    return link->m_url.find_first_not_of(" \t\r\n") != std::string::npos;
+  } else if(auto transition = std::get_if<ArtboardTransition>(&action)) {
+    return !transition->m_destination.is_nil() &&
+      transition->m_destination !=
+        find_artboard(document, interaction.m_owner);
+  } else if(auto overlay = std::get_if<Overlay>(&action)) {
+    return !overlay->m_destination.is_nil();
+  } else if(auto state = std::get_if<StateTransition>(&action)) {
+    return !state->m_state.is_nil();
+  } else if(auto scroll = std::get_if<ScrollTransition>(&action)) {
+    return !scroll->m_destination.is_nil();
+  }
+  return true;
+}
+
+Interaction Rellu::retarget_interaction(const Document& document,
+    Interaction interaction, const NodeId& destination) {
+  auto node = document.find(destination);
+  if(!node) {
+    return interaction;
+  }
+  auto& action = interaction.m_action;
+  auto animation = get_animation(action);
+  if(node->get_artboard()) {
+    if(auto transition = std::get_if<ArtboardTransition>(&action)) {
+      transition->m_destination = destination;
+    } else if(auto overlay = std::get_if<Overlay>(&action)) {
+      overlay->m_destination = destination;
+    } else {
+      action = ArtboardTransition(destination, animation);
+    }
+    return interaction;
+  }
+  auto layer = destination;
+  for(auto depth = 0; depth != 512; ++depth) {
+    auto current = document.find(layer);
+    if(!current || current->m_parent.is_nil()) {
+      break;
+    }
+    auto parent = document.find(current->m_parent);
+    if(!parent || parent->get_artboard()) {
+      break;
+    }
+    layer = current->m_parent;
+  }
+  auto offset = 0.0;
+  if(auto scroll = std::get_if<ScrollTransition>(&action)) {
+    offset = scroll->m_offset;
+  }
+  animation.m_transition = Transition::DISSOLVE;
+  action = ScrollTransition(layer, offset, animation);
+  if(!std::holds_alternative<TapTrigger>(interaction.m_trigger) &&
+      !std::holds_alternative<KeyTrigger>(interaction.m_trigger)) {
+    interaction.m_trigger = TapTrigger();
+  }
+  return interaction;
+}
+
+Interaction Rellu::make_wired_interaction(const Document& document,
+    const NodeId& owner, const NodeId& destination, bool has_states,
+    const Interaction* last) {
+  return retarget_interaction(document,
+    make_new_interaction(document, owner, has_states, last), destination);
+}
+
 std::string Rellu::make_flow_name(const Prototype& prototype) {
   auto pattern = localize("name", "Flow %1");
   auto prefix = std::string(pattern.substr(0, pattern.find("%1")));
@@ -322,29 +445,110 @@ Interaction Rellu::change_trigger(Interaction interaction, Trigger trigger) {
   return interaction;
 }
 
+ComponentStateChoices Rellu::find_component_states(
+    const Document& document, const NodeId& id) {
+  auto current = id;
+  auto owner = NodeId();
+  auto tree_state = StateId();
+  for(auto depth = 0; depth != 512 && !current.is_nil(); ++depth) {
+    auto node = document.find(current);
+    if(!node) {
+      break;
+    }
+    if(get_instance(*node)) {
+      owner = current;
+      break;
+    }
+    if(node->m_parent.is_nil() && !document.is_on_canvas(current)) {
+      auto root = current;
+      document.get_nodes().for_each([&] (const auto& candidate) {
+        if(auto instance = get_instance(candidate)) {
+          for(auto& state : instance->m_states) {
+            if(state.m_tree == root) {
+              owner = candidate.get_id();
+              tree_state = state.m_id;
+            }
+          }
+        }
+      });
+      break;
+    }
+    current = node->m_parent;
+  }
+  auto choices = ComponentStateChoices();
+  if(owner.is_nil()) {
+    return choices;
+  }
+  auto& instance = *get_instance(document.get(owner));
+  auto& components = document.get_resources().m_components;
+  auto component = components.find(instance.m_component);
+  auto default_state = instance.m_component;
+  if(component != components.end() &&
+      !component->second.m_default_state.is_nil()) {
+    default_state = component->second.m_default_state;
+  }
+  choices.m_current = tree_state;
+  if(choices.m_current.is_nil()) {
+    choices.m_current = instance.m_state;
+  }
+  if(choices.m_current.is_nil()) {
+    choices.m_current = default_state;
+  }
+  auto& states = choices.m_states;
+  states.push_back(ComponentStateChoice(default_state, "Default State"));
+  auto add = [&] (const ComponentState& state) {
+    if(std::ranges::any_of(states, [&] (const auto& choice) {
+        return choice.m_id == state.m_id;
+      })) {
+      return;
+    }
+    states.push_back(
+      ComponentStateChoice(state.m_id, state.m_name));
+  };
+  for(auto& state : instance.m_states) {
+    add(state);
+  }
+  if(component != components.end()) {
+    for(auto& state : component->second.m_states) {
+      add(state);
+    }
+  }
+  return choices;
+}
+
 InteractionId Rellu::find_default_interaction(
     const Document& document, const NodeId& owner) {
   auto interactions = get_interactions(document, owner);
   if(interactions.empty()) {
     return InteractionId();
   }
-  auto get_wire = [] (const Interaction& interaction) {
-    auto& action = interaction.m_action;
-    if(auto transition = std::get_if<ArtboardTransition>(&action)) {
-      return transition->m_destination;
-    } else if(auto overlay = std::get_if<Overlay>(&action)) {
-      return overlay->m_destination;
-    } else if(auto scroll = std::get_if<ScrollTransition>(&action)) {
-      return scroll->m_destination;
-    }
-    return NodeId();
-  };
-  auto wire = get_wire(*interactions.front());
   for(auto interaction : interactions) {
-    if(get_wire(*interaction) != wire) {
+    if(!is_same_wire(*interaction, *interactions.front())) {
       return InteractionId();
     }
   }
+  sort_by_trigger(interactions);
+  return interactions.front()->m_id;
+}
+
+NodeId Rellu::get_wire_destination(const Interaction& interaction) {
+  auto& action = interaction.m_action;
+  if(auto transition = std::get_if<ArtboardTransition>(&action)) {
+    return transition->m_destination;
+  } else if(auto overlay = std::get_if<Overlay>(&action)) {
+    return overlay->m_destination;
+  } else if(auto scroll = std::get_if<ScrollTransition>(&action)) {
+    return scroll->m_destination;
+  }
+  return NodeId();
+}
+
+bool Rellu::is_same_wire(const Interaction& left, const Interaction& right) {
+  return left.m_owner == right.m_owner &&
+    get_wire_destination(left) == get_wire_destination(right);
+}
+
+void Rellu::sort_by_trigger(std::vector<const Interaction*>& interactions) {
   auto get_rank = [] (const Trigger& trigger) {
     if(std::holds_alternative<DragTrigger>(trigger)) {
       return 1;
@@ -375,7 +579,158 @@ InteractionId Rellu::find_default_interaction(
     }
     return false;
   });
-  return interactions.front()->m_id;
+}
+
+std::vector<const Interaction*> Rellu::get_wire(
+    const Document& document, const Interaction& interaction) {
+  auto wire = std::vector<const Interaction*>();
+  for(auto candidate : get_interactions(document, interaction.m_owner)) {
+    if(is_same_wire(*candidate, interaction)) {
+      wire.push_back(candidate);
+    }
+  }
+  sort_by_trigger(wire);
+  return wire;
+}
+
+InteractionId Rellu::find_next_interaction(
+    const Document& document, const std::vector<InteractionId>& removed) {
+  auto deleted = std::vector<const Interaction*>();
+  for(auto& id : removed) {
+    if(auto interaction = find_interaction(document, id)) {
+      deleted.push_back(interaction);
+    }
+  }
+  if(deleted.empty() || std::ranges::any_of(deleted, [&] (auto interaction) {
+      return !is_same_wire(*interaction, *deleted.front());
+    })) {
+    return InteractionId();
+  }
+  sort_by_trigger(deleted);
+  auto first = deleted.front();
+  auto wire = std::vector<const Interaction*>();
+  for(auto interaction : get_interactions(document, first->m_owner)) {
+    if(is_same_wire(*interaction, *first) &&
+        std::ranges::find(deleted, interaction) == deleted.end()) {
+      wire.push_back(interaction);
+    }
+  }
+  if(wire.empty()) {
+    return InteractionId();
+  }
+  wire.push_back(first);
+  sort_by_trigger(wire);
+  auto index = static_cast<std::size_t>(
+    std::ranges::find(wire, first) - wire.begin());
+  return wire[index == 0 ? 1 : index - 1]->m_id;
+}
+
+std::vector<std::string> Rellu::label_interactions(
+    const std::vector<const Interaction*>& interactions) {
+  auto labels = std::vector<std::string>();
+  auto counts = std::vector<std::pair<std::string, int>>();
+  auto sorted = interactions;
+  sort_by_trigger(sorted);
+  for(auto interaction : sorted) {
+    auto key = std::get_if<KeyTrigger>(&interaction->m_trigger);
+    if(key && !key->m_keys.empty()) {
+      labels.push_back(format_text(localize("prototype", KEYS_LABEL),
+        {std::string(localize("prototype", "Keys")),
+          strip_gamepad(key->m_keys)}));
+      continue;
+    }
+    auto name = get_trigger_name(interaction->m_trigger);
+    auto count = std::ranges::find(
+      counts, name, &std::pair<std::string, int>::first);
+    if(count == counts.end()) {
+      counts.emplace_back(name, 1);
+      labels.push_back(name);
+      continue;
+    }
+    if(count->second == 1) {
+      if(auto first = std::ranges::find(labels, name);
+          first != labels.end()) {
+        *first = name + " - 1";
+      }
+    }
+    ++count->second;
+    labels.push_back(name + " - " + std::to_string(count->second));
+  }
+  return labels;
+}
+
+std::string Rellu::summarize_wire(
+    const std::vector<const Interaction*>& interactions) {
+  struct KeyGroup {
+    std::string m_device;
+    std::optional<std::string> m_keys;
+    int m_count = 0;
+  };
+  auto counts = std::vector<std::pair<std::string, int>>();
+  auto keys = std::vector<KeyGroup>();
+  auto sorted = interactions;
+  sort_by_trigger(sorted);
+  for(auto interaction : sorted) {
+    if(auto key = std::get_if<KeyTrigger>(&interaction->m_trigger)) {
+      auto device = std::string(localize(
+        "prototype", key->m_keys.empty() ? "Keys & Gamepad" : "Keys"));
+      auto label = std::optional<std::string>();
+      if(!key->m_keys.empty()) {
+        label = strip_gamepad(key->m_keys);
+      }
+      auto group = std::ranges::find(keys, device, &KeyGroup::m_device);
+      if(group == keys.end()) {
+        keys.push_back(KeyGroup(device, label, 1));
+      } else {
+        if(group->m_keys != label) {
+          group->m_keys = std::nullopt;
+        }
+        ++group->m_count;
+      }
+      continue;
+    }
+    auto name = get_trigger_name(interaction->m_trigger);
+    auto count = std::ranges::find(
+      counts, name, &std::pair<std::string, int>::first);
+    if(count == counts.end()) {
+      counts.emplace_back(name, 1);
+    } else {
+      ++count->second;
+    }
+  }
+  auto labels = std::vector<std::string>();
+  for(auto& count : counts) {
+    if(count.second > 1) {
+      labels.push_back(
+        count.first + " (" + std::to_string(count.second) + ")");
+    } else {
+      labels.push_back(count.first);
+    }
+  }
+  for(auto& group : keys) {
+    if(group.m_keys) {
+      if(group.m_count == 1) {
+        labels.push_back(format_text(localize("prototype", KEYS_LABEL),
+          {group.m_device, *group.m_keys}));
+      } else {
+        labels.push_back(format_text(localize("prototype", KEYS_COUNT_LABEL),
+          {group.m_device, *group.m_keys, std::to_string(group.m_count)}));
+      }
+    } else if(group.m_count > 1) {
+      labels.push_back(format_text(localize("prototype", COUNT_LABEL),
+        {group.m_device, std::to_string(group.m_count)}));
+    } else {
+      labels.push_back(group.m_device);
+    }
+  }
+  auto summary = std::string();
+  for(auto& label : labels) {
+    if(!summary.empty()) {
+      summary += ", ";
+    }
+    summary += label;
+  }
+  return summary;
 }
 
 AddInteractionCommand::AddInteractionCommand(Interaction interaction)
@@ -475,7 +830,7 @@ AddFlowCommand::AddFlowCommand(
     m_name(std::move(name)) {}
 
 std::string AddFlowCommand::get_label() const {
-  return "Add Flow";
+  return "Mark as flow root";
 }
 
 void AddFlowCommand::apply(
@@ -498,7 +853,7 @@ RemoveFlowCommand::RemoveFlowCommand(const NodeId& artboard) noexcept
   : m_artboard(artboard) {}
 
 std::string RemoveFlowCommand::get_label() const {
-  return "Remove Flow";
+  return "Unmark as flow root";
 }
 
 void RemoveFlowCommand::apply(

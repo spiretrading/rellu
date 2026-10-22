@@ -1,5 +1,6 @@
 #ifndef RELLU_RENDERING_OFFSCREEN_RENDERER_HPP
 #define RELLU_RENDERING_OFFSCREEN_RENDERER_HPP
+#include <cstdint>
 #include <memory>
 #include <QImage>
 #include <QOffscreenSurface>
@@ -18,6 +19,16 @@ namespace Rellu {
     /** Whether a software adapter is preferred over a hardware one. */
     bool m_is_software;
   };
+
+  /** The largest number of pixels in an image Adobe XD exports. */
+  inline constexpr auto MAXIMUM_EXPORT_AREA = std::int64_t(256000000);
+
+  /**
+   * Tests whether Adobe XD exports an image, which it refuses when the image
+   * has more than MAXIMUM_EXPORT_AREA pixels.
+   * @param size The size of the image in pixels.
+   */
+  bool is_exportable(QSize size);
 
   /**
    * Returns the default RenderBackend, chosen for deterministic output:

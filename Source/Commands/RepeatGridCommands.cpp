@@ -133,6 +133,7 @@ void RepeatGridCommand::apply(
     return;
   }
   auto cell = NodeHeader();
+  cell.m_is_naming_disabled = true;
   cell.m_transform = make_translation(-bounds->m_x, -bounds->m_y);
   auto cell_id = transaction.append(m_grid, std::move(cell), Group());
   ReparentCommand(std::move(nodes), cell_id, 0).apply(document, transaction);

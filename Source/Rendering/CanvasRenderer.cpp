@@ -49,7 +49,9 @@ void CanvasRenderer::invalidate(const std::vector<DrawRegion>& regions) {
   if(regions.empty()) {
     return;
   }
-  m_tiles.invalidate(regions);
+  if(m_drawing) {
+    m_tiles.invalidate(*m_drawing, regions);
+  }
   m_is_prepared = false;
 }
 

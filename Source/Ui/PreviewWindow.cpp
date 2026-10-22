@@ -132,21 +132,31 @@ NodeId Rellu::find_preview_start(
       current = node->m_parent;
     }
   }
-  auto& prototype = document.get_prototype();
-  for(auto& flow : prototype.m_flows) {
-    if(is_artboard(document, flow.m_artboard)) {
-      return flow.m_artboard;
+  auto find_top_left = [&] (const std::vector<NodeId>& candidates) {
+    auto start = NodeId();
+    auto corner = Point(0, 0);
+    for(auto& id : candidates) {
+      auto node = document.find(id);
+      if(!node || !node->get_artboard()) {
+        continue;
+      }
+      auto& frame = node->get_artboard()->m_frame;
+      if(start.is_nil() || frame.m_y < corner.m_y ||
+          (frame.m_y == corner.m_y && frame.m_x < corner.m_x)) {
+        start = id;
+        corner = frame.get_top_left();
+      }
     }
+    return start;
+  };
+  auto roots = std::vector<NodeId>();
+  for(auto& flow : document.get_prototype().m_flows) {
+    roots.push_back(flow.m_artboard);
   }
-  if(is_artboard(document, prototype.m_home_artboard)) {
-    return prototype.m_home_artboard;
+  if(auto root = find_top_left(roots); !root.is_nil()) {
+    return root;
   }
-  for(auto& id : document.get_canvas()) {
-    if(is_artboard(document, id)) {
-      return id;
-    }
-  }
-  return NodeId();
+  return find_top_left(document.get_canvas());
 }
 
 PreviewWindow::PreviewWindow(QWidget* parent)

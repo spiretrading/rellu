@@ -40,6 +40,12 @@ namespace {
     }
   }
 
+  int get_border(HWND handle) {
+    auto dpi = GetDpiForWindow(handle);
+    return GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) +
+      GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+  }
+
   QRect to_rect(const RECT& rect) {
     return QRect(rect.left, rect.top, rect.right - rect.left,
       rect.bottom - rect.top);
@@ -101,7 +107,6 @@ bool Rellu::is_custom_frame_supported() {
 }
 
 void Rellu::enable_custom_frame(QWidget& window) {
-  window.setWindowFlag(Qt::FramelessWindowHint);
   window.installEventFilter(new FrameFilter(&window));
   apply_frame(reinterpret_cast<HWND>(window.winId()));
 }
@@ -157,20 +162,13 @@ bool Rellu::handle_frame_event(QWidget& window, void* message,
     show_system_menu(native->hwnd, origin);
     *result = 0;
     return true;
-  } else if(native->message == WM_WINDOWPOSCHANGING) {
-    auto style = GetWindowLongPtrW(native->hwnd, GWL_STYLE);
-    auto frame = static_cast<LONG_PTR>(WS_THICKFRAME | WS_CAPTION);
-    if(IsZoomed(native->hwnd)) {
-      if(style & frame) {
-        SetWindowLongPtrW(native->hwnd, GWL_STYLE, style & ~frame);
-      }
-    } else if(!IsIconic(native->hwnd) && (style & frame) != frame) {
-      SetWindowLongPtrW(native->hwnd, GWL_STYLE, style | frame);
-    }
-    return false;
+  } else if(native->message == WM_NCACTIVATE) {
+    *result =
+      DefWindowProcW(native->hwnd, native->message, native->wParam, -1);
+    return true;
   } else if(native->message == WM_NCCALCSIZE && native->wParam) {
+    auto params = reinterpret_cast<NCCALCSIZE_PARAMS*>(native->lParam);
     if(IsZoomed(native->hwnd)) {
-      auto params = reinterpret_cast<NCCALCSIZE_PARAMS*>(native->lParam);
       auto monitor =
         MonitorFromRect(&params->rgrc[0], MONITOR_DEFAULTTONEAREST);
       auto info = MONITORINFO();
@@ -178,6 +176,12 @@ bool Rellu::handle_frame_event(QWidget& window, void* message,
       if(GetMonitorInfoW(monitor, &info)) {
         params->rgrc[0] = info.rcWork;
       }
+    } else if(!IsIconic(native->hwnd)) {
+      auto border = get_border(native->hwnd);
+      params->rgrc[0].top += 1;
+      params->rgrc[0].left += border;
+      params->rgrc[0].right -= border;
+      params->rgrc[0].bottom -= border;
     }
     *result = 0;
     return true;
@@ -189,9 +193,7 @@ bool Rellu::handle_frame_event(QWidget& window, void* message,
   auto bounds = RECT();
   GetWindowRect(native->hwnd, &bounds);
   if(!IsZoomed(native->hwnd)) {
-    auto dpi = GetDpiForWindow(native->hwnd);
-    auto border = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) +
-      GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+    auto border = get_border(native->hwnd);
     auto is_left = x < bounds.left + border;
     auto is_right = x >= bounds.right - border;
     auto is_top = y < bounds.top + border;
@@ -222,9 +224,11 @@ bool Rellu::handle_frame_event(QWidget& window, void* message,
       return true;
     }
   }
+  auto origin = POINT(0, 0);
+  ClientToScreen(native->hwnd, &origin);
   auto ratio = window.devicePixelRatioF();
-  auto position = QPoint(static_cast<int>((x - bounds.left) / ratio),
-    static_cast<int>((y - bounds.top) / ratio));
+  auto position = QPoint(static_cast<int>((x - origin.x) / ratio),
+    static_cast<int>((y - origin.y) / ratio));
   if(maximize && maximize->isVisible() &&
       maximize->rect().contains(maximize->mapFrom(&window, position))) {
     *result = HTMAXBUTTON;

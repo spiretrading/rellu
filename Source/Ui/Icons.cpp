@@ -764,6 +764,59 @@ namespace {
         stroke(painter, color, shackle, 1.6);
         break;
       }
+      case Glyph::TRIGGER_TAP:
+      case Glyph::TRIGGER_DRAG:
+      {
+        auto hand = QPainterPath(QPointF(9.5, 13));
+        hand.lineTo(9.5, 6);
+        hand.arcTo(QRectF(9.5, 4.5, 3, 3), 180, -180);
+        hand.lineTo(12.5, 11);
+        hand.lineTo(17, 12);
+        hand.quadTo(18.5, 12.5, 18, 14.5);
+        hand.lineTo(17, 19.5);
+        hand.lineTo(11, 19.5);
+        hand.lineTo(7, 15);
+        hand.quadTo(6.5, 13.5, 8, 13.5);
+        hand.closeSubpath();
+        stroke(painter, color, hand, 1.2);
+        if(glyph == Glyph::TRIGGER_DRAG) {
+          polyline(painter, color,
+            {QPointF(3, 6), QPointF(6.5, 6)});
+          polyline(painter, color,
+            {QPointF(4.5, 4.5), QPointF(3, 6), QPointF(4.5, 7.5)});
+          polyline(painter, color,
+            {QPointF(15.5, 6), QPointF(20, 6)});
+          polyline(painter, color,
+            {QPointF(18.5, 4.5), QPointF(20, 6), QPointF(18.5, 7.5)});
+        }
+        break;
+      }
+      case Glyph::TRIGGER_HOVER:
+        fill_polygon(painter, color, {QPointF(8, 4), QPointF(8, 18),
+          QPointF(11.5, 14.5), QPointF(14, 20), QPointF(16, 19),
+          QPointF(13.5, 13.5), QPointF(18, 13.5)});
+        break;
+      case Glyph::TRIGGER_TIME:
+      {
+        auto face = QPainterPath();
+        face.addEllipse(QPointF(12, 12), 7.5, 7.5);
+        stroke(painter, color, face, 1.4);
+        polyline(painter, color,
+          {QPointF(12, 7.5), QPointF(12, 12), QPointF(15, 14)});
+        break;
+      }
+      case Glyph::TRIGGER_KEYS:
+      {
+        stroke_rect(painter, color, QRectF(3.5, 7, 17, 10.5));
+        for(auto row : {9.5, 12.25}) {
+          for(auto column = 0; column != 5; ++column) {
+            fill_rect(painter, color,
+              QRectF(5.5 + 2.8 * column, row, 1.6, 1.4));
+          }
+        }
+        fill_rect(painter, color, QRectF(8, 15, 8, 1.4));
+        break;
+      }
     }
   }
 

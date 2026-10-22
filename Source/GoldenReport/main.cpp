@@ -511,8 +511,8 @@ namespace {
     auto renderer = CanvasRenderer();
     renderer.set_background(QColor(0, 0, 0, 0));
     auto offscreen = OffscreenRenderer(renderer);
-    auto tallies = std::array<std::array<Tally, 3>, 2>();
-    auto all = std::array<Tally, 3>();
+    auto tallies = std::array<std::map<int, Tally>, 2>();
+    auto all = std::map<int, Tally>();
     auto item_counts = std::array<int, 2>();
     auto reasons = std::map<std::string, std::array<int, 2>>();
     auto causes = std::optional<std::ofstream>();
@@ -602,7 +602,10 @@ namespace {
           auto device = make_scale(scale, scale) * make_translation(
             -item.m_draw_bounds.x(), -item.m_draw_bounds.y());
           auto list = std::shared_ptr<DrawList>();
-          if(id && !size.isEmpty()) {
+          if(id && !size.isEmpty() && !is_exportable(size)) {
+            std::cout << std::format("  not exportable {}@{}x: {}x{}\n",
+              item.m_index, scale, size.width(), size.height());
+          } else if(id && !size.isEmpty()) {
             auto start = std::chrono::steady_clock::now();
             builder.set_tolerance(StripRasterizer::TOLERANCE / scale);
             builder.set_device_transform(device);
@@ -688,8 +691,9 @@ namespace {
         reason.first, reason.second[0], reason.second[1]);
     }
     for(auto scope : {Scope::FULL, Scope::EXCLUDED}) {
-      for(auto scale = 1; scale <= 2; ++scale) {
-        auto& tally = scope == Scope::EXCLUDED ? all[scale] :
+      for(auto& entry : all) {
+        auto scale = entry.first;
+        auto& tally = scope == Scope::EXCLUDED ? entry.second :
           tallies[static_cast<int>(scope)][scale];
         std::cout << std::format("{} {}x: {} of {} match, {} sizes match, {} "
           "within 16, {} within 2, {} identical\n",

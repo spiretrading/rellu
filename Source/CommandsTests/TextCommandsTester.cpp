@@ -406,4 +406,97 @@ TEST_SUITE("TextCommands") {
       Size(60, 16));
     REQUIRE(area.m_header.m_transform == before);
   }
+
+  TEST_CASE("line_breaks") {
+    auto text = make_runs(u"aaaa bbbb cccc", {TextRun(5, make_style(10)),
+      TextRun(4, make_style(12)), TextRun(5, make_style(14))});
+    text.m_layout = Shared(make_marker_layout());
+    auto broken = insert_line_breaks(text, {5, 9, 12});
+    REQUIRE(*broken.m_content == u"aaaa \nbbbb\n cc\ncc");
+    REQUIRE(get_lengths(broken) == std::vector<std::size_t>({6, 5, 6}));
+    REQUIRE(!broken.m_layout);
+    auto unstyled = make_text(u"ab cd");
+    unstyled.m_runs.clear();
+    auto plain = insert_line_breaks(unstyled, {3});
+    REQUIRE(*plain.m_content == u"ab \ncd");
+    REQUIRE(plain.m_runs.empty());
+    REQUIRE(*insert_line_breaks(text, {}).m_content == *text.m_content);
+  }
+
+  TEST_CASE("auto_width_line_breaks") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto transaction = Transaction(document);
+    auto header = make_header("", make_translation(10, 20));
+    header.m_name = "aaaa bbbb cccc";
+    auto id = transaction.append(
+      scene.m_artboard, header, make_text(u"aaaa bbbb cccc"));
+    transaction.commit();
+    auto history = History(document);
+    auto measurer = [] (const Text& text) {
+      return Rect(0, -12, 60, 16);
+    };
+    auto finder = [] (const Text& text) {
+      if(std::holds_alternative<PositionedFrame>(text.m_frame) ||
+          text.m_content->size() != 14) {
+        return std::vector<std::size_t>();
+      }
+      return std::vector<std::size_t>({5, 10});
+    };
+    require_undoable(history, std::make_unique<SetTextFrameCommand>(
+      std::vector{id, scene.m_text}, TextFrameKind::AUTO_WIDTH, measurer,
+      finder));
+    auto& node = document.get(id);
+    REQUIRE(*node.get_text()->m_content == u"aaaa \nbbbb \ncccc");
+    REQUIRE(get_lengths(*node.get_text()) ==
+      std::vector<std::size_t>({16}));
+    REQUIRE(node.m_header.m_name == "aaaa \nbbbb \ncccc");
+    REQUIRE(node.m_header.m_transform == make_translation(10, 32));
+    auto& custom = document.get(scene.m_text);
+    REQUIRE(*custom.get_text()->m_content == u"Hello");
+    REQUIRE(custom.m_header.m_name == "Text");
+    REQUIRE(history.undo());
+    REQUIRE(*document.get(id).get_text()->m_content == u"aaaa bbbb cccc");
+    REQUIRE(document.get(id).m_header.m_name == "aaaa bbbb cccc");
+    REQUIRE(std::holds_alternative<AreaFrame>(
+      document.get(id).get_text()->m_frame));
+    require_undoable(history, std::make_unique<SetTextFrameCommand>(
+      std::vector{id}, TextFrameKind::AUTO_HEIGHT, measurer, finder));
+    REQUIRE(*document.get(id).get_text()->m_content == u"aaaa bbbb cccc");
+  }
+
+  TEST_CASE("auto_width_naming_and_repeat_data") {
+    auto document = Document();
+    auto scene = build_scene(document);
+    auto transaction = Transaction(document);
+    auto header = make_header("");
+    header.m_name = "Stale";
+    header.m_is_naming_disabled = true;
+    auto text = make_text(u"aaaa bbbb");
+    text.m_repeat_data = {u"aaaa bbbb", u"cccc dddd"};
+    auto id = transaction.append(scene.m_artboard, header, text);
+    transaction.commit();
+    auto history = History(document);
+    auto measurer = [] (const Text& text) {
+      return Rect(0, -12, 60, 16);
+    };
+    auto finder = [] (const Text& text) {
+      if(std::holds_alternative<PositionedFrame>(text.m_frame)) {
+        return std::vector<std::size_t>();
+      }
+      return std::vector<std::size_t>({5});
+    };
+    require_undoable(history, std::make_unique<SetTextFrameCommand>(
+      std::vector{id}, TextFrameKind::AUTO_WIDTH, measurer, finder));
+    auto& node = document.get(id);
+    REQUIRE(*node.get_text()->m_content == u"aaaa \nbbbb");
+    REQUIRE(node.get_text()->m_repeat_data.empty());
+    REQUIRE(node.m_header.m_name == "Stale");
+    REQUIRE(history.undo());
+    REQUIRE(document.get(id).get_text()->m_repeat_data ==
+      std::vector<std::u16string>({u"aaaa bbbb", u"cccc dddd"}));
+    REQUIRE(history.execute(std::make_unique<SetTextFrameCommand>(
+      std::vector{id}, TextFrameKind::AUTO_HEIGHT, measurer, finder)));
+    REQUIRE(document.get(id).get_text()->m_repeat_data.size() == 2);
+  }
 }

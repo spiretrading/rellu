@@ -272,6 +272,7 @@ namespace Rellu {
         std::shared_ptr<const Path> m_line;
         std::shared_ptr<const Path> m_stroke;
         std::shared_ptr<const Path> m_layered;
+        std::shared_ptr<const Path> m_dashes;
         double m_tolerance;
         std::uint64_t m_generation;
       };

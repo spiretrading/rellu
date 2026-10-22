@@ -170,7 +170,7 @@ namespace Rellu {
       /**
        * Sets the height in viewport units of the window showing the
        * viewport, which bounds how far an overlay scrolls, the viewport's
-       * height until set.
+       * height until set, scrolling back the overlays shown beyond it.
        * @param height The height.
        */
       void set_window_height(double height);

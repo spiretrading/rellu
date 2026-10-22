@@ -18,8 +18,8 @@ namespace Rellu {
 
   /**
    * Returns the artboard Adobe XD's Desktop Preview starts on: the artboard
-   * of the selection, otherwise the start of the first flow, otherwise the
-   * home artboard, otherwise the first artboard.
+   * of the selection, otherwise the top left start of a flow, otherwise the
+   * top left artboard.
    * @param document The document previewed.
    * @param selection The selected nodes.
    * @return The artboard, or nil if the document has none.

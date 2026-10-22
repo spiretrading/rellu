@@ -93,11 +93,14 @@ namespace Rellu {
       void clear();
 
       /**
-       * Marks the tiles covering regions of the drawing as needing to be
-       * rendered again, drawing them as they are until then.
+       * Marks the tiles covering regions of the drawing, and the backdrop
+       * blurs reading them, as needing to be rendered again, drawing them as
+       * they are until then.
+       * @param drawing The drawing after the change.
        * @param regions The regions whose drawing changed.
        */
-      void invalidate(const std::vector<DrawRegion>& regions);
+      void invalidate(
+        const Drawing& drawing, const std::vector<DrawRegion>& regions);
 
       /**
        * Creates the graphics resources used to draw frames.

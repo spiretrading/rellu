@@ -210,6 +210,10 @@ TEST_SUITE("TextTool") {
     REQUIRE(editor.get_history().get_undo_label() == "Draw Text");
     type(tools, u"aaaa bbbb cccc dddd");
     REQUIRE(measure_lines(get_text(document, id), get_library()).size() > 1);
+    REQUIRE(document.get(id).m_header.m_name == "aaaa bbbb cccc dddd");
+    press_key(tools, Qt::Key_Return);
+    type(tools, u"eeee");
+    REQUIRE(document.get(id).m_header.m_name == "aaaa bbbb cccc dddd\neeee");
   }
 
   TEST_CASE("empty_text") {
@@ -464,6 +468,27 @@ TEST_SUITE("TextTool") {
     REQUIRE(third.m_from == 14);
     REQUIRE(third.m_to == 18);
     REQUIRE(third.m_position.m_y == 80);
+  }
+
+  TEST_CASE("disabled_naming") {
+    auto document = Document();
+    auto board = build_board(document, u"Hello");
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(board.m_text).m_header;
+      header.m_name = "Fixed";
+      header.m_is_naming_disabled = true;
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    auto& tool = get_text_tool(tools);
+    tools.set_tool("text");
+    tool.edit(tools.get_context(), board.m_text, 5, 5);
+    type(tools, u" there");
+    REQUIRE(get_content(document, board.m_text) == u"Hello there");
+    REQUIRE(document.get(board.m_text).m_header.m_name == "Fixed");
   }
 
   TEST_CASE("typing_over_selection") {

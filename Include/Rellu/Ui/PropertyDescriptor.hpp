@@ -107,11 +107,12 @@ namespace Rellu {
     const TextSelection* selection = nullptr);
 
   /**
-   * Returns the position and size shown for nodes: for a single node, the
-   * top left corner of its bounds in its parent's space and the size of its
-   * bounds in its own space; for several nodes, the bounds of them all in
-   * document space, relative to the artboard holding them all if there is
-   * one.
+   * Returns the position and size shown for nodes: the top left corner of
+   * the box around their transformed local bounds in document space,
+   * relative to the artboard holding them all if there is one, with the
+   * size of a single node's local bounds or of the box around several
+   * nodes. A group's local bounds enclose the boxes of its children in its
+   * space. The frame of a single artboard is its own.
    * @param document The document containing the nodes.
    * @param nodes The nodes' ids.
    * @param measurer The function measuring text.

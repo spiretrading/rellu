@@ -127,7 +127,8 @@ namespace {
           point->get_number("y"_L1, 0)));
       }
       if(polygon.m_vertices ==
-          make_polygon_points(polygon.m_corner_count, polygon.m_size)) {
+          make_polygon_points(polygon.m_corner_count, polygon.m_size,
+            polygon.m_star_ratio)) {
         polygon.m_vertices.clear();
       }
     }

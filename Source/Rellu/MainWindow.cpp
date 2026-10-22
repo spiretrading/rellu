@@ -14,6 +14,7 @@
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QContextMenuEvent>
+#include <QDir>
 #include <QEnterEvent>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -1034,6 +1035,15 @@ void MainWindow::add_actions() {
   m_actions.set_handler("file.revert", [this] { revert(); });
   m_edit_actions = std::make_unique<EditActions>(m_actions, m_commands);
   m_edit_actions->set_text_measurer(m_measurer);
+  m_edit_actions->set_source_provider([this] {
+    auto source = XdClipboardSource();
+    if(m_session) {
+      source.m_id = m_session->get_id();
+      source.m_path =
+        QDir::toNativeSeparators(m_session->get_path()).toStdString();
+    }
+    return source;
+  });
   auto view_provider = [this] () -> std::optional<Rect> {
     auto inverse = invert(m_view->get_renderer().get_view());
     if(!inverse || m_view->width() <= 0 || m_view->height() <= 0) {
@@ -1230,6 +1240,10 @@ void MainWindow::set_workspace(Workspace workspace) {
   }
   update_document_actions(m_actions, workspace, static_cast<bool>(m_session));
   m_inspector->set_workspace(workspace);
+  if(m_session) {
+    m_session->get_editor().get_context().set_prototyping(
+      workspace == Workspace::PROTOTYPE);
+  }
   m_edit_actions->set_workspace(workspace);
   m_guide_actions->set_workspace(workspace);
   m_grid_actions->set_workspace(workspace);
@@ -1580,6 +1594,8 @@ void MainWindow::install(
   restore_properties();
   auto& editor = m_session->get_editor();
   editor.get_history().set_text_measurer(m_measurer);
+  editor.get_context().set_prototyping(
+    m_app_bar->get_workspace() == Workspace::PROTOTYPE);
   m_layers->set_editor(&editor);
   m_assets->set_editor(&editor);
   m_inspector->set_editor(&editor);

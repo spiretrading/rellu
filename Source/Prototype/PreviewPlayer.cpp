@@ -138,6 +138,10 @@ double PreviewPlayer::get_scroll() const {
 
 void PreviewPlayer::set_window_height(double height) {
   m_window_height = height;
+  for(auto& overlay : m_overlays) {
+    overlay.m_scroll =
+      std::min(overlay.m_scroll, get_overlay_scroll(overlay.m_artboard));
+  }
 }
 
 std::vector<NodeId> PreviewPlayer::get_history() const {

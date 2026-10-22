@@ -278,17 +278,23 @@ namespace {
     m_output = &output;
     auto antialiasing = Antialiasing::EXACT;
     auto outline = static_cast<const CurveOutline*>(nullptr);
-    if(stroke && Supersampler::is_frame(
-        *stroke->m_path, stroke->m_join, stroke->m_miter_limit, matrix)) {
+    auto coverage = 1.0;
+    auto is_hairline = stroke &&
+      Supersampler::is_hairline(stroke->m_width, matrix, coverage);
+    auto line = static_cast<const StrokeLine*>(nullptr);
+    if(stroke && (is_hairline || !stroke->m_is_hairline_only)) {
+      line = &*stroke;
+    }
+    if(line && Supersampler::is_frame(
+        *line->m_path, line->m_join, line->m_miter_limit, matrix)) {
       antialiasing = Antialiasing::EXACT;
-    } else if(stroke) {
-      auto coverage = 1.0;
-      if(Supersampler::is_hairline(stroke->m_width, matrix, coverage)) {
-        draw_hairline(*stroke, matrix, coverage);
+    } else if(line) {
+      if(is_hairline) {
+        draw_hairline(*line, matrix, coverage);
         return;
       }
-      m_outline = stroke_outline(*stroke->m_path, matrix, stroke->m_width,
-        stroke->m_cap, stroke->m_join, stroke->m_miter_limit);
+      m_outline = stroke_outline(*line->m_path, matrix, line->m_width,
+        line->m_cap, line->m_join, line->m_miter_limit);
       outline = &m_outline;
       antialiasing = Supersampler::get_antialiasing(m_outline);
     } else {

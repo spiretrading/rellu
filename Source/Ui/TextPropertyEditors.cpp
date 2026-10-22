@@ -365,8 +365,8 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
       return edit;
     }), 0.0));
   editors.add("text.frame", make_editor(
-    [measurer = make_frame_measurer(library, std::move(measurer))] (
-        const Document& document,
+    [measurer = make_frame_measurer(library, std::move(measurer)),
+        library = &library] (const Document& document,
         const std::vector<NodeId>& nodes,
         const PropertyValue& value) -> std::unique_ptr<Command> {
       auto index = get_index(value, 3);
@@ -379,7 +379,10 @@ void Rellu::add_text_property_editors(PropertyEditors& editors,
       } else if(*index == 2) {
         kind = TextFrameKind::FIXED_SIZE;
       }
-      return std::make_unique<SetTextFrameCommand>(nodes, kind, measurer);
+      return std::make_unique<SetTextFrameCommand>(nodes, kind, measurer,
+        [=] (const Text& text) {
+          return find_wraps(text, *library);
+        });
     }));
 }
 

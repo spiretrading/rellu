@@ -14,9 +14,9 @@ namespace Rellu {
 
   /**
    * Reads SVG markup into a document as Adobe XD pastes it: the graphic
-   * elements become editable shapes and groups on the canvas, wrapped in a
-   * group when the markup holds several. Throws std::invalid_argument if the
-   * text is not SVG markup.
+   * elements become editable shapes, text, images, masks and groups on the
+   * canvas, wrapped in a group when the markup holds several. Throws
+   * std::invalid_argument if the text is not SVG markup.
    * @param text The markup.
    * @param document The empty document receiving the nodes.
    */

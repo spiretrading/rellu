@@ -104,7 +104,12 @@ namespace Rellu {
     LAYER_REFERENCE,
     EYE,
     EYE_CLOSED,
-    LOCK
+    LOCK,
+    TRIGGER_TAP,
+    TRIGGER_DRAG,
+    TRIGGER_HOVER,
+    TRIGGER_TIME,
+    TRIGGER_KEYS
   };
 
   /**

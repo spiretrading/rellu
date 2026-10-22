@@ -1,17 +1,29 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
+#include <cstring>
 #include <numbers>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
+#include <QBuffer>
+#include <QByteArray>
 #include <QColor>
+#include <QDir>
+#include <QFile>
 #include <QHash>
+#include <QImageReader>
+#include <QRegularExpression>
+#include <QUrl>
 #include <QXmlStreamReader>
 #include "Rellu/Geometry/SvgPath.hpp"
 #include "Rellu/Io/SvgImport.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/Transaction.hpp"
 
 using namespace Qt::StringLiterals;
@@ -19,13 +31,27 @@ using namespace Rellu;
 
 namespace {
   const auto XLINK = u"http://www.w3.org/1999/xlink"_s;
+  const auto TEXT_NODE = u"#text"_s;
+  const auto DEFAULT_FAMILY = u"Helvetica Neue"_s;
   constexpr auto DEFAULT_SIZE = 300.0;
   constexpr auto FONT_SIZE = 20.0;
   constexpr auto PRECISION = 1e5;
+  constexpr auto TOLERANCE = 0.01;
+  constexpr auto FRAME_TOLERANCE = 0.15;
+  constexpr auto SCRIPT_SCALE = 0.5833;
+  constexpr auto MAXIMUM_NAME_LENGTH = 256;
+
+  struct Declaration {
+    QString m_name;
+    QString m_value;
+    bool m_is_important = false;
+  };
 
   struct Element {
     QString m_name;
     QHash<QString, QString> m_attributes;
+    std::vector<Declaration> m_declarations;
+    QString m_text;
     std::vector<Element> m_children;
   };
 
@@ -33,6 +59,24 @@ namespace {
     NodeHeader m_header;
     Payload m_payload;
     std::vector<Item> m_children;
+    std::vector<Effect> m_effects;
+  };
+
+  struct Compound {
+    QString m_type;
+    QString m_id;
+    QStringList m_classes;
+  };
+
+  struct Selector {
+    std::vector<Compound> m_compounds;
+    std::vector<bool> m_is_child;
+    int m_specificity = 0;
+  };
+
+  struct Rule {
+    Selector m_selector;
+    std::vector<Declaration> m_declarations;
   };
 
   using Properties = QHash<QString, QString>;
@@ -41,11 +85,37 @@ namespace {
     u"fill-opacity", u"fill-rule", u"stroke", u"stroke-width",
     u"stroke-linecap", u"stroke-linejoin", u"stroke-miterlimit",
     u"stroke-dasharray", u"stroke-dashoffset", u"stroke-opacity",
-    u"visibility", u"color"});
+    u"visibility", u"color", u"font-family", u"font-size", u"font-style",
+    u"font-weight", u"font-variant", u"letter-spacing", u"word-spacing",
+    u"text-anchor"});
 
   const auto GRAPHICS = std::unordered_set<std::u16string>({u"path",
     u"circle", u"ellipse", u"rect", u"polygon", u"polyline", u"line", u"g",
-    u"svg", u"use", u"switch"});
+    u"svg", u"text", u"image", u"use", u"switch"});
+
+  const auto GEOMETRY = std::unordered_set<std::u16string>({u"x", u"y",
+    u"cx", u"cy", u"r", u"rx", u"ry", u"width", u"height", u"x1", u"x2",
+    u"y1", u"y2", u"dx", u"dy", u"offset", u"transform", u"d", u"points"});
+
+  const auto SKETCH_SHADOW = QRegularExpression(
+    uR"(^filter/(?:(?:femorphology\+)?feoffset\+fegaussianblur\+)"
+    uR"((?:fecomposite\+)?fecolormatrix\+)+femerge/(?:femergenode\+)+)"
+    uR"(femergenode$)"_s);
+
+  const auto SKETCH_INNER_SHADOW = QRegularExpression(
+    uR"(^filter/(fegaussianblur\+feoffset\+fecomposite\+fecolormatrix\+?)+)"
+    uR"((femerge/femergenode(\+femergenode)+)?$)"_s);
+
+  const auto WRITER_SHADOW = QRegularExpression(
+    uR"(^filter/feoffset\+fegaussianblur\+feflood\+fecomposite)"
+    uR"((\+fecomposite)?$)"_s);
+
+  const auto WRITER_INNER_SHADOW = QRegularExpression(
+    uR"(^filter/feoffset\+fegaussianblur\+feflood\+fecomposite\+)"
+    uR"(fecomposite\+fecomposite$)"_s);
+
+  const auto IMAGE_DATA = QRegularExpression(
+    uR"(^data:(?:image|img)/[^;]+;base64,)"_s);
 
   double round(double value) {
     return std::round(value * PRECISION) / PRECISION;
@@ -65,6 +135,10 @@ namespace {
     return std::round(std::clamp(alpha, 0.0, 1.0) * 255) / 255;
   }
 
+  bool is_close(double left, double right, double tolerance) {
+    return std::abs(left - right) <= tolerance;
+  }
+
   void to_bounding_box(GradientFill& fill, const Rect& bounds, Point offset) {
     if(!fill.m_transform.is_identity() || bounds.m_width <= 0 ||
         bounds.m_height <= 0) {
@@ -80,9 +154,16 @@ namespace {
       linear->m_start = map(linear->m_start);
       linear->m_end = map(linear->m_end);
     } else if(auto radial = std::get_if<RadialGradient>(&fill.m_geometry)) {
-      radial->m_center = map(radial->m_center);
-      radial->m_focus = map(radial->m_focus);
-      radial->m_radius = round(radial->m_radius / bounds.m_width);
+      auto single = [] (Point point) {
+        return Point(to_single(point.m_x), to_single(point.m_y));
+      };
+      radial->m_center = single(map(radial->m_center));
+      radial->m_focus = single(map(radial->m_focus));
+      radial->m_radius =
+        to_single(round(radial->m_radius / bounds.m_height));
+      auto scale = bounds.m_height / bounds.m_width;
+      fill.m_transform = Matrix(to_single(scale), 0, 0, 1,
+        to_single((1 - scale) / 2), 0);
     }
     fill.m_units = GradientUnits::OBJECT_BOUNDING_BOX;
   }
@@ -141,45 +222,316 @@ namespace {
     return result;
   }
 
-  void parse_style(QStringView style, QHash<QString, QString>& attributes) {
-    for(auto declaration : style.split(u';')) {
-      auto colon = declaration.indexOf(u':');
+  std::vector<Declaration> parse_declarations(QStringView text) {
+    auto declarations = std::vector<Declaration>();
+    for(auto entry : text.split(u';')) {
+      auto colon = entry.indexOf(u':');
       if(colon < 0) {
         continue;
       }
-      auto name = declaration.left(colon).trimmed().toString().toLower();
-      auto value = declaration.mid(colon + 1).trimmed().toString();
-      if(value.endsWith(u"!important"_s)) {
-        value.chop(10);
-        value = value.trimmed();
+      auto declaration = Declaration();
+      declaration.m_name = entry.left(colon).trimmed().toString().toLower();
+      declaration.m_value = entry.mid(colon + 1).trimmed().toString();
+      if(auto bang = declaration.m_value.lastIndexOf(u'!'); bang >= 0 &&
+          declaration.m_value.mid(bang + 1).trimmed().compare(
+            u"important"_s, Qt::CaseInsensitive) == 0) {
+        declaration.m_value = declaration.m_value.left(bang).trimmed();
+        declaration.m_is_important = true;
       }
-      if(!name.isEmpty()) {
-        attributes.insert(name, value);
+      if(!declaration.m_name.isEmpty()) {
+        declarations.push_back(std::move(declaration));
       }
+    }
+    return declarations;
+  }
+
+  bool is_name_character(QChar character) {
+    return character.isLetterOrNumber() || character == u'-' ||
+      character == u'_' || character.unicode() > 127;
+  }
+
+  std::optional<Compound> parse_compound(QStringView text) {
+    auto compound = Compound();
+    auto position = qsizetype(0);
+    auto read_name = [&] {
+      auto start = position;
+      while(position < text.size() && is_name_character(text[position])) {
+        ++position;
+      }
+      return text.mid(start, position - start).toString();
+    };
+    if(text.isEmpty()) {
+      return std::nullopt;
+    }
+    if(text[0] == u'*') {
+      ++position;
+    } else if(is_name_character(text[0])) {
+      compound.m_type = read_name();
+    }
+    while(position < text.size()) {
+      auto marker = text[position];
+      ++position;
+      auto name = read_name();
+      if(name.isEmpty()) {
+        return std::nullopt;
+      }
+      if(marker == u'.') {
+        compound.m_classes.push_back(name);
+      } else if(marker == u'#') {
+        compound.m_id = name;
+      } else {
+        return std::nullopt;
+      }
+    }
+    return compound;
+  }
+
+  std::optional<Selector> parse_selector(QStringView text) {
+    auto spaced = text.toString();
+    spaced.replace(u">"_s, u" > "_s);
+    auto selector = Selector();
+    auto is_child = false;
+    for(auto& token : spaced.split(QRegularExpression(u"\\s+"_s),
+        Qt::SkipEmptyParts)) {
+      if(token == u">"_s) {
+        if(selector.m_compounds.empty() || is_child) {
+          return std::nullopt;
+        }
+        is_child = true;
+        continue;
+      }
+      auto compound = parse_compound(token);
+      if(!compound) {
+        return std::nullopt;
+      }
+      selector.m_specificity += (compound->m_id.isEmpty() ? 0 : 10000) +
+        100 * static_cast<int>(compound->m_classes.size()) +
+        (compound->m_type.isEmpty() ? 0 : 1);
+      selector.m_is_child.push_back(is_child);
+      selector.m_compounds.push_back(std::move(*compound));
+      is_child = false;
+    }
+    if(selector.m_compounds.empty() || is_child) {
+      return std::nullopt;
+    }
+    return selector;
+  }
+
+  QString strip_comments(const QString& text) {
+    auto result = QString();
+    auto position = qsizetype(0);
+    while(true) {
+      auto open = text.indexOf(u"/*"_s, position);
+      if(open < 0) {
+        result += text.mid(position);
+        break;
+      }
+      result += text.mid(position, open - position);
+      auto close = text.indexOf(u"*/"_s, open + 2);
+      if(close < 0) {
+        break;
+      }
+      position = close + 2;
+    }
+    result.replace(u"<!--"_s, u" "_s);
+    result.replace(u"-->"_s, u" "_s);
+    return result;
+  }
+
+  qsizetype skip_block(const QString& text, qsizetype open) {
+    auto depth = 0;
+    for(auto i = open; i < text.size(); ++i) {
+      if(text[i] == u'{') {
+        ++depth;
+      } else if(text[i] == u'}') {
+        --depth;
+        if(depth == 0) {
+          return i + 1;
+        }
+      }
+    }
+    return text.size();
+  }
+
+  void parse_stylesheet(const QString& source, std::vector<Rule>& rules) {
+    auto text = strip_comments(source);
+    auto position = qsizetype(0);
+    while(position < text.size()) {
+      while(position < text.size() && text[position].isSpace()) {
+        ++position;
+      }
+      if(position >= text.size()) {
+        break;
+      }
+      if(text[position] == u'@') {
+        auto open = text.indexOf(u'{', position);
+        auto end = text.indexOf(u';', position);
+        if(end >= 0 && (open < 0 || end < open)) {
+          position = end + 1;
+        } else if(open >= 0) {
+          position = skip_block(text, open);
+        } else {
+          break;
+        }
+        continue;
+      }
+      auto open = text.indexOf(u'{', position);
+      if(open < 0) {
+        break;
+      }
+      auto close = text.indexOf(u'}', open);
+      if(close < 0) {
+        close = text.size();
+      }
+      auto declarations =
+        parse_declarations(QStringView(text).mid(open + 1, close - open - 1));
+      for(auto part :
+          QStringView(text).mid(position, open - position).split(u',')) {
+        if(auto selector = parse_selector(part.trimmed())) {
+          rules.push_back(Rule(std::move(*selector), declarations));
+        }
+      }
+      position = close + 1;
+    }
+  }
+
+  bool matches(const Compound& compound, const Element& element) {
+    if(!compound.m_type.isEmpty() && compound.m_type != element.m_name) {
+      return false;
+    }
+    if(!compound.m_id.isEmpty() &&
+        element.m_attributes.value(u"id"_s) != compound.m_id) {
+      return false;
+    }
+    if(compound.m_classes.isEmpty()) {
+      return true;
+    }
+    auto classes = element.m_attributes.value(u"class"_s).split(
+      QRegularExpression(u"\\s+"_s), Qt::SkipEmptyParts);
+    for(auto& name : compound.m_classes) {
+      if(!classes.contains(name)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool matches(const Selector& selector, std::size_t index,
+      std::size_t position, const std::vector<const Element*>& path) {
+    if(!matches(selector.m_compounds[index], *path[position])) {
+      return false;
+    }
+    if(index == 0) {
+      return true;
+    }
+    if(selector.m_is_child[index]) {
+      return position != 0 && matches(selector, index - 1, position - 1, path);
+    }
+    for(auto i = position; i != 0; --i) {
+      if(matches(selector, index - 1, i - 1, path)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void apply(Element& element, const Declaration& declaration) {
+    if(!GEOMETRY.contains(declaration.m_name.toStdU16String())) {
+      element.m_attributes.insert(declaration.m_name, declaration.m_value);
+    }
+  }
+
+  void cascade(Element& element, const std::vector<Rule>& rules,
+      std::vector<const Element*>& path) {
+    if(element.m_name == TEXT_NODE) {
+      return;
+    }
+    path.push_back(&element);
+    struct Match {
+      const Declaration* m_declaration;
+      int m_specificity;
+    };
+    auto found = std::vector<Match>();
+    for(auto& rule : rules) {
+      auto& selector = rule.m_selector;
+      if(matches(selector, selector.m_compounds.size() - 1, path.size() - 1,
+          path)) {
+        for(auto& declaration : rule.m_declarations) {
+          found.push_back(Match(&declaration, selector.m_specificity));
+        }
+      }
+    }
+    std::ranges::stable_sort(found, [] (const auto& left, const auto& right) {
+      return left.m_specificity < right.m_specificity;
+    });
+    for(auto is_important : {false, true}) {
+      for(auto& match : found) {
+        if(match.m_declaration->m_is_important == is_important) {
+          apply(element, *match.m_declaration);
+        }
+      }
+      for(auto& declaration : element.m_declarations) {
+        if(declaration.m_is_important == is_important) {
+          apply(element, declaration);
+        }
+      }
+    }
+    element.m_declarations.clear();
+    for(auto& child : element.m_children) {
+      cascade(child, rules, path);
+    }
+    path.pop_back();
+  }
+
+  void collect_stylesheets(const Element& element, std::vector<Rule>& rules) {
+    if(element.m_name == u"style"_s) {
+      auto text = QString();
+      for(auto& child : element.m_children) {
+        if(child.m_name == TEXT_NODE) {
+          text += child.m_text;
+        }
+      }
+      parse_stylesheet(text, rules);
+      return;
+    }
+    for(auto& child : element.m_children) {
+      collect_stylesheets(child, rules);
     }
   }
 
   Element read_element(QXmlStreamReader& reader) {
     auto element = Element();
     element.m_name = reader.name().toString();
-    auto style = QString();
     for(auto& attribute : reader.attributes()) {
       auto name = attribute.name().toString();
-      if(attribute.namespaceUri() == XLINK && name == u"href"_s) {
+      auto space = attribute.namespaceUri();
+      if(space == XLINK && name == u"href"_s) {
         if(!element.m_attributes.contains(u"href"_s)) {
           element.m_attributes.insert(name, attribute.value().toString());
         }
-      } else if(name == u"style"_s) {
-        style = attribute.value().toString();
-      } else if(attribute.namespaceUri().isEmpty()) {
+      } else if(space.isEmpty() && name == u"style"_s) {
+        element.m_declarations = parse_declarations(attribute.value());
+      } else if(space.isEmpty()) {
         element.m_attributes.insert(name, attribute.value().toString());
+      } else {
+        element.m_attributes.insert(
+          attribute.qualifiedName().toString(), attribute.value().toString());
       }
     }
-    parse_style(style, element.m_attributes);
     while(!reader.atEnd()) {
       auto token = reader.readNext();
       if(token == QXmlStreamReader::StartElement) {
         element.m_children.push_back(read_element(reader));
+      } else if(token == QXmlStreamReader::Characters) {
+        if(!element.m_children.empty() &&
+            element.m_children.back().m_name == TEXT_NODE) {
+          element.m_children.back().m_text += reader.text();
+        } else {
+          auto text = Element();
+          text.m_name = TEXT_NODE;
+          text.m_text = reader.text().toString();
+          element.m_children.push_back(std::move(text));
+        }
       } else if(token == QXmlStreamReader::EndElement) {
         break;
       }
@@ -212,6 +564,40 @@ namespace {
     }
     for(auto& child : element.m_children) {
       index(child, ids);
+    }
+  }
+
+  std::vector<const Element*> get_elements(const Element& element) {
+    auto elements = std::vector<const Element*>();
+    for(auto& child : element.m_children) {
+      if(child.m_name != TEXT_NODE) {
+        elements.push_back(&child);
+      }
+    }
+    return elements;
+  }
+
+  QString describe(const Element& element) {
+    auto text = element.m_name.toLower();
+    auto children = QStringList();
+    for(auto child : get_elements(element)) {
+      children.push_back(describe(*child));
+    }
+    if(!children.isEmpty()) {
+      text += u'/' + children.join(u'+');
+    }
+    return text;
+  }
+
+  void find_all(const Element& element, const QString& name,
+      std::vector<std::pair<const Element*, const Element*>>& found) {
+    auto elements = get_elements(element);
+    for(auto i = std::size_t(0); i != elements.size(); ++i) {
+      if(elements[i]->m_name == name) {
+        found.emplace_back(elements[i],
+          i + 1 < elements.size() ? elements[i + 1] : nullptr);
+      }
+      find_all(*elements[i], name, found);
     }
   }
 
@@ -305,7 +691,8 @@ namespace {
     return numbers;
   }
 
-  std::optional<double> parse_length(QStringView text, double reference) {
+  std::optional<double> parse_length(
+      QStringView text, double reference, double font_size = FONT_SIZE) {
     auto reader = NumberReader(text.trimmed());
     auto number = reader.read();
     if(!number) {
@@ -327,9 +714,9 @@ namespace {
     } else if(unit == u"mm"_s) {
       return *number * 96 / 25.4;
     } else if(unit == u"em"_s) {
-      return *number * FONT_SIZE;
+      return *number * font_size;
     } else if(unit == u"ex"_s) {
-      return *number * FONT_SIZE / 2;
+      return *number * font_size / 2;
     }
     return std::nullopt;
   }
@@ -344,6 +731,26 @@ namespace {
       return *number / 100;
     }
     return *number;
+  }
+
+  double resolve_font_size(QStringView text, double parent) {
+    auto value = text.trimmed().toString().toLower();
+    static const auto KEYWORDS = std::array<std::pair<const char16_t*,
+      double>, 7>({std::pair(u"xx-small", 9.0), std::pair(u"x-small", 10.0),
+      std::pair(u"small", 13.0), std::pair(u"medium", 16.0),
+      std::pair(u"large", 18.0), std::pair(u"x-large", 24.0),
+      std::pair(u"xx-large", 32.0)});
+    for(auto& keyword : KEYWORDS) {
+      if(value == QStringView(keyword.first)) {
+        return keyword.second;
+      }
+    }
+    if(value == u"larger"_s) {
+      return parent * 1.2;
+    } else if(value == u"smaller"_s) {
+      return parent / 1.2;
+    }
+    return parse_length(value, parent, parent).value_or(parent);
   }
 
   double to_radians(double degrees) {
@@ -493,6 +900,161 @@ namespace {
     return reference.toString();
   }
 
+  QString to_reference(QStringView text) {
+    if(auto reference = strip_url(text); !reference.isEmpty()) {
+      return reference;
+    }
+    auto value = text.trimmed();
+    if(value.startsWith(u'#')) {
+      value = value.mid(1);
+    }
+    return value.toString();
+  }
+
+  QString to_style_name(QStringView style, QStringView weight) {
+    static const auto NAMES = std::array<const char*, 9>({"Thin",
+      "ExtraLight", "Light", "Regular", "Medium", "SemiBold", "Bold",
+      "ExtraBold", "Black"});
+    auto value = weight.trimmed().toString().toLower();
+    auto number = 400.0;
+    if(value == u"bold"_s || value == u"bolder"_s) {
+      number = 700;
+    } else if(value == u"lighter"_s) {
+      number = 300;
+    } else if(auto parsed = NumberReader(value).read()) {
+      number = *parsed;
+    }
+    auto index = static_cast<std::size_t>(
+      std::clamp(std::round(number / 100), 1.0, 9.0)) - 1;
+    auto is_italic = style.trimmed().compare(u"italic", Qt::CaseInsensitive) ==
+      0 || style.trimmed().compare(u"oblique", Qt::CaseInsensitive) == 0;
+    if(!is_italic) {
+      return QString::fromLatin1(NAMES[index]);
+    } else if(index == 3) {
+      return u"Italic"_s;
+    }
+    return QString::fromLatin1(NAMES[index]) + u" Italic"_s;
+  }
+
+  QString to_family(QStringView text) {
+    auto value = text.toString();
+    value.remove(u'\'');
+    value.remove(u'"');
+    auto family = value.section(u',', 0, 0).trimmed();
+    if(family.isEmpty()) {
+      return DEFAULT_FAMILY;
+    }
+    return family;
+  }
+
+  QStringList merge_decorations(
+      const QStringList& inherited, const QStringList& own) {
+    if(own.isEmpty()) {
+      return inherited;
+    }
+    if(inherited.isEmpty()) {
+      return own;
+    }
+    auto result = inherited;
+    for(auto& entry : own) {
+      if(!result.contains(entry)) {
+        result.push_back(entry);
+      }
+    }
+    if(auto none = result.indexOf(u"none"_s); none >= 0) {
+      for(auto entry : {u"underline"_s, u"overline"_s, u"line-through"_s,
+          u"blink"_s, u"inherit"_s}) {
+        if(result.contains(entry)) {
+          result.removeAt(none);
+          break;
+        }
+      }
+    }
+    return result;
+  }
+
+  bool is_same_set(QStringList left, QStringList right) {
+    if(left.size() != right.size()) {
+      return false;
+    }
+    for(auto& entry : right) {
+      auto index = left.indexOf(entry);
+      if(index < 0) {
+        return false;
+      }
+      left.removeAt(index);
+    }
+    return true;
+  }
+
+  Style* find_style(Item& item) {
+    if(auto shape = std::get_if<Box<Shape>>(&item.m_payload)) {
+      return &shape->edit().m_style;
+    } else if(auto text = std::get_if<Box<Text>>(&item.m_payload)) {
+      return &text->edit().m_style;
+    }
+    return nullptr;
+  }
+
+  std::vector<Effect>& get_effects(Item& item) {
+    if(auto style = find_style(item)) {
+      return style->m_effects;
+    }
+    return item.m_effects;
+  }
+
+  bool is_group(const Item& item) {
+    return std::holds_alternative<Group>(item.m_payload);
+  }
+
+  bool has_inner_shadow(Item& item) {
+    return std::ranges::any_of(get_effects(item), [] (const auto& effect) {
+      return std::holds_alternative<InnerShadow>(effect);
+    });
+  }
+
+  void hide_fill(Item& item) {
+    if(auto shape = std::get_if<Box<Shape>>(&item.m_payload)) {
+      auto& style = shape->edit().m_style;
+      style.m_fill = disable_fill(style.m_fill);
+    }
+  }
+
+  double get_fill_alpha(const Item& item) {
+    if(auto shape = std::get_if<Box<Shape>>(&item.m_payload)) {
+      if(auto solid = std::get_if<SolidFill>(&(*shape)->m_style.m_fill)) {
+        return solid->m_color.m_alpha;
+      }
+    } else if(auto text = std::get_if<Box<Text>>(&item.m_payload)) {
+      return (*text)->m_base_style.m_color.m_alpha;
+    }
+    return 1;
+  }
+
+  void collect_mask(const Item& item, const Matrix& transform,
+      std::vector<MaskShape>& shapes) {
+    auto matrix = transform * item.m_header.m_transform;
+    if(auto shape = std::get_if<Box<Shape>>(&item.m_payload)) {
+      auto mask = MaskShape();
+      mask.m_transform = matrix;
+      mask.m_geometry = (*shape)->m_geometry;
+      shapes.push_back(std::move(mask));
+    } else if(is_group(item)) {
+      for(auto& child : item.m_children) {
+        collect_mask(child, matrix, shapes);
+      }
+    }
+  }
+
+  std::string make_content_name(const QString& content) {
+    auto name = content;
+    name.truncate(MAXIMUM_NAME_LENGTH);
+    if(!name.isEmpty() && name.back().isHighSurrogate()) {
+      name.chop(1);
+    }
+    return name.toStdString();
+  }
+
   class Converter {
     public:
       explicit Converter(const Element& root)
@@ -508,17 +1070,71 @@ namespace {
       }
 
       std::vector<Item> convert() {
+        auto defaults = Properties();
+        defaults.insert(u"font-family"_s, DEFAULT_FAMILY);
+        defaults.insert(u"font-size"_s, QString::number(FONT_SIZE));
+        m_root_properties = inherit(*m_root, defaults);
         auto items = std::vector<Item>();
-        convert_children(*m_root, Properties(), items);
+        convert_children(*m_root, m_root_properties, true, items);
         return items;
       }
 
+      std::vector<ImageResource>& get_images() {
+        return m_images;
+      }
+
     private:
+      struct Run {
+        std::size_t m_from = 0;
+        std::size_t m_to = 0;
+        TextStyle m_style;
+        TextAlignment m_alignment = TextAlignment::LEFT;
+        QStringList m_decorations;
+      };
+
+      struct Position {
+        std::optional<double> m_x;
+        std::optional<double> m_y;
+        std::optional<double> m_dx;
+        std::optional<double> m_dy;
+      };
+
+      struct Scope {
+        double m_dx = 0;
+        double m_dy = 0;
+        bool m_has_x = false;
+        bool m_has_y = false;
+        bool m_is_first = false;
+      };
+
+      struct TextState {
+        const Element* m_element = nullptr;
+        std::vector<std::vector<Run>> m_lines;
+        bool m_has_line = false;
+        QString m_raw;
+        bool m_is_last_space = true;
+        bool m_is_last_collapsed = false;
+        bool m_is_multiline = true;
+        std::optional<double> m_x;
+        std::optional<double> m_y;
+        double m_start_x = 0;
+        std::optional<double> m_line_spacing;
+        bool m_is_irregular = false;
+        bool m_has_position = false;
+        std::optional<Point> m_reset;
+        std::optional<QString> m_stroke;
+        bool m_is_stroke_same = true;
+      };
+
       const Element* m_root;
       QHash<QString, const Element*> m_ids;
       double m_width;
       double m_height;
+      Properties m_root_properties;
       std::vector<const Element*> m_uses;
+      std::vector<const Element*> m_clips;
+      std::vector<ImageResource> m_images;
+      QHash<QString, std::pair<ImageId, Size>> m_image_ids;
 
       const Element* find(const QString& id) const {
         return m_ids.value(id, nullptr);
@@ -527,11 +1143,20 @@ namespace {
       static Properties inherit(const Element& element,
           const Properties& inherited) {
         auto properties = inherited;
+        auto parent = inherited.value(u"font-size"_s).toDouble();
+        if(parent <= 0) {
+          parent = FONT_SIZE;
+        }
         for(auto entry = element.m_attributes.begin();
             entry != element.m_attributes.end(); ++entry) {
           if(INHERITED.contains(entry.key().toStdU16String()) &&
               entry.value().trimmed() != u"inherit"_s) {
-            properties.insert(entry.key(), entry.value().trimmed());
+            if(entry.key() == u"font-size"_s) {
+              properties.insert(entry.key(), QString::number(
+                resolve_font_size(entry.value(), parent), 'g', 17));
+            } else {
+              properties.insert(entry.key(), entry.value().trimmed());
+            }
           }
         }
         return properties;
@@ -549,6 +1174,11 @@ namespace {
           return fallback;
         }
         return value.trimmed();
+      }
+
+      static bool is_set(const Element& element, const QString& name) {
+        auto value = get_own(element, name, u"none"_s);
+        return value != u"none"_s;
       }
 
       double get_length(const Element& element, const QString& name,
@@ -569,24 +1199,76 @@ namespace {
         return std::hypot(m_width, m_height) / std::numbers::sqrt2;
       }
 
+      static double get_font_size(const Properties& properties) {
+        auto size = properties.value(u"font-size"_s).toDouble();
+        if(size <= 0) {
+          return FONT_SIZE;
+        }
+        return size;
+      }
+
       void convert_children(const Element& element,
-          const Properties& inherited, std::vector<Item>& items) {
-        for(auto& child : element.m_children) {
-          if(!GRAPHICS.contains(child.m_name.toStdU16String()) ||
-              get_own(child, u"display"_s, u"inline"_s) == u"none"_s) {
+          const Properties& inherited, bool is_top, std::vector<Item>& items) {
+        for(auto child : get_elements(element)) {
+          if(!GRAPHICS.contains(child->m_name.toStdU16String()) ||
+              get_own(*child, u"display"_s, u"inline"_s) == u"none"_s) {
             continue;
           }
-          if(auto item = convert(child, inherited)) {
-            items.push_back(std::move(*item));
-          }
+          convert(*child, inherited, is_top, items);
         }
       }
 
-      std::optional<Item> convert(const Element& element,
-          const Properties& inherited) {
+      void convert(const Element& element, const Properties& inherited,
+          bool is_top, std::vector<Item>& items) {
+        if(element.m_name == u"switch"_s && is_top &&
+            is_editing_switch(element)) {
+          auto properties = inherit(element, inherited);
+          auto& group = *get_elements(element)[1];
+          auto group_properties = inherit(group, properties);
+          for(auto child : get_elements(group)) {
+            if(GRAPHICS.contains(child->m_name.toStdU16String())) {
+              convert(*child, group_properties, false, items);
+            }
+          }
+          return;
+        }
+        if(auto item = convert(element, inherited)) {
+          items.push_back(std::move(*item));
+        }
+      }
+
+      std::optional<Item> convert(
+          const Element& element, const Properties& inherited) {
         auto properties = inherit(element, inherited);
-        auto item = Item();
-        auto& header = item.m_header;
+        if(element.m_name == u"g"_s) {
+          if(get_elements(element).empty()) {
+            return std::nullopt;
+          }
+          if(auto item = apply_group_rules(element, properties)) {
+            return item;
+          }
+        } else if(element.m_name == u"switch"_s) {
+          auto item = Item();
+          item.m_header = make_header(element, properties);
+          item.m_header.m_transform = to_single(
+            parse_transform(element.m_attributes.value(u"transform"_s)));
+          item.m_payload = Group();
+          return item;
+        }
+        return make_item(element, properties);
+      }
+
+      static bool is_editing_switch(const Element& element) {
+        auto children = get_elements(element);
+        return children.size() == 2 &&
+          children[0]->m_name.toLower() == u"foreignobject"_s &&
+          children[1]->m_name == u"g"_s &&
+          children[1]->m_attributes.value(u"i:extraneous"_s) == u"self"_s;
+      }
+
+      NodeHeader make_header(
+          const Element& element, const Properties& properties) const {
+        auto header = NodeHeader();
         auto name = element.m_attributes.value(u"data-name"_s);
         if(name.isEmpty()) {
           name = element.m_attributes.value(u"id"_s);
@@ -598,19 +1280,72 @@ namespace {
           visibility != u"hidden"_s && visibility != u"collapse"_s;
         header.m_opacity = to_single(std::clamp(round(parse_fraction(
           get_own(element, u"opacity"_s, u"1"_s), 1)), 0.0, 1.0));
-        header.m_transform = to_single(
-          parse_transform(element.m_attributes.value(u"transform"_s)));
-        if(element.m_name == u"use"_s) {
-          return convert_use(element, properties, std::move(item));
+        return header;
+      }
+
+      std::optional<Item> make_item(
+          const Element& element, const Properties& properties) {
+        auto transform = Matrix();
+        auto clip = std::optional<Mask>();
+        auto item = make_local(element, properties, transform, clip);
+        if(!item) {
+          return std::nullopt;
         }
-        if(element.m_name == u"g"_s || element.m_name == u"svg"_s ||
-            element.m_name == u"switch"_s) {
-          convert_children(element, properties, item.m_children);
+        if(element.m_name == u"g"_s && element.m_attributes.value(
+            u"data-type"_s) == u"innerShadowGroup"_s) {
+          if(auto child = collapse_inner_shadows(*item)) {
+            return child;
+          }
+        }
+        apply_filter(element, *item);
+        if(!clip) {
+          clip = make_clip(element);
+        }
+        if(clip) {
+          auto local = item->m_header.m_transform;
+          if(auto inverse = invert(local)) {
+            for(auto& shape : clip->m_shapes) {
+              shape.m_transform = *inverse * shape.m_transform;
+            }
+            item->m_header.m_transform = Matrix();
+          } else {
+            local = Matrix();
+          }
+          auto group = Item();
+          group.m_header.m_name = localize("name", "Group");
+          group.m_payload = Group();
+          std::get<Group>(group.m_payload).m_mask = std::move(*clip);
+          group.m_header.m_transform = transform * local;
+          group.m_children.push_back(std::move(*item));
+          return group;
+        }
+        item->m_header.m_transform = transform * item->m_header.m_transform;
+        return item;
+      }
+
+      std::optional<Item> make_local(const Element& element,
+          const Properties& properties, Matrix& transform,
+          std::optional<Mask>& clip) {
+        auto item = Item();
+        item.m_header = make_header(element, properties);
+        transform = to_single(
+          parse_transform(element.m_attributes.value(u"transform"_s)));
+        auto& type = element.m_name;
+        if(type == u"use"_s) {
+          return convert_use(element, properties, std::move(item), transform,
+            clip);
+        } else if(type == u"g"_s || type == u"svg"_s ||
+            type == u"symbol"_s) {
+          convert_children(element, properties, false, item.m_children);
           if(item.m_children.empty()) {
             return std::nullopt;
           }
           item.m_payload = Group();
           return item;
+        } else if(type == u"text"_s) {
+          return make_text(element, properties, std::move(item));
+        } else if(type == u"image"_s) {
+          return make_image(element, std::move(item));
         }
         auto geometry = make_geometry(element, properties);
         if(!geometry) {
@@ -618,8 +1353,7 @@ namespace {
         }
         auto bounds = get_bounds(to_path(*geometry));
         auto offset = normalize(*geometry);
-        header.m_transform =
-          header.m_transform * make_translation(offset.m_x, offset.m_y);
+        item.m_header.m_transform = make_translation(offset.m_x, offset.m_y);
         auto shape = Shape();
         shape.m_geometry = std::move(*geometry);
         shape.m_style = make_style(properties, bounds, offset);
@@ -652,7 +1386,8 @@ namespace {
       }
 
       std::optional<Item> convert_use(const Element& element,
-          const Properties& properties, Item item) {
+          const Properties& properties, Item item, Matrix& transform,
+          std::optional<Mask>& clip) {
         auto reference = element.m_attributes.value(u"href"_s);
         if(!reference.startsWith(u'#')) {
           return std::nullopt;
@@ -667,30 +1402,58 @@ namespace {
           get_x(element, u"x"_s), get_y(element, u"y"_s));
         if(target->m_name == u"symbol"_s) {
           auto symbol = Item();
-          convert_children(*target, inherit(*target, properties),
+          auto symbol_properties = inherit(*target, properties);
+          convert_children(*target, symbol_properties, false,
             symbol.m_children);
           if(!symbol.m_children.empty()) {
             symbol.m_payload = Group();
-            symbol.m_header.m_transform = make_viewport(element, *target);
+            symbol.m_header = make_header(*target, symbol_properties);
+            auto viewport = make_viewport(element, *target);
+            transform = transform * offset * viewport;
+            if(get_own(*target, u"overflow"_s, u"hidden"_s) != u"visible"_s) {
+              if(auto inverse = invert(viewport)) {
+                auto area = inverse->map(Rect(0, 0, get_use_width(element),
+                  get_use_height(element)));
+                auto shape = MaskShape();
+                shape.m_geometry = RectangleShape(Rect(round(area.m_x),
+                  round(area.m_y), round(area.m_width), round(area.m_height)));
+                clip.emplace().m_shapes.push_back(std::move(shape));
+              }
+            }
             converted = std::move(symbol);
           }
         } else if(GRAPHICS.contains(target->m_name.toStdU16String())) {
-          converted = convert(*target, properties);
+          auto target_transform = Matrix();
+          auto ignored = std::optional<Mask>();
+          auto target_properties = inherit(*target, properties);
+          converted = make_local(
+            *target, target_properties, target_transform, ignored);
+          transform = transform * offset * target_transform;
         }
         m_uses.pop_back();
         if(!converted) {
           return std::nullopt;
         }
+        auto opacity = converted->m_header.m_opacity;
         converted->m_header.m_name = item.m_header.m_name;
         converted->m_header.m_has_custom_name =
           item.m_header.m_has_custom_name;
-        converted->m_header.m_transform = item.m_header.m_transform *
-          offset * converted->m_header.m_transform;
-        converted->m_header.m_opacity *= item.m_header.m_opacity;
-        if(!item.m_header.m_is_visible) {
-          converted->m_header.m_is_visible = false;
-        }
+        converted->m_header.m_is_visible = item.m_header.m_is_visible;
+        converted->m_header.m_blend_mode = item.m_header.m_blend_mode;
+        converted->m_header.m_is_isolated = item.m_header.m_is_isolated;
+        converted->m_header.m_opacity =
+          opacity != 1 ? opacity : item.m_header.m_opacity;
         return converted;
+      }
+
+      double get_use_width(const Element& use) const {
+        return parse_length(use.m_attributes.value(u"width"_s), m_width).
+          value_or(m_width);
+      }
+
+      double get_use_height(const Element& use) const {
+        return parse_length(use.m_attributes.value(u"height"_s), m_height).
+          value_or(m_height);
       }
 
       Matrix make_viewport(const Element& use, const Element& symbol) const {
@@ -725,6 +1488,962 @@ namespace {
         return make_translation(x * (width - box[2] * scale),
           y * (height - box[3] * scale)) * make_scale(scale, scale) *
           make_translation(-box[0], -box[1]);
+      }
+
+      std::optional<Mask> make_clip(const Element& element) {
+        auto value = get_own(element, u"clip-path"_s, u"none"_s);
+        if(value == u"none"_s) {
+          return std::nullopt;
+        }
+        auto target = find(to_reference(value));
+        if(!target || std::ranges::contains(m_clips, target)) {
+          return std::nullopt;
+        }
+        m_clips.push_back(target);
+        auto items = std::vector<Item>();
+        auto properties = inherit(*target, m_root_properties);
+        if(target->m_name == u"clipPath"_s) {
+          auto children = std::vector<Item>();
+          convert_children(*target, properties, false, children);
+          auto group = Item();
+          group.m_payload = Group();
+          group.m_header.m_transform = to_single(
+            parse_transform(target->m_attributes.value(u"transform"_s)));
+          group.m_children = std::move(children);
+          items.push_back(std::move(group));
+        } else if(GRAPHICS.contains(target->m_name.toStdU16String())) {
+          convert(*target, m_root_properties, false, items);
+        }
+        m_clips.pop_back();
+        auto mask = Mask();
+        for(auto& item : items) {
+          collect_mask(item, Matrix(), mask.m_shapes);
+        }
+        if(mask.m_shapes.empty()) {
+          return std::nullopt;
+        }
+        return mask;
+      }
+
+      std::vector<Effect> make_sketch_shadows(
+          const Element& filter, bool is_inner) const {
+        auto offsets = std::vector<std::pair<const Element*, const Element*>>();
+        auto blurs = std::vector<std::pair<const Element*, const Element*>>();
+        auto matrices =
+          std::vector<std::pair<const Element*, const Element*>>();
+        find_all(filter, u"feOffset"_s, offsets);
+        find_all(filter, u"feGaussianBlur"_s, blurs);
+        find_all(filter, u"feColorMatrix"_s, matrices);
+        auto effects = std::vector<Effect>();
+        for(auto i = std::size_t(0); i < offsets.size(); ++i) {
+          if(i >= blurs.size() || i >= matrices.size() || (blurs[i].second &&
+              blurs[i].second->m_name == u"feComposite"_s)) {
+            continue;
+          }
+          auto values = matrices[i].first->m_attributes.value(u"values"_s).
+            split(QRegularExpression(u"\\s+"_s));
+          if(values.size() < 19) {
+            continue;
+          }
+          auto channel = [&] (qsizetype index) {
+            return std::clamp(round(255 * values[index].toDouble()), 0.0,
+              255.0) / 255;
+          };
+          auto color = Color(channel(4), channel(9), channel(14),
+            std::clamp(round(values[18].toDouble()), 0.0, 1.0));
+          auto& offset = *offsets[i].first;
+          auto shift = Point(round(parse_fraction(
+            get_own(offset, u"dx"_s, u"0"_s), 0)), round(parse_fraction(
+            get_own(offset, u"dy"_s, u"0"_s), 0)));
+          auto blur = round(parse_fraction(get_own(
+            *blurs[i].first, u"stdDeviation"_s, u"0"_s), 0));
+          if(is_inner) {
+            effects.push_back(InnerShadow(shift, blur, color));
+          } else {
+            effects.push_back(DropShadow(shift, blur, color));
+          }
+        }
+        return effects;
+      }
+
+      std::optional<Effect> make_writer_shadow(
+          const Element& filter, bool is_inner) const {
+        auto offsets = std::vector<std::pair<const Element*, const Element*>>();
+        auto blurs = std::vector<std::pair<const Element*, const Element*>>();
+        auto floods = std::vector<std::pair<const Element*, const Element*>>();
+        find_all(filter, u"feOffset"_s, offsets);
+        find_all(filter, u"feGaussianBlur"_s, blurs);
+        find_all(filter, u"feFlood"_s, floods);
+        if(offsets.empty() || blurs.empty() || floods.empty()) {
+          return std::nullopt;
+        }
+        auto& flood = *floods.front().first;
+        auto color = parse_color(
+          get_own(flood, u"flood-color"_s, u"#000"_s)).value_or(
+            Color(0, 0, 0, 1));
+        if(color.m_alpha == 0) {
+          color.m_alpha = 1;
+        }
+        color.m_alpha *= round(
+          parse_fraction(get_own(flood, u"flood-opacity"_s, u"1"_s), 1));
+        auto& offset = *offsets.front().first;
+        auto shift = Point(
+          round(parse_fraction(get_own(offset, u"dx"_s, u"0"_s), 0)),
+          round(parse_fraction(get_own(offset, u"dy"_s, u"0"_s), 0)));
+        auto blur = round(parse_fraction(get_own(
+          *blurs.front().first, u"stdDeviation"_s, u"0"_s), 0));
+        if(is_inner) {
+          return InnerShadow(shift, blur, color);
+        }
+        return DropShadow(shift, blur, color);
+      }
+
+      const Element* find_filter(const Element& element) const {
+        auto value = get_own(element, u"filter"_s, u"none"_s);
+        if(value == u"none"_s) {
+          return nullptr;
+        }
+        auto target = find(to_reference(value));
+        if(!target || target->m_name != u"filter"_s) {
+          return nullptr;
+        }
+        return target;
+      }
+
+      void apply_filter(const Element& element, Item& item) const {
+        auto filter = find_filter(element);
+        if(!filter) {
+          return;
+        }
+        auto description = describe(*filter);
+        auto& effects = get_effects(item);
+        auto add = [&] (std::vector<Effect> shadows) {
+          effects.insert(effects.end(), shadows.begin(), shadows.end());
+        };
+        if(SKETCH_SHADOW.match(description).hasMatch()) {
+          add(make_sketch_shadows(*filter, false));
+        }
+        if(SKETCH_INNER_SHADOW.match(description).hasMatch()) {
+          add(make_sketch_shadows(*filter, true));
+        }
+        if(WRITER_SHADOW.match(description).hasMatch()) {
+          if(auto shadow = make_writer_shadow(*filter, false)) {
+            effects.push_back(*shadow);
+          }
+          if(!description.endsWith(u"fecomposite+fecomposite"_s)) {
+            hide_fill(item);
+          }
+        }
+        if(WRITER_INNER_SHADOW.match(description).hasMatch()) {
+          if(auto shadow = make_writer_shadow(*filter, true)) {
+            effects.push_back(*shadow);
+          }
+        }
+        if(has_inner_shadow(item)) {
+          hide_fill(item);
+        }
+      }
+
+      std::optional<Item> collapse_inner_shadows(Item& group) {
+        auto& children = group.m_children;
+        auto merge = [&] {
+          if(children.size() < 2 || get_effects(children[1]).empty()) {
+            return;
+          }
+          auto effect = get_effects(children[1]).front();
+          if(auto inner = std::get_if<InnerShadow>(&effect)) {
+            auto alpha = get_fill_alpha(children[0]);
+            if(alpha != 0 && inner->m_color.m_alpha != 1) {
+              inner->m_color.m_alpha =
+                std::min(inner->m_color.m_alpha / alpha, 1.0);
+            }
+          }
+          get_effects(children[0]).push_back(effect);
+          children.erase(children.begin() + 1);
+        };
+        auto count = children.size();
+        if(count < 1 || count > 4) {
+          return std::nullopt;
+        }
+        if(count == 4) {
+          if(!get_effects(children[0]).empty()) {
+            get_effects(children[1]).push_back(
+              get_effects(children[0]).front());
+          }
+          children.erase(children.begin());
+        }
+        if(count >= 3 && children.size() >= 2) {
+          auto& first = children[0];
+          if(is_group(first) && !first.m_effects.empty() &&
+              std::holds_alternative<DropShadow>(first.m_effects.front())) {
+            get_effects(children[1]).push_back(first.m_effects.front());
+            children.erase(children.begin());
+          } else {
+            merge();
+          }
+        }
+        if(count >= 2 && children.size() >= 2) {
+          if(is_group(children[1])) {
+            return std::nullopt;
+          }
+          if(has_inner_shadow(children[0])) {
+            auto source = find_style(children[1]);
+            if(auto target = find_style(children[0]); target && source) {
+              target->m_stroke = source->m_stroke;
+            }
+            children.erase(children.begin() + 1);
+          } else {
+            merge();
+          }
+        }
+        if(children.empty()) {
+          return std::nullopt;
+        }
+        return std::move(children.front());
+      }
+
+      Rect get_box(const Element& element, const Properties& properties) const {
+        auto geometry = make_geometry(element, properties);
+        if(!geometry) {
+          return Rect(0, 0, 0, 0);
+        }
+        return get_bounds(to_path(*geometry));
+      }
+
+      bool has_effects(const Element& element) const {
+        return is_set(element, u"filter"_s) || is_set(element, u"mask"_s) ||
+          is_set(element, u"clip-path"_s) ||
+          !element.m_attributes.value(u"transform"_s).trimmed().isEmpty();
+      }
+
+      Element move_group_style(const Element& group, const Element& child,
+          bool is_transformed) const {
+        auto copy = child;
+        auto& attributes = copy.m_attributes;
+        attributes.remove(u"stroke"_s);
+        for(auto name : {u"filter"_s, u"mask"_s, u"clip-path"_s}) {
+          attributes.insert(name, get_own(group, name, u"none"_s));
+        }
+        attributes.insert(
+          u"opacity"_s, get_own(group, u"opacity"_s, u"1"_s));
+        for(auto name : {u"mix-blend-mode"_s, u"isolation"_s}) {
+          if(auto value = get_own(group, name, QString());
+              !value.isEmpty()) {
+            attributes.insert(name, value);
+          }
+        }
+        if(is_transformed) {
+          attributes.insert(u"transform"_s,
+            group.m_attributes.value(u"transform"_s));
+        }
+        return copy;
+      }
+
+      std::optional<Item> apply_group_rules(
+          const Element& group, const Properties& properties) {
+        auto name = group.m_attributes.value(u"data-name"_s);
+        if(name.isEmpty()) {
+          name = group.m_attributes.value(u"id"_s);
+        }
+        auto item = std::optional<Item>();
+        if(auto alignment = match_aligned_stroke(group, properties)) {
+          auto& inner = *get_elements(group)[0];
+          item = convert(move_group_style(group, inner, true), properties);
+          if(item) {
+            if(auto style = find_style(*item); style && style->m_stroke) {
+              style->m_stroke->m_alignment = *alignment;
+            }
+          }
+        } else if(auto stroke = match_framed_stroke(group, properties)) {
+          auto& inner = *get_elements(group)[0];
+          item = convert(move_group_style(group, inner, false), properties);
+          if(item) {
+            if(auto style = find_style(*item)) {
+              style->m_stroke = *stroke;
+            }
+          }
+        } else if(auto child = match_shadow_element(group)) {
+          item = convert(*child, properties);
+        }
+        if(item && !name.isEmpty()) {
+          item->m_header.m_name = name.toStdString();
+          item->m_header.m_has_custom_name = true;
+        }
+        return item;
+      }
+
+      std::optional<StrokeAlignment> match_aligned_stroke(
+          const Element& group, const Properties& properties) const {
+        auto children = get_elements(group);
+        if(get(properties, u"stroke"_s, u"none"_s) == u"none"_s ||
+            children.size() != 2 ||
+            children[0]->m_name != children[1]->m_name ||
+            (children[0]->m_name != u"rect"_s &&
+              children[0]->m_name != u"circle"_s &&
+              children[0]->m_name != u"ellipse"_s)) {
+          return std::nullopt;
+        }
+        auto& inner = *children[0];
+        auto& outer = *children[1];
+        auto inner_properties = inherit(inner, properties);
+        auto outer_properties = inherit(outer, properties);
+        if(get(inner_properties, u"stroke"_s, u"none"_s) != u"none"_s ||
+            get(outer_properties, u"fill"_s, u"#000"_s) != u"none"_s ||
+            has_effects(inner)) {
+          return std::nullopt;
+        }
+        auto width = parse_length(get(properties, u"stroke-width"_s, u"1"_s),
+          get_diagonal()).value_or(1);
+        auto first = get_box(inner, inner_properties);
+        auto second = get_box(outer, outer_properties);
+        auto& larger = first.m_width > second.m_width ? first : second;
+        auto& smaller = first.m_width > second.m_width ? second : first;
+        if(!is_close(larger.m_width - smaller.m_width, width, TOLERANCE) ||
+            !is_close(smaller.m_x - larger.m_x, width / 2, TOLERANCE) ||
+            !is_close(smaller.m_y - larger.m_y, width / 2, TOLERANCE)) {
+          return std::nullopt;
+        }
+        if(second.m_width > first.m_width) {
+          return StrokeAlignment::OUTSIDE;
+        }
+        return StrokeAlignment::INSIDE;
+      }
+
+      std::optional<Stroke> match_framed_stroke(
+          const Element& group, const Properties& properties) const {
+        auto children = get_elements(group);
+        if(children.size() != 2 || children[0]->m_name != u"rect"_s ||
+            children[1]->m_name != u"path"_s) {
+          return std::nullopt;
+        }
+        auto& rectangle = *children[0];
+        auto& frame = *children[1];
+        auto rectangle_properties = inherit(rectangle, properties);
+        auto frame_properties = inherit(frame, properties);
+        if(get(rectangle_properties, u"stroke"_s, u"none"_s) != u"none"_s ||
+            get(frame_properties, u"fill"_s, u"#000"_s) == u"none"_s ||
+            get(frame_properties, u"stroke"_s, u"none"_s) != u"none"_s) {
+          return std::nullopt;
+        }
+        auto data = frame.m_attributes.value(u"d"_s);
+        auto letters = data;
+        letters.remove(QRegularExpression(u"[^a-zA-Z]"_s));
+        letters.replace(u"path"_s, QString());
+        auto upper = letters.toUpper();
+        if(upper != u"MVHVHMHVHVZ"_s && upper != u"MVHVHMHVHVLZ"_s) {
+          return std::nullopt;
+        }
+        struct Corner {
+          std::optional<double> m_x;
+          std::optional<double> m_y;
+        };
+        auto corners = std::array<Corner, 8>();
+        auto inside_top_right = std::size_t(0);
+        auto inside_bottom_right = std::size_t(1);
+        auto inside_bottom_left = std::size_t(2);
+        auto inside_top_left = std::size_t(3);
+        auto outside_top_right = std::size_t(4);
+        auto outside_top_left = std::size_t(5);
+        auto outside_bottom_left = std::size_t(6);
+        auto outside_bottom_right = std::size_t(7);
+        auto order = std::array<std::size_t, 10>({inside_top_right,
+          inside_bottom_right, inside_bottom_left, inside_top_left,
+          inside_top_right, outside_top_right, outside_top_left,
+          outside_bottom_left, outside_bottom_right, outside_top_right});
+        auto previous = std::optional<Point>();
+        auto start = qsizetype(-1);
+        for(auto i = qsizetype(0); i + 1 < letters.size(); ++i) {
+          if(letters[i] == u'L' || letters[i] == u'l') {
+            continue;
+          }
+          start = data.indexOf(letters[i], start + 1);
+          auto end = data.indexOf(letters[i + 1], start + 1);
+          auto command = data.mid(start, end < 0 ? -1 : end - start).trimmed();
+          auto& corner = corners[order[static_cast<std::size_t>(i)]];
+          auto point = read_frame_point(command, previous);
+          if(!point) {
+            return std::nullopt;
+          }
+          if(corner.m_x && corner.m_y && *corner.m_x != 0 &&
+              *corner.m_y != 0 &&
+              (std::abs(point->m_x - *corner.m_x) > FRAME_TOLERANCE ||
+              std::abs(point->m_y - *corner.m_y) > FRAME_TOLERANCE)) {
+            return std::nullopt;
+          }
+          corner.m_x = point->m_x;
+          corner.m_y = point->m_y;
+          previous = point;
+        }
+        for(auto& corner : corners) {
+          if(!corner.m_x || !corner.m_y) {
+            return std::nullopt;
+          }
+        }
+        auto x = [&] (std::size_t index) {
+          return *corners[index].m_x;
+        };
+        auto y = [&] (std::size_t index) {
+          return *corners[index].m_y;
+        };
+        auto width = x(inside_top_left) - x(outside_top_left);
+        auto differences = std::array<double, 7>({
+          y(inside_top_left) - y(outside_top_left),
+          x(outside_top_right) - x(inside_top_right),
+          y(inside_top_right) - y(outside_top_right),
+          x(outside_bottom_right) - x(inside_bottom_right),
+          y(outside_bottom_right) - y(inside_bottom_right),
+          x(inside_bottom_left) - x(outside_bottom_left),
+          y(outside_bottom_left) - y(inside_bottom_left)});
+        for(auto difference : differences) {
+          if(std::abs(difference - width) > FRAME_TOLERANCE) {
+            return std::nullopt;
+          }
+        }
+        auto translation =
+          parse_transform(frame.m_attributes.value(u"transform"_s));
+        auto box = Rect(x(inside_top_left) - width / 2 + translation.m_tx,
+          y(inside_top_left) - width / 2 + translation.m_ty,
+          x(outside_top_right) - x(outside_top_left) - width,
+          y(outside_bottom_right) - y(outside_top_right) - width);
+        if(has_effects(rectangle)) {
+          return std::nullopt;
+        }
+        auto bounds = get_box(rectangle, rectangle_properties);
+        auto& larger = bounds.m_width > box.m_width ? bounds : box;
+        auto& smaller = bounds.m_width > box.m_width ? box : bounds;
+        if(std::abs(larger.m_width - smaller.m_width) > FRAME_TOLERANCE ||
+            std::abs(smaller.m_x - larger.m_x) > FRAME_TOLERANCE ||
+            std::abs(smaller.m_y - larger.m_y) > FRAME_TOLERANCE) {
+          return std::nullopt;
+        }
+        auto stroke = Stroke();
+        stroke.m_width = round(width);
+        auto color = resolve_color(get(frame_properties, u"fill"_s, u"#000"_s),
+          frame_properties).value_or(Color(0, 0, 0, 1));
+        color.m_alpha = quantize(color.m_alpha * std::clamp(parse_fraction(
+          get_own(frame, u"opacity"_s, u"1"_s), 1), 0.0, 1.0));
+        stroke.m_color = color;
+        return stroke;
+      }
+
+      static std::optional<Point> read_frame_point(
+          QStringView command, std::optional<Point> previous) {
+        if(command.isEmpty()) {
+          return std::nullopt;
+        }
+        auto letter = command[0];
+        auto rest = command.mid(1).trimmed().toString();
+        if(letter == u'V' || letter == u'v') {
+          if(!previous) {
+            return std::nullopt;
+          }
+          auto y = rest.toDouble();
+          if(letter == u'v') {
+            y += previous->m_y;
+          }
+          return Point(previous->m_x, y);
+        } else if(letter == u'H' || letter == u'h') {
+          if(!previous) {
+            return std::nullopt;
+          }
+          auto x = rest.toDouble();
+          if(letter == u'h') {
+            x += previous->m_x;
+          }
+          return Point(x, previous->m_y);
+        } else if(letter == u'M' || letter == u'm') {
+          auto numbers = parse_numbers(rest);
+          if(numbers.size() < 2) {
+            return std::nullopt;
+          }
+          auto point = Point(numbers[0], numbers[1]);
+          if(letter == u'm' && previous) {
+            point = Point(point.m_x + previous->m_x, point.m_y + previous->m_y);
+          }
+          return point;
+        }
+        return std::nullopt;
+      }
+
+      std::optional<Element> match_shadow_element(const Element& group) const {
+        auto children = get_elements(group);
+        if(children.size() != 1) {
+          return std::nullopt;
+        }
+        auto filter = find_filter(group);
+        if(!filter) {
+          return std::nullopt;
+        }
+        auto description = describe(*filter);
+        if(!WRITER_SHADOW.match(description).hasMatch() &&
+            !WRITER_INNER_SHADOW.match(description).hasMatch()) {
+          return std::nullopt;
+        }
+        auto& child = *children[0];
+        auto has_mask = is_set(group, u"mask"_s);
+        auto has_clip = is_set(group, u"clip-path"_s);
+        auto child_transform = child.m_attributes.value(u"transform"_s);
+        if((has_mask || has_clip) && (is_set(child, u"mask"_s) ||
+            is_set(child, u"clip-path"_s) ||
+            !child_transform.trimmed().isEmpty()) ||
+            is_set(child, u"filter"_s)) {
+          return std::nullopt;
+        }
+        auto copy = child;
+        copy.m_attributes.insert(
+          u"filter"_s, group.m_attributes.value(u"filter"_s));
+        if(has_mask) {
+          copy.m_attributes.insert(
+            u"mask"_s, group.m_attributes.value(u"mask"_s));
+        }
+        if(has_clip) {
+          copy.m_attributes.insert(
+            u"clip-path"_s, group.m_attributes.value(u"clip-path"_s));
+        }
+        auto opacity = parse_fraction(get_own(group, u"opacity"_s, u"1"_s), 1);
+        if(opacity != 1) {
+          copy.m_attributes.insert(u"opacity"_s, QString::number(opacity *
+            parse_fraction(get_own(child, u"opacity"_s, u"1"_s), 1), 'g', 17));
+        }
+        auto transform = group.m_attributes.value(u"transform"_s);
+        if(!transform.trimmed().isEmpty()) {
+          copy.m_attributes.insert(
+            u"transform"_s, transform + u' ' + child_transform);
+        }
+        return copy;
+      }
+
+      std::optional<Item> make_image(const Element& element, Item item) {
+        auto reference = element.m_attributes.value(u"href"_s).trimmed();
+        auto image = load_image(reference);
+        if(!image) {
+          return std::nullopt;
+        }
+        auto [id, size] = *image;
+        auto width = size.m_width;
+        auto height = size.m_height;
+        if(element.m_attributes.contains(u"width"_s)) {
+          width = get_x(element, u"width"_s);
+        }
+        if(element.m_attributes.contains(u"height"_s)) {
+          height = get_y(element, u"height"_s);
+        }
+        if(width <= 0 || height <= 0) {
+          return std::nullopt;
+        }
+        auto fill = ImageFill();
+        fill.m_image = id;
+        fill.m_size = size;
+        auto shape = Shape();
+        shape.m_geometry = RectangleShape(Rect(0, 0, width, height));
+        shape.m_style.m_fill = fill;
+        item.m_header.m_transform =
+          make_translation(get_x(element, u"x"_s), get_y(element, u"y"_s));
+        item.m_payload = Box<Shape>(std::move(shape));
+        return item;
+      }
+
+      std::optional<std::pair<ImageId, Size>> load_image(
+          const QString& reference) {
+        if(auto entry = m_image_ids.find(reference);
+            entry != m_image_ids.end()) {
+          return *entry;
+        }
+        auto bytes = QByteArray();
+        if(auto match = IMAGE_DATA.match(reference); match.hasMatch()) {
+          bytes = QByteArray::fromBase64(
+            reference.mid(match.capturedLength()).toLatin1());
+        } else {
+          auto url = QUrl(reference);
+          auto path = url.isLocalFile() ? url.toLocalFile() : reference;
+          if(path.isEmpty() || !QDir::isAbsolutePath(path) ||
+              !QFile::exists(path)) {
+            return std::nullopt;
+          }
+          auto file = QFile(path);
+          if(!file.open(QIODevice::ReadOnly)) {
+            return std::nullopt;
+          }
+          bytes = file.readAll();
+        }
+        auto buffer = QBuffer(&bytes);
+        buffer.open(QIODevice::ReadOnly);
+        auto reader = QImageReader(&buffer);
+        auto dimensions = reader.size();
+        auto format = reader.format();
+        if(!dimensions.isValid() || format.isEmpty()) {
+          return std::nullopt;
+        }
+        auto resource = ImageResource();
+        resource.m_id = generate_node_id();
+        auto type = QString::fromLatin1(format).toLower();
+        if(type == u"jpg"_s) {
+          type = u"jpeg"_s;
+        }
+        resource.m_media_type = "image/" + type.toStdString();
+        auto data = std::vector<std::byte>(static_cast<std::size_t>(
+          bytes.size()));
+        std::memcpy(data.data(), bytes.constData(), data.size());
+        resource.m_data = Shared(std::move(data));
+        auto result = std::pair(resource.m_id,
+          Size(dimensions.width(), dimensions.height()));
+        m_images.push_back(std::move(resource));
+        m_image_ids.insert(reference, result);
+        return result;
+      }
+
+      std::optional<Item> make_text(
+          const Element& element, const Properties& properties, Item item) {
+        auto state = TextState();
+        state.m_element = &element;
+        auto x_attribute = element.m_attributes.value(u"x"_s);
+        auto y_attribute = element.m_attributes.value(u"y"_s);
+        if(element.m_attributes.contains(u"x"_s)) {
+          state.m_x = parse_numbers(x_attribute).empty() ? 0 :
+            parse_numbers(x_attribute).front();
+        }
+        if(element.m_attributes.contains(u"y"_s)) {
+          state.m_y = parse_numbers(y_attribute).empty() ? 0 :
+            parse_numbers(y_attribute).front();
+        }
+        state.m_has_position = state.m_x || state.m_y;
+        state.m_start_x = state.m_x.value_or(0);
+        auto frame = Point(get_first(element, u"x"_s, m_width),
+          get_first(element, u"y"_s, m_height));
+        auto parent = find_parent(*m_root, element);
+        auto is_first = parent && get_elements(*parent).front() == &element;
+        collect_runs(
+          element, properties, true, true, is_first, QStringList(), state);
+        if(!state.m_is_last_collapsed && state.m_raw.endsWith(u' ') &&
+            !state.m_lines.empty() && !state.m_lines.back().empty()) {
+          --state.m_lines.back().back().m_to;
+          state.m_raw.chop(1);
+        }
+        if(state.m_raw.isEmpty()) {
+          return std::nullopt;
+        }
+        if(state.m_is_multiline && state.m_is_stroke_same && state.m_reset) {
+          frame = *state.m_reset;
+        }
+        auto text = Text();
+        text.m_frame = PositionedFrame();
+        auto content = QString();
+        auto runs = std::vector<TextRun>();
+        auto append_run = [&] (const TextStyle& style, std::size_t length) {
+          if(length == 0) {
+            return;
+          }
+          if(!runs.empty() && runs.back().m_style == style) {
+            runs.back().m_length += length;
+          } else {
+            auto run = TextRun();
+            run.m_length = length;
+            run.m_style = style;
+            runs.push_back(std::move(run));
+          }
+        };
+        auto first = static_cast<const Run*>(nullptr);
+        auto last = static_cast<const Run*>(nullptr);
+        for(auto i = std::size_t(0); i != state.m_lines.size(); ++i) {
+          if(i != 0) {
+            content += u'\n';
+            if(!runs.empty()) {
+              ++runs.back().m_length;
+            }
+          }
+          for(auto& run : state.m_lines[i]) {
+            if(run.m_to <= run.m_from) {
+              continue;
+            }
+            if(!first) {
+              first = &run;
+            }
+            last = &run;
+            content += state.m_raw.mid(static_cast<qsizetype>(run.m_from),
+              static_cast<qsizetype>(run.m_to - run.m_from));
+            append_run(run.m_style, run.m_to - run.m_from);
+          }
+        }
+        if(!first) {
+          return std::nullopt;
+        }
+        text.m_content = Shared(content.toStdU16String());
+        text.m_base_style = last->m_style;
+        text.m_paragraph_style.m_alignment = first->m_alignment;
+        if(state.m_is_multiline && state.m_is_stroke_same &&
+            state.m_line_spacing && !state.m_is_irregular) {
+          text.m_paragraph_style.m_line_height = *state.m_line_spacing;
+        }
+        if(runs.size() > 1) {
+          text.m_runs = std::move(runs);
+        }
+        text.m_style.m_fill = SolidFill(text.m_base_style.m_color);
+        if(get(properties, u"stroke"_s, u"none"_s) != u"none"_s) {
+          text.m_style.m_stroke =
+            make_stroke(properties, Rect(0, 0, 0, 0), Point(0, 0));
+        } else {
+          auto stroke = Stroke();
+          stroke.m_color = Color(0, 0, 0, 0);
+          stroke.m_is_enabled = false;
+          text.m_style.m_stroke = std::move(stroke);
+        }
+        item.m_header.m_transform = make_translation(frame.m_x, frame.m_y);
+        if(!item.m_header.m_has_custom_name) {
+          item.m_header.m_name = make_content_name(content);
+        }
+        item.m_payload = Box<Text>(std::move(text));
+        return item;
+      }
+
+      double get_first(const Element& element, const QString& name,
+          double reference) const {
+        auto value = element.m_attributes.value(name);
+        auto reader = NumberReader(value);
+        if(!reader.read()) {
+          return 0;
+        }
+        auto first = value.trimmed();
+        auto end = first.indexOf(QRegularExpression(u"[\\s,]"_s));
+        if(end > 0) {
+          first = first.left(end);
+        }
+        return round(parse_length(first, reference).value_or(0));
+      }
+
+      void collect_runs(const Element& element, const Properties& properties,
+          bool is_last, bool is_collapsed, bool is_first,
+          QStringList decorations, TextState& state) {
+        decorations = merge_decorations(decorations, get_own(element,
+          u"text-decoration"_s, u"none"_s).split(QRegularExpression(
+            u"\\s+"_s), Qt::SkipEmptyParts));
+        auto space = element.m_attributes.value(u"xml:space"_s);
+        auto collapse = space.isEmpty() ? is_collapsed : space != u"preserve"_s;
+        auto scope = Scope();
+        scope.m_dx = get_first(element, u"dx"_s, m_width);
+        scope.m_dy = get_first(element, u"dy"_s, m_height);
+        scope.m_has_x = !element.m_attributes.value(u"x"_s).isEmpty();
+        scope.m_has_y = !element.m_attributes.value(u"y"_s).isEmpty();
+        scope.m_is_first = is_first;
+        auto& children = element.m_children;
+        auto first = static_cast<const Element*>(nullptr);
+        for(auto& child : children) {
+          if(child.m_name != TEXT_NODE) {
+            first = &child;
+            break;
+          }
+        }
+        for(auto i = std::size_t(0); i != children.size(); ++i) {
+          auto& child = children[i];
+          auto is_child_last = is_last && i + 1 == children.size();
+          if(child.m_name != TEXT_NODE) {
+            collect_runs(child, inherit(child, properties), is_child_last,
+              collapse, &child == first, decorations, state);
+            continue;
+          }
+          auto text = child.m_text;
+          if(collapse) {
+            text.remove(u'\n');
+            text.replace(QRegularExpression(u"\\s+"_s), u" "_s);
+            if(state.m_is_last_space && text.startsWith(u' ')) {
+              text.remove(0, 1);
+            }
+            if(is_child_last && text.endsWith(u' ')) {
+              text.chop(1);
+            }
+          } else {
+            text.remove(u'\n');
+            text.replace(u'\t', u' ');
+          }
+          state.m_is_last_collapsed = collapse;
+          if(text.isEmpty()) {
+            continue;
+          }
+          state.m_is_last_space = text.back().isSpace();
+          auto from = static_cast<std::size_t>(state.m_raw.size());
+          state.m_raw += text;
+          if(text == u" "_s && state.m_has_line &&
+              !state.m_lines.back().empty() && is_same_set(decorations,
+                state.m_lines.back().back().m_decorations)) {
+            ++state.m_lines.back().back().m_to;
+            auto position = Position();
+            place(element, scope, position, state);
+            continue;
+          }
+          auto run = Run();
+          run.m_from = from;
+          run.m_to = from + static_cast<std::size_t>(text.size());
+          run.m_decorations = decorations;
+          auto position = Position();
+          place(element, scope, position, state);
+          fill_run(element, properties, run, state);
+          if(!state.m_has_line) {
+            state.m_lines.emplace_back();
+            state.m_has_line = true;
+          }
+          state.m_lines.back().push_back(std::move(run));
+        }
+      }
+
+      void place(const Element& element, Scope& scope, Position& position,
+          TextState& state) {
+        auto capture = false;
+        if(element.m_name == u"tspan"_s) {
+          if(scope.m_dx != 0) {
+            position.m_dx = scope.m_dx;
+            scope.m_dx = 0;
+          }
+          if(scope.m_dy != 0) {
+            position.m_dy = scope.m_dy;
+            scope.m_dy = 0;
+          }
+          if(!state.m_has_position && scope.m_has_x && scope.m_has_y) {
+            capture = scope.m_is_first;
+            state.m_has_position = true;
+          }
+          if(scope.m_has_x) {
+            position.m_x = get_first(element, u"x"_s, m_width);
+            scope.m_has_x = false;
+          }
+          if(scope.m_has_y) {
+            position.m_y = get_first(element, u"y"_s, m_height);
+            if(!state.m_y) {
+              state.m_y = position.m_y;
+            }
+            scope.m_has_y = false;
+          }
+          if(capture) {
+            state.m_reset = Point(*position.m_x, *position.m_y);
+          }
+        }
+        auto x = round(position.m_x.value_or(state.m_x.value_or(0)) +
+          position.m_dx.value_or(0));
+        auto y = round(position.m_y.value_or(state.m_y.value_or(0)) +
+          position.m_dy.value_or(0));
+        if(!state.m_x) {
+          state.m_start_x = x;
+          state.m_x = x;
+        }
+        if(!state.m_y) {
+          state.m_y = y;
+        }
+        if(state.m_is_multiline && y != round(*state.m_y)) {
+          auto is_first = scope.m_is_first;
+          if(x == state.m_start_x && (!element.m_attributes.value(
+              u"x"_s).isEmpty() || is_first)) {
+            state.m_lines.emplace_back();
+            state.m_has_line = true;
+            if(!is_first) {
+              auto spacing = std::round(100 * (y - *state.m_y)) / 100;
+              if(!state.m_line_spacing && !state.m_is_irregular) {
+                state.m_line_spacing = spacing;
+              }
+              auto count = 1.0;
+              if(state.m_is_irregular || *state.m_line_spacing <= 0 ||
+                  std::fmod(spacing, *state.m_line_spacing) > TOLERANCE ||
+                  spacing < 0) {
+                state.m_is_irregular = true;
+              } else {
+                count = spacing / *state.m_line_spacing;
+              }
+              for(auto i = 1; i < count; ++i) {
+                state.m_lines.emplace_back();
+              }
+            }
+          } else {
+            state.m_is_multiline = false;
+            auto merged = std::vector<Run>();
+            for(auto& line : state.m_lines) {
+              merged.insert(merged.end(), line.begin(), line.end());
+            }
+            state.m_lines.clear();
+            state.m_lines.push_back(std::move(merged));
+            state.m_has_line = true;
+            state.m_is_irregular = true;
+          }
+        }
+        state.m_x = x;
+        state.m_y = y;
+        if(&element == state.m_element) {
+          state.m_has_position = true;
+        }
+      }
+
+      static const Element* find_parent(
+          const Element& root, const Element& element) {
+        for(auto& child : root.m_children) {
+          if(&child == &element) {
+            return &root;
+          }
+          if(auto parent = find_parent(child, element)) {
+            return parent;
+          }
+        }
+        return nullptr;
+      }
+
+      void fill_run(const Element& element, const Properties& properties,
+          Run& run, TextState& state) const {
+        auto& style = run.m_style;
+        auto size = round(get_font_size(properties));
+        style.m_font.m_family =
+          to_family(get(properties, u"font-family"_s, DEFAULT_FAMILY)).
+            toStdString();
+        style.m_font.m_style = to_style_name(
+          get(properties, u"font-style"_s, u"normal"_s),
+          get(properties, u"font-weight"_s, u"400"_s)).toStdString();
+        if(auto spacing = get(properties, u"letter-spacing"_s, u"normal"_s);
+            spacing != u"normal"_s && size != 0) {
+          if(auto length = parse_length(spacing, size, size)) {
+            style.m_letter_spacing = round(*length / size * 1000);
+          }
+        }
+        auto shift = get_own(element, u"baseline-shift"_s, u"baseline"_s);
+        if(shift == u"super"_s) {
+          style.m_script = TextScript::SUPERSCRIPT;
+        } else if(shift == u"sub"_s) {
+          style.m_script = TextScript::SUBSCRIPT;
+        }
+        if(style.m_script != TextScript::NORMAL) {
+          size = round(size / SCRIPT_SCALE);
+        }
+        style.m_font.m_size = size;
+        style.m_is_underlined = run.m_decorations.contains(u"underline"_s);
+        style.m_is_struck_through =
+          run.m_decorations.contains(u"line-through"_s);
+        auto anchor = get(properties, u"text-anchor"_s, u"start"_s);
+        if(anchor == u"middle"_s) {
+          run.m_alignment = TextAlignment::CENTER;
+        } else if(anchor == u"end"_s) {
+          run.m_alignment = TextAlignment::RIGHT;
+        }
+        auto fill = get(properties, u"fill"_s, u"#000"_s);
+        auto color = Color(0, 0, 0, 1);
+        if(fill == u"none"_s) {
+          color.m_alpha = 0;
+        } else if(strip_url(fill).isEmpty()) {
+          color = resolve_color(fill, properties).value_or(Color(0, 0, 0, 1));
+          color.m_alpha *= std::clamp(parse_fraction(
+            get(properties, u"fill-opacity"_s, u"1"_s), 1), 0.0, 1.0);
+        }
+        if(&element != state.m_element) {
+          color.m_alpha *= std::clamp(
+            parse_fraction(get_own(element, u"opacity"_s, u"1"_s), 1), 0.0,
+            1.0);
+        }
+        color.m_alpha = quantize(color.m_alpha);
+        style.m_color = color;
+        auto stroke = QStringList();
+        for(auto name : {u"stroke"_s, u"stroke-width"_s, u"stroke-dasharray"_s,
+            u"stroke-dashoffset"_s, u"stroke-linecap"_s, u"stroke-linejoin"_s,
+            u"stroke-miterlimit"_s, u"stroke-opacity"_s}) {
+          stroke.push_back(get(properties, name, QString()));
+        }
+        auto key = stroke.join(u',');
+        if(!state.m_stroke) {
+          state.m_stroke = key;
+        } else if(*state.m_stroke != key) {
+          state.m_is_stroke_same = false;
+        }
       }
 
       std::optional<ShapeGeometry> make_geometry(
@@ -793,11 +2512,18 @@ namespace {
 
       std::optional<FillPaint> make_paint(const QString& value,
           double opacity, const Properties& properties, const Rect& bounds,
-          Point offset) const {
+          Point offset) {
         if(value == u"none"_s) {
           return std::nullopt;
         }
         if(auto reference = strip_url(value); !reference.isEmpty()) {
+          if(auto target = find(reference);
+              target && target->m_name == u"pattern"_s) {
+            if(auto pattern = make_pattern(*target, bounds)) {
+              return *pattern;
+            }
+            return SolidFill(Color(0, 0, 0, quantize(opacity)));
+          }
           if(auto gradient =
               make_gradient(reference, opacity, bounds, offset)) {
             return *gradient;
@@ -814,6 +2540,135 @@ namespace {
         }
         color->m_alpha = quantize(color->m_alpha * opacity);
         return SolidFill(*color);
+      }
+
+      std::optional<ImageFill> make_pattern(
+          const Element& pattern, const Rect& bounds) {
+        auto source = &pattern;
+        auto visited = std::vector<const Element*>();
+        while(get_elements(*source).empty() &&
+            !std::ranges::contains(visited, source)) {
+          visited.push_back(source);
+          auto reference = source->m_attributes.value(u"href"_s);
+          auto next = reference.startsWith(u'#') ? find(reference.mid(1)) :
+            nullptr;
+          if(!next) {
+            break;
+          }
+          source = next;
+        }
+        auto children = std::vector<const Element*>();
+        for(auto child : get_elements(*source)) {
+          if(GRAPHICS.contains(child->m_name.toStdU16String()) &&
+              get_own(*child, u"display"_s, u"inline"_s) != u"none"_s) {
+            children.push_back(child);
+          }
+        }
+        if(children.size() != 1) {
+          return std::nullopt;
+        }
+        auto element_pointer = children.front();
+        auto transform =
+          parse_transform(element_pointer->m_attributes.value(u"transform"_s));
+        if(element_pointer->m_name == u"use"_s) {
+          auto reference = element_pointer->m_attributes.value(u"href"_s);
+          auto target = reference.startsWith(u'#') ?
+            find(reference.mid(1)) : nullptr;
+          if(!target) {
+            return std::nullopt;
+          }
+          transform = transform * make_translation(
+            get_x(*element_pointer, u"x"_s), get_y(*element_pointer, u"y"_s)) *
+            parse_transform(target->m_attributes.value(u"transform"_s));
+          element_pointer = target;
+        }
+        if(element_pointer->m_name != u"image"_s) {
+          return std::nullopt;
+        }
+        auto& element = *element_pointer;
+        auto image =
+          load_image(element.m_attributes.value(u"href"_s).trimmed());
+        if(!image) {
+          return std::nullopt;
+        }
+        auto fill = ImageFill();
+        fill.m_image = image->first;
+        fill.m_size = image->second;
+        auto image_width = element.m_attributes.contains(u"width"_s) ?
+          get_x(element, u"width"_s) : image->second.m_width;
+        auto image_height = element.m_attributes.contains(u"height"_s) ?
+          get_y(element, u"height"_s) : image->second.m_height;
+        auto width = image_width * transform.m_a;
+        auto height = image_height * transform.m_d;
+        auto box = parse_numbers(get_linked(pattern, u"viewBox"_s));
+        auto pattern_transform = get_linked(pattern, u"patternTransform"_s);
+        fill.m_scale_behavior = ScaleBehavior::COVER;
+        if(box.size() != 4) {
+          fill.m_scale_behavior = ScaleBehavior::FILL;
+          return fill;
+        }
+        for(auto& value : box) {
+          value = round(value);
+        }
+        if(is_close(box[2], image_width, TOLERANCE) &&
+            is_close(box[3], image_height, TOLERANCE) &&
+            is_close(box[0], 0, TOLERANCE) && is_close(box[1], 0, TOLERANCE) &&
+            pattern_transform.isEmpty()) {
+          return fill;
+        }
+        auto shape_width = round(bounds.m_width);
+        auto shape_height = round(bounds.m_height);
+        auto horizontal = shape_width / box[2];
+        auto vertical = shape_height / box[3];
+        auto is_flipped_horizontally = false;
+        auto is_flipped_vertically = false;
+        if(!pattern_transform.isEmpty()) {
+          if(pattern_transform.contains(
+              QRegularExpression(uR"(matrix\(-1(,|\s))"_s))) {
+            is_flipped_horizontally = true;
+          } else if(pattern_transform.contains(QRegularExpression(
+              uR"(matrix\(1(,|\s)\s*0(,|\s)\s*0(,|\s)\s*-1(,|\s))"_s))) {
+            is_flipped_vertically = true;
+          } else if(pattern_transform.contains(u"rotate(-180)"_s)) {
+            is_flipped_horizontally = true;
+            is_flipped_vertically = true;
+          }
+        }
+        auto covered_width = 0.0;
+        auto covered_height = 0.0;
+        if(1 / vertical < 1 / horizontal) {
+          covered_width = width;
+          covered_height = height * horizontal / vertical;
+        } else {
+          covered_height = height;
+          covered_width = width * vertical / horizontal;
+        }
+        auto top = (covered_height * vertical - shape_height) / (2 * vertical);
+        auto middle = (height - covered_height) / 2;
+        auto offset_x = horizontal * ((covered_width * horizontal -
+          shape_width) / (2 * horizontal) + (width - covered_width) / 2 -
+          box[0]) / width;
+        auto offset_y = vertical * (top + middle - box[1]) / height;
+        if(!std::isfinite(horizontal) || !std::isfinite(vertical) ||
+            !std::isfinite(offset_x) || !std::isfinite(offset_y)) {
+          fill.m_scale_behavior = ScaleBehavior::FILL;
+          return fill;
+        }
+        fill.m_offset = Point(offset_x, offset_y);
+        fill.m_is_flipped_horizontally = is_flipped_horizontally;
+        fill.m_is_flipped_vertically = is_flipped_vertically;
+        if(is_close(horizontal, vertical, TOLERANCE)) {
+          if(!is_close(horizontal, 1, 1e-6)) {
+            fill.m_scale = horizontal;
+          }
+        } else {
+          fill.m_scale_behavior = ScaleBehavior::FILL;
+          if(!is_close(horizontal, 1, 1e-6) || !is_close(vertical, 1, 1e-6)) {
+            fill.m_horizontal_scale = horizontal;
+            fill.m_vertical_scale = vertical;
+          }
+        }
+        return fill;
       }
 
       QString get_linked(const Element& element, const QString& name) const {
@@ -836,17 +2691,17 @@ namespace {
         auto visited = std::vector<const Element*>();
         while(current && !std::ranges::contains(visited, current)) {
           auto stops = std::vector<GradientStop>();
-          for(auto& child : current->m_children) {
-            if(child.m_name != u"stop"_s) {
+          for(auto child : get_elements(*current)) {
+            if(child->m_name != u"stop"_s) {
               continue;
             }
             auto color = parse_color(
-              get_own(child, u"stop-color"_s, u"#000"_s)).value_or(
+              get_own(*child, u"stop-color"_s, u"#000"_s)).value_or(
                 Color(0, 0, 0, 1));
             color.m_alpha = color.m_alpha * parse_fraction(
-              get_own(child, u"stop-opacity"_s, u"1"_s), 1);
+              get_own(*child, u"stop-opacity"_s, u"1"_s), 1);
             auto offset = to_single(std::clamp(round(parse_fraction(
-              get_own(child, u"offset"_s, u"0"_s), 0)), 0.0, 1.0));
+              get_own(*child, u"offset"_s, u"0"_s), 0)), 0.0, 1.0));
             if(!stops.empty()) {
               offset = std::max(offset, stops.back().m_offset);
             }
@@ -920,35 +2775,8 @@ namespace {
         return fill;
       }
 
-      Style make_style(const Properties& properties, const Rect& bounds,
-          Point offset) const {
-        auto style = Style();
-        auto fill_opacity = std::clamp(parse_fraction(
-          get(properties, u"fill-opacity"_s, u"1"_s), 1), 0.0, 1.0);
-        if(auto paint = make_paint(get(properties, u"fill"_s, u"#000"_s),
-            fill_opacity, properties, bounds, offset)) {
-          style.m_fill = std::visit([] (auto& value) -> Fill {
-            return value;
-          }, *paint);
-        } else {
-          style.m_fill = NoFill(SolidFill(Color(0, 0, 0, 0)));
-        }
-        auto stroke_opacity = std::clamp(parse_fraction(
-          get(properties, u"stroke-opacity"_s, u"1"_s), 1), 0.0, 1.0);
-        auto paint = make_paint(get(properties, u"stroke"_s, u"none"_s),
-          stroke_opacity, properties, bounds, offset);
-        auto stroke = Stroke();
-        if(!paint) {
-          stroke.m_color = make_color(112, 112, 112);
-          stroke.m_is_enabled = false;
-          style.m_stroke = std::move(stroke);
-          return style;
-        }
-        if(auto solid = std::get_if<SolidFill>(&*paint)) {
-          stroke.m_color = solid->m_color;
-        } else if(auto gradient = std::get_if<GradientFill>(&*paint)) {
-          stroke.m_color = gradient->m_stops.front().m_color;
-        }
+      void apply_stroke_attributes(
+          const Properties& properties, Stroke& stroke) const {
         stroke.m_width = round(parse_length(
           get(properties, u"stroke-width"_s, u"1"_s), get_diagonal()).value_or(
             1));
@@ -970,14 +2798,70 @@ namespace {
         if(dashes != u"none"_s) {
           stroke.m_dashes = parse_numbers(dashes);
         }
-        style.m_stroke = std::move(stroke);
+        stroke.m_dash_offset = round(parse_length(
+          get(properties, u"stroke-dashoffset"_s, u"0"_s), get_diagonal()).
+            value_or(0));
+      }
+
+      Style make_style(const Properties& properties, const Rect& bounds,
+          Point offset) {
+        auto style = Style();
+        auto fill_opacity = std::clamp(parse_fraction(
+          get(properties, u"fill-opacity"_s, u"1"_s), 1), 0.0, 1.0);
+        if(auto paint = make_paint(get(properties, u"fill"_s, u"#000"_s),
+            fill_opacity, properties, bounds, offset)) {
+          style.m_fill = std::visit([] (auto& value) -> Fill {
+            return value;
+          }, *paint);
+        } else {
+          style.m_fill = NoFill(SolidFill(Color(0, 0, 0, 0)));
+        }
+        style.m_stroke = make_stroke(properties, bounds, offset);
         return style;
       }
+
+      Stroke make_stroke(
+          const Properties& properties, const Rect& bounds, Point offset) {
+        auto opacity = std::clamp(parse_fraction(
+          get(properties, u"stroke-opacity"_s, u"1"_s), 1), 0.0, 1.0);
+        auto paint = make_paint(get(properties, u"stroke"_s, u"none"_s),
+          opacity, properties, bounds, offset);
+        auto stroke = Stroke();
+        if(!paint) {
+          stroke.m_color = make_color(112, 112, 112);
+          stroke.m_is_enabled = false;
+          return stroke;
+        }
+        if(auto solid = std::get_if<SolidFill>(&*paint)) {
+          stroke.m_color = solid->m_color;
+        } else {
+          stroke.m_color = make_color(112, 112, 112);
+        }
+        apply_stroke_attributes(properties, stroke);
+        return stroke;
+      }
   };
+
+  void finish_effects(std::vector<Effect>& effects) {
+    auto has_drop_shadow = false;
+    std::erase_if(effects, [&] (const auto& effect) {
+      if(!std::holds_alternative<DropShadow>(effect)) {
+        return false;
+      }
+      if(has_drop_shadow) {
+        return true;
+      }
+      has_drop_shadow = true;
+      return false;
+    });
+  }
 
   void append(Transaction& transaction, const NodeId& parent, Item item) {
     if(item.m_header.m_id.is_nil()) {
       item.m_header.m_id = generate_node_id();
+    }
+    if(auto style = find_style(item)) {
+      finish_effects(style->m_effects);
     }
     item.m_header.m_rotation = derive_rotation(item.m_header.m_transform);
     auto id = transaction.append(
@@ -1000,11 +2884,19 @@ void Rellu::read_svg(const QString& text, Document& document) {
   if(!root) {
     throw std::invalid_argument("The text is not SVG markup.");
   }
-  auto items = Converter(*root).convert();
+  auto rules = std::vector<Rule>();
+  collect_stylesheets(*root, rules);
+  auto path = std::vector<const Element*>();
+  cascade(*root, rules, path);
+  auto converter = Converter(*root);
+  auto items = converter.convert();
   if(items.empty()) {
     return;
   }
   auto transaction = Transaction(document);
+  for(auto& image : converter.get_images()) {
+    transaction.add_image(std::move(image));
+  }
   if(items.size() == 1) {
     append(transaction, NodeId(), std::move(items.front()));
   } else {

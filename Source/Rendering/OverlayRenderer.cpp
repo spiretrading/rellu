@@ -250,7 +250,13 @@ void OverlayRenderer::render(QRhiCommandBuffer& buffer,
     auto position = QPoint(
       static_cast<int>(std::lround(image.m_position.m_x * scale)),
       static_cast<int>(std::lround(image.m_position.m_y * scale)));
-    images.emplace_back(&entry, QRect(position, image.m_image->size()));
+    auto extent = image.m_image->size();
+    if(image.m_size) {
+      extent = QSize(
+        static_cast<int>(std::lround(image.m_size->m_width * scale)),
+        static_cast<int>(std::lround(image.m_size->m_height * scale)));
+    }
+    images.emplace_back(&entry, QRect(position, extent));
   }
   reserve_images(images.size());
   for(auto i = std::size_t(0); i != images.size(); ++i) {

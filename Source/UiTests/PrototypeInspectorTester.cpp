@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <string>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -8,6 +10,7 @@
 #include <QToolButton>
 #include <QWheelEvent>
 #include <doctest/doctest.h>
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Prototype/InteractionCommands.hpp"
 #include "Rellu/Ui/PrototypeInspector.hpp"
 #include "../PrototypeTests/Stage.hpp"
@@ -44,6 +47,15 @@ namespace {
     return *interactions.front();
   }
 
+  const Interaction& get_edited(Editor& editor, const NodeId& id) {
+    for(auto& interaction : editor.get_context().get_pending()) {
+      if(interaction.m_owner == id) {
+        return interaction;
+      }
+    }
+    return get_first(editor.get_document(), id);
+  }
+
   const ScrollTransition& get_scroll(
       const Document& document, const NodeId& id) {
     return std::get<ScrollTransition>(get_first(document, id).m_action);
@@ -76,7 +88,8 @@ TEST_SUITE("PrototypeInspector") {
     auto inspector = PrototypeInspector();
     inspector.set_editor(&editor);
     REQUIRE(inspector.get_fields() == std::vector<std::string>({"add",
-      "trigger", "type", "destination", "animation", "easing", "duration"}));
+      "trigger", "type", "preserve_scroll", "destination", "animation",
+      "easing", "duration"}));
     REQUIRE(!inspector.find_field("add")->isEnabled());
     auto& trigger = get<QComboBox>(inspector, "trigger");
     REQUIRE(trigger.currentText() == "Tap");
@@ -107,11 +120,13 @@ TEST_SUITE("PrototypeInspector") {
     QApplication::processEvents();
     get<QToolButton>(inspector, "add").click();
     QApplication::processEvents();
-    auto& interaction = get_first(document, scene.m_button);
-    REQUIRE(inspector.get_current() == interaction.m_id);
+    REQUIRE(get_interactions(document, scene.m_button).empty());
+    REQUIRE(editor.get_history().get_undo_count() == 0);
+    auto& interaction = get_edited(editor, scene.m_button);
+    auto id = interaction.m_id;
+    REQUIRE(inspector.get_current() == id);
     REQUIRE(interaction.m_action == Action(ArtboardTransition(NodeId(),
       Animation(Transition::NONE, Easing::EASE_OUT, 0.30000001192092896))));
-    REQUIRE(editor.get_history().get_undo_count() == 1);
     REQUIRE(get<QComboBox>(inspector, "trigger").isEnabled());
     auto& destination = get<QComboBox>(inspector, "destination");
     REQUIRE(destination.currentIndex() == -1);
@@ -133,37 +148,84 @@ TEST_SUITE("PrototypeInspector") {
     REQUIRE(items == QStringList({"None", "Ease Out", "Ease In", "Ease In-Out",
       "Snap", "Wind Up", "Bounce"}));
     choose(get<QComboBox>(inspector, "destination"), "Menu");
+    REQUIRE(editor.get_context().get_pending().empty());
+    REQUIRE(get_first(document, scene.m_button).m_id == id);
     REQUIRE(get_first(document, scene.m_button).m_action == Action(
       ArtboardTransition(scene.m_menu, make_empty_animation())));
+    REQUIRE(editor.get_history().get_undo_count() == 1);
+    REQUIRE(editor.get_history().get_undo_label() == "Target");
+    REQUIRE(inspector.get_current() == id);
     REQUIRE(get<QComboBox>(inspector, "animation").currentText() == "None");
     REQUIRE(get<QComboBox>(inspector, "animation").isEnabled());
     REQUIRE(get<QComboBox>(inspector, "easing").currentText() == "Ease Out");
     REQUIRE(get<QComboBox>(inspector, "duration").currentText() == "0.3 s");
     enter(get<QComboBox>(inspector, "duration"), "0.3 s");
-    REQUIRE(editor.get_history().get_undo_count() == 2);
+    REQUIRE(editor.get_history().get_undo_count() == 1);
     editor.get_selection().select(scene.m_home);
     QApplication::processEvents();
     get<QToolButton>(inspector, "add").click();
     QApplication::processEvents();
-    REQUIRE(get_first(document, scene.m_home).m_trigger ==
+    REQUIRE(get_interactions(document, scene.m_home).empty());
+    REQUIRE(get_edited(editor, scene.m_home).m_trigger ==
       Trigger(TapTrigger()));
     editor.get_selection().select(scene.m_button);
     QApplication::processEvents();
+    REQUIRE(editor.get_context().get_pending().empty());
     choose(get<QComboBox>(inspector, "type"), "Overlay");
     editor.get_selection().select(scene.m_box);
     QApplication::processEvents();
     get<QToolButton>(inspector, "add").click();
     QApplication::processEvents();
-    REQUIRE(get_first(document, scene.m_box).m_action ==
+    REQUIRE(get_edited(editor, scene.m_box).m_action ==
       Action(Overlay(NodeId(), Point(0, 0), make_empty_animation())));
     REQUIRE(get<QComboBox>(inspector, "type").currentText() == "Overlay");
     editor.get_selection().select(scene.m_button);
     QApplication::processEvents();
     get<QToolButton>(inspector, "add").click();
     QApplication::processEvents();
-    auto interactions = get_interactions(document, scene.m_button);
-    REQUIRE(interactions.size() == 2);
-    REQUIRE(interactions[1]->m_trigger == Trigger(KeyTrigger()));
+    REQUIRE(get_interactions(document, scene.m_button).size() == 1);
+    REQUIRE(get_edited(editor, scene.m_button).m_trigger ==
+      Trigger(KeyTrigger()));
+    choose(get<QComboBox>(inspector, "type"), "Previous Artboard");
+    REQUIRE(get_interactions(document, scene.m_button).size() == 2);
+    REQUIRE(editor.get_history().get_undo_label() == "Action");
+    REQUIRE(editor.get_context().get_pending().empty());
+  }
+
+  TEST_CASE("pending_history") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    auto editor = Editor(document);
+    auto& edit = editor.get_context();
+    edit.set_prototyping(true);
+    auto inspector = PrototypeInspector();
+    inspector.set_editor(&editor);
+    editor.get_selection().select(scene.m_button);
+    QApplication::processEvents();
+    get<QToolButton>(inspector, "add").click();
+    QApplication::processEvents();
+    auto pending = edit.get_pending();
+    REQUIRE(pending.size() == 1);
+    choose(get<QComboBox>(inspector, "destination"), "Menu");
+    REQUIRE(edit.get_pending().empty());
+    REQUIRE(editor.undo());
+    QApplication::processEvents();
+    REQUIRE(get_interactions(document, scene.m_button).empty());
+    REQUIRE(edit.get_pending() == pending);
+    REQUIRE(inspector.get_current() == pending.front().m_id);
+    REQUIRE(editor.redo());
+    QApplication::processEvents();
+    REQUIRE(edit.get_pending().empty());
+    REQUIRE(edit.get_interactions() == std::vector{pending.front().m_id});
+    REQUIRE(inspector.get_current() == pending.front().m_id);
+    choose(get<QComboBox>(inspector, "destination"), "None");
+    REQUIRE(get_interactions(document, scene.m_button).empty());
+    REQUIRE(editor.undo());
+    QApplication::processEvents();
+    REQUIRE(edit.get_pending().empty());
+    REQUIRE(get_first(document, scene.m_button).m_id ==
+      pending.front().m_id);
+    REQUIRE(inspector.get_current() == pending.front().m_id);
   }
 
   TEST_CASE("wheel") {
@@ -216,10 +278,18 @@ TEST_SUITE("PrototypeInspector") {
     REQUIRE(!is_item_enabled(get<QComboBox>(inspector, "trigger"), "Voice"));
     get<QToolButton>(inspector, "add").click();
     QApplication::processEvents();
-    auto second = get_interactions(document, scene.m_button)[1];
-    REQUIRE(second->m_trigger == Trigger(DragTrigger()));
-    REQUIRE(std::get<ArtboardTransition>(second->m_action).m_animation.
+    REQUIRE(get_interactions(document, scene.m_button).size() == 1);
+    auto& second = get_edited(editor, scene.m_button);
+    REQUIRE(second.m_trigger == Trigger(DragTrigger()));
+    REQUIRE(std::get<ArtboardTransition>(second.m_action).m_animation.
       m_transition == Transition::AUTO_ANIMATE);
+    REQUIRE(get<QComboBox>(inspector, "type").currentText() == "Auto-Animate");
+    REQUIRE(get<QComboBox>(inspector, "destination").placeholderText() ==
+      "(Choose an artboard)");
+    REQUIRE(get<QComboBox>(inspector, "easing").currentText() == "Ease Out");
+    REQUIRE(!inspector.find_field("duration"));
+    REQUIRE(!inspector.find_field("secondary_action"));
+    REQUIRE(inspector.find_field("fixed"));
     REQUIRE(list() == QStringList({"Drag", "Keys & Gamepad", "Voice"}));
     editor.get_selection().select(scene.m_home);
     QApplication::processEvents();
@@ -355,7 +425,9 @@ TEST_SUITE("PrototypeInspector") {
     REQUIRE(destination.count() == 3);
     REQUIRE(get<QComboBox>(inspector, "animation").count() == 2);
     choose(get<QComboBox>(inspector, "destination"), "None");
-    REQUIRE(get_first(document, scene.m_instance).m_action ==
+    REQUIRE(get_interactions(document, scene.m_instance).empty());
+    REQUIRE(editor.get_history().get_undo_label() == "Target");
+    REQUIRE(get_edited(editor, scene.m_instance).m_action ==
       Action(StateTransition(StateId(), make_default_animation())));
     REQUIRE(get<QComboBox>(inspector, "destination").placeholderText() ==
       "(Choose a state)");
@@ -372,6 +444,31 @@ TEST_SUITE("PrototypeInspector") {
     REQUIRE(get<QComboBox>(inspector, "easing").count() == 7);
     REQUIRE(get<QComboBox>(inspector, "destination").currentText() ==
       "Hover");
+  }
+
+  TEST_CASE("default_state_name") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    add_interaction(document, scene.m_instance, TapTrigger(),
+      StateTransition(scene.m_component, make_default_animation()));
+    auto editor = Editor(document);
+    auto inspector = PrototypeInspector();
+    inspector.set_editor(&editor);
+    editor.get_selection().select(scene.m_instance);
+    QApplication::processEvents();
+    REQUIRE(get<QComboBox>(inspector, "destination").currentText() ==
+      "Default State");
+    set_language(Language::GERMAN);
+    editor.get_selection().select(scene.m_button);
+    QApplication::processEvents();
+    editor.get_selection().select(scene.m_instance);
+    QApplication::processEvents();
+    auto& destination = get<QComboBox>(inspector, "destination");
+    auto name = destination.currentText();
+    auto hover = destination.findText("Hover");
+    set_language(Language::ENGLISH);
+    REQUIRE(name == "Standardzustand");
+    REQUIRE(hover >= 0);
   }
 
   TEST_CASE("artboard_order") {
@@ -439,10 +536,10 @@ TEST_SUITE("PrototypeInspector") {
     QApplication::processEvents();
     REQUIRE(is_item_enabled(get<QComboBox>(inspector, "type"), "Scroll To"));
     choose(get<QComboBox>(inspector, "type"), "Scroll To");
-    REQUIRE(get_first(document, scene.m_button).m_action ==
+    REQUIRE(get_edited(editor, scene.m_button).m_action ==
       Action(ScrollTransition(NodeId(), 0,
         Animation(Transition::DISSOLVE, Easing::EASE_OUT, DEFAULT_DURATION))));
-    REQUIRE(editor.get_history().get_undo_label() == "Change Interaction");
+    REQUIRE(editor.get_history().get_undo_count() == 0);
     REQUIRE(get<QComboBox>(inspector, "type").currentText() == "Scroll To");
     REQUIRE(!inspector.find_field("animation"));
     REQUIRE(!inspector.find_field("preserve_scroll"));
@@ -456,6 +553,7 @@ TEST_SUITE("PrototypeInspector") {
     REQUIRE(get_first(document, scene.m_button).m_action ==
       Action(ScrollTransition(scene.m_box, 0,
         Animation(Transition::DISSOLVE, Easing::EASE_OUT, DEFAULT_DURATION))));
+    REQUIRE(editor.get_history().get_undo_label() == "Target");
     auto& chosen = get<QComboBox>(inspector, "destination");
     REQUIRE(chosen.count() == 4);
     REQUIRE(chosen.itemText(0) == "None");
@@ -482,16 +580,46 @@ TEST_SUITE("PrototypeInspector") {
     REQUIRE(get_first(document, scene.m_button).m_action ==
       Action(ScrollTransition(scene.m_box, -100,
         Animation(Transition::DISSOLVE, Easing::EASE_IN, 0.6000000238418579))));
-    REQUIRE(editor.get_history().get_undo_label() == "Change Interaction");
-    choose(get<QComboBox>(inspector, "destination"), "None");
-    REQUIRE(std::get<ScrollTransition>(
-      get_first(document, scene.m_button).m_action).m_destination.is_nil());
+    REQUIRE(editor.get_history().get_undo_label() == "Duration");
+    auto& stored = get<QLineEdit>(inspector, "y_offset");
+    stored.setText("150");
+    stored.editingFinished();
+    QApplication::processEvents();
+    choose(get<QComboBox>(inspector, "destination"), "Toggle");
+    REQUIRE(get_scroll(document, scene.m_button).m_destination ==
+      scene.m_instance);
+    REQUIRE(get_scroll(document, scene.m_button).m_offset == 150);
+    REQUIRE(get<QLineEdit>(inspector, "y_offset").text() == "150");
+    auto count = editor.get_history().get_undo_count();
+    auto& retyped = get<QLineEdit>(inspector, "y_offset");
+    retyped.setText("150");
+    retyped.editingFinished();
+    QApplication::processEvents();
+    REQUIRE(get_scroll(document, scene.m_button).m_offset == 150);
+    REQUIRE(editor.get_history().get_undo_count() == count);
+    auto& clamped = get<QLineEdit>(inspector, "y_offset");
+    clamped.setText("140");
+    clamped.editingFinished();
+    QApplication::processEvents();
+    REQUIRE(get_scroll(document, scene.m_button).m_offset == 100);
+    REQUIRE(editor.get_history().get_undo_label() == "Y-Offset");
     REQUIRE(editor.undo());
+    REQUIRE(editor.undo());
+    REQUIRE(editor.undo());
+    REQUIRE(get_scroll(document, scene.m_button).m_offset == -100);
+    choose(get<QComboBox>(inspector, "destination"), "None");
+    REQUIRE(get_interactions(document, scene.m_button).empty());
+    REQUIRE(std::get<ScrollTransition>(get_edited(
+      editor, scene.m_button).m_action).m_destination.is_nil());
+    REQUIRE(editor.undo());
+    QApplication::processEvents();
+    REQUIRE(editor.get_context().get_pending().empty());
     REQUIRE(std::get<ScrollTransition>(get_first(document,
       scene.m_button).m_action).m_destination == scene.m_box);
     choose(get<QComboBox>(inspector, "type"), "Transition");
+    REQUIRE(get_interactions(document, scene.m_button).empty());
     auto transition = std::get_if<ArtboardTransition>(
-      &get_first(document, scene.m_button).m_action);
+      &get_edited(editor, scene.m_button).m_action);
     REQUIRE(transition);
     REQUIRE(transition->m_destination.is_nil());
   }
@@ -509,18 +637,18 @@ TEST_SUITE("PrototypeInspector") {
     choose(get<QComboBox>(inspector, "type"), "Scroll To");
     choose(get<QComboBox>(inspector, "destination"), "Box");
     choose(get<QComboBox>(inspector, "trigger"), "Hover");
-    REQUIRE(get_first(document, scene.m_instance).m_trigger ==
+    REQUIRE(get_edited(editor, scene.m_instance).m_trigger ==
       Trigger(HoverTrigger()));
-    REQUIRE(get_first(document, scene.m_instance).m_action ==
+    REQUIRE(get_edited(editor, scene.m_instance).m_action ==
       Action(StateTransition(StateId(), Animation(Transition::AUTO_ANIMATE,
         Easing::EASE_OUT, DEFAULT_DURATION))));
     REQUIRE(get<QComboBox>(inspector, "type").currentText() == "Auto-Animate");
     REQUIRE(editor.undo());
     QApplication::processEvents();
     choose(get<QComboBox>(inspector, "trigger"), "Drag");
-    REQUIRE(get_first(document, scene.m_instance).m_trigger ==
+    REQUIRE(get_edited(editor, scene.m_instance).m_trigger ==
       Trigger(DragTrigger()));
-    REQUIRE(get_first(document, scene.m_instance).m_action ==
+    REQUIRE(get_edited(editor, scene.m_instance).m_action ==
       Action(ArtboardTransition(NodeId(), Animation(Transition::AUTO_ANIMATE,
         Easing::LINEAR, DEFAULT_DURATION))));
   }
@@ -560,7 +688,8 @@ TEST_SUITE("PrototypeInspector") {
     REQUIRE(get<QComboBox>(inspector, "type").currentText() == "Scroll To");
     REQUIRE(get<QComboBox>(inspector, "destination").currentText() == "Box");
     choose(get<QComboBox>(inspector, "trigger"), "Drag");
-    REQUIRE(get_first(document, button).m_action ==
+    REQUIRE(get_interactions(document, button).empty());
+    REQUIRE(get_edited(editor, button).m_action ==
       Action(ArtboardTransition(NodeId(), Animation(Transition::AUTO_ANIMATE,
         Easing::LINEAR, DEFAULT_DURATION))));
     auto& dragged = get<QComboBox>(inspector, "destination");
@@ -641,15 +770,16 @@ TEST_SUITE("PrototypeInspector") {
     QApplication::processEvents();
     REQUIRE(inspector.get_current().is_nil());
     REQUIRE(editor.get_context().get_interaction().is_nil());
-    REQUIRE(!get<QToolButton>(inspector, "interaction_0").isChecked());
+    REQUIRE(!inspector.find_field("interaction_0"));
     REQUIRE(!get<QComboBox>(inspector, "trigger").isEnabled());
-    REQUIRE(get<QToolButton>(inspector, "interaction_0").text() ==
-      "Tap - Transition");
-    get<QToolButton>(inspector, "interaction_1").click();
+    editor.get_context().set_interaction(second);
     QApplication::processEvents();
     REQUIRE(inspector.get_current() == second);
-    REQUIRE(editor.get_context().get_interaction() == second);
+    REQUIRE(!inspector.find_field("interaction_0"));
     REQUIRE(get<QLineEdit>(inspector, "keys").text() == "Ctrl+K");
+    REQUIRE(get<QLabel>(inspector, "previous_note").text() ==
+      "Targeting a previous artboard automatically reverses the last used "
+      "transition.");
     auto& keys = get<QLineEdit>(inspector, "keys");
     auto event = QKeyEvent(QEvent::KeyPress, Qt::Key_B,
       Qt::ShiftModifier, "B");
@@ -657,10 +787,177 @@ TEST_SUITE("PrototypeInspector") {
     QApplication::processEvents();
     REQUIRE(get_interactions(document, scene.m_button)[1]->m_trigger ==
       Trigger(KeyTrigger("Shift+B")));
-    get<QToolButton>(inspector, "remove").click();
+    REQUIRE(editor.get_history().get_undo_label() == "Key");
+    REQUIRE(!inspector.find_field("remove"));
+  }
+
+  TEST_CASE("wire_list") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    auto transition = Action(
+      ArtboardTransition(scene.m_second, make_default_animation()));
+    auto keys = add_interaction(
+      document, scene.m_button, KeyTrigger("Ctrl+K"), transition);
+    auto tap = add_interaction(
+      document, scene.m_button, TapTrigger(), transition);
+    auto late = add_interaction(
+      document, scene.m_button, TimeTrigger(2), transition);
+    auto early = add_interaction(
+      document, scene.m_button, TimeTrigger(1), transition);
+    auto editor = Editor(document);
+    auto inspector = PrototypeInspector();
+    inspector.set_editor(&editor);
+    editor.get_selection().select(scene.m_button);
     QApplication::processEvents();
-    REQUIRE(get_interactions(document, scene.m_button).size() == 1);
+    REQUIRE(inspector.get_current() == tap);
+    auto labels = QStringList();
+    for(auto i = 0; i != 4; ++i) {
+      labels.push_back(get<QToolButton>(
+        inspector, "interaction_" + std::to_string(i)).text());
+    }
+    REQUIRE(labels == QStringList({"Tap", "Time - 1", "Time - 2",
+      "Keys \xE2\x80\x94 Ctrl+K"}));
+    REQUIRE(get<QToolButton>(inspector, "interaction_0").isChecked());
+    REQUIRE(!get<QToolButton>(inspector, "interaction_0").icon().isNull());
+    REQUIRE(!inspector.find_field("interaction_4"));
+    auto overlay = add_interaction(document, scene.m_button, HoverTrigger(),
+      Overlay(scene.m_menu, Point(0, 0), make_default_animation()));
+    QApplication::processEvents();
+    REQUIRE(inspector.get_current() == tap);
+    REQUIRE(inspector.find_field("interaction_3"));
+    REQUIRE(!inspector.find_field("interaction_4"));
+    get<QToolButton>(inspector, "interaction_2").click();
+    QApplication::processEvents();
+    REQUIRE(inspector.get_current() == late);
+    REQUIRE(editor.get_context().get_interaction() == late);
+    REQUIRE(get<QToolButton>(inspector, "interaction_2").isChecked());
+    editor.get_context().set_interaction(overlay);
+    QApplication::processEvents();
+    REQUIRE(inspector.get_current() == overlay);
     REQUIRE(!inspector.find_field("interaction_0"));
+    editor.get_context().set_interactions(scene.m_button, {});
+    QApplication::processEvents();
+    REQUIRE(inspector.get_current().is_nil());
+    REQUIRE(!get<QComboBox>(inspector, "trigger").isEnabled());
+    editor.get_context().set_interaction(keys);
+    QApplication::processEvents();
+    REQUIRE(get<QToolButton>(inspector, "interaction_3").isChecked());
+  }
+
+  TEST_CASE("placeholder_states") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    add_interaction(document, scene.m_button, TapTrigger(),
+      ArtboardTransition(scene.m_second, make_default_animation()));
+    add_interaction(document, scene.m_button, KeyTrigger("K"),
+      PreviousArtboard());
+    auto editor = Editor(document);
+    auto inspector = PrototypeInspector();
+    inspector.set_editor(&editor);
+    REQUIRE(get<QComboBox>(inspector, "destination").currentText() ==
+      "(Choose a destination)");
+    REQUIRE(!get<QCheckBox>(inspector, "preserve_scroll").isEnabled());
+    REQUIRE(!get<QCheckBox>(inspector, "preserve_scroll").isChecked());
+    REQUIRE(!inspector.find_field("fixed"));
+    editor.get_selection().select(scene.m_box);
+    QApplication::processEvents();
+    auto& destination = get<QComboBox>(inspector, "destination");
+    REQUIRE(destination.currentIndex() == -1);
+    REQUIRE(destination.placeholderText() == QString(QChar(0x2014)));
+    REQUIRE(inspector.find_field("fixed"));
+    editor.get_selection().select(scene.m_button);
+    QApplication::processEvents();
+    REQUIRE(inspector.get_fields() == std::vector<std::string>({"add",
+      "trigger", "type", "preserve_scroll", "destination", "animation",
+      "easing", "duration", "fixed"}));
+    REQUIRE(!get<QComboBox>(inspector, "type").isEnabled());
+  }
+
+  TEST_CASE("mixed_nodes") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    auto first = add_interaction(document, scene.m_button, TapTrigger(),
+      ArtboardTransition(scene.m_second, make_default_animation()));
+    auto second = add_interaction(document, scene.m_box, TapTrigger(),
+      ArtboardTransition(scene.m_menu, make_default_animation()));
+    auto editor = Editor(document);
+    auto inspector = PrototypeInspector();
+    inspector.set_editor(&editor);
+    editor.get_selection().select(scene.m_button);
+    QApplication::processEvents();
+    get<QToolButton>(inspector, "add").click();
+    QApplication::processEvents();
+    REQUIRE(editor.get_context().get_pending().size() == 1);
+    REQUIRE(editor.get_history().get_undo_count() == 0);
+    editor.get_context().set_interactions(scene.m_button, {first, second});
+    REQUIRE(editor.get_context().get_pending().empty());
+    QApplication::processEvents();
+    auto& trigger = get<QComboBox>(inspector, "trigger");
+    REQUIRE(trigger.currentText() == "Tap");
+    auto items = QStringList();
+    for(auto i = 0; i != trigger.count(); ++i) {
+      items.push_back(trigger.itemText(i));
+    }
+    REQUIRE(items == QStringList({"Tap", "Drag", "Keys & Gamepad", "Voice"}));
+    choose(get<QComboBox>(inspector, "easing"), "Ease In");
+    REQUIRE(editor.get_history().get_undo_label() == "Easing");
+    for(auto& id : {scene.m_button, scene.m_box}) {
+      REQUIRE(std::get<ArtboardTransition>(get_interactions(
+        document, id).front()->m_action).m_animation.m_easing ==
+          Easing::EASE_IN);
+    }
+  }
+
+  TEST_CASE("mixed") {
+    auto document = Document();
+    auto scene = build_prototype_scene(document);
+    auto tap = add_interaction(document, scene.m_button, TapTrigger(),
+      ArtboardTransition(scene.m_second, make_empty_animation()));
+    auto drag = add_interaction(document, scene.m_button, DragTrigger(),
+      ArtboardTransition(scene.m_menu, Animation(Transition::AUTO_ANIMATE,
+        Easing::EASE_OUT, DEFAULT_DURATION)));
+    auto keys = add_interaction(document, scene.m_button, KeyTrigger("A"),
+      ArtboardTransition(scene.m_long, make_empty_animation()));
+    auto editor = Editor(document);
+    auto inspector = PrototypeInspector();
+    inspector.set_editor(&editor);
+    editor.get_selection().select(scene.m_button);
+    editor.get_context().set_interactions(scene.m_button, {drag, tap});
+    QApplication::processEvents();
+    REQUIRE(inspector.get_fields() == std::vector<std::string>({"add",
+      "trigger", "type", "destination", "easing", "fixed"}));
+    auto& trigger = get<QComboBox>(inspector, "trigger");
+    REQUIRE(trigger.currentText() == "Keys & Gamepad");
+    REQUIRE(trigger.isEnabled());
+    REQUIRE(get<QComboBox>(inspector, "type").currentIndex() == -1);
+    REQUIRE(get<QComboBox>(inspector, "destination").currentIndex() == -1);
+    REQUIRE(get<QComboBox>(inspector, "easing").currentText() == "Ease Out");
+    REQUIRE(!get<QComboBox>(inspector, "easing").isEnabled());
+    editor.get_context().set_interactions(scene.m_button, {tap, keys});
+    QApplication::processEvents();
+    REQUIRE(inspector.get_fields() == std::vector<std::string>({"add",
+      "trigger", "type", "preserve_scroll", "destination", "animation",
+      "easing", "duration", "fixed"}));
+    REQUIRE(get<QComboBox>(inspector, "type").currentText() == "Transition");
+    REQUIRE(get<QComboBox>(inspector, "animation").currentText() == "None");
+    REQUIRE(get<QComboBox>(inspector, "duration").currentText() == "0.3 s");
+    choose(get<QComboBox>(inspector, "animation"), "Dissolve");
+    REQUIRE(editor.get_history().get_undo_label() == "Animation");
+    for(auto& id : {tap, keys}) {
+      for(auto interaction : get_interactions(document, scene.m_button)) {
+        if(interaction->m_id == id) {
+          REQUIRE(std::get<ArtboardTransition>(interaction->m_action).
+            m_animation.m_transition == Transition::DISSOLVE);
+        }
+      }
+    }
+    REQUIRE(editor.undo());
+    for(auto interaction : get_interactions(document, scene.m_button)) {
+      if(interaction->m_id != drag) {
+        REQUIRE(std::get<ArtboardTransition>(interaction->m_action).
+          m_animation.m_transition == Transition::NONE);
+      }
+    }
   }
 
   TEST_CASE("flows") {
@@ -818,7 +1115,7 @@ TEST_SUITE("PrototypeInspector") {
     REQUIRE(get_scroll(document, scene.m_button).m_offset == -60);
     REQUIRE(history.get_undo_count() == steps + 2);
     REQUIRE(history.get_redo_count() == 0);
-    REQUIRE(history.get_undo_label() == "Change Interaction");
+    REQUIRE(history.get_undo_label() == "Y-Offset");
     REQUIRE(history.is_dirty());
     REQUIRE(editor.undo());
     REQUIRE(get_scroll(document, scene.m_button).m_offset == 0);

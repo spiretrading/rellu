@@ -27,6 +27,7 @@
 #include "Rellu/Io/XdClipboard.hpp"
 #include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/Transaction.hpp"
+#include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Ui/Clipboard.hpp"
 
 using namespace Rellu;
@@ -92,6 +93,7 @@ namespace {
         remap_keys(group->m_stack->m_spacing, mapping);
       }
       if(auto& instance = group->m_component_instance) {
+        remap(instance->m_component, mapping);
         remap(instance->m_sync_map, mapping);
         remap(instance->m_overrides, mapping);
         for(auto& state : instance->m_states) {
@@ -128,6 +130,41 @@ namespace {
       text.chop(1);
     }
     return text;
+  }
+
+  void resolve_font(Font& font) {
+    if(!font.m_postscript_name.empty()) {
+      return;
+    }
+    auto resolution = get_default_font_library().resolve(font);
+    if(resolution.m_typeface &&
+        (resolution.m_match == FontMatch::POSTSCRIPT_NAME ||
+          resolution.m_match == FontMatch::FAMILY_AND_STYLE)) {
+      font.m_postscript_name =
+        resolution.m_typeface->get_names().m_postscript_name;
+    }
+  }
+
+  void resolve_fonts(Document& document) {
+    auto texts = std::vector<NodeId>();
+    document.get_nodes().for_each([&] (const Node& node) {
+      if(node.get_text()) {
+        texts.push_back(node.get_id());
+      }
+    });
+    if(texts.empty()) {
+      return;
+    }
+    auto transaction = Transaction(document);
+    for(auto& id : texts) {
+      auto text = *document.get(id).get_text();
+      resolve_font(text.m_base_style.m_font);
+      for(auto& run : text.m_runs) {
+        resolve_font(run.m_style.m_font);
+      }
+      transaction.replace_payload(id, Box<Text>(std::move(text)));
+    }
+    transaction.commit();
   }
 
   QString find_svg(const QMimeData& data) {
@@ -518,6 +555,7 @@ struct Clipboard::Content {
   bool m_is_image = false;
   bool m_is_text = false;
   std::string m_prefix;
+  std::string m_source;
   QByteArray m_mark;
   QByteArray m_xd;
 
@@ -709,6 +747,18 @@ class Clipboard::PasteCommand : public Command {
 
     void apply(const Document& document, Transaction& transaction) override {
       m_copies.clear();
+      m_localization.clear();
+      if(!m_content->m_source.empty() && !m_target.m_document.empty() &&
+          m_content->m_source != m_target.m_document) {
+        for(auto& component : m_content->m_components) {
+          m_localization.emplace(component.m_id, generate_node_id());
+        }
+        for(auto& tree : m_content->m_masters) {
+          for(auto& entry : tree) {
+            m_localization.emplace(entry.m_header.m_id, generate_node_id());
+          }
+        }
+      }
       add_resources(document, transaction);
       auto& trees = m_content->m_trees;
       if(std::any_of(trees.begin(), trees.end(), &Content::is_artboard)) {
@@ -735,6 +785,7 @@ class Clipboard::PasteCommand : public Command {
     std::shared_ptr<const Content> m_content;
     PasteTarget m_target;
     std::vector<NodeId> m_copies;
+    Mapping m_localization;
 
     static bool is_mapped(const Mapping& mapping, const NodeId& id) {
       return std::any_of(mapping.begin(), mapping.end(),
@@ -983,7 +1034,7 @@ class Clipboard::PasteCommand : public Command {
     }
 
     Mapping make_mapping() const {
-      auto mapping = Mapping();
+      auto mapping = m_localization;
       for(auto& tree : m_content->m_trees) {
         for(auto& entry : tree.m_nodes) {
           mapping.emplace(entry.m_header.m_id, generate_node_id());
@@ -1032,30 +1083,60 @@ class Clipboard::PasteCommand : public Command {
           transaction.add_image(image);
         }
       }
+      auto& mapping = m_localization;
       auto missing = std::unordered_set<ComponentId>();
       for(auto& component : m_content->m_components) {
-        if(!resources.m_components.contains(component.m_id)) {
-          missing.insert(component.m_id);
+        auto id = component.m_id;
+        remap(id, mapping);
+        if(!resources.m_components.contains(id)) {
+          missing.insert(id);
         }
       }
       if(missing.empty()) {
         return;
       }
       for(auto& tree : m_content->m_masters) {
-        if(document.find(tree.front().m_header.m_id)) {
+        auto root = tree.front().m_header.m_id;
+        remap(root, mapping);
+        if(document.find(root)) {
           continue;
         }
-        transaction.insert_root(tree.front().m_header, tree.front().m_payload);
-        for(auto i = std::size_t(1); i < tree.size(); ++i) {
-          transaction.append(
-            tree[i].m_parent, tree[i].m_header, tree[i].m_payload);
+        for(auto& entry : tree) {
+          auto header = entry.m_header;
+          remap(header.m_id, mapping);
+          auto payload = entry.m_payload;
+          remap(payload, mapping);
+          if(&entry == &tree.front()) {
+            transaction.insert_root(std::move(header), std::move(payload));
+          } else {
+            auto parent = entry.m_parent;
+            remap(parent, mapping);
+            transaction.append(parent, std::move(header), std::move(payload));
+          }
         }
       }
-      for(auto& component : m_content->m_components) {
-        if(missing.contains(component.m_id)) {
-          transaction.add_component(component);
+      for(auto component : m_content->m_components) {
+        remap(component.m_id, mapping);
+        if(!missing.contains(component.m_id)) {
+          continue;
         }
+        if(!mapping.empty()) {
+          remap(component.m_master, mapping);
+          for(auto& state : component.m_states) {
+            remap(state.m_tree, mapping);
+            remap(state.m_sync_map, mapping);
+            remap(state.m_overrides, mapping);
+          }
+          if(component.m_link && is_document_link(*component.m_link)) {
+            component.m_link = std::nullopt;
+          }
+        }
+        transaction.add_component(std::move(component));
       }
+    }
+
+    static bool is_document_link(const ComponentLink& link) {
+      return !link.m_reference.starts_with('{');
     }
 
     static std::pair<NodeHeader, Payload> make_copy(
@@ -1428,7 +1509,7 @@ bool Clipboard::is_copyable(
 
 bool Clipboard::copy(const Document& document,
     const std::vector<NodeId>& nodes, const TextMeasurer& measurer,
-    const XdTextLayout& layout) {
+    const XdTextLayout& layout, const XdClipboardSource& source) {
   auto roots = get_copyable(document, nodes);
   if(roots.empty()) {
     return false;
@@ -1462,8 +1543,10 @@ bool Clipboard::copy(const Document& document,
       folder.clear();
     }
   }
+  content->m_source = source.m_id;
   content->m_xd = write_xd_clipboard(document, items,
-    content->get_bounds().value_or(Rect(0, 0, 0, 0)), layout, folder);
+    content->get_bounds().value_or(Rect(0, 0, 0, 0)), layout, folder,
+    source);
   auto& folders = get_image_folders();
   for(auto& earlier : folders) {
     std::filesystem::remove_all(earlier, error);
@@ -1564,6 +1647,7 @@ bool Clipboard::load(const QMimeData& data, const TextMeasurer& measurer) {
           }
         }
         content->m_is_foreign = true;
+        content->m_source = read.m_document;
         m_content = std::move(content);
         return true;
       }
@@ -1573,6 +1657,7 @@ bool Clipboard::load(const QMimeData& data, const TextMeasurer& measurer) {
     auto scratch = Document();
     try {
       read_svg(svg, scratch);
+      resolve_fonts(scratch);
       auto& canvas = scratch.get_canvas();
       if(!canvas.empty()) {
         auto content = Content::make(scratch, canvas, measurer);

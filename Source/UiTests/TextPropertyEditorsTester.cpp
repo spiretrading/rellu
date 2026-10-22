@@ -1,7 +1,11 @@
 #include <algorithm>
 #include <cmath>
+#include <string>
+#include <tuple>
 #include <utility>
+#include <vector>
 #include <doctest/doctest.h>
+#include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Text/TextLayout.hpp"
 #include "Rellu/Ui/PropertyDescriptor.hpp"
@@ -350,6 +354,96 @@ TEST_SUITE("TextPropertyEditors") {
     REQUIRE(std::get<AutoHeightFrame>(text.m_frame).m_width ==
       std::ceil(width));
     REQUIRE(measure_lines(text, library).size() == 2);
+  }
+
+  TEST_CASE("auto_width_line_breaks") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    {
+      auto transaction = Transaction(document);
+      auto text = get_text(document, ids.m_label);
+      text.m_content = Shared(std::u16string(u"aaaa bbbb cccc dddd\nee"));
+      text.m_frame = AutoHeightFrame(60);
+      text.m_runs.clear();
+      text.m_layout = std::nullopt;
+      transaction.replace_payload(ids.m_label, text);
+      transaction.commit();
+    }
+    auto& library = get_default_font_library();
+    auto lines = measure_lines(get_text(document, ids.m_label), library);
+    REQUIRE(lines.size() > 2);
+    auto expected = std::u16string();
+    auto& content = *get_text(document, ids.m_label).m_content;
+    for(auto i = std::size_t(0); i != lines.size(); ++i) {
+      auto end = i + 1 == lines.size() ? content.size() : lines[i + 1].m_start;
+      expected += content.substr(lines[i].m_start, end - lines[i].m_start);
+      if(i + 1 != lines.size() && !lines[i].m_is_paragraph_end) {
+        expected += u'\n';
+      }
+    }
+    REQUIRE(expected.starts_with(u"aaaa \n"));
+    auto editor = Editor(document);
+    auto editors = make_editors(editor);
+    REQUIRE(apply(editor, editors, "text.frame", ids.m_label,
+      Choice(0, QStringList())));
+    auto& text = get_text(document, ids.m_label);
+    REQUIRE(std::holds_alternative<PositionedFrame>(text.m_frame));
+    REQUIRE(*text.m_content == expected);
+    REQUIRE(measure_lines(text, library).size() == lines.size());
+    REQUIRE(document.get(ids.m_label).m_header.m_name ==
+      make_text_name(expected));
+    REQUIRE(editor.undo());
+    REQUIRE(*get_text(document, ids.m_label).m_content ==
+      u"aaaa bbbb cccc dddd\nee");
+    REQUIRE(document.get(ids.m_label).m_header.m_name.empty());
+  }
+
+  TEST_CASE("auto_width_conversion") {
+    auto& library = get_default_font_library();
+    auto convert = [&] (TextFrame frame, double y) {
+      auto document = Document();
+      auto ids = build_test_document(document);
+      {
+        auto transaction = Transaction(document);
+        auto text = get_text(document, ids.m_label);
+        text.m_content =
+          Shared(std::u16string(u"alpha beta gamma delta epsilon"));
+        text.m_frame = frame;
+        text.m_base_style.m_font =
+          Font("Roboto", "Regular", "Roboto-Regular", 26);
+        text.m_paragraph_style.m_line_height = 18;
+        text.m_runs.clear();
+        text.m_layout = std::nullopt;
+        transaction.replace_payload(ids.m_label, text);
+        auto header = document.get(ids.m_label).m_header;
+        header.m_transform = make_translation(292, y);
+        transaction.replace_header(header);
+        transaction.commit();
+      }
+      auto editor = Editor(document);
+      auto editors = make_editors(editor);
+      REQUIRE(apply(editor, editors, "text.frame", ids.m_label,
+        Choice(0, QStringList())));
+      auto& text = get_text(document, ids.m_label);
+      REQUIRE(*text.m_content == u"alpha \nbeta \ngamma \ndelta \nepsilon");
+      REQUIRE(document.get(ids.m_label).m_header.m_name ==
+        "alpha \nbeta \ngamma \ndelta \nepsilon");
+      REQUIRE(document.get(ids.m_label).m_header.m_transform ==
+        make_translation(292, y + 25));
+      auto layout = store_layout(text, library);
+      using Range = std::tuple<std::size_t, std::size_t, double>;
+      auto ranges = std::vector<Range>();
+      for(auto& paragraph : layout.m_paragraphs) {
+        REQUIRE(paragraph.m_lines.size() == 1);
+        auto& runs = paragraph.m_lines.front().m_runs;
+        ranges.emplace_back(runs.front().m_from, runs.back().m_to,
+          runs.front().m_position.m_y);
+      }
+      REQUIRE(ranges == std::vector<Range>({{0, 6, 0}, {7, 12, 18},
+        {13, 19, 36}, {20, 26, 54}, {27, 34, 72}}));
+    };
+    convert(AutoHeightFrame(120), 30);
+    convert(AreaFrame(Size(120, 104)), 250);
   }
 
   TEST_CASE("auto_height_width") {

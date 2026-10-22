@@ -61,7 +61,7 @@ TEST_SUITE("ShapeImporter") {
     REQUIRE(polygon.m_star_ratio == 100);
     auto derived = std::get<PolygonShape>(import_geometry(R"({
       "type": "polygon", "uxdesign#cornerCount": 3, "uxdesign#width": 5,
-      "uxdesign#height": 6, "points": [{"x": 2.5, "y": 0},
+      "uxdesign#height": 6, "points": [{"x": 2.499999761581421, "y": 0},
       {"x": 5, "y": 6}, {"x": 0, "y": 6}]})"));
     REQUIRE(derived.m_vertices.empty());
   }
@@ -73,6 +73,20 @@ TEST_SUITE("ShapeImporter") {
     auto& polygon = std::get<PolygonShape>(geometry);
     REQUIRE(polygon.m_corner_count == 5);
     REQUIRE(polygon.m_star_ratio == 47);
+    auto derived = std::get<PolygonShape>(import_geometry(R"({
+      "type": "polygon", "uxdesign#cornerCount": 5, "uxdesign#width": 303,
+      "uxdesign#height": 303, "uxdesign#starRatio": 50, "points": [
+      {"x": 151.49998474121094, "y": 0},
+      {"x": 189.37501525878906, "y": 112.6810531616211},
+      {"x": 303, "y": 115.7356948852539},
+      {"x": 212.78305053710938, "y": 188.43106079101562},
+      {"x": 245.13214111328125, "y": 303},
+      {"x": 151.5, "y": 235.24713134765625},
+      {"x": 57.867862701416016, "y": 303},
+      {"x": 90.21696472167969, "y": 188.43106079101562},
+      {"x": 0, "y": 115.73571014404297},
+      {"x": 113.62499237060547, "y": 112.68107604980469}]})"));
+    REQUIRE(derived.m_vertices.empty());
   }
 
   TEST_CASE("path") {

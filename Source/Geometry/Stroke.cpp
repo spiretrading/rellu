@@ -215,7 +215,7 @@ namespace {
   }
 
   std::vector<Contour> dash(const Contour& contour,
-      const std::vector<double>& pattern, double offset) {
+      const std::vector<double>& pattern, double offset, bool is_wedged) {
     auto total = 0.0;
     for(auto entry : pattern) {
       total += entry;
@@ -290,7 +290,7 @@ namespace {
       dashes.front() = std::move(current);
     } else if(is_on && current.m_vertices.size() > 1) {
       dashes.push_back(std::move(current));
-    } else if(!is_on && contour.m_is_closed && remaining <= 0 &&
+    } else if(is_wedged && !is_on && contour.m_is_closed && remaining <= 0 &&
         is_first_on && !dashes.empty()) {
       auto& first = dashes.front().m_vertices;
       auto start = first.front().m_point;
@@ -465,7 +465,7 @@ namespace {
     }
     auto dashes = std::vector<Contour>();
     for(auto& contour : contours) {
-      for(auto& piece : dash(contour, pattern, offset)) {
+      for(auto& piece : dash(contour, pattern, offset, true)) {
         dashes.push_back(std::move(piece));
       }
     }
@@ -544,4 +544,42 @@ Path Rellu::outline_stroke(
       Clipper2Lib::FillRule::NonZero);
   }
   return to_path(region, scale);
+}
+
+Path Rellu::dash_line(
+    const Path& path, const StrokeGeometry& stroke, double tolerance) {
+  auto extent = get_extent(path);
+  if(!(extent <= MAXIMUM_COORDINATE)) {
+    return dash_line(drop_unrepresentable(path), stroke, tolerance);
+  }
+  auto precision = get_precision(tolerance, extent + 2 * stroke.m_width);
+  auto scale = std::pow(10.0, precision.m_digits);
+  auto contours = make_contours(path, precision.m_tolerance, scale);
+  auto pattern = make_pattern(stroke, scale);
+  auto offset = stroke.m_dash_offset * scale;
+  if(!std::isfinite(offset)) {
+    offset = 0;
+  }
+  auto pieces = std::vector<Contour>();
+  for(auto& contour : contours) {
+    if(pattern.empty()) {
+      pieces.push_back(contour);
+      continue;
+    }
+    for(auto& piece : dash(contour, pattern, offset, false)) {
+      pieces.push_back(std::move(piece));
+    }
+  }
+  auto line = Path(FillRule::NON_ZERO);
+  for(auto& piece : pieces) {
+    auto& vertices = piece.m_vertices;
+    line.move_to(vertices.front().m_point / scale);
+    for(auto i = std::next(vertices.begin()); i != vertices.end(); ++i) {
+      line.line_to(i->m_point / scale);
+    }
+    if(piece.m_is_closed) {
+      line.close();
+    }
+  }
+  return line;
 }

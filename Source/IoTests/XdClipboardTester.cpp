@@ -183,7 +183,14 @@ TEST_SUITE("XdClipboard") {
     auto json = decode(write_xd_clipboard(document,
       {XdClipboardItem(instance, Matrix(), std::nullopt)},
       Rect(0, 0, 10, 10), {},
-      std::filesystem::path(directory.path().toStdU16String())));
+      std::filesystem::path(directory.path().toStdU16String()),
+      XdClipboardSource("9a6d0034-4db4-40c2-b0b5-841af2118dbc",
+        "C:\\Designs\\Source.xd")));
+    auto ux = get_ux(json);
+    REQUIRE(ux.value("docId").toString() ==
+      "9a6d0034-4db4-40c2-b0b5-841af2118dbc");
+    REQUIRE(ux.value("docPath").toString() == "C:\\Designs\\Source.xd");
+    REQUIRE(ux.value("isCloudDocument") == QJsonValue(false));
     auto node = json.value("children").toArray().at(0).toObject();
     REQUIRE(!node.contains("id"));
     REQUIRE(get_ux(node).value("sourceGuid").toString().toStdString() ==
@@ -194,6 +201,8 @@ TEST_SUITE("XdClipboard") {
     REQUIRE(symbols.at(0).toObject().value("id").toString().toStdString() ==
       to_string(master));
     REQUIRE(get_ux(symbols.at(0)).value("symbolOnClipboard").toBool());
+    REQUIRE(get_ux(symbols.at(0)).value("linkedElementRef").toString() ==
+      "C:\\Designs\\Source.xd");
     auto pattern = symbols.at(0).toObject().value("group").toObject().value(
       "children").toArray().at(0).toObject().value("style").toObject().
       value("fill").toObject().value("pattern").toObject();
@@ -228,6 +237,7 @@ TEST_SUITE("XdClipboard") {
     auto data = write_xd_clipboard(document, {XdClipboardItem(box,
       make_translation(110, 70), Point(10, 20))}, Rect(110, 70, 30, 40));
     REQUIRE(data.endsWith(QByteArray(2, '\0')));
+    REQUIRE(!get_ux(decode(data)).contains("docId"));
     auto copy = Document();
     auto content = read_xd_clipboard(data, copy);
     REQUIRE(content.m_offsets.front() == Point(10, 20));

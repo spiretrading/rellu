@@ -265,6 +265,35 @@ TEST_SUITE("Shapes") {
     REQUIRE(is_near(vertices[5], Point(20, 0)));
   }
 
+  TEST_CASE("xd_points") {
+    REQUIRE(make_polygon_points(6, Size(130, 130)) == std::vector{
+      Point(97.5, 0), Point(130, 65), Point(97.5, 130),
+      Point(32.499996185302734, 130), Point(0, 65),
+      Point(32.50000762939453, 0)});
+    REQUIRE(make_polygon_points(3, Size(130, 130)) == std::vector{
+      Point(64.99999237060547, 0), Point(130, 130), Point(0, 130)});
+    REQUIRE(make_polygon_points(5, Size(303, 303), 50) == std::vector{
+      Point(151.49998474121094, 0),
+      Point(189.37501525878906, 112.6810531616211),
+      Point(303, 115.7356948852539),
+      Point(212.78305053710938, 188.43106079101562),
+      Point(245.13214111328125, 303),
+      Point(151.5, 235.24713134765625),
+      Point(57.867862701416016, 303),
+      Point(90.21696472167969, 188.43106079101562),
+      Point(0, 115.73571014404297),
+      Point(113.62499237060547, 112.68107604980469)});
+    REQUIRE(make_polygon_points(6, Size(150, 157), 30) == std::vector{
+      Point(112.5, 0), Point(91.875, 66.72500610351562), Point(150, 78.5),
+      Point(91.875, 90.2750015258789), Point(112.5, 157),
+      Point(75, 102.04999542236328), Point(37.499996185302734, 157),
+      Point(58.125, 90.2750015258789), Point(0, 78.50001525878906),
+      Point(58.125, 66.72500610351562),
+      Point(37.499977111816406, 2.1611211195704527e-05),
+      Point(74.99999237060547, 54.95000457763672)});
+    REQUIRE(make_polygon_points(2, Size(10, 10)).empty());
+  }
+
   TEST_CASE("equilateral_aspect") {
     auto is_near_size = [] (Size left, Size right) {
       return std::abs(left.m_width - right.m_width) < 1e-9 &&

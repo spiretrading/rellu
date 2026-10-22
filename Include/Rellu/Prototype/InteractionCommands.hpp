@@ -29,10 +29,7 @@ namespace Rellu {
    */
   double to_stored_seconds(double seconds);
 
-  /**
-   * Returns the animation Adobe XD gives a new interaction wired to a
-   * destination: a dissolve, easing out, over 0.3 seconds.
-   */
+  /** Returns a dissolve, easing out, over 0.3 seconds. */
   Animation make_default_animation();
 
   /**
@@ -66,15 +63,53 @@ namespace Rellu {
     const NodeId& owner, bool has_states, const Interaction* last);
 
   /**
-   * Makes the interaction Adobe XD creates when a wire is dragged from a
-   * node to an artboard: tapping the node transitions to the artboard with
-   * the default animation.
+   * Makes an interaction where tapping a node transitions to an artboard
+   * with a dissolve, easing out, over 0.3 seconds.
    * @param owner The node the interaction is attached to.
    * @param destination The artboard navigated to.
    * @return The interaction, with a nil id.
    */
   Interaction make_default_interaction(
     const NodeId& owner, const NodeId& destination);
+
+  /**
+   * Returns whether Adobe XD keeps an interaction in the document: its
+   * action has the destination it needs, a transition leading elsewhere
+   * than its own artboard, and a hyperlink has an address.
+   * @param document The document holding the owner.
+   * @param interaction The interaction.
+   */
+  bool is_complete(const Document& document, const Interaction& interaction);
+
+  /**
+   * Leads an interaction to a destination as Adobe XD does when a wire is
+   * dropped on it: an artboard keeps a transition or overlay and makes any
+   * other action a transition, and a layer makes a Scroll To to the layer
+   * directly within its artboard, triggered by a tap unless by keys.
+   * @param document The document holding the destination.
+   * @param interaction The interaction.
+   * @param destination The artboard or layer.
+   * @return The interaction leading to the destination.
+   */
+  Interaction retarget_interaction(const Document& document,
+    Interaction interaction, const NodeId& destination);
+
+  /**
+   * Makes the interaction Adobe XD adds when a wire is drawn from a node's
+   * handle to a destination: the one the + of the INTERACTION section adds,
+   * led to the destination.
+   * @param document The document holding the owner.
+   * @param owner The node the interaction is attached to.
+   * @param destination The artboard or layer.
+   * @param has_states Whether the owner is within a component with more
+   *        than one state.
+   * @param last The interaction last edited, or <code>nullptr</code> for
+   *        none.
+   * @return The interaction, with a nil id.
+   */
+  Interaction make_wired_interaction(const Document& document,
+    const NodeId& owner, const NodeId& destination, bool has_states,
+    const Interaction* last);
 
   /**
    * Returns the name Adobe XD gives a new flow: Flow followed by the
@@ -122,6 +157,34 @@ namespace Rellu {
    */
   Interaction change_trigger(Interaction interaction, Trigger trigger);
 
+  /** A state a component instance can switch to. */
+  struct ComponentStateChoice {
+
+    /** The state's id. */
+    StateId m_id;
+
+    /** The state's name, Default State for the default state. */
+    std::string m_name;
+  };
+
+  /** The states of the component instance a node lies in. */
+  struct ComponentStateChoices {
+
+    /** The state the node is shown in, or nil outside a component. */
+    StateId m_current;
+
+    /** The states in the order Adobe XD lists them, the default first. */
+    std::vector<ComponentStateChoice> m_states;
+  };
+
+  /**
+   * Finds the states of the component instance a node lies in.
+   * @param document The document.
+   * @param id The node.
+   */
+  ComponentStateChoices find_component_states(
+    const Document& document, const NodeId& id);
+
   /**
    * Returns the interaction Adobe XD selects when a node is selected: the
    * first by trigger of the node's interactions when they all share one
@@ -132,6 +195,62 @@ namespace Rellu {
    */
   InteractionId find_default_interaction(
     const Document& document, const NodeId& owner);
+
+  /**
+   * Returns the artboard or layer an interaction's wire leads to.
+   * @param interaction The interaction.
+   * @return The destination of its transition, overlay or scroll, or nil
+   *         if its wire has none.
+   */
+  NodeId get_wire_destination(const Interaction& interaction);
+
+  /**
+   * Returns whether two interactions share a wire as Adobe XD draws them:
+   * the same owner and the same destination, or no destination for both.
+   */
+  bool is_same_wire(const Interaction& left, const Interaction& right);
+
+  /**
+   * Sorts interactions by trigger in Adobe XD's order: tap, drag, hover,
+   * time by delay, then keys by device and key.
+   * @param interactions The interactions to sort.
+   */
+  void sort_by_trigger(std::vector<const Interaction*>& interactions);
+
+  /**
+   * Returns the interactions sharing an interaction's wire, sorted by
+   * trigger.
+   * @param document The document holding the interaction.
+   * @param interaction The interaction.
+   */
+  std::vector<const Interaction*> get_wire(
+    const Document& document, const Interaction& interaction);
+
+  /**
+   * Returns the interaction Adobe XD edits after deleting interactions: when
+   * they share one wire, the one before the first of them by trigger among
+   * those left on the wire, or after it when it is the first.
+   * @param document The document holding the interactions, before deleting.
+   * @param removed The ids of the interactions deleted.
+   * @return The interaction's id, or nil if none is edited.
+   */
+  InteractionId find_next_interaction(
+    const Document& document, const std::vector<InteractionId>& removed);
+
+  /**
+   * Returns the labels Adobe XD lists the interactions of a wire with, in
+   * the order of their triggers.
+   * @param interactions The interactions.
+   */
+  std::vector<std::string> label_interactions(
+    const std::vector<const Interaction*>& interactions);
+
+  /**
+   * Returns the tooltip Adobe XD shows over a wire.
+   * @param interactions The wire's interactions.
+   */
+  std::string summarize_wire(
+    const std::vector<const Interaction*>& interactions);
 
   /** Adds an interaction to a node, labelled Add Interaction. */
   class AddInteractionCommand : public Command {
@@ -208,8 +327,8 @@ namespace Rellu {
   };
 
   /**
-   * Makes an artboard the start of a flow, labelled Add Flow, doing nothing
-   * if a flow already starts on it.
+   * Makes an artboard the start of a flow, labelled Mark as flow root,
+   * doing nothing if a flow already starts on it.
    */
   class AddFlowCommand : public Command {
     public:
@@ -231,8 +350,8 @@ namespace Rellu {
   };
 
   /**
-   * Removes the flow starting on an artboard, labelled Remove Flow, along
-   * with the home artboard if it is that artboard.
+   * Removes the flow starting on an artboard, labelled Unmark as flow root,
+   * along with the home artboard if it is that artboard.
    */
   class RemoveFlowCommand : public Command {
     public:

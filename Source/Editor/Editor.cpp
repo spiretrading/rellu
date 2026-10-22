@@ -33,6 +33,8 @@ struct Editor::Record {
   NodeId m_before_primary;
   std::vector<NodeId> m_after;
   NodeId m_after_primary;
+  std::optional<InteractionSelection> m_interactions_before;
+  std::optional<InteractionSelection> m_interactions_after;
 };
 
 Editor::Editor(Document& document)
@@ -54,6 +56,7 @@ Document& Editor::get_document() const {
 const Command* Editor::capture(auto apply) {
   auto before = m_selection.get_nodes();
   auto before_primary = m_selection.get_primary();
+  auto interactions = m_context.get_interaction_selection();
   auto guard = Guard(m_is_updating);
   auto command = apply();
   if(!command) {
@@ -62,16 +65,42 @@ const Command* Editor::capture(auto apply) {
   if(auto selection = command->get_selection()) {
     m_selection.select(*selection);
   }
+  annotate(std::move(before), before_primary, std::move(interactions));
+  return command;
+}
+
+void Editor::annotate(std::vector<NodeId> before, const NodeId& primary,
+    std::optional<InteractionSelection> interactions) {
+  auto annotation = m_history.get_undo_annotation();
+  if(!annotation) {
+    return;
+  }
+  if(auto record = std::any_cast<Record>(annotation)) {
+    record->m_after = m_selection.get_nodes();
+    record->m_after_primary = m_selection.get_primary();
+    record->m_interactions_after = m_context.get_interaction_selection();
+  } else {
+    *annotation = Record(std::move(before), primary, m_selection.get_nodes(),
+      m_selection.get_primary(), std::move(interactions),
+      m_context.get_interaction_selection());
+  }
+}
+
+void Editor::record(std::string label,
+    std::optional<InteractionSelection> interactions) {
+  m_history.record(std::move(label), {}, {});
+  annotate(m_selection.get_nodes(), m_selection.get_primary(),
+    std::move(interactions));
+}
+
+void Editor::update_selection() {
   if(auto annotation = m_history.get_undo_annotation()) {
     if(auto record = std::any_cast<Record>(annotation)) {
       record->m_after = m_selection.get_nodes();
       record->m_after_primary = m_selection.get_primary();
-    } else {
-      *annotation = Record(std::move(before), before_primary,
-        m_selection.get_nodes(), m_selection.get_primary());
+      record->m_interactions_after = m_context.get_interaction_selection();
     }
   }
-  return command;
 }
 
 const Command* Editor::execute(std::unique_ptr<Command> command) {
@@ -111,6 +140,8 @@ bool Editor::undo() {
   m_history.undo();
   if(record) {
     m_selection.select(record->m_before, record->m_before_primary);
+    m_context.restore_interactions(
+      m_selection.get_primary(), record->m_interactions_before);
   }
   return true;
 }
@@ -128,6 +159,8 @@ bool Editor::redo() {
   m_history.redo();
   if(record) {
     m_selection.select(record->m_after, record->m_after_primary);
+    m_context.restore_interactions(
+      m_selection.get_primary(), record->m_interactions_after);
   }
   return true;
 }

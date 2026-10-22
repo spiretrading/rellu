@@ -150,7 +150,8 @@ void TileCache::clear() {
   m_is_complete = false;
 }
 
-void TileCache::invalidate(const std::vector<DrawRegion>& regions) {
+void TileCache::invalidate(
+    const Drawing& drawing, const std::vector<DrawRegion>& regions) {
   if(!m_epoch || regions.empty()) {
     return;
   }
@@ -158,7 +159,10 @@ void TileCache::invalidate(const std::vector<DrawRegion>& regions) {
   auto view = make_translation(-epoch.m_anchor.x(), -epoch.m_anchor.y()) *
     make_scale(epoch.m_scale, epoch.m_scale);
   auto frame = QRect(QPoint(0, 0), epoch.m_size);
-  for(auto& region : regions) {
+  auto damage = regions;
+  auto readers = drawing.get_readers(regions, epoch.m_scale);
+  damage.insert(damage.end(), readers.begin(), readers.end());
+  for(auto& region : damage) {
     auto pixels = to_pixels(region, view) & frame;
     if(pixels.isEmpty()) {
       continue;

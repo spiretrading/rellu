@@ -320,8 +320,8 @@ TEST_SUITE("LayersPanel") {
     for(auto row = 0; row != results.rowCount(); ++row) {
       names.push_back(results.index(row, LayersModel::NAME).data().toString());
     }
-    REQUIRE(names == QStringList({"HOME", "Home", "Button", "Hello world",
-      "Background", "PASTEBOARD", "Loose"}));
+    REQUIRE(names == QStringList({"HOME", "Home", "Button",
+      "Hello world Second line", "Background", "PASTEBOARD", "Loose"}));
     panel.set_search("");
     REQUIRE(!panel.is_filtered_out(ids.m_loose));
     panel.set_filter(LayerFilter::TEXT);

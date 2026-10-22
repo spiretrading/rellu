@@ -14,6 +14,7 @@
 #include "Rellu/Commands/CreationCommands.hpp"
 #include "Rellu/Commands/HeaderCommands.hpp"
 #include "Rellu/Localization/Localization.hpp"
+#include "Rellu/Prototype/InteractionCommands.hpp"
 #include "Rellu/Ui/EditActions.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "TestDocument.hpp"
@@ -230,6 +231,53 @@ TEST_SUITE("EditActions") {
     REQUIRE(actions.trigger("edit.duplicate"));
     REQUIRE(!document.get(editor.get_selection().get_primary()).
       get_artboard()->m_layout_grid);
+  }
+
+  TEST_CASE("delete_interactions") {
+    auto fixture = Fixture();
+    auto& actions = fixture.m_actions;
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    fixture.m_edit_actions->set_editor(&editor);
+    fixture.m_edit_actions->set_workspace(Workspace::PROTOTYPE);
+    auto add = [&] (Trigger trigger, Action action) {
+      auto command = std::make_unique<AddInteractionCommand>(Interaction(
+        NodeId(), ids.m_instance, std::move(trigger), std::move(action)));
+      auto id = command->get_interaction().m_id;
+      REQUIRE(editor.execute(std::move(command)));
+      return id;
+    };
+    auto transition = Action(
+      ArtboardTransition(ids.m_artboard, make_default_animation()));
+    auto tap = add(TapTrigger(), transition);
+    auto drag = add(DragTrigger(), transition);
+    auto back = add(KeyTrigger("K"), PreviousArtboard());
+    auto& edit = editor.get_context();
+    editor.get_selection().select(ids.m_instance);
+    edit.set_interactions(ids.m_instance, {drag});
+    fixture.m_edit_actions->update();
+    REQUIRE(actions.trigger("edit.delete"));
+    REQUIRE(get_interactions(document, ids.m_instance).size() == 2);
+    REQUIRE(document.find(ids.m_instance));
+    REQUIRE(edit.get_interactions() == std::vector{tap});
+    REQUIRE(actions.get("edit.undo").text() == "Undo Delete");
+    edit.set_interactions(ids.m_instance, {back});
+    REQUIRE(actions.trigger("edit.delete"));
+    REQUIRE(get_interactions(document, ids.m_instance).size() == 1);
+    REQUIRE(edit.get_interactions().empty());
+    REQUIRE(edit.get_interaction_owner() == ids.m_instance);
+    auto pending = make_empty_interaction(ids.m_instance);
+    pending.m_id = generate_node_id();
+    edit.set_interactions(ids.m_instance, {pending.m_id});
+    edit.set_pending({pending});
+    auto count = editor.get_history().get_undo_count();
+    REQUIRE(actions.trigger("edit.delete"));
+    REQUIRE(document.find(ids.m_instance));
+    REQUIRE(edit.get_pending().empty());
+    REQUIRE(editor.get_history().get_undo_count() == count);
+    REQUIRE(actions.trigger("edit.delete"));
+    REQUIRE(!document.find(ids.m_instance));
   }
 
   TEST_CASE("reset_main_state") {

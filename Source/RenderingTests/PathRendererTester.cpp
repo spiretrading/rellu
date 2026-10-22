@@ -918,6 +918,23 @@ TEST_SUITE("PathRenderer") {
     require_pixel(image, 11, 4, Pixel({0, 0, 0, 1}), 0);
   }
 
+  TEST_CASE("backdrop_blur_resolution") {
+    auto renderer = TestRenderer();
+    renderer.m_list.push_back(
+      fill(make_rectangle(Rect(0, 0, 20, 10)), make_color(0, 0, 0)));
+    renderer.m_list.push_back(fill(make_rectangle(Rect(31.0 / 3, 0, 1.0 / 3,
+      10)), make_color(255, 255, 255)));
+    renderer.m_list.push_back(BackdropBlurCommand(
+      share(make_rectangle(Rect(0, 0, 20, 10))), Matrix(), 0.2, 0,
+      std::nullopt));
+    auto image = render(renderer, QSize(60, 30), 3);
+    require_pixel(image, 28, 15, Pixel({0, 0, 0, 1}), 1);
+    require_pixel(image, 30, 15, Pixel({2.0 / 3, 2.0 / 3, 2.0 / 3, 1}), 2);
+    require_pixel(image, 31, 15, Pixel({1, 1, 1, 1}), 1);
+    require_pixel(image, 33, 15, Pixel({1.0 / 3, 1.0 / 3, 1.0 / 3, 1}), 2);
+    require_pixel(image, 35, 15, Pixel({0, 0, 0, 1}), 1);
+  }
+
   TEST_CASE("backdrop_blur_edges") {
     for(auto radius : {3.0, 40.0}) {
       auto renderer = TestRenderer();

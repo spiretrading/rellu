@@ -134,6 +134,11 @@ namespace {
   }
 }
 
+bool Rellu::is_exportable(QSize size) {
+  return !size.isEmpty() && std::int64_t(size.width()) * size.height() <=
+    MAXIMUM_EXPORT_AREA;
+}
+
 RenderBackend Rellu::get_default_render_backend() {
 #ifdef Q_OS_WIN
   return RenderBackend(QRhi::D3D11, true);

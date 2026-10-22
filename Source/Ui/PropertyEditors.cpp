@@ -85,11 +85,6 @@ namespace {
       }
       auto delta = is_x ? Point(*number - frame->m_x, 0) :
         Point(0, *number - frame->m_y);
-      if(nodes.size() == 1 && !document.get(nodes.front()).get_artboard()) {
-        auto parent = get_parent_transform(document, nodes.front());
-        delta = Point(parent.m_a * delta.m_x + parent.m_c * delta.m_y,
-          parent.m_b * delta.m_x + parent.m_d * delta.m_y);
-      }
       if(auto bounds = get_world_bounds(
           document, targets, BoundsType::GEOMETRY, measurer)) {
         delta = keep_on_canvas(*bounds, delta);

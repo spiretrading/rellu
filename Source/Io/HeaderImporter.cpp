@@ -122,6 +122,7 @@ namespace {
   void import_ux(XdObject& ux, NodeHeader& header) {
     header.m_is_locked = ux.get_bool("locked"_L1, false);
     header.m_is_marked_for_export = ux.get_bool("markedForExport"_L1, false);
+    header.m_is_naming_disabled = ux.get_bool("disableNaming"_L1, false);
     auto& constraints = header.m_constraints;
     constraints.m_is_enabled = !ux.get_bool("constraintsDisabled"_L1, false);
     constraints.m_is_custom = ux.get_bool("customConstraints"_L1, false);
@@ -195,11 +196,9 @@ void Rellu::add_header_importer(XdImporter& importer) {
     if(header.m_has_custom_name || !node.m_payload) {
       return;
     }
-    if(auto text = std::get_if<Box<Text>>(&*node.m_payload)) {
-      if(auto ux = get_ux(json);
-          !ux || !ux->get_bool("disableNaming"_L1, false)) {
-        header.m_name = make_content_name(*(*text)->m_content);
-      }
+    if(auto text = std::get_if<Box<Text>>(&*node.m_payload);
+        text && !header.m_is_naming_disabled) {
+      header.m_name = make_content_name(*(*text)->m_content);
     }
   });
 }

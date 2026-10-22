@@ -1,7 +1,10 @@
 #ifndef RELLU_EDITOR_EDITOR_HPP
 #define RELLU_EDITOR_EDITOR_HPP
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
 #include "Rellu/Commands/Command.hpp"
 #include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Commands/History.hpp"
@@ -63,6 +66,21 @@ namespace Rellu {
       const Command* merge(std::unique_ptr<Command> command);
 
       /**
+       * Records a step changing nothing in the document, restoring the
+       * selection and the interactions being edited when undone and redone.
+       * @param label The step's label.
+       * @param interactions The interactions edited before the step.
+       */
+      void record(std::string label,
+        std::optional<InteractionSelection> interactions);
+
+      /**
+       * Records the selection and the interactions now being edited as
+       * those the most recent step leaves.
+       */
+      void update_selection();
+
+      /**
        * Applies a named command to the selection as a new step.
        * @param registry The registry naming the command.
        * @param name The command's name.
@@ -105,6 +123,8 @@ namespace Rellu {
       Editor(const Editor&) = delete;
       Editor& operator =(const Editor&) = delete;
       const Command* capture(auto apply);
+      void annotate(std::vector<NodeId> before, const NodeId& primary,
+        std::optional<InteractionSelection> interactions);
       void on_selection();
   };
 

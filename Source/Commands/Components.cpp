@@ -117,6 +117,7 @@ namespace {
     if(is_set(mask, ChangeMask::NAME)) {
       to.m_name = from.m_name;
       to.m_has_custom_name = from.m_has_custom_name;
+      to.m_is_naming_disabled = from.m_is_naming_disabled;
     }
     if(is_set(mask, ChangeMask::VISIBILITY)) {
       to.m_is_visible = from.m_is_visible;

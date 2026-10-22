@@ -166,6 +166,16 @@ namespace Rellu {
     const Text& text, const FontLibrary& library);
 
   /**
+   * Finds the indices of a text's content at which its lines, as measured
+   * by measure_lines, wrap within a paragraph.
+   * @param text The text node's payload.
+   * @param library The fonts to resolve the text's fonts with.
+   * @return The indices in ascending order.
+   */
+  std::vector<std::size_t> find_wraps(
+    const Text& text, const FontLibrary& library);
+
+  /**
    * Converts a TextLayout into filled regions, merging the glyphs and
    * decorations of each color, with each layer of a color glyph filled in
    * its own color.

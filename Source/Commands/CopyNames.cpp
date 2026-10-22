@@ -99,6 +99,17 @@ namespace {
       node.m_header.m_has_custom_name;
   }
 
+  bool is_unnumbered_group(const Node& node) {
+    auto group = node.get_group();
+    if(!group || !group->m_mask || has_custom_name(node)) {
+      return false;
+    }
+    return std::any_of(LANGUAGES.begin(), LANGUAGES.end(),
+      [&] (const auto& language) {
+        return node.m_header.m_name == localize("name", "Group", language);
+      });
+  }
+
   std::string make_name(const Document& document, const Node& node) {
     if(auto text = node.get_text()) {
       return make_text_name(*text->m_content);
@@ -172,8 +183,9 @@ namespace {
       name_subtree(document, transaction, child, is_kept);
     }
     auto& current = document.get(id);
-    if(has_custom_name(current) ||
-        (is_kept && !current.m_header.m_name.empty())) {
+    if(has_custom_name(current) || current.m_header.m_is_naming_disabled ||
+        (is_kept && !current.m_header.m_name.empty() &&
+          !is_unnumbered_group(current))) {
       return false;
     }
     rename(document, transaction, id, make_name(document, current));
@@ -188,7 +200,8 @@ void Rellu::name_copy(const Document& document, Transaction& transaction,
   auto is_subtree_kept = is_kept || node.get_artboard() ||
     (group && (group->m_repeat_grid || is_plain_group(*group)));
   if(!name_subtree(document, transaction, id, is_subtree_kept) && !is_kept &&
-      !has_custom_name(document.get(id))) {
+      !has_custom_name(document.get(id)) &&
+      !document.get(id).m_header.m_is_naming_disabled) {
     rename(document, transaction, id, make_name(document, document.get(id)));
   }
 }

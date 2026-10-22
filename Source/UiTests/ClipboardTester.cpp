@@ -17,6 +17,7 @@
 #include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Io/XdGenerator.hpp"
+#include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Ui/Clipboard.hpp"
 #include "TestDocument.hpp"
 
@@ -384,6 +385,67 @@ TEST_SUITE("Clipboard") {
     REQUIRE(!other.find(ids.m_master_shape));
   }
 
+  TEST_CASE("other_document_components") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    {
+      auto component = document.get_resources().m_components.at(
+        ids.m_component);
+      component.m_link = ComponentLink("C:\\Designs\\A.xd", "A", 0);
+      auto transaction = Transaction(document);
+      transaction.replace_component(component);
+      transaction.commit();
+    }
+    auto clipboard = Clipboard();
+    REQUIRE(clipboard.copy(document, {ids.m_instance}, estimate_text_bounds,
+      {}, XdClipboardSource("A", "C:\\Designs\\A.xd")));
+    auto other = Document();
+    auto editor = Editor(other);
+    auto target = PasteTarget();
+    target.m_document = "B";
+    REQUIRE(editor.execute(clipboard.make_paste_command(target)));
+    auto& copy = other.get(editor.get_selection().get_primary());
+    REQUIRE(get_world_transform(other, copy.get_id()) ==
+      get_world_transform(document, ids.m_instance));
+    REQUIRE(copy.m_header.m_name == "Button \xE2\x80\x93 1");
+    auto& instance = *copy.get_group()->m_component_instance;
+    REQUIRE(instance.m_component != ids.m_component);
+    auto& components = other.get_resources().m_components;
+    REQUIRE(components.size() == 1);
+    auto& component = components.at(instance.m_component);
+    REQUIRE(!component.m_link);
+    REQUIRE(component.m_name == "Button");
+    REQUIRE(component.m_master != ids.m_master);
+    REQUIRE(!other.find(ids.m_master_shape));
+    auto& master = other.get(component.m_master);
+    REQUIRE(master.m_children.size() == 1);
+    auto& reference = other.get(copy.m_children.front());
+    REQUIRE(reference.get_reference()->m_source == master.m_children.front());
+    auto data = clipboard.make_mime_data();
+    auto xd = QMimeData();
+    for(auto& format : data->formats()) {
+      if(format.contains("com.adobe.xd")) {
+        xd.setData(format, data->data(format));
+      }
+    }
+    auto foreign = Clipboard();
+    REQUIRE(foreign.load(xd));
+    auto pasted = Document();
+    auto pasted_editor = Editor(pasted);
+    REQUIRE(pasted_editor.execute(foreign.make_paste_command(target)));
+    auto& pasted_components = pasted.get_resources().m_components;
+    REQUIRE(pasted_components.size() == 1);
+    REQUIRE(!pasted_components.contains(ids.m_component));
+    REQUIRE(!pasted_components.begin()->second.m_link);
+    auto same = Clipboard();
+    REQUIRE(same.copy(document, {ids.m_instance}, estimate_text_bounds, {},
+      XdClipboardSource("A", "C:\\Designs\\A.xd")));
+    auto again = Document();
+    auto again_editor = Editor(again);
+    REQUIRE(again_editor.execute(same.make_paste_command()));
+    REQUIRE(again.get_resources().m_components.contains(ids.m_component));
+  }
+
   TEST_CASE("system_clipboard") {
     auto document = Document();
     auto ids = build_test_document(document);
@@ -684,6 +746,94 @@ TEST_SUITE("Clipboard") {
     REQUIRE(mark.m_header.m_name == "Mark");
     REQUIRE(std::holds_alternative<PathShape>(
       mark.get_shape()->m_geometry));
+  }
+
+  TEST_CASE("svg_group") {
+    auto document = Document();
+    build_test_document(document);
+    auto artboard =
+      add_artboard(document, "Square", Rect(1000, 0, 400, 400));
+    auto editor = Editor(document);
+    auto clipboard = Clipboard();
+    auto text = QMimeData();
+    text.setText(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200"
+      height="150"><g transform="translate(50,30)"><rect x="10" y="20"
+      width="40" height="30" fill="#ff8800"/><rect x="70" y="60" width="30"
+      height="20" fill="#0088ff"/></g></svg>)svg");
+    REQUIRE(clipboard.load(text));
+    REQUIRE(editor.execute(clipboard.make_paste_command(
+      make_target({artboard}, Rect(0, 0, 2000, 2000)))));
+    auto& selection = editor.get_selection().get_nodes();
+    REQUIRE(selection.size() == 1);
+    auto& group = document.get(selection.front());
+    REQUIRE(group.m_parent == artboard);
+    REQUIRE(group.m_header.m_name == "Group 1");
+    REQUIRE(group.m_header.m_transform == make_translation(145, 150));
+    REQUIRE(group.m_children.size() == 2);
+    auto& first = document.get(group.m_children[0]);
+    REQUIRE(first.m_header.m_name == "Rectangle 1");
+    REQUIRE(first.m_header.m_transform == make_translation(10, 20));
+    auto& second = document.get(group.m_children[1]);
+    REQUIRE(second.m_header.m_name == "Rectangle 2");
+    REQUIRE(second.m_header.m_transform == make_translation(70, 60));
+  }
+
+  TEST_CASE("svg_features") {
+    auto document = Document();
+    build_test_document(document);
+    auto artboard =
+      add_artboard(document, "Board", Rect(1000, 0, 420, 320));
+    auto editor = Editor(document);
+    auto paste = [&] (const QString& markup) -> const Node& {
+      auto clipboard = Clipboard();
+      auto text = QMimeData();
+      text.setText(markup);
+      REQUIRE(clipboard.load(text));
+      REQUIRE(editor.execute(clipboard.make_paste_command(
+        make_target({artboard}, Rect(0, 0, 3000, 3000)))));
+      return document.get(editor.get_selection().get_primary());
+    };
+    auto& clipped = paste(R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+      width="200" height="200"><defs><clipPath id="c"><circle cx="100"
+      cy="100" r="60"/></clipPath></defs><rect x="20" y="20" width="160"
+      height="160" fill="#22aa66" clip-path="url(#c)"/></svg>)svg");
+    REQUIRE(clipped.m_header.m_name == "Group 1");
+    REQUIRE(clipped.get_group()->m_mask);
+    REQUIRE(clipped.m_header.m_transform == make_translation(130, 80));
+    auto& switched = paste(R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+      width="160" height="100"><switch><foreignObject width="1"
+      height="1"/><g><rect x="20" y="20" width="100" height="60"
+      fill="#996633"/></g></switch></svg>)svg");
+    REQUIRE(switched.m_header.m_name == "Group 2");
+    REQUIRE(switched.m_parent == artboard);
+    REQUIRE(switched.m_children.empty());
+    REQUIRE(switched.m_header.m_transform == make_translation(210, 160));
+    auto& text = paste(R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+      width="300" height="80"><text x="10" y="40" font-family="Arial"
+      font-size="24" fill="#333">Hello <tspan
+      font-weight="bold">World</tspan></text></svg>)svg");
+    REQUIRE(text.m_header.m_name == "Hello World");
+    auto& content = *text.get_text();
+    REQUIRE(content.m_base_style.m_font.m_postscript_name == "Arial-BoldMT");
+    REQUIRE(content.m_runs.front().m_style.m_font.m_postscript_name ==
+      "ArialMT");
+    auto markup = QString(R"svg(<svg
+      xmlns="http://www.w3.org/2000/svg" width="200" height="200"><defs>
+      <clipPath id="n"><circle cx="50" cy="50" r="40"/></clipPath></defs>
+      <rect width="100" height="100" clip-path="url(#n)"/><circle cx="150"
+      cy="150" r="20"/></svg>)svg");
+    auto& nested = paste(markup);
+    REQUIRE(nested.m_header.m_name == "Group 4");
+    REQUIRE(document.get(nested.m_children.front()).m_header.m_name ==
+      "Group 3");
+    set_language(Language::GERMAN);
+    auto& localized = paste(markup);
+    set_language(Language::ENGLISH);
+    REQUIRE(localized.m_header.m_name == "Gruppe 2");
+    REQUIRE(document.get(localized.m_children.front()).m_header.m_name ==
+      "Gruppe 1");
+    REQUIRE(document.get(localized.m_children.back()).m_header.m_name ==
+      "Ellipse 2");
   }
 
   TEST_CASE("image_on_pasteboard") {
