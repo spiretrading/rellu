@@ -560,20 +560,29 @@ TEST_SUITE("LayersPanel") {
         return button->menu() != nullptr;
       });
     REQUIRE(filter != buttons.end());
-    REQUIRE((*filter)->geometry().right() == field->width() - 4 - 1);
-    auto ratio = field->devicePixelRatioF();
-    REQUIRE((*filter)->width() ==
-      static_cast<int>(std::ceil(std::lround(28.0 / 3 * ratio) / ratio)));
+    REQUIRE((*filter)->geometry() == QRect(field->width() - 14, 11, 9, 6));
     REQUIRE(field->textMargins().left() == 17);
-    REQUIRE(field->textMargins().right() == (*filter)->width() + 4 + 2);
+    REQUIRE(field->textMargins().right() == 16);
     REQUIRE(field->actions().empty());
-    auto icon = field->findChild<QLabel*>("search_icon");
-    REQUIRE(icon);
-    REQUIRE(icon->geometry().x() == 1);
-    auto glyph = icon->pixmap();
-    REQUIRE(glyph.width() == std::lround(28.0 / 3 * ratio));
-    REQUIRE(field->palette().color(QPalette::PlaceholderText) ==
-      QColor(0x66, 0x66, 0x66));
+    auto glyphs = field->findChild<QWidget*>("search_glyphs");
+    REQUIRE(glyphs);
+    REQUIRE(glyphs->geometry() == field->rect());
+    auto image = glyphs->grab().toImage();
+    auto bounds = [&] (const QRect& area) {
+      auto box = QRect();
+      for(auto y = area.top(); y <= area.bottom(); ++y) {
+        for(auto x = area.left(); x <= area.right(); ++x) {
+          if(qAlpha(image.pixel(x, y)) != 0) {
+            box |= QRect(x, y, 1, 1);
+          }
+        }
+      }
+      return box;
+    };
+    auto half = image.width() / 2;
+    REQUIRE(bounds(QRect(0, 0, half, image.height())) == QRect(1, 9, 9, 9));
+    REQUIRE(bounds(QRect(half, 0, image.width() - half, image.height())) ==
+      QRect(field->width() - 14, 11, 9, 6));
     panel.hide();
   }
 }

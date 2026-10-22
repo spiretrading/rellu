@@ -14,7 +14,7 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
-#include <QPalette>
+#include <QPainter>
 #include <QStyledItemDelegate>
 #include <QVBoxLayout>
 #include "Rellu/Commands/Components.hpp"
@@ -34,18 +34,81 @@ namespace {
   constexpr auto INDICATOR_WIDTH = 24;
   constexpr auto ICON_MARGIN = 6;
   constexpr auto SEARCH_GLYPH_SIZE = 28.0 / 3;
+  constexpr auto SEARCH_GLYPH_LEFT = 2.0 / 3;
+  constexpr auto SEARCH_GLYPH_TOP = 28.0 / 3;
   constexpr auto SEARCH_TEXT_MARGIN = 17;
   constexpr auto CHEVRON_WIDTH = 28.0 / 3;
   constexpr auto CHEVRON_HEIGHT = 6.0;
+  constexpr auto CHEVRON_RIGHT = 14.0 / 3;
+  constexpr auto CHEVRON_TOP = 34.0 / 3;
   constexpr auto FILTER_INSET = 4;
   constexpr auto SEARCH_TEXT_GAP = 2;
-  const auto SEARCH_TEXT_COLOR = QColor(0x66, 0x66, 0x66);
   const auto FILTERS = std::to_array<std::pair<LayerFilter, const char*>>({
     std::pair(LayerFilter::ALL, "All Items"),
     std::pair(LayerFilter::IMAGES, "Images"),
     std::pair(LayerFilter::SHAPES, "Shapes"),
     std::pair(LayerFilter::TEXT, "Text"),
     std::pair(LayerFilter::VIDEO, "Video")});
+
+  QRectF snap_glyph(
+      const QWidget& field, double left, double top, double width,
+      double height) {
+    auto ratio = field.devicePixelRatioF();
+    auto origin = QPointF(field.mapTo(field.window(), QPoint(0, 0))) * ratio;
+    auto x = std::lround(origin.x() + left * ratio);
+    auto y = std::lround(origin.y() + top * ratio);
+    return QRectF((x - origin.x()) / ratio, (y - origin.y()) / ratio,
+      std::lround(width * ratio) / ratio, std::lround(height * ratio) / ratio);
+  }
+
+  QRectF get_search_glyph_rect(const QWidget& field) {
+    return snap_glyph(field, SEARCH_GLYPH_LEFT, SEARCH_GLYPH_TOP,
+      SEARCH_GLYPH_SIZE, SEARCH_GLYPH_SIZE);
+  }
+
+  QRectF get_chevron_rect(const QWidget& field) {
+    auto ratio = field.devicePixelRatioF();
+    auto width = std::lround(CHEVRON_WIDTH * ratio) / ratio;
+    auto right = snap_glyph(field, field.width() - CHEVRON_RIGHT, CHEVRON_TOP,
+      CHEVRON_WIDTH, CHEVRON_HEIGHT);
+    return right.translated(-width, 0);
+  }
+
+  class SearchGlyphs : public QWidget {
+    public:
+      explicit SearchGlyphs(QWidget* field)
+        : QWidget(field),
+          m_ratio(0) {
+        setObjectName("search_glyphs");
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+      }
+
+    protected:
+      void paintEvent(QPaintEvent*) override {
+        auto ratio = devicePixelRatioF();
+        if(ratio != m_ratio) {
+          m_ratio = ratio;
+          auto size = [&] (double width, double height) {
+            return QSize(static_cast<int>(std::lround(width * ratio)),
+              static_cast<int>(std::lround(height * ratio)));
+          };
+          m_icon = make_fitted_glyph(Glyph::SEARCH,
+            size(SEARCH_GLYPH_SIZE, SEARCH_GLYPH_SIZE), ratio);
+          m_chevron = make_fitted_glyph(Glyph::CHEVRON_DOWN,
+            size(CHEVRON_WIDTH, CHEVRON_HEIGHT), ratio);
+        }
+        auto painter = QPainter(this);
+        auto& field = *parentWidget();
+        painter.drawPixmap(get_search_glyph_rect(field).topLeft(), m_icon);
+        painter.drawPixmap(get_chevron_rect(field).topLeft(), m_chevron);
+      }
+
+    private:
+      double m_ratio;
+      QPixmap m_icon;
+      QPixmap m_chevron;
+  };
 
   bool is_image(const Node& node) {
     auto shape = node.get_shape();
@@ -228,6 +291,7 @@ LayersPanel::LayersPanel(QWidget* parent)
       m_results(new QTreeView()),
       m_search(new QLineEdit()),
       m_filter_button(new QToolButton()),
+      m_search_glyphs(nullptr),
       m_back(new QToolButton()),
       m_heading(new QLabel()),
       m_editor(nullptr),
@@ -248,26 +312,6 @@ LayersPanel::LayersPanel(QWidget* parent)
   m_search->setAccessibleName(translate("layers", "Search Layers"));
   m_search->setClearButtonEnabled(true);
   m_search->installEventFilter(this);
-  m_search_icon = new QLabel(m_search);
-  m_search_icon->setObjectName("search_icon");
-  auto ratio = devicePixelRatioF();
-  auto to_device = [&] (double logical) {
-    return static_cast<int>(std::lround(logical * ratio));
-  };
-  auto to_logical = [&] (int device) {
-    return static_cast<int>(std::ceil(device / ratio - 1e-6));
-  };
-  auto icon_size = QSize(to_device(SEARCH_GLYPH_SIZE),
-    to_device(SEARCH_GLYPH_SIZE));
-  m_search_icon->setPixmap(
-    make_fitted_glyph(Glyph::SEARCH, icon_size, ratio));
-  m_search_icon->setFixedSize(
-    to_logical(icon_size.width()), to_logical(icon_size.height()));
-  m_search_icon->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-  auto palette = m_search->palette();
-  palette.setColor(QPalette::PlaceholderText, SEARCH_TEXT_COLOR);
-  m_search->setPalette(palette);
-  m_search_icon->setAttribute(Qt::WA_TransparentForMouseEvents);
   search_layout->addWidget(m_search, 1);
   connect(m_search, &QLineEdit::textChanged, this, [this] (const auto& text) {
     set_search(text);
@@ -275,14 +319,6 @@ LayersPanel::LayersPanel(QWidget* parent)
   m_filter_button->setObjectName("panel_button");
   m_filter_button->setAutoRaise(true);
   m_filter_button->setFocusPolicy(Qt::NoFocus);
-  auto chevron = QSize(
-    to_device(CHEVRON_WIDTH), to_device(CHEVRON_HEIGHT));
-  m_filter_button->setIcon(
-    QIcon(make_fitted_glyph(Glyph::CHEVRON_DOWN, chevron, ratio)));
-  auto button = QSize(
-    to_logical(chevron.width()), to_logical(chevron.height()));
-  m_filter_button->setIconSize(button);
-  m_filter_button->setFixedSize(button);
   m_filter_button->setToolTip(translate("layers", "Filter"));
   m_filter_button->setAccessibleName(translate("layers", "Filter"));
   m_filter_button->setPopupMode(QToolButton::InstantPopup);
@@ -299,8 +335,10 @@ LayersPanel::LayersPanel(QWidget* parent)
   }
   m_filter_button->setMenu(filters);
   m_filter_button->setParent(m_search);
+  m_search_glyphs = new SearchGlyphs(m_search);
   m_search->setTextMargins(SEARCH_TEXT_MARGIN, 0,
-    button.width() + FILTER_INSET + SEARCH_TEXT_GAP, 0);
+    static_cast<int>(std::ceil(CHEVRON_WIDTH)) + FILTER_INSET +
+      SEARCH_TEXT_GAP, 0);
   auto heading = new QWidget();
   auto heading_layout = new QHBoxLayout(heading);
   heading_layout->setContentsMargins(12, 18, 16, 4);
@@ -529,11 +567,10 @@ void LayersPanel::show_context_menu(QTreeView& view, const QPoint& position) {
 
 bool LayersPanel::eventFilter(QObject* watched, QEvent* event) {
   if(watched == m_search && event->type() == QEvent::Resize) {
-    m_filter_button->move(
-      m_search->width() - m_filter_button->width() - FILTER_INSET,
-      (m_search->height() - m_filter_button->height()) / 2);
-    m_search_icon->move(
-      1, (m_search->height() - m_search_icon->height()) / 2);
+    m_filter_button->setGeometry(
+      get_chevron_rect(*m_search).toAlignedRect());
+    m_search_glyphs->setGeometry(m_search->rect());
+    m_search_glyphs->raise();
   }
   if(watched == m_search) {
     if(event->type() == QEvent::KeyPress &&

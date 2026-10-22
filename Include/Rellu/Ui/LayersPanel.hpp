@@ -221,7 +221,7 @@ namespace Rellu {
       QTreeView* m_results;
       QLineEdit* m_search;
       QToolButton* m_filter_button;
-      QLabel* m_search_icon;
+      QWidget* m_search_glyphs;
       QToolButton* m_back;
       QLabel* m_heading;
       Editor* m_editor;

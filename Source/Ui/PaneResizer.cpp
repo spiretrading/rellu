@@ -1,5 +1,6 @@
 #include <cmath>
 #include <utility>
+#include <QCoreApplication>
 #include <QEnterEvent>
 #include <QEvent>
 #include <QMouseEvent>
@@ -7,18 +8,46 @@
 
 using namespace Rellu;
 
+namespace {
+  class EnterFilter : public QObject {
+    public:
+      EnterFilter(std::function<void ()> callback, QObject* parent)
+        : QObject(parent),
+          m_callback(std::move(callback)) {}
+
+    protected:
+      bool eventFilter(QObject* watched, QEvent* event) override {
+        if(event->type() == QEvent::Enter) {
+          m_callback();
+        }
+        return QObject::eventFilter(watched, event);
+      }
+
+    private:
+      std::function<void ()> m_callback;
+  };
+}
+
 PaneResizer::PaneResizer(PaneFrame& pane, QWidget* parent)
     : QWidget(parent),
       m_pane(&pane),
+      m_enter_filter(nullptr),
       m_is_pressed(false),
       m_is_dragging(false),
+      m_has_parent_cursor(false),
       m_press(0),
       m_origin(0),
       m_width(0) {
   setMouseTracking(true);
   setAttribute(Qt::WA_NoSystemBackground);
+  m_enter_filter = new EnterFilter([this] {
+    if(!m_is_pressed) {
+      set_parent_cursor(false);
+    }
+  }, this);
   pane.installEventFilter(this);
   if(parent) {
+    parent->setMouseTracking(true);
     parent->installEventFilter(this);
   }
   place();
@@ -89,6 +118,9 @@ bool PaneResizer::eventFilter(QObject* watched, QEvent* event) {
       place();
     }
   }
+  if(watched == parentWidget() && handle_parent_event(*event)) {
+    return true;
+  }
   return QWidget::eventFilter(watched, event);
 }
 
@@ -98,14 +130,7 @@ void PaneResizer::mousePressEvent(QMouseEvent* event) {
     event->ignore();
     return;
   }
-  m_is_pressed = true;
-  m_is_dragging = false;
-  m_press = event->globalPosition().x();
-  if(m_provider) {
-    m_width = m_provider();
-  } else {
-    m_width = m_pane->width();
-  }
+  press(event->globalPosition().x());
   event->accept();
 }
 
@@ -114,18 +139,7 @@ void PaneResizer::mouseMoveEvent(QMouseEvent* event) {
     update_cursor(event->position());
     return;
   }
-  auto x = event->globalPosition().x();
-  if(!m_is_dragging) {
-    if(std::abs(x - m_press) * devicePixelRatio() < DEAD_ZONE) {
-      return;
-    }
-    m_is_dragging = true;
-    m_origin = x;
-    return;
-  }
-  if(m_handler) {
-    m_handler(m_width + (x - m_origin));
-  }
+  drag(event->globalPosition().x());
 }
 
 void PaneResizer::leaveEvent(QEvent*) {
@@ -139,4 +153,86 @@ void PaneResizer::mouseReleaseEvent(QMouseEvent* event) {
     m_is_pressed = false;
     m_is_dragging = false;
   }
+}
+
+void PaneResizer::press(double x) {
+  m_is_pressed = true;
+  m_is_dragging = false;
+  m_press = x;
+  if(m_provider) {
+    m_width = m_provider();
+  } else {
+    m_width = m_pane->width();
+  }
+}
+
+void PaneResizer::drag(double x) {
+  if(!m_is_dragging) {
+    if(std::abs(x - m_press) * devicePixelRatio() < DEAD_ZONE) {
+      return;
+    }
+    m_is_dragging = true;
+    m_origin = x;
+    return;
+  }
+  if(m_handler) {
+    m_handler(m_width + (x - m_origin));
+  }
+}
+
+void PaneResizer::set_parent_cursor(bool is_band) {
+  if(is_band == m_has_parent_cursor) {
+    return;
+  }
+  m_has_parent_cursor = is_band;
+  if(is_band) {
+    parentWidget()->setCursor(Qt::SizeHorCursor);
+    QCoreApplication::instance()->installEventFilter(m_enter_filter);
+  } else {
+    parentWidget()->unsetCursor();
+    QCoreApplication::instance()->removeEventFilter(m_enter_filter);
+  }
+}
+
+bool PaneResizer::handle_parent_event(QEvent& event) {
+  auto type = event.type();
+  if(type == QEvent::Leave) {
+    if(!m_is_pressed) {
+      set_parent_cursor(false);
+    }
+    return false;
+  } else if(type != QEvent::MouseButtonPress &&
+      type != QEvent::MouseMove && type != QEvent::MouseButtonRelease) {
+    return false;
+  }
+  auto& mouse = static_cast<QMouseEvent&>(event);
+  auto position = mouse.position() - QPointF(pos());
+  auto is_band = m_pane && isVisible() && position.y() >= 0 &&
+    is_on_band(position);
+  auto x = mouse.globalPosition().x();
+  if(type == QEvent::MouseButtonPress) {
+    if(mouse.button() != Qt::LeftButton || m_is_pressed || !is_band) {
+      return false;
+    }
+    set_parent_cursor(true);
+    press(x);
+    return true;
+  } else if(type == QEvent::MouseMove) {
+    if(m_is_pressed && m_has_parent_cursor) {
+      drag(x);
+      return true;
+    }
+    if(!m_is_pressed) {
+      set_parent_cursor(is_band);
+    }
+    return false;
+  }
+  if(mouse.button() != Qt::LeftButton || !m_is_pressed ||
+      !m_has_parent_cursor) {
+    return false;
+  }
+  m_is_pressed = false;
+  m_is_dragging = false;
+  set_parent_cursor(is_band);
+  return true;
 }

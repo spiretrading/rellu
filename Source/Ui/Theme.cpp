@@ -111,6 +111,7 @@ QLineEdit#search_field {
   border: none;
   border-bottom: 1px solid #CACACA;
   color: #3F3F3F;
+  placeholder-text-color: #666666;
   font-size: 12px;
   padding: 4px 0px;
 }
@@ -648,9 +649,11 @@ void Rellu::apply_theme(QApplication& application) {
   application.setPalette(make_light_palette());
   auto font = QFont("Segoe UI");
   font.setPixelSize(12);
+  font.setStyleStrategy(QFont::NoSubpixelAntialias);
   QApplication::setFont(font);
   auto menu_font = QFont("Segoe UI");
   menu_font.setPixelSize(14);
+  menu_font.setStyleStrategy(QFont::NoSubpixelAntialias);
   QApplication::setFont(menu_font, "QMenu");
   QApplication::setFont(menu_font, "QMenuBar");
   application.setStyleSheet(STYLE_SHEET);
