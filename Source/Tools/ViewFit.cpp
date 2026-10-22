@@ -6,6 +6,8 @@
 using namespace Rellu;
 
 namespace {
+  constexpr auto SNAP_TOLERANCE = 1e-6;
+
   Size get_fitted_size(Size size) {
     return Size(std::max(size.m_width - 2 * FIT_PADDING_X, 1.0),
       std::max(size.m_height - 2 * FIT_PADDING_Y, 1.0));
@@ -29,6 +31,21 @@ ViewFit Rellu::fit_view(const Rect& region, Size size) {
   fit.m_offset = Point(size.m_width / 2 - fit.m_zoom * center.m_x,
     size.m_height / 2 - fit.m_zoom * center.m_y);
   return fit;
+}
+
+Point Rellu::snap_view_offset(Point offset, Point origin, double ratio) {
+  if(!(ratio > 0)) {
+    return offset;
+  }
+  auto snap = [&] (double value, double corner) {
+    auto device = (value - corner) * ratio;
+    auto nearest = std::round(device);
+    if(std::abs(device - nearest) < SNAP_TOLERANCE) {
+      return corner + nearest / ratio;
+    }
+    return corner + std::trunc(device) / ratio;
+  };
+  return Point(snap(offset.m_x, origin.m_x), snap(offset.m_y, origin.m_y));
 }
 
 Rect Rellu::get_fitted_region(Point center, double zoom, Size size) {

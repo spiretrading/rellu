@@ -1738,7 +1738,7 @@ void MainWindow::reveal(const NodeId& id) {
     return;
   }
   auto fitted = get_fitted_region(bounds->get_center(), get_zoom(),
-    Size(m_view->width(), m_view->height()));
+    m_view->get_view_region().get_size());
   if(bounds->m_width > fitted.m_width || bounds->m_height > fitted.m_height) {
     m_view->zoom_to(*bounds);
     return;

@@ -16,7 +16,7 @@ namespace Rellu {
    * The space in logical pixels Adobe XD leaves to the left and right of a
    * region it zooms to fit.
    */
-  constexpr auto FIT_PADDING_X = 62.0;
+  constexpr auto FIT_PADDING_X = 60.0;
 
   /**
    * The space in logical pixels Adobe XD leaves above and below a region it
@@ -43,6 +43,17 @@ namespace Rellu {
    * @param size The size of the canvas in logical pixels.
    */
   ViewFit fit_view(const Rect& region, Size size);
+
+  /**
+   * Places a view's offset as Adobe XD places it, the distance in device
+   * pixels from the corner of the canvas to the document's origin truncated
+   * toward zero.
+   * @param offset The position of the document's origin in logical pixels.
+   * @param origin The position of the canvas's corner in logical pixels.
+   * @param ratio The number of device pixels per logical pixel.
+   * @return The offset placed.
+   */
+  Point snap_view_offset(Point offset, Point origin, double ratio);
 
   /**
    * Returns the region fit_view shows at a zoom, centred on a point, so

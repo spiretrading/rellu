@@ -19,6 +19,7 @@
 #include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Rendering/StripRasterizer.hpp"
+#include "Rellu/Tools/ArtboardOutlines.hpp"
 #include "Rellu/Tools/CanvasBounds.hpp"
 #include "Rellu/Tools/CanvasCursors.hpp"
 #include "Rellu/Tools/PathEditTool.hpp"
@@ -224,13 +225,30 @@ void DocumentView::zoom_to(const Rect& region) {
 
 void DocumentView::center_on(Point point) {
   m_is_fitting = false;
-  m_offset = Point(width() / 2.0 - m_zoom * point.m_x,
-    height() / 2.0 - m_zoom * point.m_y);
+  auto center = get_view_region().get_center();
+  m_offset = Point(center.m_x - m_zoom * point.m_x,
+    center.m_y - m_zoom * point.m_y);
   update_view();
 }
 
 void DocumentView::set_zoom(double zoom) {
-  this->zoom(zoom / m_zoom, QPointF(width() / 2.0, height() / 2.0));
+  auto center = get_view_region().get_center();
+  this->zoom(zoom / m_zoom, QPointF(center.m_x, center.m_y));
+}
+
+void DocumentView::set_view_region(const std::optional<Rect>& region) {
+  auto position = mapTo(window(), QPoint(0, 0));
+  if(m_window_position && !m_is_fitting) {
+    auto shift = *m_window_position - position;
+    m_offset = Point(m_offset.m_x + shift.x(), m_offset.m_y + shift.y());
+  }
+  m_window_position = position;
+  Canvas::set_view_region(region);
+  if(m_is_fitting) {
+    fit();
+  } else {
+    update_view();
+  }
 }
 
 bool DocumentView::event(QEvent* event) {
@@ -281,6 +299,15 @@ void DocumentView::render(QRhiCommandBuffer* buffer) {
       shape.m_fill = OUTSIDE_CANVAS_COLOR;
       outside.push_back(shape);
     }
+    auto outlines = CanvasOverlay();
+    auto selection = std::vector<NodeId>();
+    if(m_editor) {
+      selection = m_editor->get_selection().get_nodes();
+    }
+    draw_artboard_outlines(
+      *m_document, get_renderer().get_view(), selection, outlines);
+    outside.insert(
+      outside.end(), outlines.m_shapes.begin(), outlines.m_shapes.end());
     overlay.m_shapes.insert(
       overlay.m_shapes.begin(), outside.begin(), outside.end());
     get_renderer().set_overlay(std::move(overlay));
@@ -289,15 +316,18 @@ void DocumentView::render(QRhiCommandBuffer* buffer) {
 }
 
 void DocumentView::frame(const Rect& region) {
-  auto size = Size(width(), height());
+  auto view = get_view_region();
+  auto size = view.get_size();
   if(size.m_width > 0 && size.m_height > 0) {
+    auto corner = view.get_top_left();
     if(region.m_width > 0 || region.m_height > 0) {
       auto fit = fit_view(region, size);
       m_zoom = fit.m_zoom;
-      m_offset = fit.m_offset;
+      m_offset = fit.m_offset + corner;
     } else {
-      m_offset = Point(size.m_width / 2 - m_zoom * region.m_x,
-        size.m_height / 2 - m_zoom * region.m_y);
+      auto center = view.get_center();
+      m_offset = Point(center.m_x - m_zoom * region.m_x,
+        center.m_y - m_zoom * region.m_y);
     }
   }
   update_view();
@@ -533,11 +563,13 @@ void DocumentView::update_view() {
       m_scene->set_tolerance(StripRasterizer::TOLERANCE / m_level);
     }
   }
+  auto offset = snap_view_offset(
+    m_offset, get_view_region().get_top_left(), devicePixelRatio());
   auto view =
-    make_translation(m_offset.m_x, m_offset.m_y) * make_scale(m_zoom, m_zoom);
+    make_translation(offset.m_x, offset.m_y) * make_scale(m_zoom, m_zoom);
   get_renderer().set_view(view);
   if(m_tools) {
-    m_tools->set_view(view, devicePixelRatio(), Size(width(), height()));
+    m_tools->set_view(view, devicePixelRatio(), get_view_region().get_size());
   }
   update_text();
   place_title_editor();
@@ -632,7 +664,7 @@ void DocumentView::attach_tools() {
       zoom_to(region);
     }));
   m_tools->set_view(get_renderer().get_view(), devicePixelRatio(),
-    Size(width(), height()));
+    get_view_region().get_size());
   m_preparation.start();
 }
 

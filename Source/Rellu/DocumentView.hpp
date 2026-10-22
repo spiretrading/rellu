@@ -110,6 +110,13 @@ namespace Rellu {
        */
       void set_zoom(double zoom);
 
+      /**
+       * Sets the view region, keeping the document where it appears in the
+       * window as the view moves within it, as Adobe XD keeps it when a
+       * panel beside the canvas opens or closes.
+       */
+      void set_view_region(const std::optional<Rect>& region) override;
+
     protected:
       bool event(QEvent* event) override;
       void render(QRhiCommandBuffer* buffer) override;
@@ -146,6 +153,7 @@ namespace Rellu {
       bool m_is_space_pressed;
       bool m_is_panning;
       QPointF m_position;
+      std::optional<QPoint> m_window_position;
       std::map<std::tuple<CursorKind, int, double>, QCursor> m_cursors;
       QTimer m_preparation;
       QTimer m_caret_timer;

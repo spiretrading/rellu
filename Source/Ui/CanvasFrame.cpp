@@ -22,6 +22,17 @@ int Rellu::align_to_device_pixels(int position, double ratio) {
   return position;
 }
 
+Rect Rellu::get_view_region(const QRect& frame, QPoint canvas, double ratio) {
+  auto round = [&] (int position) {
+    return std::round(position * ratio) / ratio;
+  };
+  auto left = round(frame.x());
+  auto top = round(frame.y());
+  return Rect(left - canvas.x(), top - canvas.y(),
+    round(frame.x() + frame.width()) - left,
+    round(frame.y() + frame.height()) - top);
+}
+
 CanvasFrame::CanvasFrame(Canvas& canvas, QWidget* parent)
     : QWidget(parent),
       m_canvas(&canvas) {
@@ -63,4 +74,6 @@ void CanvasFrame::place() {
     m_canvas->setGeometry(geometry);
     update();
   }
+  m_canvas->set_view_region(get_view_region(QRect(origin, size()),
+    QPoint(origin.x() + left, origin.y() + top), ratio));
 }
