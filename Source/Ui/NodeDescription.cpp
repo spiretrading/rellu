@@ -30,7 +30,7 @@ const Node* Rellu::get_displayed_node(
   return nullptr;
 }
 
-QString Rellu::get_display_name(const Document& document, const Node& node) {
+QString Rellu::get_node_name(const Document& document, const Node& node) {
   auto displayed = get_displayed_node(document, node);
   auto name = QString();
   if(!node.m_header.m_name.empty()) {
@@ -45,7 +45,12 @@ QString Rellu::get_display_name(const Document& document, const Node& node) {
   if(name.isEmpty()) {
     name = get_type_name(*displayed);
   }
-  name = normalize_name(std::move(name));
+  return normalize_name(std::move(name));
+}
+
+QString Rellu::get_display_name(const Document& document, const Node& node) {
+  auto name = get_node_name(document, node);
+  auto displayed = get_displayed_node(document, node);
   auto group = displayed ? displayed->get_group() : nullptr;
   if(!group || !group->m_component_instance) {
     return name;

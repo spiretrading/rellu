@@ -3,6 +3,7 @@
 #include <variant>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Geometry/Path.hpp"
+#include "Rellu/Geometry/Stroke.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Model/ShapeGeometry.hpp"
 
@@ -13,6 +14,9 @@ namespace {
   constexpr auto LINE_SPACING = 1.2;
   constexpr auto ASCENT = 0.8;
   constexpr auto CHARACTER_WIDTH = 0.5;
+  constexpr auto STROKE_TOLERANCE = 0.001;
+  constexpr auto SHADOW_EXTENT = 3.0;
+  constexpr auto VIEWPORT_EXTENT = 1e9;
 
   struct Accumulator {
     std::optional<Rect> m_bounds;
@@ -92,13 +96,87 @@ namespace {
     return Placement(&node, &node.m_children, node.m_header.m_transform);
   }
 
-  void add_styled(Measurement& measurement, const Rect& bounds,
-      const Style& style, bool is_open, const Matrix& matrix) {
-    auto extent = 0.0;
-    if(measurement.m_type == BoundsType::VISUAL) {
-      extent = get_stroke_extent(style.m_stroke, is_open) * get_scale(matrix);
+  std::optional<Rect> get_stroke_bounds(
+      const Path& path, const Stroke& stroke, const Matrix& matrix) {
+    if(!stroke.m_is_enabled || !(stroke.m_width > 0)) {
+      return std::nullopt;
     }
-    measurement.m_accumulator.add(inflate(bounds, extent));
+    auto outline = outline_stroke(path, StrokeGeometry(stroke.m_width,
+      stroke.m_alignment, stroke.m_cap, stroke.m_join, stroke.m_miter_limit,
+      {}, 0), STROKE_TOLERANCE);
+    if(outline.is_empty()) {
+      return std::nullopt;
+    }
+    return get_bounds(outline, matrix);
+  }
+
+  void add_styled(Measurement& measurement, const Rect& bounds,
+      const Style& style, bool is_open, const Matrix& matrix,
+      const Path* path = nullptr) {
+    auto painted = bounds;
+    if(measurement.m_type == BoundsType::DRAW && path && style.m_stroke) {
+      if(auto stroke = get_stroke_bounds(*path, *style.m_stroke, matrix)) {
+        painted = unite(painted, *stroke);
+      }
+    } else if(measurement.m_type != BoundsType::GEOMETRY) {
+      painted = inflate(bounds,
+        get_stroke_extent(style.m_stroke, is_open) * get_scale(matrix));
+    }
+    measurement.m_accumulator.add(painted);
+    if(measurement.m_type != BoundsType::DRAW) {
+      return;
+    }
+    auto scale = get_scale(matrix);
+    for(auto& effect : style.m_effects) {
+      if(auto shadow = std::get_if<DropShadow>(&effect)) {
+        if(shadow->m_is_visible) {
+          auto offset = matrix.map(shadow->m_offset) - matrix.map(Point(0, 0));
+          auto shadowed = painted;
+          shadowed.m_x += offset.m_x;
+          shadowed.m_y += offset.m_y;
+          measurement.m_accumulator.add(
+            inflate(shadowed, SHADOW_EXTENT * shadow->m_blur * scale));
+        }
+      } else if(auto blur = std::get_if<Blur>(&effect)) {
+        if(blur->m_is_visible && !blur->m_is_background) {
+          measurement.m_accumulator.add(
+            inflate(painted, blur->m_amount * scale));
+        }
+      }
+    }
+  }
+
+  std::optional<Rect> get_viewport(const Node& node) {
+    auto group = node.get_group();
+    if(!group) {
+      return std::nullopt;
+    }
+    auto viewport = std::optional<Rect>();
+    if(auto& scroll = group->m_scroll_group) {
+      viewport.emplace(-VIEWPORT_EXTENT, -VIEWPORT_EXTENT,
+        2 * VIEWPORT_EXTENT, 2 * VIEWPORT_EXTENT);
+      if(scroll->m_direction != ScrollDirection::VERTICAL) {
+        viewport->m_x = scroll->m_offset.m_x;
+        viewport->m_width = scroll->m_viewport.m_width;
+      }
+      if(scroll->m_direction != ScrollDirection::HORIZONTAL) {
+        viewport->m_y = scroll->m_offset.m_y;
+        viewport->m_height = scroll->m_viewport.m_height;
+      }
+    }
+    if(auto& grid = group->m_repeat_grid) {
+      auto size = Rect(0, 0, grid->m_size.m_width, grid->m_size.m_height);
+      if(!viewport) {
+        return size;
+      }
+      auto left = std::max(viewport->get_left(), size.get_left());
+      auto top = std::max(viewport->get_top(), size.get_top());
+      auto right = std::min(viewport->get_right(), size.get_right());
+      auto bottom = std::min(viewport->get_bottom(), size.get_bottom());
+      viewport = Rect(left, top, std::max(0.0, right - left),
+        std::max(0.0, bottom - top));
+    }
+    return viewport;
   }
 
   void add_content(Measurement& measurement, const Node& source,
@@ -127,10 +205,18 @@ namespace {
       measurement.m_accumulator.add(matrix.map(
         Rect(0, 0, artboard->m_frame.m_width, artboard->m_frame.m_height)));
     } else if(auto shape = source.get_shape()) {
-      auto path = to_path(shape->m_geometry);
+      auto path = Path();
+      if(auto polygon = std::get_if<PolygonShape>(&shape->m_geometry);
+          polygon && measurement.m_type == BoundsType::DRAW) {
+        auto corners = *polygon;
+        corners.m_corner_radius = 0;
+        path = to_path(ShapeGeometry(corners));
+      } else {
+        path = to_path(shape->m_geometry);
+      }
       if(!path.is_empty()) {
         add_styled(measurement, get_bounds(path, matrix), shape->m_style,
-          is_open(shape->m_geometry), matrix);
+          is_open(shape->m_geometry), matrix, &path);
       }
     } else if(auto text = source.get_text()) {
       add_styled(measurement, matrix.map((*measurement.m_measurer)(*text)),
@@ -142,6 +228,25 @@ namespace {
         if(!path.is_empty()) {
           measurement.m_accumulator.add(
             get_bounds(path, matrix * shape.m_transform));
+        }
+      }
+    } else if(auto viewport = get_viewport(source);
+        viewport && measurement.m_type == BoundsType::DRAW) {
+      auto inner = Measurement(measurement.m_document, measurement.m_type,
+        measurement.m_measurer, Accumulator());
+      for(auto& child : children) {
+        add_child(inner, child, matrix, depth);
+      }
+      if(inner.m_accumulator.m_bounds) {
+        auto clip = matrix.map(*viewport);
+        auto& bounds = *inner.m_accumulator.m_bounds;
+        auto left = std::max(bounds.get_left(), clip.get_left());
+        auto top = std::max(bounds.get_top(), clip.get_top());
+        auto right = std::min(bounds.get_right(), clip.get_right());
+        auto bottom = std::min(bounds.get_bottom(), clip.get_bottom());
+        if(right >= left && bottom >= top) {
+          measurement.m_accumulator.add(
+            Rect(left, top, right - left, bottom - top));
         }
       }
     } else {

@@ -28,6 +28,7 @@
 #include "Rellu/Ui/ComponentActions.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/EditActions.hpp"
+#include "Rellu/Ui/ExportActions.hpp"
 #include "Rellu/Ui/GradientHandles.hpp"
 #include "Rellu/Ui/GridActions.hpp"
 #include "Rellu/Ui/GuideActions.hpp"
@@ -134,6 +135,7 @@ namespace Rellu {
       std::unique_ptr<TextActions> m_text_actions;
       std::unique_ptr<GuideActions> m_guide_actions;
       std::unique_ptr<GridActions> m_grid_actions;
+      std::unique_ptr<ExportActions> m_export_actions;
       ComponentThumbnails m_thumbnails;
       std::unique_ptr<ComponentDrop> m_component_drop;
       AppBar* m_app_bar;

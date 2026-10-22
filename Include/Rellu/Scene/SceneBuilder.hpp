@@ -63,6 +63,22 @@ namespace Rellu {
     bool m_is_device_mixed = false;
   };
 
+  /** A region of a text node's drawing that a conversion fills as outlines. */
+  struct TextRegion {
+
+    /** The text node. */
+    NodeId m_id;
+
+    /**
+     * The node's glyphs and decorations in the coordinates of the region's
+     * path, valid until the next conversion.
+     */
+    const TextLayout* m_layout;
+
+    /** The color the region is filled with. */
+    Color m_color;
+  };
+
   /**
    * Converts the nodes of a Document into DrawLists in document coordinates,
    * reusing the outlines of shapes left unchanged since an earlier
@@ -251,6 +267,14 @@ namespace Rellu {
        * @param id The node's id.
        */
       void discard(const NodeId& id);
+
+      /**
+       * Finds the text region whose outlines a path drawn by the last
+       * conversion holds.
+       * @param path The path of a FillCommand of the conversion.
+       * @return The region, or none if the path holds no text outlines.
+       */
+      std::optional<TextRegion> find_text(const Path& path) const;
 
     private:
       struct Placement {

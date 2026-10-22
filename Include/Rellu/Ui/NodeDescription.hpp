@@ -17,6 +17,15 @@ namespace Rellu {
   const Node* get_displayed_node(const Document& document, const Node& node);
 
   /**
+   * Returns a node's name: its own name, else the name of the node it is
+   * displayed as, else a description of its kind or content, shown up to its
+   * first vertical tab with each other line break shown as a space.
+   * @param document The document containing the node.
+   * @param node The node.
+   */
+  QString get_node_name(const Document& document, const Node& node);
+
+  /**
    * Returns the name a node is listed under: its own name, else the name of
    * the node it is displayed as, else a description of its kind or content,
    * shown up to its first vertical tab with each other line break shown as

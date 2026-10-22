@@ -46,11 +46,24 @@ namespace Rellu {
     Color m_color = Color(0, 0, 0, 1);
   };
 
+  /** A glyph without an outline or color layers, such as a space. */
+  struct BlankGlyph {
+
+    /** The number of drawn glyphs placed before it. */
+    std::size_t m_position = 0;
+
+    /** The glyph. */
+    PlacedGlyph m_glyph;
+  };
+
   /** The glyphs and decorations of a text node in its local space. */
   struct TextLayout {
 
     /** The glyphs in drawing order. */
     std::vector<PlacedGlyph> m_glyphs;
+
+    /** The glyphs that draw nothing, in order. */
+    std::vector<BlankGlyph> m_blanks;
 
     /** The underlines and strikethroughs in drawing order. */
     std::vector<TextDecoration> m_decorations;

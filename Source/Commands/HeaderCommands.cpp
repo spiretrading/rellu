@@ -103,7 +103,10 @@ SetExportMarkCommand::SetExportMarkCommand(
     m_is_marked(is_marked) {}
 
 std::string SetExportMarkCommand::get_label() const {
-  return "Mark for Export";
+  if(m_is_marked) {
+    return "Mark for Export";
+  }
+  return "Unmark for Export";
 }
 
 void SetExportMarkCommand::apply(

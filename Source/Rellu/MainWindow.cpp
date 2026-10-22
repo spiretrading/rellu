@@ -417,6 +417,11 @@ MainWindow::MainWindow(QWidget* parent)
     store_grid_settings();
   });
   m_inspector->set_grid_actions(m_grid_actions.get());
+  m_export_actions = std::make_unique<ExportActions>(m_actions, *this);
+  m_export_actions->set_text_measurer(m_measurer);
+  m_export_actions->set_path_provider([this] {
+    return m_session ? m_session->get_path() : QString();
+  });
   m_edit_actions->set_paste_handler([this] (const auto& data, auto is_applied) {
     return m_guide_actions->paste(data, is_applied);
   });
@@ -1714,6 +1719,7 @@ void MainWindow::install(
   m_text_actions->set_editor(&editor);
   m_guide_actions->set_editor(&editor);
   m_grid_actions->set_editor(&editor);
+  m_export_actions->set_editor(&editor);
   load_document_settings(GuideSettings(), GridSettings());
   m_component_drop->set_editor(&editor);
   m_history_subscription = editor.get_history().subscribe([this] {
@@ -1770,6 +1776,9 @@ void MainWindow::detach() {
   }
   if(m_grid_actions) {
     m_grid_actions->set_editor(nullptr);
+  }
+  if(m_export_actions) {
+    m_export_actions->set_editor(nullptr);
   }
   if(m_component_drop) {
     m_component_drop->set_editor(nullptr);

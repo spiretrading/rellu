@@ -16,6 +16,10 @@ TEST_SUITE("HeaderCommands") {
     REQUIRE(history.get_undo_label() == "Mark for Export");
     REQUIRE(document.get(scene.m_rectangle).m_header.m_is_marked_for_export);
     REQUIRE(document.get(scene.m_artboard).m_header.m_is_marked_for_export);
+    require_undoable(history, std::make_unique<SetExportMarkCommand>(
+      std::vector{scene.m_rectangle}, false));
+    REQUIRE(history.get_undo_label() == "Unmark for Export");
+    REQUIRE(!document.get(scene.m_rectangle).m_header.m_is_marked_for_export);
   }
 
   TEST_CASE("fixed_position") {

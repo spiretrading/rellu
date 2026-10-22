@@ -18,7 +18,13 @@ namespace Rellu {
     GEOMETRY,
 
     /** The outline together with the area its stroke paints. */
-    VISUAL
+    VISUAL,
+
+    /**
+     * The area painted, including strokes, shadows and blurs, as Adobe XD
+     * measures a node's draw bounds.
+     */
+    DRAW
   };
 
   /** Measures the content of a text payload in its node's local space. */

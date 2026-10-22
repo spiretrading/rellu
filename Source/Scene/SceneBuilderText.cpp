@@ -382,6 +382,19 @@ const std::vector<SceneBuilder::TextLevel>& SceneBuilder::add_rasters(
   return outline.m_rasters.emplace_back(transform, std::move(levels)).second;
 }
 
+std::optional<TextRegion> SceneBuilder::find_text(const Path& path) const {
+  for(auto& entry : m_texts) {
+    auto& outline = entry.second;
+    for(auto i = std::size_t(0); i != outline.m_paths.size(); ++i) {
+      if(outline.m_paths[i].get() == &path) {
+        return TextRegion(
+          entry.first, &outline.m_layout, outline.m_fills[i].m_color);
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 void SceneBuilder::defer(
     const NodeId& id, const Matrix& transform, bool is_referenced) {
   if(!is_referenced) {

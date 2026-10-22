@@ -264,11 +264,17 @@ namespace {
               (i == 0 || glyphs[i - 1].m_cluster != glyph.m_cluster)) {
             stops.push_back(ClusterStop(glyph.m_cluster, x));
           }
-          if(layout && (!typeface->get_outline(glyph.m_index).is_empty() ||
-              !typeface->get_color_layers(glyph.m_index).empty())) {
-            layout->m_glyphs.push_back(PlacedGlyph(typeface, glyph.m_index,
+          if(layout) {
+            auto placed = PlacedGlyph(typeface, glyph.m_index,
               Point(x + glyph.m_offset.m_x * size,
-                baseline + glyph.m_offset.m_y * size), size, color));
+                baseline + glyph.m_offset.m_y * size), size, color);
+            if(!typeface->get_outline(glyph.m_index).is_empty() ||
+                !typeface->get_color_layers(glyph.m_index).empty()) {
+              layout->m_glyphs.push_back(std::move(placed));
+            } else {
+              layout->m_blanks.push_back(
+                BlankGlyph(layout->m_glyphs.size(), std::move(placed)));
+            }
           }
           x += glyph.m_advance * size;
           if(glyph.m_advance != 0) {
