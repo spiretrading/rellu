@@ -304,8 +304,8 @@ void DocumentView::render(QRhiCommandBuffer* buffer) {
     if(m_editor) {
       selection = m_editor->get_selection().get_nodes();
     }
-    draw_artboard_outlines(
-      *m_document, get_renderer().get_view(), selection, outlines);
+    draw_artboard_outlines(*m_document, get_renderer().get_view(),
+      devicePixelRatio(), selection, outlines);
     outside.insert(
       outside.end(), outlines.m_shapes.begin(), outlines.m_shapes.end());
     overlay.m_shapes.insert(

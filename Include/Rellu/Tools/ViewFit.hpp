@@ -33,8 +33,33 @@ namespace Rellu {
    */
   constexpr auto MINIMUM_WINDOW_HEIGHT = 500.0;
 
-  /** The narrowest the canvas becomes before the left pane narrows. */
-  constexpr auto MINIMUM_CANVAS_WIDTH = 42.0;
+  /** The narrowest the canvas becomes, in logical pixels. */
+  constexpr auto MINIMUM_CANVAS_WIDTH = 40.0;
+
+  /**
+   * The width in logical pixels of the canvas that the left pane leaves
+   * while it is no narrower than MINIMUM_PANE_WIDTH.
+   */
+  constexpr auto PANE_CANVAS_WIDTH = 160.0;
+
+  /**
+   * The narrowest the left pane is dragged or fitted to while the canvas
+   * keeps MINIMUM_CANVAS_WIDTH, in logical pixels.
+   */
+  constexpr auto MINIMUM_PANE_WIDTH = 244.0;
+
+  /**
+   * Returns the width Adobe XD gives its left pane once its window changes
+   * size: the width stored, no wider than leaves the canvas
+   * PANE_CANVAS_WIDTH and no narrower than MINIMUM_PANE_WIDTH, then
+   * narrower where the canvas would otherwise be narrower than
+   * MINIMUM_CANVAS_WIDTH.
+   * @param stored The pane's width stored, in logical pixels.
+   * @param available The width in logical pixels shared by the pane and the
+   *        canvas.
+   * @return The pane's width, which becomes the width stored.
+   */
+  double fit_pane_width(double stored, double available);
 
   /**
    * Returns the smallest client area of a window in device pixels, as

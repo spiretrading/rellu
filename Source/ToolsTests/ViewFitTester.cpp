@@ -213,4 +213,27 @@ TEST_SUITE("ViewFit") {
     REQUIRE(get_minimum_client_size(1.5, 11) == Size(750, 739));
     REQUIRE(get_minimum_client_size(1, 8) == Size(500, 492));
   }
+  TEST_CASE("fit_pane_width") {
+    auto to_logical = [] (double device) {
+      return device / 1.5;
+    };
+    auto available = [&] (double client) {
+      return to_logical(client - 75 - 435);
+    };
+    auto to_device = [] (double logical) {
+      return std::round(logical * 1.5);
+    };
+    REQUIRE(to_device(fit_pane_width(to_logical(600), available(1200))) ==
+      450);
+    auto narrow = fit_pane_width(to_logical(600), available(900));
+    REQUIRE(to_device(narrow) == 330);
+    REQUIRE(to_device(fit_pane_width(narrow, available(3840))) == 366);
+    REQUIRE(to_device(fit_pane_width(to_logical(450), available(3840))) ==
+      450);
+    REQUIRE(to_device(fit_pane_width(to_logical(611), available(750))) ==
+      180);
+    REQUIRE(to_device(fit_pane_width(to_logical(4000), available(3840))) ==
+      3090);
+    REQUIRE(fit_pane_width(500, 30) == 0);
+  }
 }

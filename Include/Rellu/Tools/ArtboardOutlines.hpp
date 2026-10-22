@@ -22,14 +22,17 @@ namespace Rellu {
   /**
    * Draws the outlines Adobe XD draws on the canvas just outside the frames
    * of the visible artboards, ARTBOARD_OUTLINE_WIDTH wide and darker around
-   * the artboards holding a selected node.
+   * the artboards holding a selected node, leaving out the device pixels an
+   * artboard partly covers.
    * @param document The document.
    * @param view The transform from document coordinates to logical pixels.
+   * @param ratio The number of device pixels per logical pixel.
    * @param selection The selected nodes.
    * @param overlay The overlay receiving the outlines.
    */
   void draw_artboard_outlines(const Document& document, const Matrix& view,
-    const std::vector<NodeId>& selection, CanvasOverlay& overlay);
+    double ratio, const std::vector<NodeId>& selection,
+    CanvasOverlay& overlay);
 }
 
 #endif

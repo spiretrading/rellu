@@ -32,6 +32,7 @@
 #include "Rellu/Ui/GuideActions.hpp"
 #include "Rellu/Ui/LastProperties.hpp"
 #include "Rellu/Ui/LayersPanel.hpp"
+#include "Rellu/Ui/PaneResizer.hpp"
 #include "Rellu/Ui/PluginsPanel.hpp"
 #include "Rellu/Ui/PreviewWindow.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
@@ -160,7 +161,8 @@ namespace Rellu {
       Subscription m_tool_subscription;
       bool m_is_launching;
       bool m_is_restored_expanded;
-      int m_left_panel_width;
+      double m_left_panel_width;
+      PaneResizer* m_pane_resizer;
       std::vector<QWidget*> m_caption_buttons;
       std::optional<QRect> m_restored_bounds;
 
@@ -195,6 +197,8 @@ namespace Rellu {
       void update_title();
       void update_document_state();
       void fit_left_panel();
+      void set_left_panel_width(double width);
+      double get_pane_space() const;
       void place_caption_buttons();
       void update_selection_actions();
       void reveal(const NodeId& id);

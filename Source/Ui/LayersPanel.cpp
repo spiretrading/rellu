@@ -230,9 +230,10 @@ LayersPanel::LayersPanel(QWidget* parent)
   setObjectName("layers_panel");
   auto search = new QWidget();
   auto search_layout = new QHBoxLayout(search);
-  search_layout->setContentsMargins(16, 12, 16, 0);
+  search_layout->setContentsMargins(12, 12, 13, 0);
   search_layout->setSpacing(4);
   m_search->setObjectName("search_field");
+  m_search->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
   m_search->setPlaceholderText(translate("layers", "All Items"));
   m_search->setAccessibleName(translate("layers", "Search Layers"));
   m_search->setClearButtonEnabled(true);
@@ -263,7 +264,8 @@ LayersPanel::LayersPanel(QWidget* parent)
     });
   }
   m_filter_button->setMenu(filters);
-  search_layout->addWidget(m_filter_button);
+  m_filter_button->setParent(m_search);
+  m_search->setTextMargins(0, 0, m_filter_button->width(), 0);
   auto heading = new QWidget();
   auto heading_layout = new QHBoxLayout(heading);
   heading_layout->setContentsMargins(12, 18, 16, 4);
@@ -318,6 +320,7 @@ LayersPanel::LayersPanel(QWidget* parent)
   m_results->setItemsExpandable(false);
   m_results->setVisible(false);
   auto layout = new QVBoxLayout(this);
+  layout->setSizeConstraint(QLayout::SetNoConstraint);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
   layout->addWidget(search);
@@ -490,6 +493,10 @@ void LayersPanel::show_context_menu(QTreeView& view, const QPoint& position) {
 }
 
 bool LayersPanel::eventFilter(QObject* watched, QEvent* event) {
+  if(watched == m_search && event->type() == QEvent::Resize) {
+    m_filter_button->move(m_search->width() - m_filter_button->width() - 1,
+      (m_search->height() - m_filter_button->height()) / 2);
+  }
   if(watched == m_search) {
     if(event->type() == QEvent::KeyPress &&
         static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {

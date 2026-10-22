@@ -74,7 +74,7 @@ using namespace Rellu;
 namespace {
   constexpr auto ZOOM_STEP = 2.0;
   constexpr auto MAXIMUM_RECENT_FILES = 15;
-  constexpr auto LEFT_PANEL_WIDTH = 407;
+  constexpr auto LEFT_PANEL_WIDTH = 1222.0 / 3;
   const auto LEFT_PANEL_WIDTH_KEY = QString("main_window/left_panel_width");
   constexpr auto MENU_ROW_HEIGHT = 32;
   constexpr auto CAPTION_BUTTON_WIDTH = 46;
@@ -317,7 +317,8 @@ MainWindow::MainWindow(QWidget* parent)
       m_gradient_overlay(nullptr),
       m_is_launching(false),
       m_is_restored_expanded(false),
-      m_left_panel_width(LEFT_PANEL_WIDTH) {
+      m_left_panel_width(LEFT_PANEL_WIDTH),
+      m_pane_resizer(nullptr) {
   add_standard_commands(m_commands, m_measurer);
   add_align_commands(m_commands, m_measurer);
   add_path_commands(
@@ -568,21 +569,34 @@ void MainWindow::showEvent(QShowEvent* event) {
   fit_left_panel();
 }
 
+double MainWindow::get_pane_space() const {
+  auto space = static_cast<double>(centralWidget()->width() -
+    m_toolbar->width());
+  if(m_inspector_frame->isVisible()) {
+    space -= m_inspector_frame->width();
+  }
+  return space;
+}
+
 void MainWindow::fit_left_panel() {
-  auto central = centralWidget();
-  if(!central || !isVisible() || isMinimized()) {
+  if(!centralWidget() || !isVisible() || isMinimized() ||
+      !m_left_panel->isVisible()) {
     return;
   }
-  auto available = central->width() - m_toolbar->width() -
-    static_cast<int>(MINIMUM_CANVAS_WIDTH);
-  if(m_inspector_frame->isVisible()) {
-    available -= m_inspector_frame->width();
+  set_left_panel_width(m_left_panel_width);
+}
+
+void MainWindow::set_left_panel_width(double width) {
+  if(!centralWidget()) {
+    return;
   }
-  if(m_left_panel->isVisible() && available < m_left_panel_width) {
-    m_left_panel_width = std::max(available, 0);
-    QSettings().setValue(LEFT_PANEL_WIDTH_KEY, m_left_panel_width);
+  width = fit_pane_width(width, get_pane_space());
+  m_left_panel->setFixedWidth(static_cast<int>(std::lround(width)));
+  if(width == m_left_panel_width) {
+    return;
   }
-  m_left_panel->setFixedWidth(m_left_panel_width);
+  m_left_panel_width = width;
+  QSettings().setValue(LEFT_PANEL_WIDTH_KEY, m_left_panel_width);
 }
 
 void MainWindow::place_caption_buttons() {
@@ -1056,11 +1070,19 @@ QMenuBar* MainWindow::make_layout() {
   body_layout->setSpacing(0);
   body_layout->addWidget(m_toolbar);
   m_left_panel->setObjectName("left_panel");
-  m_left_panel->setFixedWidth(m_left_panel_width);
+  m_left_panel->setFixedWidth(
+    static_cast<int>(std::lround(m_left_panel_width)));
   m_left_panel->addWidget(m_assets);
   m_left_panel->addWidget(m_layers);
   m_left_panel->addWidget(m_plugins);
   body_layout->addWidget(m_left_panel);
+  m_pane_resizer = new PaneResizer(*m_left_panel, body);
+  m_pane_resizer->set_width_handler([this] (auto width) {
+    set_left_panel_width(width);
+  });
+  m_pane_resizer->set_width_provider([this] {
+    return m_left_panel_width;
+  });
   body_layout->addWidget(new CanvasFrame(*m_view), 1);
   m_inspector_frame->setObjectName("inspector_frame");
   m_inspector_frame->setAttribute(Qt::WA_StyledBackground);
@@ -1351,9 +1373,10 @@ void MainWindow::restore_settings() {
   auto settings = QSettings();
   m_recent_files.set_paths(settings.value("recent_files").toStringList());
   update_recent_files();
-  m_left_panel_width = std::clamp(settings.value(LEFT_PANEL_WIDTH_KEY,
-    LEFT_PANEL_WIDTH).toInt(), 0, LEFT_PANEL_WIDTH);
-  m_left_panel->setFixedWidth(m_left_panel_width);
+  m_left_panel_width = std::max(settings.value(LEFT_PANEL_WIDTH_KEY,
+    LEFT_PANEL_WIDTH).toDouble(), 0.0);
+  m_left_panel->setFixedWidth(
+    static_cast<int>(std::lround(m_left_panel_width)));
   if(!restoreGeometry(settings.value("main_window/geometry").toByteArray())) {
     if(auto screen = this->screen()) {
       auto area = screen->availableGeometry();

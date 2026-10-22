@@ -33,6 +33,15 @@ ViewFit Rellu::fit_view(const Rect& region, Size size) {
   return fit;
 }
 
+double Rellu::fit_pane_width(double stored, double available) {
+  auto width = std::max(
+    std::min(stored, available - PANE_CANVAS_WIDTH), MINIMUM_PANE_WIDTH);
+  if(available - width < MINIMUM_CANVAS_WIDTH) {
+    width = std::max(available - MINIMUM_CANVAS_WIDTH, 0.0);
+  }
+  return width;
+}
+
 Size Rellu::get_minimum_client_size(double ratio, double border) {
   return Size(std::round(MINIMUM_CLIENT_WIDTH * ratio),
     std::round(MINIMUM_WINDOW_HEIGHT * ratio) - border);
