@@ -4,6 +4,7 @@
 #include <QtPlugin>
 #include "Rellu/Ui/Clipboard.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
+#include "Rellu/Ui/FeatureCards.hpp"
 #include "Rellu/Ui/GreyscaleText.hpp"
 #include "Rellu/Ui/PixelHitFilter.hpp"
 #include "Rellu/Ui/Theme.hpp"
@@ -26,6 +27,7 @@ int main(int argc, char** argv) {
   application.installEventFilter(new PixelHitFilter(&application));
   application.installEventFilter(new GreyscaleTextFilter(&application));
   application.installEventFilter(new ToolTipFilter(&application));
+  application.installEventFilter(new FeatureCardFilter(&application));
   Clipboard::remove_stale_images(Clipboard::get_default_image_directory(),
     QApplication::clipboard()->mimeData());
   auto window = MainWindow();

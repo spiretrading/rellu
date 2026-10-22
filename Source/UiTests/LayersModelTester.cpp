@@ -351,8 +351,8 @@ TEST_SUITE("LayersModel") {
       return model.data(model.find(ids.m_label, column), Qt::ToolTipRole).
         toString().toStdString();
     };
-    REQUIRE(tip(LayersModel::VISIBILITY) == "Hide (Ctrl + ,)");
-    REQUIRE(tip(LayersModel::LOCK) == "Lock (Ctrl + L)");
+    REQUIRE(tip(LayersModel::VISIBILITY) == "Hide (Ctrl+,)");
+    REQUIRE(tip(LayersModel::LOCK) == "Lock (Ctrl+L)");
     {
       auto transaction = Transaction(document);
       auto header = document.get(ids.m_label).m_header;
@@ -361,8 +361,8 @@ TEST_SUITE("LayersModel") {
       transaction.replace_header(header);
       transaction.commit();
     }
-    REQUIRE(tip(LayersModel::VISIBILITY) == "Show (Ctrl + ,)");
-    REQUIRE(tip(LayersModel::LOCK) == "Unlock (Ctrl + L)");
+    REQUIRE(tip(LayersModel::VISIBILITY) == "Show (Ctrl+,)");
+    REQUIRE(tip(LayersModel::LOCK) == "Unlock (Ctrl+L)");
   }
 
   TEST_CASE("header_changes") {

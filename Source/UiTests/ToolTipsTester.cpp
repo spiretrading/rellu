@@ -144,4 +144,28 @@ TEST_SUITE("ToolTips") {
     REQUIRE(position(3437, 148, 250).x() == 3312);
     REQUIRE(position(3735, 77, 75) == QPoint(3698, 107));
   }
+
+  TEST_CASE("wrapped_tool_tip") {
+    auto filter = ToolTipFilter();
+    QCoreApplication::instance()->installEventFilter(&filter);
+    auto window = QWidget();
+    window.resize(400, 300);
+    auto label = new QWidget(&window);
+    label->setGeometry(10, 10, 30, 30);
+    label->setToolTip("Rectangle with a very long name that the row has to "
+      "elide because it is far too wide END");
+    window.show();
+    QCoreApplication::processEvents();
+    hover(*label, QPoint(5, 5));
+    auto tip = find_tip();
+    REQUIRE(tip);
+    auto box = find_box(tip->grab().toImage());
+    auto metrics = QFontMetricsF(QToolTip::font());
+    REQUIRE(box.width() <= 320);
+    auto line_height = metrics.ascent() + metrics.descent();
+    auto lines = std::lround((box.height() - 14) / line_height);
+    REQUIRE(lines >= 2);
+    REQUIRE(box.height() == std::lround(14 + lines * line_height));
+    QCoreApplication::instance()->removeEventFilter(&filter);
+  }
 }

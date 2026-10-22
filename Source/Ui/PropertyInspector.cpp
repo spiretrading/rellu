@@ -36,6 +36,7 @@
 #include "Rellu/Commands/Hierarchy.hpp"
 #include "Rellu/Model/ReferenceResolution.hpp"
 #include "Rellu/Model/Transaction.hpp"
+#include "Rellu/Ui/FeatureCards.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
 #include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
@@ -524,7 +525,8 @@ namespace {
     QHBoxLayout* m_header;
   };
 
-  SectionFrame make_section(const QString& title, bool has_info) {
+  SectionFrame make_section(
+      const QString& title, std::optional<Feature> feature) {
     auto widget = new QWidget();
     widget->setObjectName("inspector_section");
     auto layout = new QVBoxLayout(widget);
@@ -535,10 +537,11 @@ namespace {
       auto row = make_row(header, 6);
       auto heading = translate("inspector.section", title);
       header->addWidget(make_label(heading.toUpper(), "section_heading"));
-      if(has_info) {
+      if(feature) {
         auto info = new QLabel();
         info->setPixmap(get_icon(Glyph::INFO).pixmap(QSize(14, 14)));
         info->setToolTip(heading);
+        set_feature(*info, *feature);
         header->addWidget(info);
       }
       header->addStretch(1);
@@ -1140,6 +1143,9 @@ namespace {
       is_grid ? "object.ungroup" : "object.repeat_grid", Glyph::REPEAT_GRID);
     grid_button->setCheckable(true);
     grid_button->setChecked(is_grid);
+    if(!is_grid) {
+      set_feature(*grid_button, Feature::REPEAT_GRID);
+    }
     row_layout->addWidget(grid_button);
     row_layout->addStretch(1);
     auto buttons = std::make_shared<std::vector<QToolButton*>>();
@@ -1850,8 +1856,15 @@ namespace {
       path != "geometry" && path != "fill" && path != "stroke";
   }
 
-  bool has_info(const std::string& path) {
-    return path == "component" || path == "transform" || path == "layout";
+  std::optional<Feature> get_info_feature(const std::string& path) {
+    if(path == "component") {
+      return Feature::COMPONENTS;
+    } else if(path == "transform") {
+      return Feature::TRANSFORM;
+    } else if(path == "layout") {
+      return Feature::LAYOUT;
+    }
+    return std::nullopt;
   }
 
   bool continues_group(const std::string& path) {
@@ -2270,7 +2283,7 @@ void PropertyInspector::rebuild() {
     m_layout->addWidget(make_rule(Qt::Horizontal));
   };
   if(m_workspace == Workspace::PROTOTYPE) {
-    auto frame = make_section("Interaction", false);
+    auto frame = make_section("Interaction", std::nullopt);
     auto add = make_icon_button(Glyph::PLUS, "Add Interaction");
     add->setEnabled(false);
     frame.m_header->addWidget(add);
@@ -2283,7 +2296,7 @@ void PropertyInspector::rebuild() {
     m_layout->addWidget(frame.m_widget);
     m_sections.emplace_back("interaction", frame.m_widget);
   } else if(m_workspace == Workspace::SHARE) {
-    auto frame = make_section("Link Settings", false);
+    auto frame = make_section("Link Settings", std::nullopt);
     frame.m_layout->addWidget(make_static_combo("Link", "Untitled"));
     frame.m_layout->addWidget(
       make_static_combo("View Setting", "Design Review"));
@@ -2356,7 +2369,8 @@ void PropertyInspector::rebuild() {
           add_rule();
         }
         frames.push_back(make_section(
-          has_header(path) ? section.m_label : QString(), has_info(path)));
+          has_header(path) ? section.m_label : QString(),
+          get_info_feature(path)));
         current = &frames.back();
         current->m_widget->setEnabled(!is_empty && !m_is_locked);
         m_layout->addWidget(current->m_widget);

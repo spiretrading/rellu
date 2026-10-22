@@ -4,9 +4,10 @@
 #include <QObject>
 #include <QPoint>
 #include <QPointF>
+#include <QPointer>
 #include <QRect>
 #include <QSize>
-#include <QPointer>
+#include <QString>
 #include <QWidget>
 
 namespace Rellu {
@@ -44,6 +45,19 @@ namespace Rellu {
   ToolTipPlacement get_tool_tip_placement(const QWidget& widget);
 
   /**
+   * Shows a tool tip as Adobe XD shows it, through the application's
+   * ToolTipFilter.
+   * @param target The widget the tool tip describes.
+   * @param text The tool tip's text, wrapped as needed.
+   * @param position The pointer's global position.
+   * @param area The region of the <i>target</i> the tool tip describes,
+   *        leaving which hides it, or nothing for the whole target.
+   * @return <code>true</code> iff a ToolTipFilter showed the tool tip.
+   */
+  bool show_tool_tip(QWidget& target, const QString& text, QPoint position,
+    std::optional<QRect> area = std::nullopt);
+
+  /**
    * An application event filter showing widgets' tool tips as Adobe XD
    * shows its tool tips.
    */
@@ -57,6 +71,16 @@ namespace Rellu {
       explicit ToolTipFilter(QObject* parent = nullptr);
 
       ~ToolTipFilter() override;
+
+      /**
+       * Shows a tool tip.
+       * @param target The widget the tool tip describes.
+       * @param text The tool tip's text.
+       * @param position The pointer's global position.
+       * @param area The region of the <i>target</i> the tool tip describes.
+       */
+      void show_text(QWidget& target, const QString& text, QPoint position,
+        std::optional<QRect> area);
 
       bool eventFilter(QObject* watched, QEvent* event) override;
 

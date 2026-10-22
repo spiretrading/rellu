@@ -8,15 +8,19 @@
 #include <vector>
 #include <QAbstractProxyModel>
 #include <QActionGroup>
+#include <QApplication>
 #include <QColor>
+#include <QFontMetricsF>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QHelpEvent>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
+#include <QStyle>
 #include <QStyledItemDelegate>
 #include <QVBoxLayout>
 #include "Rellu/Commands/Components.hpp"
@@ -26,6 +30,7 @@
 #include "Rellu/Ui/ContextMenus.hpp"
 #include "Rellu/Ui/LayersPanel.hpp"
 #include "Rellu/Ui/NodeDescription.hpp"
+#include "Rellu/Ui/ToolTips.hpp"
 #include "Rellu/Ui/Translation.hpp"
 #include "Colors.hpp"
 #include "Icons.hpp"
@@ -54,6 +59,7 @@ namespace {
   constexpr auto CHEVRON_RIGHT = 14.0 / 3;
   constexpr auto CHEVRON_TOP = 34.0 / 3;
   constexpr auto FILTER_INSET = 4;
+  constexpr auto FILTER_REGION_WIDTH = 62.0 / 3;
   constexpr auto SEARCH_TEXT_GAP = 2;
   const auto UNDERLINE_COLOR = QColor(0xCA, 0xCA, 0xCA);
   const auto FILTERS = std::to_array<std::pair<LayerFilter, const char*>>({
@@ -111,20 +117,6 @@ namespace {
         auto points = std::array{QPointF(20.75, 26.25) - origin,
           QPointF(17, 30) - origin, QPointF(20.75, 33.75) - origin};
         painter.drawPolyline(points.data(), static_cast<int>(points.size()));
-      }
-  };
-
-  class ContextTreeView : public QTreeView {
-    public:
-      std::function<bool (const QModelIndex&)> m_is_in_context;
-
-    protected:
-      void drawRow(QPainter* painter, const QStyleOptionViewItem& option,
-          const QModelIndex& index) const override {
-        if(m_is_in_context && m_is_in_context(index)) {
-          painter->fillRect(option.rect, CONTEXT_BACKGROUND);
-        }
-        QTreeView::drawRow(painter, option, index);
       }
   };
 
@@ -205,6 +197,19 @@ namespace {
         : QStyledItemDelegate(view),
           m_view(view) {}
 
+      bool is_elided(QStyleOptionViewItem option,
+          const QModelIndex& index) const {
+        initStyleOption(&option, index);
+        auto style = option.widget ? option.widget->style() :
+          QApplication::style();
+        auto text = style->subElementRect(
+          QStyle::SE_ItemViewItemText, &option, option.widget);
+        auto margin = style->pixelMetric(
+          QStyle::PM_FocusFrameHMargin, nullptr, option.widget) + 1;
+        return QFontMetricsF(option.font).horizontalAdvance(option.text) >
+          text.width() - 2 * margin;
+      }
+
     protected:
       void initStyleOption(QStyleOptionViewItem* option,
           const QModelIndex& index) const override {
@@ -230,6 +235,42 @@ namespace {
 
     private:
       QTreeView* m_view;
+  };
+
+  class ContextTreeView : public QTreeView {
+    public:
+      std::function<bool (const QModelIndex&)> m_is_in_context;
+
+    protected:
+      void drawRow(QPainter* painter, const QStyleOptionViewItem& option,
+          const QModelIndex& index) const override {
+        if(m_is_in_context && m_is_in_context(index)) {
+          painter->fillRect(option.rect, CONTEXT_BACKGROUND);
+        }
+        QTreeView::drawRow(painter, option, index);
+      }
+
+      bool viewportEvent(QEvent* event) override {
+        if(event->type() != QEvent::ToolTip) {
+          return QTreeView::viewportEvent(event);
+        }
+        auto& help = static_cast<QHelpEvent&>(*event);
+        auto index = indexAt(help.pos());
+        auto delegate =
+          dynamic_cast<StateDelegate*>(itemDelegateForIndex(index));
+        if(!index.isValid() || index.column() != LayersModel::NAME ||
+            !delegate) {
+          return QTreeView::viewportEvent(event);
+        }
+        auto option = QStyleOptionViewItem();
+        initViewItemOption(&option);
+        option.rect = visualRect(index);
+        if(delegate->is_elided(option, index)) {
+          show_tool_tip(*viewport(), index.data(Qt::DisplayRole).toString(),
+            help.globalPos(), option.rect);
+        }
+        return true;
+      }
   };
 
   class ResultsModel : public QAbstractProxyModel {
@@ -639,8 +680,10 @@ void LayersPanel::show_context_menu(QTreeView& view, const QPoint& position) {
 
 bool LayersPanel::eventFilter(QObject* watched, QEvent* event) {
   if(watched == m_search && event->type() == QEvent::Resize) {
+    auto left = static_cast<int>(
+      std::floor(m_search->width() - FILTER_REGION_WIDTH));
     m_filter_button->setGeometry(
-      get_chevron_rect(*m_search).toAlignedRect());
+      left, 0, m_search->width() - left, m_search->height());
     m_search_glyphs->setGeometry(m_search->rect());
     m_search_glyphs->raise();
   }

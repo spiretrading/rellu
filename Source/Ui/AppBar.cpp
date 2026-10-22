@@ -1,4 +1,6 @@
 #include <cmath>
+#include <optional>
+#include <tuple>
 #include <utility>
 #include <QColor>
 #include <QEvent>
@@ -15,6 +17,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include "Rellu/Ui/AppBar.hpp"
+#include "Rellu/Ui/FeatureCards.hpp"
 #include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "Icons.hpp"
@@ -208,11 +211,17 @@ AppBar::AppBar(QWidget* parent)
   right_layout->setSpacing(0);
   right_layout->addStretch(1);
   auto is_first = true;
-  for(auto [glyph, tip] : {std::pair(Glyph::INVITE, "Invite to Document"),
-      std::pair(Glyph::DEVICE, "Device Preview"),
-      std::pair(Glyph::PLAY, "Desktop Preview")}) {
+  for(auto [glyph, tip, feature] : {std::tuple(Glyph::INVITE,
+      "Invite to Document", std::optional<Feature>()),
+      std::tuple(Glyph::DEVICE, "Device Preview",
+        std::optional(Feature::DEVICE_PREVIEW)),
+      std::tuple(Glyph::PLAY, "Desktop Preview",
+        std::optional(Feature::DESKTOP_PREVIEW))}) {
     auto button = make_icon_button(glyph, tip);
     button->setEnabled(false);
+    if(feature) {
+      set_feature(*button, *feature);
+    }
     if(!is_first) {
       right_layout->addSpacing(ICON_BUTTON_SPACING);
     }

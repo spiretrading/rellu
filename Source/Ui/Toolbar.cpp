@@ -1,5 +1,6 @@
 #include <utility>
 #include <QVBoxLayout>
+#include "Rellu/Ui/FeatureCards.hpp"
 #include "Rellu/Ui/Toolbar.hpp"
 #include "Rellu/Ui/ToolTips.hpp"
 #include "Rellu/Ui/Translation.hpp"
@@ -168,6 +169,13 @@ QToolButton* Toolbar::make_button(const ToolEntry& entry) {
   button->setIconSize(QSize(ICON_SIZE, ICON_SIZE));
   button->setIcon(entry.m_icon);
   set_tool_tip_placement(*button, ToolTipPlacement::RIGHT);
+  if(entry.m_name == "layers") {
+    set_feature(*button, Feature::LAYERS_PANEL);
+  } else if(entry.m_name == "assets") {
+    set_feature(*button, Feature::ASSETS_PANEL);
+  } else if(entry.m_name == "plugins") {
+    set_feature(*button, Feature::PLUGINS_PANEL);
+  }
   auto label = translate("toolbar", entry.m_label);
   button->setAccessibleName(label);
   if(entry.m_shortcut.isEmpty()) {

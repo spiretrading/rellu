@@ -3,9 +3,12 @@
 #include <memory>
 #include <vector>
 #include <doctest/doctest.h>
+#include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
 #include <QFont>
+#include <QFontMetrics>
+#include <QHelpEvent>
 #include <QImage>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
@@ -15,9 +18,11 @@
 #include <QPalette>
 #include <QToolButton>
 #include <QTreeView>
+#include <QWidget>
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Ui/LayersPanel.hpp"
+#include "Rellu/Ui/ToolTips.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "TestDocument.hpp"
 
@@ -175,6 +180,52 @@ TEST_SUITE("LayersPanel") {
     QCoreApplication::processEvents();
     REQUIRE(color_of(ids.m_card) == QColor(0xF5, 0xF5, 0xF5));
     panel.hide();
+  }
+
+  TEST_CASE("elided_name_tool_tip") {
+    auto filter = ToolTipFilter();
+    QCoreApplication::instance()->installEventFilter(&filter);
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto panel = LayersPanel();
+    panel.set_editor(&editor);
+    panel.resize(240, 600);
+    editor.get_selection().select(ids.m_ellipse);
+    panel.show();
+    QCoreApplication::processEvents();
+    auto& model = panel.get_model();
+    auto& view = panel.get_view();
+    auto find_tip = [] {
+      for(auto widget : QApplication::topLevelWidgets()) {
+        if(widget->objectName() == "rellu_tool_tip" && widget->isVisible()) {
+          return widget;
+        }
+      }
+      return static_cast<QWidget*>(nullptr);
+    };
+    auto hover = [&] (const NodeId& id) {
+      auto center = view.visualRect(model.find(id)).center();
+      auto help = QHelpEvent(
+        QEvent::ToolTip, center, view.viewport()->mapToGlobal(center));
+      QCoreApplication::sendEvent(view.viewport(), &help);
+    };
+    hover(ids.m_card);
+    REQUIRE(!find_tip());
+    {
+      auto transaction = Transaction(document);
+      auto header = document.get(ids.m_card).m_header;
+      header.m_name = "Rectangle with a very long name that the row has to "
+        "elide because it is far too wide END";
+      transaction.replace_header(header);
+      transaction.commit();
+    }
+    QCoreApplication::processEvents();
+    hover(ids.m_card);
+    auto tip = find_tip();
+    REQUIRE(tip);
+    REQUIRE(tip->height() > 2 * QFontMetrics(QApplication::font()).height());
+    QCoreApplication::instance()->removeEventFilter(&filter);
   }
 
   TEST_CASE("pasteboard") {
@@ -596,7 +647,9 @@ TEST_SUITE("LayersPanel") {
         return button->menu() != nullptr;
       });
     REQUIRE(filter != buttons.end());
-    REQUIRE((*filter)->geometry() == QRect(field->width() - 14, 11, 9, 6));
+    REQUIRE((*filter)->geometry() ==
+      QRect(field->width() - 21, 0, 21, field->height()));
+    REQUIRE((*filter)->cursor().shape() == Qt::ArrowCursor);
     REQUIRE(field->textMargins().left() == 17);
     REQUIRE(field->textMargins().right() == 16);
     REQUIRE(field->actions().empty());

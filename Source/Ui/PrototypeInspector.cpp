@@ -29,6 +29,7 @@
 #include "Rellu/Prototype/InteractionCommands.hpp"
 #include "Rellu/Prototype/KeyNames.hpp"
 #include "Rellu/Prototype/StageDocument.hpp"
+#include "Rellu/Ui/FeatureCards.hpp"
 #include "Rellu/Ui/PrototypeInspector.hpp"
 #include "Rellu/Ui/Translation.hpp"
 #include "FieldKeys.hpp"
@@ -155,7 +156,8 @@ namespace {
     return label;
   }
 
-  Section make_section(const QString& title) {
+  Section make_section(const QString& title,
+      std::optional<Feature> feature = std::nullopt) {
     auto widget = new QWidget();
     widget->setObjectName("inspector_section");
     auto layout = new QVBoxLayout(widget);
@@ -170,6 +172,9 @@ namespace {
     auto info = new QLabel();
     info->setPixmap(get_icon(Glyph::INFO).pixmap(QSize(14, 14)));
     info->setToolTip(heading);
+    if(feature) {
+      set_feature(*info, *feature);
+    }
     header->addWidget(info);
     header->addStretch(1);
     row->setFixedHeight(22);
@@ -893,7 +898,7 @@ void PrototypeInspector::rebuild() {
       layout.addWidget(make_field(label, input));
     }
   };
-  auto section = make_section("Interaction");
+  auto section = make_section("Interaction", Feature::INTERACTION);
   auto add = new QToolButton();
   add->setObjectName("icon_toggle");
   add->setAutoRaise(true);
@@ -1069,6 +1074,7 @@ void PrototypeInspector::rebuild() {
           apply(std::move(changed), "Action");
         }
       });
+    set_feature(*type, Feature::INTERACTION_ACTION_TYPE);
     add_field(*section.m_layout, "type", "Type", type);
     auto action = base.m_action;
     if(std::holds_alternative<PreviousArtboard>(action)) {

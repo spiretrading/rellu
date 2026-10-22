@@ -63,6 +63,10 @@ QToolButton#panel_button, QToolButton#zoom_presets {
   border-radius: 4px;
   background: transparent;
 }
+QToolButton#toolbar_button:hover, QToolButton#toolbar_button:pressed,
+QToolButton#toolbar_button:checked {
+  background: transparent;
+}
 QToolButton#panel_button:hover {
   background: #EAEAEA;
 }

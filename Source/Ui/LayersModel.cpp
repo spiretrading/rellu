@@ -232,13 +232,6 @@ QVariant LayersModel::data(const QModelIndex& index, int role) const {
         return get_kind_icon(NodeKind::REFERENCE, is_reference);
       }
       return get_layer_icon(*displayed, is_reference);
-    } else if(role == Qt::ToolTipRole) {
-      auto type = displayed ? get_type_name(*displayed) :
-        translate("layers", "Unresolved reference");
-      if(is_reference && displayed) {
-        return translate("layers", "%1 (reference)").arg(type);
-      }
-      return type;
     } else if(role == Qt::FontRole && is_reference) {
       auto font = QFont();
       font.setItalic(true);
@@ -253,14 +246,14 @@ QVariant LayersModel::data(const QModelIndex& index, int role) const {
       return get_visibility_icon(header->m_is_visible);
     } else if(role == Qt::ToolTipRole) {
       return translate("layers", header->m_is_visible ? "Hide (%1)" :
-        "Show (%1)").arg(to_xd_tool_tip_shortcut_text(QKeySequence("Ctrl+,")));
+        "Show (%1)").arg(to_xd_shortcut_text(QKeySequence("Ctrl+,")));
     }
   } else if(index.column() == LOCK) {
     if(role == Qt::DecorationRole && header->m_is_locked) {
       return get_lock_icon();
     } else if(role == Qt::ToolTipRole) {
       return translate("layers", header->m_is_locked ? "Unlock (%1)" :
-        "Lock (%1)").arg(to_xd_tool_tip_shortcut_text(QKeySequence("Ctrl+L")));
+        "Lock (%1)").arg(to_xd_shortcut_text(QKeySequence("Ctrl+L")));
     }
   }
   return QVariant();
