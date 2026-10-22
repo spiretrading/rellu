@@ -11,6 +11,7 @@
 #include "Rellu/Commands/Compounds.hpp"
 #include "Rellu/Commands/Layouts.hpp"
 #include "Rellu/Commands/Signal.hpp"
+#include "Rellu/Geometry/Point.hpp"
 #include "Rellu/Model/ChangeSet.hpp"
 #include "Rellu/Model/Document.hpp"
 #include "Rellu/Model/Subscription.hpp"
@@ -24,13 +25,31 @@ namespace Rellu {
    * A command's step also holds the changes it causes in components, as
    * refresh_components makes them, the recomputed results of the compound
    * shapes whose operands it changed, as refresh_compounds makes them, and
-   * the recomputed layouts it called for, as refresh_layouts makes them. The
+   * the recomputed layouts it called for, as refresh_layouts makes them, and
+   * the nodes it moved onto or off artboards, as settle_nodes moves those
+   * get_settled_nodes lists along with those the settle provider lists, by
+   * the pointer's position, as Adobe XD does once each edit ends. The
    * most recent step stays open to merging until it is sealed, undone or
    * followed by another step. Once a History is attached, the document must
    * be undone, redone and cleared only through it.
    */
   class History {
     public:
+
+      /**
+       * The type of function listing the nodes to settle after every step
+       * beyond those the step changed, such as the selected containers and
+       * the containers being edited.
+       */
+      using SettleProvider = std::function<std::vector<NodeId> ()>;
+
+      /**
+       * The type of function told of the nodes a step moved onto or off
+       * artboards.
+       * @param nodes The nodes moved, in z order.
+       */
+      using SettleObserver =
+        std::function<void (const std::vector<NodeId>& nodes)>;
 
       /**
        * Constructs a History of the changes to a document from now on, the
@@ -55,6 +74,39 @@ namespace Rellu {
        * @param measurer The function measuring text.
        */
       void set_text_measurer(TextMeasurer measurer);
+
+      /**
+       * Sets the pointer's position, by which nodes overlapping several
+       * artboards are settled.
+       * @param pointer The position in document space, or none.
+       */
+      void set_pointer(std::optional<Point> pointer);
+
+      /**
+       * Sets the function listing the nodes to settle after every step
+       * beyond those the step changed.
+       * @param provider The function, or empty for none.
+       */
+      void set_settle_provider(SettleProvider provider);
+
+      /**
+       * Sets the function told of the nodes a step moved onto or off
+       * artboards.
+       * @param observer The function, or empty for none.
+       */
+      void set_settle_observer(SettleObserver observer);
+
+      /**
+       * Defers settling nodes onto or off artboards while a gesture making
+       * several steps, such as a drag, is under way, until released.
+       */
+      void hold_settling();
+
+      /**
+       * Settles the nodes the steps made since hold_settling call for, as
+       * part of the most recent step if that step was made since.
+       */
+      void release_settling();
 
       /**
        * Keeps stack items where they are while they are dragged, the other
@@ -195,6 +247,11 @@ namespace Rellu {
       CompoundFilter m_filter;
       LayoutOptions m_layout;
       std::size_t m_hold;
+      std::optional<Point> m_pointer;
+      SettleProvider m_settle_provider;
+      SettleObserver m_settle_observer;
+      std::optional<std::size_t> m_settle_hold;
+      std::vector<NodeId> m_pending;
       ChangeSet m_changes;
       Signal m_signal;
       Subscription m_subscription;
@@ -205,6 +262,7 @@ namespace Rellu {
       void push(Step step);
       void synchronize();
       void refresh();
+      void settle(std::vector<NodeId> nodes);
       void on_change(const ChangeSet& changes);
   };
 }

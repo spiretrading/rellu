@@ -314,7 +314,7 @@ TEST_SUITE("PathCommands") {
   TEST_CASE("outline_stroke_flipped_text") {
     auto document = Document();
     auto board = build_board(document);
-    auto flip = Matrix(-1, 0, 0, -1, 499, 409);
+    auto flip = Matrix(-1, 0, 0, -1, 399, 309);
     {
       auto header = document.get(board.m_text).m_header;
       header.m_name = "Hi";
@@ -617,7 +617,8 @@ TEST_SUITE("PathCommands") {
     auto outer = static_cast<const BooleanCommand*>(history.execute(
       registry.make("object.path.subtract", document,
         std::vector{inner, board.m_loose})))->get_compound();
-    REQUIRE(document.get(outer).m_parent == NodeId());
+    REQUIRE(document.get(outer).m_parent == board.m_artboard);
+    REQUIRE(document.get(board.m_artboard).m_children.back() == outer);
     REQUIRE(document.get(outer).m_children ==
       std::vector{inner, board.m_loose});
     require_near(get_world_transform(document, board.m_bottom),

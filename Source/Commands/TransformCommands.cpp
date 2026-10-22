@@ -713,7 +713,7 @@ NodeId Rellu::find_artboard_parent(const Document& document,
     const TextMeasurer& measurer) {
   auto& node = document.get(id);
   auto bounds = get_world_bounds(document, id, BoundsType::GEOMETRY, measurer);
-  if(!bounds) {
+  if(!bounds || bounds->m_width == 0 && bounds->m_height == 0) {
     return node.m_parent;
   }
   auto candidates = std::vector<NodeId>();
@@ -727,9 +727,39 @@ NodeId Rellu::find_artboard_parent(const Document& document,
     pointer);
 }
 
-void Rellu::settle_nodes(const Document& document, Transaction& transaction,
-    const std::vector<NodeId>& nodes, std::optional<Point> pointer,
-    const TextMeasurer& measurer) {
+std::vector<NodeId> Rellu::get_settled_nodes(
+    const Document& document, const ChangeSet& changes) {
+  constexpr auto MASK = ChangeMask::VISIBILITY | ChangeMask::TRANSFORM |
+    ChangeMask::GEOMETRY | ChangeMask::TEXT | ChangeMask::CHILDREN |
+    ChangeMask::REFERENCE;
+  auto nodes = std::vector<NodeId>();
+  auto add = [&] (const NodeId& id) {
+    auto node = document.find(id);
+    if(!node || std::find(nodes.begin(), nodes.end(), id) != nodes.end()) {
+      return;
+    }
+    if(node->m_parent.is_nil() ? document.is_on_canvas(id) :
+        static_cast<bool>(document.get(node->m_parent).get_artboard())) {
+      nodes.push_back(id);
+    }
+  };
+  for(auto& id : changes.m_inserted) {
+    add(id);
+  }
+  for(auto& id : changes.m_moved) {
+    add(id);
+  }
+  for(auto& change : changes.m_modified) {
+    if(is_set(change.m_mask, MASK)) {
+      add(change.m_id);
+    }
+  }
+  return nodes;
+}
+
+std::vector<NodeId> Rellu::settle_nodes(const Document& document,
+    Transaction& transaction, const std::vector<NodeId>& nodes,
+    std::optional<Point> pointer, const TextMeasurer& measurer) {
   auto targets = std::vector<std::pair<NodeId, NodeId>>();
   auto is_listed = [&] (const NodeId& id) {
     return std::any_of(targets.begin(), targets.end(),
@@ -789,24 +819,7 @@ void Rellu::settle_nodes(const Document& document, Transaction& transaction,
     ReparentCommand(std::vector{id}, i->second, count).apply(
       document, transaction);
   }
-}
-
-SettleCommand::SettleCommand(std::vector<NodeId> nodes,
-  std::optional<Point> pointer, TextMeasurer measurer) noexcept
-  : m_nodes(std::move(nodes)),
-    m_pointer(pointer),
-    m_measurer(std::move(measurer)) {}
-
-const std::vector<NodeId>& SettleCommand::get_nodes() const {
-  return m_nodes;
-}
-
-std::string SettleCommand::get_label() const {
-  return "Move";
-}
-
-void SettleCommand::apply(const Document& document, Transaction& transaction) {
-  settle_nodes(document, transaction, m_nodes, m_pointer, m_measurer);
+  return moved;
 }
 
 TranslateCommand::TranslateCommand(std::vector<NodeId> nodes, Point delta)
@@ -814,14 +827,9 @@ TranslateCommand::TranslateCommand(std::vector<NodeId> nodes, Point delta)
 
 TranslateCommand::TranslateCommand(
   std::vector<NodeId> nodes, Point delta, std::string label) noexcept
-  : TranslateCommand(std::move(nodes), delta, std::move(label), true) {}
-
-TranslateCommand::TranslateCommand(std::vector<NodeId> nodes, Point delta,
-  std::string label, bool is_settled) noexcept
   : m_nodes(std::move(nodes)),
     m_delta(delta),
-    m_label(std::move(label)),
-    m_is_settled(is_settled) {}
+    m_label(std::move(label)) {}
 
 const std::vector<NodeId>& TranslateCommand::get_nodes() const {
   return m_nodes;
@@ -840,15 +848,9 @@ void TranslateCommand::apply(
   for(auto& id : get_top_level(document, m_nodes)) {
     translate_node(document, transaction, id, m_delta);
   }
-  if(m_is_settled) {
-    settle_nodes(document, transaction, m_nodes);
-  }
 }
 
 bool TranslateCommand::merge(const Command& command) {
-  if(auto settle = dynamic_cast<const SettleCommand*>(&command)) {
-    return settle->get_nodes() == m_nodes;
-  }
   auto translation = dynamic_cast<const TranslateCommand*>(&command);
   if(!translation || translation->m_label != m_label ||
       translation->m_nodes != m_nodes) {

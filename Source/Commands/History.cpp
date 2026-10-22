@@ -1,6 +1,8 @@
+#include <algorithm>
 #include <utility>
 #include "Rellu/Commands/Components.hpp"
 #include "Rellu/Commands/History.hpp"
+#include "Rellu/Commands/TransformCommands.hpp"
 #include "Rellu/Model/Transaction.hpp"
 
 using namespace Rellu;
@@ -62,6 +64,49 @@ void History::set_compound_filter(CompoundFilter filter) {
 
 void History::set_text_measurer(TextMeasurer measurer) {
   m_layout.m_measurer = std::move(measurer);
+}
+
+void History::set_pointer(std::optional<Point> pointer) {
+  m_pointer = pointer;
+}
+
+void History::set_settle_provider(SettleProvider provider) {
+  m_settle_provider = std::move(provider);
+}
+
+void History::set_settle_observer(SettleObserver observer) {
+  m_settle_observer = std::move(observer);
+}
+
+void History::hold_settling() {
+  if(m_settle_hold) {
+    return;
+  }
+  synchronize();
+  m_settle_hold = get_depth();
+  m_pending.clear();
+}
+
+void History::release_settling() {
+  if(!m_settle_hold) {
+    return;
+  }
+  auto hold = *std::exchange(m_settle_hold, std::nullopt);
+  auto nodes = std::exchange(m_pending, std::vector<NodeId>());
+  synchronize();
+  if(get_depth() <= hold || m_document->get_undo_count() != get_depth()) {
+    return;
+  }
+  std::erase_if(nodes, [&] (const auto& id) {
+    return !m_document->find(id);
+  });
+  {
+    auto guard = Guard(m_is_applying);
+    auto recording = Guard(m_is_recording);
+    settle(std::move(nodes));
+    m_changes = ChangeSet();
+  }
+  m_signal();
 }
 
 void History::hold_layout(std::vector<NodeId> nodes) {
@@ -384,6 +429,42 @@ void History::refresh() {
   m_changes = ChangeSet();
   refresh_component_sizes(*m_document, changes, m_layout.m_measurer);
   m_changes = ChangeSet();
+  auto nodes = get_settled_nodes(*m_document, changes);
+  if(m_settle_hold) {
+    for(auto& id : nodes) {
+      if(std::find(m_pending.begin(), m_pending.end(), id) ==
+          m_pending.end()) {
+        m_pending.push_back(id);
+      }
+    }
+  } else {
+    settle(std::move(nodes));
+    m_changes = ChangeSet();
+  }
+}
+
+void History::settle(std::vector<NodeId> nodes) {
+  if(m_settle_provider) {
+    for(auto& id : m_settle_provider()) {
+      if(m_document->find(id) &&
+          std::find(nodes.begin(), nodes.end(), id) == nodes.end()) {
+        nodes.push_back(id);
+      }
+    }
+  }
+  if(nodes.empty()) {
+    return;
+  }
+  auto transaction = Transaction(*m_document);
+  auto moved = settle_nodes(
+    *m_document, transaction, nodes, m_pointer, m_layout.m_measurer);
+  if(moved.empty()) {
+    return;
+  }
+  transaction.amend();
+  if(m_settle_observer) {
+    m_settle_observer(moved);
+  }
 }
 
 void History::on_change(const ChangeSet& changes) {

@@ -3,6 +3,8 @@
 #include <numbers>
 #include <string>
 #include <doctest/doctest.h>
+#include "Rellu/Commands/AlignCommands.hpp"
+#include "Rellu/Commands/CreationCommands.hpp"
 #include "Rellu/Commands/TransformCommands.hpp"
 #include "Fixture.hpp"
 
@@ -751,6 +753,7 @@ TEST_SUITE("TransformCommands") {
     transaction.commit();
     document.clear_history();
     auto history = History(document);
+    history.hold_settling();
     history.execute(std::make_unique<TransformCommand>(std::vector{board},
       make_scale(1.25, 1), "Resize", TransformMode::DRAG));
     REQUIRE(document.get(board).get_artboard()->m_frame ==
@@ -793,7 +796,7 @@ TEST_SUITE("TransformCommands") {
     REQUIRE(*get_world_bounds(document, loose) == Rect(50, 10, 40, 40));
   }
 
-  TEST_CASE("settle_command") {
+  TEST_CASE("held_settling") {
     auto document = Document();
     auto transaction = Transaction(document);
     auto artboard = Artboard();
@@ -813,11 +816,13 @@ TEST_SUITE("TransformCommands") {
     document.clear_history();
     auto history = History(document);
     auto nodes = std::vector{upper, lower};
-    REQUIRE(history.merge(std::make_unique<TranslateCommand>(
-      nodes, Point(500, 0), "Move", false)));
+    history.hold_settling();
+    REQUIRE(history.merge(
+      std::make_unique<TranslateCommand>(nodes, Point(250, 0))));
+    REQUIRE(history.merge(
+      std::make_unique<TranslateCommand>(nodes, Point(250, 0))));
     REQUIRE(document.get(lower).m_parent == board);
-    REQUIRE(history.merge(std::make_unique<SettleCommand>(
-      nodes, std::nullopt, estimate_text_bounds)));
+    history.release_settling();
     REQUIRE(history.get_undo_count() == 1);
     REQUIRE(history.get_undo_label() == "Move");
     REQUIRE(document.get_canvas() == std::vector{board, lower, upper});
@@ -876,13 +881,14 @@ TEST_SUITE("TransformCommands") {
     document.clear_history();
     auto history = History(document);
     require_undoable(history, std::make_unique<TranslateCommand>(
-      std::vector{first}, Point(500, 0)));
+      std::vector{first, second}, Point(500, 0)));
     REQUIRE(document.get(group).m_parent == board);
+    history.set_settle_provider([&] { return std::vector{group}; });
     require_undoable(history, std::make_unique<TranslateCommand>(
-      std::vector{second}, Point(500, 0)));
+      std::vector{second}, Point(0, 1)));
     REQUIRE(document.get(group).m_parent.is_nil());
     REQUIRE(document.get(group).m_children == std::vector{first, second});
-    REQUIRE(*get_world_bounds(document, second) == Rect(560, 10, 40, 40));
+    REQUIRE(*get_world_bounds(document, second) == Rect(560, 11, 40, 40));
   }
 
   TEST_CASE("settle_moved_artboard") {
@@ -906,5 +912,47 @@ TEST_SUITE("TransformCommands") {
     REQUIRE(document.get(board).m_children == std::vector{loose});
     REQUIRE(document.get(far).m_parent.is_nil());
     REQUIRE(*get_world_bounds(document, loose) == Rect(150, 10, 40, 40));
+  }
+  TEST_CASE("settle_after_each_kind_of_edit") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 400, 300);
+    auto board =
+      transaction.append(NodeId(), make_header("Artboard"), artboard);
+    auto shape = transaction.append(board,
+      make_header("Shape", make_translation(10, 10)),
+      make_rectangle_shape(40, 40));
+    auto loose = transaction.append(NodeId(),
+      make_header("Loose", make_translation(500, 100)),
+      make_rectangle_shape(40, 40));
+    transaction.commit();
+    document.clear_history();
+    auto history = History(document);
+    require_undoable(history, make_bounds_command(
+      document, shape, Rect(390, 0, 40, 40)));
+    REQUIRE(*get_world_bounds(document, shape) == Rect(400, 10, 40, 40));
+    REQUIRE(history.get_undo_label() == "Resize");
+    REQUIRE(document.get(shape).m_parent.is_nil());
+    REQUIRE(history.undo());
+    REQUIRE(document.get(shape).m_parent == board);
+    require_undoable(history, make_rotate_command(
+      std::vector{shape}, std::numbers::pi, Point(395, 30)));
+    REQUIRE(history.get_undo_label() == "Rotate");
+    REQUIRE(document.get(shape).m_parent.is_nil());
+    REQUIRE(history.undo());
+    require_undoable(history, std::make_unique<AlignCommand>(
+      std::vector{shape, loose}, ObjectAlignment::LEFT,
+      estimate_text_bounds));
+    REQUIRE(history.get_undo_label() == "Align");
+    REQUIRE(document.get(loose).m_parent == board);
+    REQUIRE(document.get(board).m_children == std::vector{shape, loose});
+    REQUIRE(history.undo());
+    auto header = make_header("Drawn", make_translation(380, 100));
+    auto drawn = header.m_id;
+    require_undoable(history, std::make_unique<InsertNodeCommand>(
+      "Draw Rectangle", NodeId(), header, make_rectangle_shape(40, 40)));
+    REQUIRE(document.get(drawn).m_parent == board);
+    REQUIRE(*get_world_bounds(document, drawn) == Rect(380, 100, 40, 40));
   }
 }

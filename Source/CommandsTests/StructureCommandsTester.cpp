@@ -130,7 +130,8 @@ TEST_SUITE("StructureCommands") {
       std::vector{scene.m_loose, scene.m_ellipse, scene.m_reference},
       "Mixed"));
     auto& group = static_cast<const GroupCommand&>(*command).get_group();
-    REQUIRE(document.get_canvas() == std::vector{scene.m_artboard, group});
+    REQUIRE(document.get_canvas() == std::vector{scene.m_artboard});
+    REQUIRE(document.get_children(scene.m_artboard).back() == group);
     REQUIRE(document.get_children(group) ==
       std::vector{scene.m_ellipse, scene.m_reference, scene.m_loose});
     REQUIRE(document.get(group).m_header.m_name == "Mixed");

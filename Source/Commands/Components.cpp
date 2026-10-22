@@ -1256,7 +1256,6 @@ namespace {
         [] (const auto& child) { return handles_references(*child); });
     }
     return dynamic_cast<const TranslateCommand*>(&command) ||
-      dynamic_cast<const SettleCommand*>(&command) ||
       dynamic_cast<const TransformCommand*>(&command) ||
       dynamic_cast<const ArrangeCommand*>(&command) ||
       dynamic_cast<const ReparentCommand*>(&command) ||

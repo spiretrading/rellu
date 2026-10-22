@@ -47,6 +47,12 @@ Editor::Editor(Document& document)
   m_subscription = m_selection.subscribe([this] {
     on_selection();
   });
+  m_history.set_settle_provider([this] {
+    return get_settled_containers();
+  });
+  m_history.set_settle_observer([this] (const auto& nodes) {
+    on_settle(nodes);
+  });
 }
 
 Document& Editor::get_document() const {
@@ -180,6 +186,47 @@ void Editor::select_all() {
     }
   }
   m_selection.select(nodes);
+}
+
+std::vector<NodeId> Editor::get_settled_containers() const {
+  auto nodes = std::vector<NodeId>();
+  auto is_top_level = [&] (const Node& node) {
+    if(node.m_parent.is_nil()) {
+      return m_document->is_on_canvas(node.get_id());
+    }
+    return static_cast<bool>(m_document->get(node.m_parent).get_artboard());
+  };
+  for(auto& id : m_selection.get_nodes()) {
+    auto node = m_document->find(id);
+    if(node && !node->get_artboard() && !node->m_children.empty() &&
+        is_top_level(*node)) {
+      nodes.push_back(id);
+    }
+  }
+  for(auto node = m_document->find(m_context.get_container());
+      node && !node->get_artboard(); node = m_document->find(node->m_parent)) {
+    auto group = node->get_group();
+    if(group && group->m_component_instance) {
+      auto instances = find_instances(
+        *m_document, group->m_component_instance->m_component);
+      nodes.insert(nodes.end(), instances.begin(), instances.end());
+    } else if(is_top_level(*node)) {
+      nodes.push_back(node->get_id());
+    }
+    if(node->m_parent.is_nil()) {
+      break;
+    }
+  }
+  return nodes;
+}
+
+void Editor::on_settle(const std::vector<NodeId>& nodes) {
+  for(auto& id : nodes) {
+    if(m_selection.contains(id) || id == m_context.get_container() ||
+        is_ancestor(*m_document, id, m_context.get_container())) {
+      m_context.set_artboard(m_document->get(id).m_parent);
+    }
+  }
 }
 
 void Editor::on_selection() {

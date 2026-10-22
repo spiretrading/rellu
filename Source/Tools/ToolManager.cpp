@@ -124,6 +124,7 @@ void ToolManager::set_tool(const std::string& name) {
   }
   m_tool->cancel(m_context);
   m_tool->leave(m_context);
+  m_context.get_editor().get_history().release_settling();
   m_tool = entry->second.get();
   m_name = name;
   m_tool_signal();
@@ -145,6 +146,11 @@ void ToolManager::set_view(const Matrix& view, double scale, Size size) {
 void ToolManager::press(const PointerEvent& event) {
   m_last_move = event;
   m_has_move = true;
+  auto& history = m_context.get_editor().get_history();
+  history.set_pointer(m_context.to_document(event.m_position));
+  if(event.m_button == Qt::LeftButton) {
+    history.hold_settling();
+  }
   m_tool->press(m_context, event);
   take_request();
   m_signal();
@@ -153,6 +159,8 @@ void ToolManager::press(const PointerEvent& event) {
 void ToolManager::move(const PointerEvent& event) {
   m_last_move = event;
   m_has_move = true;
+  m_context.get_editor().get_history().set_pointer(
+    m_context.to_document(event.m_position));
   m_tool->move(m_context, event);
   take_request();
   m_signal();
@@ -161,7 +169,12 @@ void ToolManager::move(const PointerEvent& event) {
 void ToolManager::release(const PointerEvent& event) {
   m_last_move = event;
   m_has_move = true;
+  auto& history = m_context.get_editor().get_history();
+  history.set_pointer(m_context.to_document(event.m_position));
   m_tool->release(m_context, event);
+  if(event.m_button == Qt::LeftButton) {
+    history.release_settling();
+  }
   take_request();
   m_signal();
 }
@@ -202,6 +215,7 @@ bool ToolManager::key_release(const KeyEvent& event) {
 
 void ToolManager::cancel() {
   m_tool->cancel(m_context);
+  m_context.get_editor().get_history().release_settling();
   m_signal();
 }
 

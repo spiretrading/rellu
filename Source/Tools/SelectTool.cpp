@@ -47,9 +47,6 @@ namespace {
       }
 
       bool merge(const Command& command) override {
-        if(auto settle = dynamic_cast<const SettleCommand*>(&command)) {
-          return settle->get_nodes() == m_duplicate.get_copies();
-        }
         auto translation = dynamic_cast<const TranslateCommand*>(&command);
         return translation &&
           translation->get_nodes() == m_duplicate.get_copies();
@@ -622,7 +619,7 @@ void SelectTool::release(ToolContext& context, const PointerEvent& event) {
   } else if(m_gesture == Gesture::GUIDE) {
     m_guides.release(context, event);
   } else if(m_gesture == Gesture::MOVE && m_is_applied) {
-    settle(context, m_nodes, context.to_document(event.m_position), true);
+    drop(context, event);
   } else if(m_gesture == Gesture::BADGE &&
       m_handles.find_lock_badge(context, event.m_position) == m_badge) {
     auto& editor = context.get_editor();
@@ -789,8 +786,7 @@ bool SelectTool::key_press(ToolContext& context, const KeyEvent& event) {
     editor.get_history().seal();
   }
   editor.merge(std::make_unique<TranslateCommand>(
-    nodes, step, get_nudge_label(delta), false));
-  settle(context, std::move(nodes), context.to_document(m_pointer), false);
+    std::move(nodes), step, get_nudge_label(delta)));
   return true;
 }
 
@@ -1063,7 +1059,7 @@ void SelectTool::update_move(ToolContext& context, const PointerEvent& event) {
     return;
   }
   context.get_editor().merge(
-    std::make_unique<TranslateCommand>(m_nodes, step, "Move", false));
+    std::make_unique<TranslateCommand>(m_nodes, step));
   m_delta = delta;
   m_is_applied = true;
 }
@@ -1135,20 +1131,14 @@ void SelectTool::update_hover(
   measure(context, m_handles.get_box(context), hover, event.m_modifiers);
 }
 
-void SelectTool::settle(ToolContext& context, std::vector<NodeId> nodes,
-    Point pointer, bool is_dropped) {
+void SelectTool::drop(ToolContext& context, const PointerEvent& event) {
   auto& editor = context.get_editor();
   auto& document = context.get_document();
+  editor.get_history().set_pointer(context.to_document(event.m_position));
+  editor.get_history().release_settling();
   auto primary = editor.get_selection().get_primary();
-  auto artboard = find_artboard(document, primary);
-  editor.merge(std::make_unique<SettleCommand>(
-    std::move(nodes), pointer, context.get_text_measurer()));
-  if(primary.is_nil() || !document.find(primary)) {
-    return;
-  }
-  auto settled = find_artboard(document, primary);
-  if(is_dropped || settled != artboard) {
-    editor.get_context().set_artboard(settled);
+  if(document.find(primary)) {
+    editor.get_context().set_artboard(find_artboard(document, primary));
   }
 }
 

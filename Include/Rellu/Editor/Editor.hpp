@@ -22,7 +22,12 @@ namespace Rellu {
    * undoing or redoing them restores the selection from before or after.
    * A command editing selected nodes inside component instances first makes
    * them editable, as make_instance_edit prepares it.
-   * Changing the selection seals the most recent step to merging.
+   * Changing the selection seals the most recent step to merging. After
+   * every step the history also settles the selected containers on the
+   * canvas or directly in an artboard and the containers being edited, the
+   * instances of an entered component among them, as Adobe XD does, and a
+   * selected or entered node settled makes its new artboard, or none, the
+   * active artboard.
    */
   class Editor {
     public:
@@ -125,6 +130,8 @@ namespace Rellu {
       const Command* capture(auto apply);
       void annotate(std::vector<NodeId> before, const NodeId& primary,
         std::optional<InteractionSelection> interactions);
+      std::vector<NodeId> get_settled_containers() const;
+      void on_settle(const std::vector<NodeId>& nodes);
       void on_selection();
   };
 

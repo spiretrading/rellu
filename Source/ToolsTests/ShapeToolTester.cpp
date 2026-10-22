@@ -660,4 +660,20 @@ TEST_SUITE("ShapeTool") {
     drag(tools, Point(410, 160), Point(420, 170));
     REQUIRE(get_drawn(editor).m_parent == instance);
   }
+  TEST_CASE("draw_onto_artboard") {
+    auto document = Document();
+    auto artboard = build_artboard(document);
+    auto editor = Editor(document);
+    auto tools = ToolManager(editor);
+    tools.set_view(Matrix(), 1, Size(1000, 800));
+    tools.set_tool("rectangle");
+    drag(tools, Point(50, 50), Point(250, 200));
+    auto& node = get_drawn(editor);
+    REQUIRE(node.m_parent == artboard);
+    REQUIRE(document.get(artboard).m_children.back() == node.get_id());
+    REQUIRE(*get_world_bounds(document, node.get_id()) ==
+      Rect(50, 50, 200, 150));
+    REQUIRE(editor.get_history().get_undo_count() == 1);
+    REQUIRE(editor.get_history().get_undo_label() == "Draw Rectangle");
+  }
 }

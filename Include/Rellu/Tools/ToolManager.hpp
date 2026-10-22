@@ -22,7 +22,10 @@ namespace Rellu {
    * draws the overlay: the artboard grids, guides and titles, the active
    * tool's state and the snap guides. Modifier keys pressed or released
    * during a gesture replay the most recent pointer move, so that
-   * constraints apply at once. Tools are registered by name; the select,
+   * constraints apply at once. The pointer's position is the history's,
+   * and the history settles nodes onto or off artboards only once the left
+   * button is released, as Adobe XD ends each drag's edit on release.
+   * Tools are registered by name; the select,
    * rectangle, ellipse, polygon, line, pen, path_edit, artboard, zoom, text
    * and prototype tools are registered from the start.
    */

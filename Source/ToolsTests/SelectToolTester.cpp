@@ -826,7 +826,12 @@ TEST_SUITE("SelectTool") {
     auto& context = editor.get_context();
     editor.get_selection().select(board.m_rectangle);
     REQUIRE(context.get_artboard() == board.m_artboard);
-    drag(tools, Point(450, 175), Point(850, 175));
+    tools.press(make_event(
+      Point(450, 175), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier));
+    drag_to(tools, Point(450, 175), Point(850, 175));
+    REQUIRE(document.get(board.m_rectangle).m_parent == board.m_artboard);
+    tools.release(make_event(
+      Point(850, 175), Qt::LeftButton, Qt::NoButton, Qt::NoModifier));
     REQUIRE(document.get(board.m_rectangle).m_parent.is_nil());
     REQUIRE(document.get_canvas().back() == board.m_rectangle);
     REQUIRE(get_bounds(document, board.m_rectangle) ==

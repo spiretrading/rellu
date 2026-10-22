@@ -248,4 +248,35 @@ TEST_SUITE("Editor") {
     REQUIRE(view.get_context().get_container().is_nil());
     REQUIRE(&view.get_document() == &document);
   }
+  TEST_CASE("settled_containers") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto artboard = Artboard();
+    artboard.m_frame = Rect(0, 0, 400, 300);
+    auto board =
+      transaction.append(NodeId(), make_header("Artboard"), artboard);
+    auto group = transaction.append(board, make_header("Group"), Group());
+    auto first = transaction.append(group,
+      make_header("First", make_translation(10, 10)),
+      make_rectangle_shape(40, 40));
+    auto second = transaction.append(group,
+      make_header("Second", make_translation(60, 10)),
+      make_rectangle_shape(40, 40));
+    transaction.commit();
+    document.clear_history();
+    auto editor = Editor(document);
+    REQUIRE(editor.get_context().enter(group));
+    editor.get_selection().select({first, second});
+    REQUIRE(editor.get_context().get_artboard() == board);
+    REQUIRE(editor.execute(std::make_unique<TranslateCommand>(
+      std::vector{first}, Point(500, 0))));
+    REQUIRE(document.get(group).m_parent == board);
+    REQUIRE(editor.execute(std::make_unique<TranslateCommand>(
+      std::vector{second}, Point(500, 0))));
+    REQUIRE(document.get(group).m_parent.is_nil());
+    REQUIRE(editor.get_context().get_artboard().is_nil());
+    REQUIRE(editor.get_history().get_undo_count() == 2);
+    REQUIRE(editor.undo());
+    REQUIRE(document.get(group).m_parent == board);
+  }
 }
