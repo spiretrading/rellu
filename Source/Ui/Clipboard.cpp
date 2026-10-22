@@ -170,17 +170,28 @@ namespace {
       metrics.m_line_ascent, metrics.m_line_descent, metrics.m_x_height);
   }
 
-  std::optional<double> measure_advance(
+  std::optional<double> measure_width(
       const Font& font, const std::u16string& text) {
     auto resolution = get_default_font_library().resolve(to_installed(font));
     if(!resolution.m_typeface) {
       return std::nullopt;
     }
-    auto advance = 0.0;
-    for(auto& glyph : resolution.m_typeface->shape(text, 0, text.size())) {
-      advance += glyph.m_advance;
+    auto& typeface = *resolution.m_typeface;
+    auto pen = 0.0;
+    auto left = 0.0;
+    auto right = 0.0;
+    for(auto& glyph : typeface.shape(text, 0, text.size())) {
+      auto& outline = typeface.get_outline(glyph.m_index);
+      if(!outline.get_segments().empty()) {
+        auto bounds = get_bounds(outline);
+        left = std::min(left, pen + glyph.m_offset.m_x + bounds.m_x);
+        right = std::max(right,
+          pen + glyph.m_offset.m_x + bounds.m_x + bounds.m_width);
+      }
+      pen += glyph.m_advance;
+      right = std::max(right, pen);
     }
-    return advance * font.m_size;
+    return (right - left) * font.m_size;
   }
 
   void resolve_fonts(Document& document) {
@@ -604,7 +615,7 @@ struct Clipboard::Content {
   std::vector<Interaction> m_interactions;
   std::unordered_set<NodeId> m_instanced;
   bool m_is_sequenced = false;
-  bool m_is_unplaced = false;
+  std::unordered_set<NodeId> m_anchored;
   bool m_is_foreign = false;
   bool m_is_image = false;
   bool m_is_text = false;
@@ -888,11 +899,6 @@ class Clipboard::PasteCommand : public Command {
       placement.m_artboard = target;
       placement.m_target = target;
       placement.m_deltas.assign(trees.size(), Point(0, 0));
-      if(m_content->m_is_unplaced) {
-        placement.m_artboard = NodeId();
-        placement.m_target = NodeId();
-        return placement;
-      }
       auto container = target;
       auto region = std::optional<Rect>();
       if(auto frame = get_frame(document, container)) {
@@ -1009,6 +1015,9 @@ class Clipboard::PasteCommand : public Command {
         auto container = find_container(document, placement.m_artboard,
           Content::get_bounds(tree), delta);
         auto copy = make_copy(tree.m_nodes.front(), mapping);
+        if(m_content->m_anchored.contains(tree.m_nodes.front().m_header.m_id)) {
+          transform = Matrix();
+        }
         if(auto inverse = invert(get_world_transform(document, container))) {
           copy.first.m_transform = *inverse * transform;
         }
@@ -1021,7 +1030,12 @@ class Clipboard::PasteCommand : public Command {
           has_image_fill(copy.second);
         auto id = transaction.append(
           container, std::move(copy.first), std::move(copy.second));
-        insert_descendants(transaction, tree.m_nodes, mapping);
+        if(m_content->m_anchored.empty()) {
+          insert_descendants(transaction, tree.m_nodes, mapping);
+        } else {
+          insert_descendants(
+            transaction, anchor(tree.m_nodes, transform), mapping);
+        }
         name_copy(document, transaction, id, is_kept);
         copies.push_back(id);
       }
@@ -1214,6 +1228,24 @@ class Clipboard::PasteCommand : public Command {
         }
       }
       return std::pair(std::move(header), std::move(payload));
+    }
+
+    std::vector<Content::Entry> anchor(
+        std::vector<Content::Entry> entries, const Matrix& transform) const {
+      auto worlds = std::unordered_map<NodeId, Matrix>();
+      worlds.emplace(entries.front().m_header.m_id, transform);
+      for(auto i = std::size_t(1); i < entries.size(); ++i) {
+        auto& entry = entries[i];
+        auto& parent = worlds.at(entry.m_parent);
+        if(m_content->m_anchored.contains(entry.m_header.m_id)) {
+          if(auto inverse = invert(parent)) {
+            entry.m_header.m_transform = *inverse;
+          }
+        }
+        worlds.emplace(entry.m_header.m_id,
+          parent * entry.m_header.m_transform);
+      }
+      return entries;
     }
 
     static void insert_descendants(Transaction& transaction,
@@ -1720,15 +1752,15 @@ bool Clipboard::load(const QMimeData& data, const TextMeasurer& measurer) {
   if(auto svg = find_svg(data); !svg.isEmpty()) {
     auto scratch = Document();
     try {
-      auto is_complete = read_svg(
-        svg, scratch, SvgMeasurer(&measure_font, &measure_advance));
+      auto anchored = read_svg(
+        svg, scratch, SvgMeasurer(&measure_font, &measure_width));
       resolve_fonts(scratch);
       auto& canvas = scratch.get_canvas();
       if(!canvas.empty()) {
         auto content = Content::make(scratch, canvas, measurer);
         content->m_is_sequenced = true;
         content->m_is_foreign = true;
-        content->m_is_unplaced = !is_complete;
+        content->m_anchored.insert(anchored.begin(), anchored.end());
         m_content = std::move(content);
         return true;
       }

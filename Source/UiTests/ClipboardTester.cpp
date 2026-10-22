@@ -864,6 +864,29 @@ TEST_SUITE("Clipboard") {
     REQUIRE(empty.get_group());
     REQUIRE(empty.m_children.empty());
     REQUIRE(get_world_transform(document, empty.get_id()) == Matrix());
+    auto mixed = QMimeData();
+    mixed.setText(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><defs><filter
+      id="u"><feOffset dx="5px" dy="2"/><feGaussianBlur stdDeviation="2"/>
+      <feFlood/><feComposite operator="in"/></filter></defs><g><rect
+      width="50" height="50" filter="url(#u)"/></g><circle cx="200" cy="25"
+      r="25"/></svg>)svg");
+    REQUIRE(clipboard.load(mixed));
+    REQUIRE(editor.execute(clipboard.make_paste_command(
+      make_target({}, Rect(0, 0, 600, 600)))));
+    auto& placed = document.get(editor.get_selection().get_primary());
+    REQUIRE(placed.m_children.size() == 2);
+    auto circle = *get_world_bounds(document, placed.m_children[1]);
+    auto& anchored = document.get(placed.m_children[0]);
+    REQUIRE(anchored.m_children.empty());
+    REQUIRE(get_world_transform(document, anchored.get_id()) == Matrix());
+    auto lone = QMimeData();
+    lone.setText(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><circle
+      cx="200" cy="25" r="25"/></svg>)svg");
+    REQUIRE(clipboard.load(lone));
+    REQUIRE(editor.execute(clipboard.make_paste_command(
+      make_target({}, Rect(0, 0, 600, 600)))));
+    REQUIRE(*get_world_bounds(document, editor.get_selection().get_primary())
+      == circle);
   }
 
   TEST_CASE("svg_fonts") {
@@ -908,6 +931,66 @@ TEST_SUITE("Clipboard") {
     REQUIRE(*pasted.m_content == u"A\nB\n\nC");
     REQUIRE(pasted.m_runs.size() == 3);
     REQUIRE(pasted.m_runs[1].m_style.m_font.m_size == 27.42729949951172);
+    auto spacer = [&] (const QString& family, int size, int y2, int y3) {
+      auto markup = QMimeData();
+      markup.setText(QString(R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+        ><text font-family="%1" font-size="%2"><tspan x="10" y="30">A</tspan
+        ><tspan x="10" y="%3">B</tspan><tspan x="10" y="%4">C</tspan></text>
+        </svg>)svg").arg(family).arg(size).arg(y2).arg(y3));
+      REQUIRE(clipboard.load(markup));
+      REQUIRE(editor.execute(clipboard.make_paste_command(
+        make_target({}, Rect(0, 0, 600, 600)))));
+      auto& spaced = *document.get(
+        editor.get_selection().get_primary()).get_text();
+      REQUIRE(spaced.m_runs.size() == 3);
+      return spaced.m_runs[1].m_style.m_font.m_size;
+    };
+    REQUIRE(spacer("Georgia", 20, 53, 103) == 24.014089584350586);
+    REQUIRE(spacer("Arial", 18, 51, 97) == 23.19403076171875);
+    REQUIRE(spacer("Arial", 15, 47, 86) == 19.904529571533203);
+  }
+
+  TEST_CASE("svg_split_positions") {
+    auto document = Document();
+    build_test_document(document);
+    auto editor = Editor(document);
+    auto clipboard = Clipboard();
+    auto positions = [&] (const QString& markup) {
+      auto text = QMimeData();
+      text.setText(markup);
+      REQUIRE(clipboard.load(text));
+      REQUIRE(editor.execute(clipboard.make_paste_command(
+        make_target({}, Rect(0, 0, 600, 600)))));
+      auto& group = document.get(editor.get_selection().get_primary());
+      auto result = std::vector<double>();
+      for(auto& child : group.m_children) {
+        result.push_back(document.get(child).m_header.m_transform.m_tx);
+      }
+      return result;
+    };
+    auto make = [] (const QString& family, const QString& size,
+        const QString& x, const QStringList& runs) {
+      auto spans = QString();
+      for(auto i = 0; i != runs.size(); ++i) {
+        spans += QString(R"(<tspan%1>%2</tspan>)").arg(
+          i % 2 == 0 ? R"( stroke="#f00")" : "", runs[i]);
+      }
+      return QString(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><text
+        x="%1" y="30" font-family="%2" font-size="%3">%4</text></svg>)svg").
+        arg(x, family, size, spans);
+    };
+    REQUIRE(positions(make("Arial", "20", "10", {"W", "i", "m"})) ==
+      std::vector<double>({10, 29, 33}));
+    REQUIRE(positions(make("Times New Roman", "17", "10.4", {"A", "m", "i"}))
+      == std::vector<double>({10.399999618530273, 22.399999618530273,
+        35.400001525878906}));
+    REQUIRE(positions(make("Georgia", "31", "10", {"m", "W", "i"})) ==
+      std::vector<double>({10, 37, 68}));
+    REQUIRE(positions(make("Verdana", "13", "10.6", {"i", "i", "i", "i"})) ==
+      std::vector<double>({10.600000381469727, 14.600000381469727,
+        18.600000381469727, 22.600000381469727}));
+    REQUIRE(positions(make("Arial", "23", "10", {"mmm", "A", "W"})) ==
+      std::vector<double>({10, 67, 82}));
   }
 
   TEST_CASE("svg_group") {

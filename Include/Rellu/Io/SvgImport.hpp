@@ -3,8 +3,10 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 #include <QString>
 #include "Rellu/Model/Document.hpp"
+#include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Model/Text.hpp"
 
 namespace Rellu {
@@ -32,11 +34,11 @@ namespace Rellu {
     std::function<std::optional<SvgFontExtent> (const Font& font)> m_extent;
 
     /**
-     * Returns the distance text displayed in a font advances, in pixels, or
-     * none if it is unknown.
+     * Returns the width text displayed in a font covers, in pixels: the
+     * union of its glyphs' advances and outlines, or none if it is unknown.
      */
     std::function<std::optional<double> (
-      const Font& font, const std::u16string& text)> m_advance;
+      const Font& font, const std::u16string& text)> m_width;
   };
 
   /**
@@ -56,10 +58,10 @@ namespace Rellu {
    * @param document The empty document receiving the nodes.
    * @param measurer The functions measuring fonts, or empty functions to
    *        leave text that depends on them unmeasured.
-   * @return <code>true</code> iff every element converted, otherwise Adobe
-   *         XD pastes what remains where it is, without placing it.
+   * @return The empty groups left by elements that failed to convert,
+   *         which Adobe XD places at the document's origin.
    */
-  bool read_svg(const QString& text, Document& document,
+  std::vector<NodeId> read_svg(const QString& text, Document& document,
     const SvgMeasurer& measurer = {});
 }
 

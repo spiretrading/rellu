@@ -20,6 +20,7 @@
 #include <QFile>
 #include <QHash>
 #include <QImageReader>
+#include <QSize>
 #include <QRegularExpression>
 #include <QUrl>
 #include <QXmlStreamReader>
@@ -37,7 +38,7 @@ namespace {
   const auto DEFAULT_FAMILY = u"Helvetica Neue"_s;
   constexpr auto DEFAULT_SIZE = 300.0;
   constexpr auto WINDOW_SIZE = 1.0;
-  constexpr auto LAYOUT_UNITS = 120.0;
+  constexpr auto LAYOUT_UNITS = 100.0;
   constexpr auto FONT_SIZE = 20.0;
   constexpr auto PRECISION = 1e5;
   constexpr auto TOLERANCE = 0.01;
@@ -132,7 +133,7 @@ namespace {
     QRegularExpression::CaseInsensitiveOption);
 
   const auto IMAGE_DATA = QRegularExpression(
-    uR"(^data:(?:image|img)/[^;]+;base64,)"_s);
+    uR"(^data:(?:image|img)/([^;]+);base64,)"_s);
 
   double round(double value) {
     return std::round(value * PRECISION) / PRECISION;
@@ -1145,9 +1146,7 @@ namespace {
         return m_images;
       }
 
-      bool has_failures() const {
-        return m_has_failures;
-      }
+
 
     private:
       struct Run {
@@ -1218,7 +1217,6 @@ namespace {
 
       const Element* m_root;
       SvgMeasurer m_measurer;
-      bool m_has_failures = false;
       QHash<QString, const Element*> m_ids;
       double m_width;
       double m_height;
@@ -1852,7 +1850,7 @@ namespace {
         return target;
       }
 
-      void apply_filter(const Element& element, Item& item) {
+      void apply_filter(const Element& element, Item& item) const {
         auto filter = find_filter(element);
         if(!filter) {
           return;
@@ -1890,7 +1888,6 @@ namespace {
               if(std::isnan(shadow.m_offset.m_x) ||
                   std::isnan(shadow.m_offset.m_y)) {
                 item.m_is_failed = true;
-                m_has_failures = true;
               }
             }
           }, effect);
@@ -2311,9 +2308,11 @@ namespace {
           return *entry;
         }
         auto bytes = QByteArray();
+        auto subtype = QString();
         if(auto match = IMAGE_DATA.match(reference); match.hasMatch()) {
           bytes = QByteArray::fromBase64(
             reference.mid(match.capturedLength()).toLatin1());
+          subtype = match.captured(1).toLower();
         } else {
           auto url = QUrl(reference);
           auto path = url.isLocalFile() ? url.toLocalFile() : reference;
@@ -2333,7 +2332,11 @@ namespace {
         auto dimensions = reader.size();
         auto format = reader.format();
         if(!dimensions.isValid() || format.isEmpty()) {
-          return std::nullopt;
+          if(subtype.isEmpty()) {
+            return std::nullopt;
+          }
+          dimensions = QSize(0, 0);
+          format = subtype.toLatin1();
         }
         auto resource = ImageResource();
         resource.m_id = generate_node_id();
@@ -2505,8 +2508,9 @@ namespace {
             }
             auto content = state.m_raw.mid(static_cast<qsizetype>(run.m_from),
               static_cast<qsizetype>(run.m_to - run.m_from));
-            auto position = Point(run.m_x.value_or(pen.m_x) + run.m_dx,
-              run.m_y.value_or(pen.m_y) + run.m_dy);
+            auto position =
+              Point(to_single(run.m_x.value_or(pen.m_x) + run.m_dx),
+                to_single(run.m_y.value_or(pen.m_y) + run.m_dy));
             auto text = Text();
             text.m_frame = PositionedFrame();
             text.m_content = Shared(content.toStdU16String());
@@ -2521,12 +2525,13 @@ namespace {
             child.m_payload = Box<Text>(std::move(text));
             child.m_fill_alpha = run.m_fill_alpha;
             texts.push_back(std::move(child));
-            auto advance = 0.0;
-            if(m_measurer.m_advance) {
-              advance = m_measurer.m_advance(run.m_style.m_font,
+            auto width = 0.0;
+            if(m_measurer.m_width) {
+              width = m_measurer.m_width(run.m_style.m_font,
                 content.toStdU16String()).value_or(0);
             }
-            pen = Point(position.m_x + std::round(advance), position.m_y);
+            pen = Point(to_single(position.m_x + std::round(width)),
+              position.m_y);
           }
         }
         if(texts.empty()) {
@@ -2643,9 +2648,10 @@ namespace {
           if(!metrics) {
             continue;
           }
-          auto top = cell.m_baseline - metrics->m_ascent * cell.m_font.m_size;
-          auto bottom =
-            cell.m_baseline + metrics->m_descent * cell.m_font.m_size;
+          auto top = to_single(cell.m_baseline -
+            to_layout_units(metrics->m_ascent * cell.m_font.m_size));
+          auto bottom = to_single(cell.m_baseline +
+            to_layout_units(metrics->m_descent * cell.m_font.m_size));
           if(!extent) {
             extent = Extent(top, bottom);
           } else {
@@ -2668,8 +2674,6 @@ namespace {
           if(!extent) {
             continue;
           }
-          extent->m_top = to_layout_units(extent->m_top);
-          extent->m_bottom = to_layout_units(extent->m_bottom);
           auto& row = rows[*cell.m_row];
           row.m_top = std::min(row.m_top, extent->m_top);
           row.m_bottom = std::max(row.m_bottom, extent->m_bottom);
@@ -3332,10 +3336,15 @@ namespace {
     });
   }
 
-  void append(Transaction& transaction, const NodeId& parent, Item item) {
+  void append(Transaction& transaction, const NodeId& parent, Item item,
+      std::vector<NodeId>& anchored) {
     if(item.m_is_failed) {
       return;
     }
+    auto is_anchored = is_group(item) && !item.m_children.empty() &&
+      std::ranges::all_of(item.m_children, [] (const auto& child) {
+        return child.m_is_failed;
+      });
     if(item.m_header.m_id.is_nil()) {
       item.m_header.m_id = generate_node_id();
     }
@@ -3345,8 +3354,11 @@ namespace {
     item.m_header.m_rotation = derive_rotation(item.m_header.m_transform);
     auto id = transaction.append(
       parent, std::move(item.m_header), std::move(item.m_payload));
+    if(is_anchored) {
+      anchored.push_back(id);
+    }
     for(auto& child : item.m_children) {
-      append(transaction, id, std::move(child));
+      append(transaction, id, std::move(child), anchored);
     }
   }
 }
@@ -3358,7 +3370,7 @@ bool Rellu::is_svg(const QString& text) {
   return static_cast<bool>(parse(text));
 }
 
-bool Rellu::read_svg(const QString& text, Document& document,
+std::vector<NodeId> Rellu::read_svg(const QString& text, Document& document,
     const SvgMeasurer& measurer) {
   auto root = parse(text);
   if(!root) {
@@ -3370,21 +3382,27 @@ bool Rellu::read_svg(const QString& text, Document& document,
   cascade(*root, rules, path);
   auto converter = Converter(*root, measurer);
   auto items = converter.convert();
+  auto anchored = std::vector<NodeId>();
   if(items.empty()) {
-    return true;
+    return anchored;
   }
   auto transaction = Transaction(document);
   for(auto& image : converter.get_images()) {
     transaction.add_image(std::move(image));
   }
-  if(items.size() == 1 && !items.front().m_is_failed) {
-    append(transaction, NodeId(), std::move(items.front()));
+  auto survivors = std::ranges::count_if(items, [] (const auto& item) {
+    return !item.m_is_failed;
+  });
+  if(survivors == 1) {
+    for(auto& item : items) {
+      append(transaction, NodeId(), std::move(item), anchored);
+    }
   } else {
     auto group = Item();
     group.m_payload = Group();
     group.m_children = std::move(items);
-    append(transaction, NodeId(), std::move(group));
+    append(transaction, NodeId(), std::move(group), anchored);
   }
   transaction.commit();
-  return !converter.has_failures();
+  return anchored;
 }

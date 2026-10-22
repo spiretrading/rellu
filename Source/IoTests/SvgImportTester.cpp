@@ -197,14 +197,24 @@ TEST_SUITE("SvgImport") {
     REQUIRE(*std::get<PathShape>(get_child(document, root, 2).get_shape()->
       m_geometry).m_path == *parse_svg_path("M0 0L10 -20L5 10"));
     auto failed = Document();
-    REQUIRE(!read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><defs>
-      <filter id="u"><feOffset dx="5px" dy="2"/><feGaussianBlur
+    auto anchored = read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+      <defs><filter id="u"><feOffset dx="5px" dy="2"/><feGaussianBlur
       stdDeviation="2"/><feFlood/><feComposite operator="in"/></filter>
       </defs><rect width="1" height="1" filter="url(#u)"/></svg>)svg",
-      failed));
+      failed);
     auto& empty = get_root(failed);
     REQUIRE(empty.get_group());
     REQUIRE(empty.m_children.empty());
+    REQUIRE(anchored == std::vector<NodeId>({empty.get_id()}));
+    auto survivor = Document();
+    REQUIRE(read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><defs>
+      <filter id="u"><feOffset dx="5px" dy="2"/><feGaussianBlur
+      stdDeviation="2"/><feFlood/><feComposite operator="in"/></filter>
+      </defs><rect width="50" height="50" filter="url(#u)"/><rect x="60"
+      width="50" height="50"/></svg>)svg", survivor).empty());
+    REQUIRE(get_root(survivor).get_shape());
+    REQUIRE(get_root(survivor).m_header.m_transform ==
+      make_translation(60, 0));
     auto unconverted = Document();
     REQUIRE_THROWS_AS(read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
       <defs><rect id="r" width="1" height="1"/></defs><use href="#r"/>
@@ -599,6 +609,31 @@ TEST_SUITE("SvgImport") {
     REQUIRE(std::holds_alternative<ImageFill>(shadowed.m_fill));
     REQUIRE(shadowed.m_effects == std::vector<Effect>({DropShadow(
       Point(3, 4), 2, make_color(0, 0, 0, 0.5))}));
+  }
+
+  TEST_CASE("unreadable_images") {
+    auto document = Document();
+    read_svg(R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+      xmlns:xlink="http://www.w3.org/1999/xlink"><image x="10" y="10"
+      width="20" height="20" xlink:href="data:image/png;base64,AAAA"/>
+      <image x="10" y="10" width="20" height="20"
+      xlink:href="file:///C:/does-not-exist/x.png"/><image width="20"
+      height="20" xlink:href="https://example.invalid/x.png"/></svg>)svg",
+      document);
+    auto& root = get_root(document);
+    REQUIRE(root.m_children.size() == 3);
+    auto& invalid = *get_child(document, root, 0).get_shape();
+    REQUIRE(invalid.m_geometry ==
+      ShapeGeometry(RectangleShape(Rect(0, 0, 20, 20))));
+    auto& fill = std::get<ImageFill>(invalid.m_style.m_fill);
+    REQUIRE(fill.m_size == Size(0, 0));
+    REQUIRE(fill.m_scale_behavior == ScaleBehavior::FILL);
+    REQUIRE(!invalid.m_style.m_stroke);
+    auto& resources = document.get_resources().m_images;
+    REQUIRE(resources.size() == 1);
+    REQUIRE(resources.at(fill.m_image).m_media_type == "image/png");
+    REQUIRE(get_child(document, root, 1).get_shape()->m_style == Style());
+    REQUIRE(get_child(document, root, 2).get_shape()->m_style == Style());
   }
 
   TEST_CASE("pattern_offsets") {
