@@ -86,8 +86,8 @@ TEST_SUITE("ToolTips") {
     REQUIRE(tip);
     box = find_box(tip->grab().toImage()).translated(tip->pos());
     auto pointer = label->mapToGlobal(QPoint(10, 10));
-    REQUIRE(box.left() == static_cast<int>(
-      std::floor(pointer.x() - box.width() / 2.0)));
+    REQUIRE(box.left() ==
+      static_cast<int>(std::lround(pointer.x() - box.width() / 2.0)));
     REQUIRE(box.top() == pointer.y() + 20);
     REQUIRE(tip->windowFlags().testFlag(Qt::WindowTransparentForInput));
     QCursor::setPos(label->mapToGlobal(QPoint(15, 15)));
@@ -131,5 +131,17 @@ TEST_SUITE("ToolTips") {
     hover(*view.viewport(), second);
     REQUIRE(!find_tip());
     QCoreApplication::instance()->removeEventFilter(&filter);
+  }
+
+  TEST_CASE("pointer_tip_position") {
+    auto position = [] (double x, double y, int width) {
+      return get_pointer_tip_position(
+        QPointF(x / 1.5, y / 1.5), QSize(width, 46), 1.5);
+    };
+    REQUIRE(position(102, 218, 107) == QPoint(48, 248));
+    REQUIRE(position(112, 222, 107) == QPoint(57, 252));
+    REQUIRE(position(95, 77, 107) == QPoint(41, 107));
+    REQUIRE(position(3437, 148, 250).x() == 3312);
+    REQUIRE(position(3735, 77, 75) == QPoint(3698, 107));
   }
 }

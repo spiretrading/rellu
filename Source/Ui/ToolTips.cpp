@@ -83,11 +83,10 @@ namespace {
           top = static_cast<long>(std::floor(
             anchor->center().y() * ratio - height / 2.0)) + 1;
         } else {
-          auto x = std::floor(pointer.x() + 1e-6);
-          auto y = std::floor(pointer.y() + 1e-6);
-          left = static_cast<long>(std::floor(x * ratio - width / 2.0));
-          top = static_cast<long>(
-            std::floor((y + POINTER_OFFSET) * ratio + 0.5));
+          auto position = get_pointer_tip_position(pointer,
+            QSize(static_cast<int>(width), static_cast<int>(height)), ratio);
+          left = position.x();
+          top = position.y();
         }
         auto available = screen.availableGeometry().translated(
           -get_screen_origin(screen));
@@ -176,6 +175,15 @@ namespace {
     private:
       QImage m_image;
   };
+}
+
+QPoint Rellu::get_pointer_tip_position(
+    QPointF pointer, QSize size, double ratio) {
+  auto x = std::floor(pointer.x() + 1e-6);
+  auto y = std::floor(pointer.y() + 1e-6);
+  auto left = std::round(x - size.width() / (2 * ratio));
+  return QPoint(static_cast<int>(std::floor(left * ratio + 0.5)),
+    static_cast<int>(std::floor((y + POINTER_OFFSET) * ratio + 0.5)));
 }
 
 void Rellu::set_tool_tip_placement(
