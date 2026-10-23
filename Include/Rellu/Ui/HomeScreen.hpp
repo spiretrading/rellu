@@ -149,6 +149,9 @@ namespace Rellu {
   class HomeScreen : public QWidget {
     public:
 
+      /** The height of the white header at the top, in logical pixels. */
+      static constexpr auto HEADER_HEIGHT = 88;
+
       /**
        * The type of function creating a document of a preset.
        * @param preset The preset.

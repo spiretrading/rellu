@@ -4,18 +4,15 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QFileInfo>
-#include <QGuiApplication>
-#include <QScreen>
+#include <QSize>
 #include "Rellu/Ui/DocumentSession.hpp"
 #include "Rellu/Ui/DocumentWindows.hpp"
 
 using namespace Rellu;
 
 namespace {
-  constexpr auto CASCADE_LEFT = 470.0 / 1.5;
-  constexpr auto CASCADE_TOP = 348.0 / 1.5;
-  constexpr auto CASCADE_WIDTH = 1635.0 / 1.5;
-  constexpr auto CASCADE_HEIGHT = 1142.0 / 1.5;
+  constexpr auto CASCADE_WIDTH = 1657.0 / 1.5;
+  constexpr auto CASCADE_HEIGHT = 1153.0 / 1.5;
   constexpr auto CASCADE_STEP_X = 59.0 / 1.5;
   constexpr auto CASCADE_STEP_Y = 48.0 / 1.5;
 
@@ -43,13 +40,6 @@ DocumentWindows::DocumentWindows()
   : m_empty_handler([] {
       QCoreApplication::quit();
     }),
-    m_area_provider([] {
-      if(auto screen = QGuiApplication::primaryScreen()) {
-        return screen->availableGeometry();
-      }
-      return QRect();
-    }),
-    m_cascades(0),
     m_recent_files(MAXIMUM_RECENT_FILES),
     m_filter(std::make_unique<ActivationFilter>([this] (auto& widget) {
       on_activated(widget);
@@ -71,10 +61,6 @@ void DocumentWindows::set_factory(Factory factory) {
 
 void DocumentWindows::set_empty_handler(std::function<void ()> handler) {
   m_empty_handler = std::move(handler);
-}
-
-void DocumentWindows::set_area_provider(AreaProvider provider) {
-  m_area_provider = std::move(provider);
 }
 
 void DocumentWindows::set_file_tracking(
@@ -164,10 +150,8 @@ DocumentWindow& DocumentWindows::add(
   auto& widget = added.get_widget();
   if(host) {
     added.place(*host);
-  } else if(!m_entries.empty()) {
-    auto area = m_area_provider ? m_area_provider() : QRect();
-    added.place(get_cascade_bounds(m_cascades, area));
-    ++m_cascades;
+  } else if(auto active = get_active()) {
+    added.place(*active);
   }
   widget.installEventFilter(m_filter.get());
   auto connection = QObject::connect(&widget, &QObject::destroyed,
@@ -196,9 +180,6 @@ void DocumentWindows::remove(DocumentWindow& window) {
   m_entries.erase(entry);
   std::erase(m_activations, &window);
   widget->deleteLater();
-  if(m_entries.empty()) {
-    m_cascades = 0;
-  }
   m_signal();
   if(m_entries.empty() && m_empty_handler) {
     m_empty_handler();
@@ -363,25 +344,16 @@ void DocumentWindows::on_destroyed(QObject* object) {
   m_signal();
 }
 
-QRect Rellu::get_cascade_bounds(int index, const QRect& area) {
-  auto fits = [&] (int position) {
-    return area.x() + CASCADE_LEFT + position * CASCADE_STEP_X +
-      CASCADE_WIDTH <= area.x() + area.width() &&
-      area.y() + CASCADE_TOP + position * CASCADE_STEP_Y + CASCADE_HEIGHT <=
-        area.y() + area.height();
-  };
-  auto count = 1;
-  while(count <= index && fits(count)) {
-    ++count;
-  }
-  auto position = index % count;
-  return QRect(
-    static_cast<int>(std::lround(
-      area.x() + CASCADE_LEFT + position * CASCADE_STEP_X)),
-    static_cast<int>(std::lround(
-      area.y() + CASCADE_TOP + position * CASCADE_STEP_Y)),
-    static_cast<int>(std::lround(CASCADE_WIDTH)),
-    static_cast<int>(std::lround(CASCADE_HEIGHT)));
+QPoint Rellu::get_cascade_position(const QPoint& position, double ratio) {
+  return position + QPoint(
+    static_cast<int>(std::lround(CASCADE_STEP_X * ratio)),
+    static_cast<int>(std::lround(CASCADE_STEP_Y * ratio)));
+}
+
+QRect Rellu::get_cascade_bounds(const QRect& bounds, double ratio) {
+  return QRect(get_cascade_position(bounds.topLeft(), ratio),
+    QSize(static_cast<int>(std::lround(CASCADE_WIDTH * ratio)),
+      static_cast<int>(std::lround(CASCADE_HEIGHT * ratio))));
 }
 
 QString Rellu::make_window_title(const QString& name) {

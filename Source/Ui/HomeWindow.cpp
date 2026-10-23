@@ -1,10 +1,8 @@
-#include <algorithm>
 #include <utility>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QFileDialog>
 #include <QGuiApplication>
-#include <QRect>
 #include <QScreen>
 #include "Rellu/Commands/ArtboardPresets.hpp"
 #include "Rellu/Geometry/Size.hpp"
@@ -16,27 +14,30 @@ using namespace Rellu;
 namespace {
   const auto FILE_FILTER = QString("Adobe XD Files (*.xd);;All Files (*)");
 
-  QRect center(const QRect& bounds, const QPoint& point, const QRect& area) {
-    auto result = bounds;
-    result.moveCenter(point);
-    if(area.isEmpty()) {
-      return result;
+  void place_home(HomeScreen& screen, const QWidget* window) {
+    if(window) {
+      screen.move(
+        get_cascade_position(window->normalGeometry().topLeft(), 1));
+    } else if(auto primary = QGuiApplication::primaryScreen()) {
+      auto bounds = screen.frameGeometry();
+      bounds.moveCenter(primary->availableGeometry().center());
+      screen.move(bounds.topLeft());
     }
-    result.moveLeft(std::max(area.left(),
-      std::min(result.left(), area.right() - result.width() + 1)));
-    result.moveTop(std::max(area.top(),
-      std::min(result.top(), area.bottom() - result.height() + 1)));
-    return result;
   }
 }
 
 HomeWindow::HomeWindow(DocumentWindows& windows)
+  : HomeWindow(windows, std::make_unique<HomeScreen>()) {}
+
+HomeWindow::HomeWindow(
+    DocumentWindows& windows, std::unique_ptr<HomeScreen> screen)
     : m_windows(&windows),
-      m_screen(std::make_unique<HomeScreen>()),
+      m_screen(std::move(screen)),
       m_open_dialog([] (QWidget& parent) {
         return QFileDialog::getOpenFileName(
           &parent, "Open", QString(), FILE_FILTER);
       }),
+      m_placer(place_home),
       m_quit_handler([] {
         QCoreApplication::quit();
       }) {
@@ -67,12 +68,6 @@ HomeWindow::HomeWindow(DocumentWindows& windows)
       leave();
     }
   });
-  m_screen->set_back_handler([this] {
-    if(auto window = m_windows->get_active()) {
-      m_windows->activate(*window);
-    }
-    leave();
-  });
   m_subscription = m_windows->subscribe([this] {
     update();
   });
@@ -91,6 +86,10 @@ void HomeWindow::set_open_dialog(OpenDialog dialog) {
   m_open_dialog = std::move(dialog);
 }
 
+void HomeWindow::set_placer(Placer placer) {
+  m_placer = std::move(placer);
+}
+
 void HomeWindow::set_quit_handler(std::function<void ()> handler) {
   m_quit_handler = std::move(handler);
 }
@@ -99,30 +98,21 @@ bool HomeWindow::is_shown() const {
   return m_screen->isVisible();
 }
 
-void HomeWindow::show(const QByteArray& geometry) {
-  if(geometry.isEmpty() || !m_screen->restoreGeometry(geometry)) {
-    m_screen->setWindowState(Qt::WindowNoState);
-    m_screen->resize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
-    if(auto screen = QGuiApplication::primaryScreen()) {
-      auto area = screen->availableGeometry();
-      m_screen->move(
-        center(m_screen->frameGeometry(), area.center(), area).topLeft());
-    }
-  }
-  m_screen->show();
-  activate();
+void HomeWindow::show() {
+  present(nullptr);
 }
 
 void HomeWindow::show_over(const QWidget& window) {
+  present(&window);
+}
+
+void HomeWindow::present(const QWidget* window) {
   if(!is_shown()) {
     m_screen->setWindowState(Qt::WindowNoState);
     m_screen->resize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
-    auto area = QRect();
-    if(auto screen = window.screen()) {
-      area = screen->availableGeometry();
+    if(m_placer) {
+      m_placer(*m_screen, window);
     }
-    m_screen->move(center(m_screen->frameGeometry(),
-      window.frameGeometry().center(), area).topLeft());
     m_screen->show();
   }
   activate();
@@ -179,5 +169,4 @@ void HomeWindow::update() {
   if(m_screen->get_recent_paths() != m_windows->get_recent_files()) {
     m_screen->set_recent_paths(m_windows->get_recent_files());
   }
-  m_screen->set_back_enabled(!m_windows->get_windows().empty());
 }

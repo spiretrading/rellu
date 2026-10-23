@@ -15,7 +15,6 @@
 #include <QCloseEvent>
 #include <QContextMenuEvent>
 #include <QDir>
-#include <QEnterEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -68,6 +67,7 @@
 #include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdAlert.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
+#include "CaptionButtons.hpp"
 #include "MainWindow.hpp"
 #include "NativeFrame.hpp"
 
@@ -78,7 +78,6 @@ namespace {
   constexpr auto LEFT_PANEL_WIDTH = 1222.0 / 3;
   const auto LEFT_PANEL_WIDTH_KEY = QString("main_window/left_panel_width");
   constexpr auto MENU_ROW_HEIGHT = 32;
-  constexpr auto CAPTION_BUTTON_WIDTH = 46;
   constexpr auto HIT_TOLERANCE = 3.0;
   constexpr auto HIGHLIGHT_WIDTH = 2.0;
   constexpr auto MESSAGE_MARGIN = 48;
@@ -142,80 +141,6 @@ namespace {
     }
     return "view.plugins";
   }
-
-  enum class CaptionKind : unsigned char {
-    MINIMIZE,
-    MAXIMIZE,
-    CLOSE
-  };
-
-  class CaptionButton : public QAbstractButton {
-    public:
-      CaptionButton(CaptionKind kind, const QString& tip)
-          : m_kind(kind),
-            m_is_hovered(false) {
-        setObjectName("caption_button");
-        setFocusPolicy(Qt::NoFocus);
-        setFixedSize(CAPTION_BUTTON_WIDTH, MENU_ROW_HEIGHT);
-        setToolTip(translate("window", tip));
-        setAccessibleName(toolTip());
-        setAttribute(Qt::WA_Hover);
-      }
-
-    protected:
-      void enterEvent(QEnterEvent* event) override {
-        m_is_hovered = true;
-        update();
-        QAbstractButton::enterEvent(event);
-      }
-
-      void leaveEvent(QEvent* event) override {
-        m_is_hovered = false;
-        update();
-        QAbstractButton::leaveEvent(event);
-      }
-
-      void paintEvent(QPaintEvent*) override {
-        auto painter = QPainter(this);
-        auto ink = QColor(0x3F, 0x3F, 0x3F);
-        if(m_kind == CaptionKind::CLOSE && (m_is_hovered || isDown())) {
-          painter.fillRect(rect(), isDown() ? QColor(0xF1, 0x70, 0x7A) :
-            QColor(0xE8, 0x11, 0x23));
-          ink = Qt::white;
-        } else if(isDown()) {
-          painter.fillRect(rect(), QColor(0xC6, 0xC6, 0xC6));
-        } else if(m_is_hovered) {
-          painter.fillRect(rect(), QColor(0xD6, 0xD6, 0xD6));
-        }
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(ink, 1));
-        painter.setBrush(Qt::NoBrush);
-        auto center = QPointF(width() / 2.0, height() / 2.0);
-        if(m_kind == CaptionKind::MINIMIZE) {
-          painter.drawLine(QPointF(center.x() - 5, center.y() + 0.5),
-            QPointF(center.x() + 5, center.y() + 0.5));
-        } else if(m_kind == CaptionKind::MAXIMIZE) {
-          if(window()->isMaximized()) {
-            painter.drawRect(QRectF(center.x() - 5, center.y() - 3, 8, 8));
-            painter.drawPolyline(QList<QPointF>({
-              QPointF(center.x() - 3, center.y() - 5),
-              QPointF(center.x() + 5, center.y() - 5),
-              QPointF(center.x() + 5, center.y() + 3)}));
-          } else {
-            painter.drawRect(QRectF(center.x() - 5, center.y() - 5, 10, 10));
-          }
-        } else {
-          painter.drawLine(QPointF(center.x() - 5, center.y() - 5),
-            QPointF(center.x() + 5, center.y() + 5));
-          painter.drawLine(QPointF(center.x() + 5, center.y() - 5),
-            QPointF(center.x() - 5, center.y() + 5));
-        }
-      }
-
-    private:
-      CaptionKind m_kind;
-      bool m_is_hovered;
-  };
 
   class HighlightOverlay : public QWidget {
     public:
@@ -474,18 +399,51 @@ QString MainWindow::get_name() const {
   return m_session ? m_session->get_name() : translate("Untitled");
 }
 
-void MainWindow::place(const QRect& bounds) {
-  m_restored_bounds.reset();
+void MainWindow::place(DocumentWindow& window) {
+  auto& widget = window.get_widget();
+  m_maximized_bounds.reset();
   m_is_restored_expanded = false;
   setWindowState(Qt::WindowNoState);
-  setGeometry(bounds);
+  if(auto normal = get_normal_bounds(widget); normal.isValid()) {
+    auto ratio = widget.devicePixelRatioF();
+    apply_normal_bounds(get_cascade_bounds(normal, ratio), ratio);
+  } else {
+    m_restored_bounds.reset();
+    setGeometry(get_cascade_bounds(widget.normalGeometry(), 1));
+  }
 }
 
 void MainWindow::place(const QWidget& host) {
-  m_restored_bounds.reset();
-  restoreGeometry(host.saveGeometry());
-  m_is_restored_expanded = static_cast<bool>(
-    windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen));
+  auto normal = get_normal_bounds(host);
+  if(!normal.isValid()) {
+    move(host.normalGeometry().topLeft());
+    return;
+  }
+  auto ratio = host.devicePixelRatioF();
+  auto size = m_saved_bounds ? m_saved_bounds->size() :
+    get_cascade_bounds(normal, ratio).size();
+  apply_normal_bounds(QRect(normal.topLeft(), size), ratio);
+}
+
+void MainWindow::apply_normal_bounds(QRect bounds, double ratio) {
+  if(auto area = get_work_area(bounds); area.isValid()) {
+    auto fitted = fit_window(
+      Rect(bounds.x(), bounds.y(), bounds.width(), bounds.height()),
+      Rect(area.x(), area.y(), area.width(), area.height()));
+    bounds = QRect(static_cast<int>(fitted.m_x),
+      static_cast<int>(fitted.m_y), static_cast<int>(fitted.m_width),
+      static_cast<int>(fitted.m_height));
+  }
+  if(m_is_restored_expanded) {
+    m_restored_bounds.reset();
+    m_maximized_bounds = bounds;
+    return;
+  }
+  m_restored_bounds = bounds;
+  setGeometry(QRect(QPoint(static_cast<int>(std::lround(bounds.x() / ratio)),
+    static_cast<int>(std::lround(bounds.y() / ratio))),
+    QSize(static_cast<int>(std::lround(bounds.width() / ratio)),
+      static_cast<int>(std::lround(bounds.height() / ratio)))));
 }
 
 void MainWindow::set_document(
@@ -598,11 +556,7 @@ void MainWindow::changeEvent(QEvent* event) {
     update_launch();
   }
   if(event->type() == QEvent::WindowStateChange && m_maximize) {
-    auto tip = translate("window",
-      isMaximized() ? QString("Restore Down") : QString("Maximize"));
-    m_maximize->setToolTip(tip);
-    m_maximize->setAccessibleName(tip);
-    m_maximize->update();
+    update_maximize_tip(*m_maximize, isMaximized());
   }
 }
 
@@ -1096,27 +1050,9 @@ QMenuBar* MainWindow::make_layout() {
   if(is_custom_frame_supported()) {
     menu_layout->setSpacing(0);
     menu_layout->insertSpacing(1, 14);
-    auto minimize = new CaptionButton(CaptionKind::MINIMIZE, "Minimize");
-    connect(minimize, &QAbstractButton::clicked, this, [this] {
-      showMinimized();
-    });
-    auto maximize = new CaptionButton(CaptionKind::MAXIMIZE, "Maximize");
-    connect(maximize, &QAbstractButton::clicked, this, [this] {
-      if(isMaximized()) {
-        showNormal();
-      } else {
-        showMaximized();
-      }
-    });
-    auto close = new CaptionButton(CaptionKind::CLOSE, "Close");
-    connect(close, &QAbstractButton::clicked, this, [this] {
-      this->close();
-    });
-    for(auto button : std::to_array<QWidget*>({minimize, maximize, close})) {
-      button->setParent(menu_row);
-      m_caption_buttons.push_back(button);
-    }
-    m_maximize = maximize;
+    auto buttons = make_caption_buttons(*this, *menu_row);
+    m_caption_buttons.assign(buttons.begin(), buttons.end());
+    m_maximize = buttons[1];
     enable_custom_frame(*this);
   }
   setMenuWidget(menu_row);
@@ -1467,9 +1403,14 @@ void MainWindow::restore_settings() {
       auto normal = QRect(static_cast<int>(bounds.m_x),
         static_cast<int>(bounds.m_y), static_cast<int>(bounds.m_width),
         static_cast<int>(bounds.m_height));
+      m_saved_bounds = normal;
       if(windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen)) {
-        QTimer::singleShot(0, this, [this, normal] {
-          set_normal_bounds(*this, normal);
+        m_maximized_bounds = normal;
+        QTimer::singleShot(0, this, [this] {
+          if(m_maximized_bounds) {
+            set_normal_bounds(*this, *m_maximized_bounds);
+            m_maximized_bounds.reset();
+          }
         });
       } else {
         m_restored_bounds = normal;

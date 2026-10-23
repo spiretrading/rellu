@@ -51,7 +51,6 @@ namespace {
   const auto FOCUS = QColor(0x26, 0x80, 0xEB);
   const auto MARK = QColor(0x2B, 0x2F, 0x4A);
   const auto MARK_TEXT = QColor(0x8F, 0xD3, 0xFF);
-  constexpr auto HEADER_HEIGHT = 88;
   constexpr auto MARK_X = 36;
   constexpr auto MARK_Y = 38;
   constexpr auto MARK_SIZE = 36;

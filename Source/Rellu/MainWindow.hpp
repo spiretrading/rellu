@@ -80,7 +80,7 @@ namespace Rellu {
       QWidget& get_widget() override;
       QString get_path() const override;
       QString get_name() const override;
-      void place(const QRect& bounds) override;
+      void place(DocumentWindow& window) override;
       void place(const QWidget& host) override;
 
       /**
@@ -194,6 +194,8 @@ namespace Rellu {
       PaneResizer* m_pane_resizer;
       std::vector<QWidget*> m_caption_buttons;
       std::optional<QRect> m_restored_bounds;
+      std::optional<QRect> m_maximized_bounds;
+      std::optional<QRect> m_saved_bounds;
 
       QMenuBar* make_layout();
       void add_actions();
@@ -205,6 +207,7 @@ namespace Rellu {
       void set_workspace(Workspace workspace);
       void toggle_preview();
       void restore_settings();
+      void apply_normal_bounds(QRect bounds, double ratio);
       void update_launch();
       void finish_launch();
       void check_language(Language language);

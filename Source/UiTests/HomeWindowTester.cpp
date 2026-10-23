@@ -43,7 +43,7 @@ namespace {
         return m_path;
       }
 
-      void place(const QRect&) override {}
+      void place(DocumentWindow&) override {}
 
       void place(const QWidget& host) override {
         m_host = &host;
@@ -106,24 +106,51 @@ TEST_SUITE("HomeWindow") {
   TEST_CASE("show") {
     auto fixture = Fixture();
     auto& home = *fixture.m_home;
+    auto placements = std::vector<const QWidget*>();
+    home.set_placer([&] (HomeScreen& screen, const QWidget* window) {
+      REQUIRE(&screen == &home.get_screen());
+      REQUIRE(screen.size() ==
+        QSize(HomeWindow::DEFAULT_WIDTH, HomeWindow::DEFAULT_HEIGHT));
+      REQUIRE(!screen.isVisible());
+      placements.push_back(window);
+      screen.move(30, 40);
+    });
     REQUIRE(!home.is_shown());
-    home.show(QByteArray());
+    home.get_screen().resize(800, 600);
+    home.show();
     REQUIRE(home.is_shown());
+    REQUIRE(placements == std::vector<const QWidget*>({nullptr}));
+    REQUIRE(home.get_screen().pos() == QPoint(30, 40));
+    home.show();
+    REQUIRE(placements.size() == 1);
+    fixture.m_windows.make_new();
+    home.show_over(*fixture.m_made[0]);
+    REQUIRE(placements.size() == 1);
+    home.hide();
+    home.show_over(*fixture.m_made[0]);
+    REQUIRE(placements ==
+      std::vector<const QWidget*>({nullptr, fixture.m_made[0]}));
+    REQUIRE(!home.get_screen().is_back_enabled());
+  }
+
+  TEST_CASE("default_placement") {
+    auto fixture = Fixture();
+    auto& home = *fixture.m_home;
+    fixture.m_windows.make_new();
+    auto& window = *fixture.m_made[0];
+    window.setGeometry(200, 150, 1400, 900);
+    home.show_over(window);
+    REQUIRE(home.get_screen().pos() ==
+      get_cascade_position(window.normalGeometry().topLeft(), 1));
     REQUIRE(home.get_screen().size() ==
       QSize(HomeWindow::DEFAULT_WIDTH, HomeWindow::DEFAULT_HEIGHT));
-    REQUIRE(!home.get_screen().is_back_enabled());
-    home.hide();
-    auto saved = QWidget();
-    saved.setGeometry(100, 120, 800, 600);
-    home.show(saved.saveGeometry());
-    REQUIRE(home.get_screen().size() == QSize(800, 600));
   }
 
   TEST_CASE("create") {
     auto previous = get_last_used_preset();
     auto fixture = Fixture();
     auto& home = *fixture.m_home;
-    home.show(QByteArray());
+    home.show();
     auto preset = home.get_screen().get_shown_preset(HomePresetType::MOBILE);
     home.get_screen().activate(HomePresetType::MOBILE);
     REQUIRE(fixture.m_made.size() == 1);
@@ -135,7 +162,6 @@ TEST_SUITE("HomeWindow") {
     REQUIRE(made.m_document->get(canvas.front()).m_header.m_name ==
       preset.m_name.toStdString() + " \xE2\x80\x93 1");
     REQUIRE(!home.is_shown());
-    REQUIRE(home.get_screen().is_back_enabled());
     set_last_used_preset(previous);
   }
 
@@ -143,7 +169,7 @@ TEST_SUITE("HomeWindow") {
     auto previous = get_last_used_preset();
     auto fixture = Fixture();
     auto& home = *fixture.m_home;
-    home.show(QByteArray());
+    home.show();
     click(find(home.get_screen(), "new_file"));
     REQUIRE(fixture.m_made.size() == 1);
     REQUIRE(fixture.m_made[0]->m_host == &home.get_screen());
@@ -161,7 +187,7 @@ TEST_SUITE("HomeWindow") {
       requested = "a.xd";
       return *requested;
     });
-    home.show(QByteArray());
+    home.show();
     click(find(home.get_screen(), "open"));
     REQUIRE(requested);
     REQUIRE(fixture.m_made.size() == 1);
@@ -176,7 +202,7 @@ TEST_SUITE("HomeWindow") {
   TEST_CASE("forwarded_file") {
     auto fixture = Fixture();
     auto& home = *fixture.m_home;
-    home.show(QByteArray());
+    home.show();
     REQUIRE(home.open("a.xd"));
     REQUIRE(fixture.m_made[0]->m_host == &home.get_screen());
     REQUIRE(!home.is_shown());
@@ -186,22 +212,6 @@ TEST_SUITE("HomeWindow") {
     REQUIRE(home.is_shown());
     REQUIRE(home.open("a.xd"));
     REQUIRE(fixture.m_made.size() == 2);
-  }
-
-  TEST_CASE("back") {
-    auto fixture = Fixture();
-    auto& home = *fixture.m_home;
-    fixture.m_windows.make_new();
-    auto& window = *fixture.m_made[0];
-    window.setGeometry(200, 200, 1400, 900);
-    home.show_over(window);
-    REQUIRE(home.is_shown());
-    REQUIRE(home.get_screen().size() ==
-      QSize(HomeWindow::DEFAULT_WIDTH, HomeWindow::DEFAULT_HEIGHT));
-    REQUIRE(home.get_screen().is_back_enabled());
-    click(find(home.get_screen(), "back"));
-    REQUIRE(!home.is_shown());
-    REQUIRE(fixture.m_windows.get_active() == &window);
   }
 
   TEST_CASE("close") {
@@ -215,8 +225,7 @@ TEST_SUITE("HomeWindow") {
     fixture.m_made[0]->close();
     flush();
     REQUIRE(fixture.m_windows.get_windows().empty());
-    REQUIRE(!home.get_screen().is_back_enabled());
-    home.show(QByteArray());
+    home.show();
     REQUIRE(home.get_screen().close());
     REQUIRE(fixture.m_quits == 1);
   }

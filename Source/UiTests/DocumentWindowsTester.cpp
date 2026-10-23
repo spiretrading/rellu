@@ -1,5 +1,4 @@
 #include <memory>
-#include <optional>
 #include <vector>
 #include <doctest/doctest.h>
 #include <QApplication>
@@ -9,6 +8,7 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QPointer>
+#include <QPoint>
 #include <QRect>
 #include <QTemporaryDir>
 #include <QWidget>
@@ -28,7 +28,7 @@ namespace {
       QString m_path;
       bool m_is_closable;
       int m_closes;
-      std::optional<QRect> m_bounds;
+      const DocumentWindow* m_cascade;
       const QWidget* m_host;
 
       TestWindow(DocumentWindows& windows, QString path)
@@ -36,6 +36,7 @@ namespace {
           m_path(std::move(path)),
           m_is_closable(true),
           m_closes(0),
+          m_cascade(nullptr),
           m_host(nullptr) {}
 
       QWidget& get_widget() override {
@@ -50,8 +51,8 @@ namespace {
         return m_path.isEmpty() ? QString("Untitled") : m_path;
       }
 
-      void place(const QRect& bounds) override {
-        m_bounds = bounds;
+      void place(DocumentWindow& window) override {
+        m_cascade = &window;
       }
 
       void place(const QWidget& host) override {
@@ -81,9 +82,6 @@ namespace {
     Fixture()
         : m_is_failing(false) {
       m_windows.set_empty_handler([] {});
-      m_windows.set_area_provider([] {
-        return QRect(0, 0, 2560, 1392);
-      });
       m_windows.set_factory([this] (const QString& path, auto document) {
         m_requests.push_back(path);
         m_documents.push_back(document.get());
@@ -254,37 +252,30 @@ TEST_SUITE("DocumentWindows") {
     windows.make_new();
     windows.make_new();
     auto& made = fixture.m_made;
-    REQUIRE(!made[0]->m_bounds);
-    REQUIRE(made[1]->m_bounds == QRect(313, 232, 1090, 761));
-    REQUIRE(made[2]->m_bounds == QRect(353, 264, 1090, 761));
+    REQUIRE(!made[0]->m_cascade);
+    REQUIRE(made[1]->m_cascade == made[0]);
+    REQUIRE(made[2]->m_cascade == made[1]);
+    windows.activate(*made[0]);
+    windows.make_new();
+    REQUIRE(made[3]->m_cascade == made[0]);
     auto host = QWidget();
     windows.make_new(std::make_unique<Document>(), &host);
-    REQUIRE(made[3]->m_host == &host);
-    REQUIRE(!made[3]->m_bounds);
-    windows.make_new();
-    REQUIRE(made[4]->m_bounds == QRect(392, 296, 1090, 761));
-    for(auto window : windows.get_windows()) {
-      window->get_widget().close();
-    }
-    flush();
-    REQUIRE(windows.get_windows().empty());
-    windows.make_new();
-    windows.make_new();
-    REQUIRE(made[6]->m_bounds == QRect(313, 232, 1090, 761));
+    REQUIRE(made[4]->m_host == &host);
+    REQUIRE(!made[4]->m_cascade);
   }
 
   TEST_CASE("cascade_bounds") {
-    auto area = QRect(0, 0, 2560, 1392);
-    REQUIRE(get_cascade_bounds(0, area) == QRect(313, 232, 1090, 761));
-    REQUIRE(get_cascade_bounds(1, area) == QRect(353, 264, 1090, 761));
-    REQUIRE(get_cascade_bounds(3, area) == QRect(431, 328, 1090, 761));
-    REQUIRE(get_cascade_bounds(12, area) == QRect(785, 616, 1090, 761));
-    REQUIRE(get_cascade_bounds(13, area) == QRect(313, 232, 1090, 761));
-    REQUIRE(get_cascade_bounds(14, area) == QRect(353, 264, 1090, 761));
-    REQUIRE(get_cascade_bounds(2, QRect(100, 50, 2560, 1392)) ==
-      QRect(492, 346, 1090, 761));
-    REQUIRE(get_cascade_bounds(5, QRect(0, 0, 1280, 800)) ==
-      QRect(313, 232, 1090, 761));
+    REQUIRE(get_cascade_position(QPoint(1100, 500), 1.5) == QPoint(1159, 548));
+    REQUIRE(get_cascade_position(QPoint(700, 200), 1.5) == QPoint(759, 248));
+    REQUIRE(get_cascade_position(QPoint(10, 20), 1) == QPoint(49, 52));
+    REQUIRE(get_cascade_bounds(QRect(400, 300, 3040, 1600), 1.5) ==
+      QRect(459, 348, 1657, 1153));
+    REQUIRE(get_cascade_bounds(QRect(459, 348, 1657, 1153), 1.5) ==
+      QRect(518, 396, 1657, 1153));
+    REQUIRE(get_cascade_bounds(QRect(640, 278, 2500, 1600), 1.5) ==
+      QRect(699, 326, 1657, 1153));
+    REQUIRE(get_cascade_bounds(QRect(0, 0, 800, 600), 1) ==
+      QRect(39, 32, 1105, 769));
   }
 
   TEST_CASE("menu_windows") {

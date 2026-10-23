@@ -23,6 +23,7 @@
 #include "Rellu/Ui/Theme.hpp"
 #include "Rellu/Ui/ToolTips.hpp"
 #include "FileTracking.hpp"
+#include "HomeFrame.hpp"
 #include "MainWindow.hpp"
 #include "NativeFrame.hpp"
 
@@ -36,7 +37,7 @@ using namespace Rellu;
 namespace {
   const auto RECENT_FILES_KEY = QString("recent_files");
   const auto RECENT_IDENTITIES_KEY = QString("recent_file_identities");
-  const auto GEOMETRY_KEY = QString("main_window/geometry");
+  const auto BOUNDS_KEY = QString("main_window/bounds");
 
   QList<QByteArray> load_identities(const QSettings& settings) {
     auto identities = QList<QByteArray>();
@@ -102,7 +103,11 @@ int main(int argc, char** argv) {
     }
   });
   windows.locate_recent_files();
-  auto home = HomeWindow(windows);
+  auto home = HomeWindow(windows, std::make_unique<HomeFrame>());
+  home.set_placer([] (HomeScreen& screen, const QWidget* window) {
+    place_home_frame(
+      screen, window, QSettings().value(BOUNDS_KEY).toRect());
+  });
   {
     auto settings = QSettings();
     home.get_screen().set_selections(load_home_selections(settings));
@@ -139,7 +144,7 @@ int main(int argc, char** argv) {
     }
   });
   auto show_home = [&] {
-    home.show(QSettings().value(GEOMETRY_KEY).toByteArray());
+    home.show();
     return true;
   };
   if(!open_launched_document(QApplication::arguments(),

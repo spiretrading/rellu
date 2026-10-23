@@ -8,6 +8,7 @@
 #include <QList>
 #include <QMetaObject>
 #include <QObject>
+#include <QPoint>
 #include <QRect>
 #include <QString>
 #include <QStringList>
@@ -34,15 +35,16 @@ namespace Rellu {
       virtual QString get_name() const = 0;
 
       /**
-       * Places the window, neither maximized nor minimized, before it is
-       * first shown.
-       * @param bounds The window's bounds in logical pixels.
+       * Places the window before it is first shown, neither maximized nor
+       * minimized and at the default size, cascaded from another window as
+       * get_cascade_bounds places it.
+       * @param window The window it is cascaded from.
        */
-      virtual void place(const QRect& bounds) = 0;
+      virtual void place(DocumentWindow& window) = 0;
 
       /**
-       * Places the window where another window is, in the same state,
-       * before it is first shown.
+       * Places the window before it is first shown with its top left corner
+       * at another window's, keeping its own size and state.
        * @param host The window whose place the window takes.
        */
       virtual void place(const QWidget& host) = 0;
@@ -81,12 +83,6 @@ namespace Rellu {
         const QString& path, std::unique_ptr<Document> document)>;
 
       /**
-       * The type of function returning the area windows are cascaded in.
-       * @return The available area of the screen in logical pixels.
-       */
-      using AreaProvider = std::function<QRect ()>;
-
-      /**
        * The type of function identifying a file wherever it is later moved
        * or renamed.
        * @param path The path of the file.
@@ -103,8 +99,7 @@ namespace Rellu {
 
       /**
        * Constructs DocumentWindows without windows or recent files, quitting
-       * the application once its last window closes and cascading windows
-       * in the primary screen's available area.
+       * the application once its last window closes.
        */
       DocumentWindows();
 
@@ -123,12 +118,6 @@ namespace Rellu {
        * @param handler The function to call.
        */
       void set_empty_handler(std::function<void ()> handler);
-
-      /**
-       * Sets the function returning the area windows are cascaded in.
-       * @param provider The function returning the area.
-       */
-      void set_area_provider(AreaProvider provider);
 
       /**
        * Sets the functions following the files opened recently when they
@@ -193,7 +182,7 @@ namespace Rellu {
       /**
        * Adds a window, placing, showing and activating it. The first window
        * keeps its own place, and each window added while others are open is
-       * cascaded as Adobe XD cascades them.
+       * cascaded from the active window, as Adobe XD cascades them.
        * @param window The window, taken ownership of.
        * @param host The window whose place the window takes, or
        *        <code>nullptr</code>.
@@ -287,12 +276,10 @@ namespace Rellu {
       };
       Factory m_factory;
       std::function<void ()> m_empty_handler;
-      AreaProvider m_area_provider;
       FileIdentifier m_identifier;
       FileLocator m_locator;
       std::vector<Entry> m_entries;
       std::vector<DocumentWindow*> m_activations;
-      int m_cascades;
       RecentFiles m_recent_files;
       QHash<QString, QByteArray> m_identities;
       std::unique_ptr<QObject> m_filter;
@@ -307,15 +294,24 @@ namespace Rellu {
   };
 
   /**
-   * Returns the bounds Adobe XD gives a window opened while others are
-   * open: a fixed size at a fixed offset into the screen's available area,
-   * stepping down and right with each window cascaded before it and
-   * starting over once a window would leave the area.
-   * @param index The number of windows cascaded before it.
-   * @param area The screen's available area in logical pixels.
-   * @return The window's bounds in logical pixels.
+   * Returns the position Adobe XD gives a window opened over another: the
+   * other window's top left corner stepped down and right.
+   * @param position The top left corner of the other window's frame while
+   *        neither maximized nor minimized.
+   * @param ratio The number of device pixels per logical pixel.
+   * @return The window's top left corner, in the position's units.
    */
-  QRect get_cascade_bounds(int index, const QRect& area);
+  QPoint get_cascade_position(const QPoint& position, double ratio);
+
+  /**
+   * Returns the bounds Adobe XD gives a document window opened while others
+   * are open: at the default size, cascaded from the active window.
+   * @param bounds The bounds of the active window's frame while neither
+   *        maximized nor minimized.
+   * @param ratio The number of device pixels per logical pixel.
+   * @return The window's frame bounds, in the bounds' units.
+   */
+  QRect get_cascade_bounds(const QRect& bounds, double ratio);
 
   /**
    * Returns the title of a document's window as Adobe XD gives it, the
