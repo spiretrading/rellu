@@ -1,6 +1,9 @@
 #include <doctest/doctest.h>
 #include <QApplication>
+#include <QColor>
 #include <QEnterEvent>
+#include <QImage>
+#include <QPoint>
 #include <QWidget>
 #include "Rellu/Ui/CaptionButtons.hpp"
 
@@ -54,6 +57,28 @@ TEST_SUITE("CaptionButtons") {
     REQUIRE(!close.isDown());
     enter(close);
     REQUIRE(close.is_hovered());
+  }
+
+  TEST_CASE("hover_colors") {
+    auto window = QWidget();
+    window.resize(400, 300);
+    auto buttons = make_caption_buttons(window, window);
+    window.show();
+    auto& minimize = *buttons[0];
+    auto& close = *buttons[2];
+    auto glyph = QPoint(CaptionButton::WIDTH / 2, CaptionButton::HEIGHT / 2);
+    auto corner = QPoint(2, 2);
+    REQUIRE(minimize.grab().toImage().pixelColor(glyph) ==
+      QColor(0x2D, 0x2D, 0x2D));
+    enter(minimize);
+    auto hovered = minimize.grab().toImage();
+    REQUIRE(hovered.pixelColor(glyph) == QColor(0x00, 0x00, 0x00));
+    REQUIRE(hovered.pixelColor(corner) != QColor(0xD6, 0xD6, 0xD6));
+    REQUIRE(close.grab().toImage().pixelColor(corner) !=
+      QColor(0xC5, 0x29, 0x1D));
+    enter(close);
+    REQUIRE(close.grab().toImage().pixelColor(corner) ==
+      QColor(0xC5, 0x29, 0x1D));
   }
 
   TEST_CASE("close") {

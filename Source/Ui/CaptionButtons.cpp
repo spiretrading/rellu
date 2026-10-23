@@ -11,6 +11,14 @@
 
 using namespace Rellu;
 
+namespace {
+  const auto INK = QColor(0x2D, 0x2D, 0x2D);
+  const auto HOVER_INK = QColor(0x00, 0x00, 0x00);
+  const auto PRESSED = QColor(0xC6, 0xC6, 0xC6);
+  const auto CLOSE_HOVER = QColor(0xC5, 0x29, 0x1D);
+  const auto CLOSE_PRESSED = QColor(0xF1, 0x70, 0x7A);
+}
+
 CaptionButton::CaptionButton(CaptionKind kind, const QString& tip)
     : m_kind(kind),
       m_is_hovered(false) {
@@ -56,15 +64,15 @@ void CaptionButton::reset() {
 
 void CaptionButton::paintEvent(QPaintEvent*) {
   auto painter = QPainter(this);
-  auto ink = QColor(0x3F, 0x3F, 0x3F);
+  auto ink = INK;
   if(m_kind == CaptionKind::CLOSE && (m_is_hovered || isDown())) {
-    painter.fillRect(rect(), isDown() ? QColor(0xF1, 0x70, 0x7A) :
-      QColor(0xE8, 0x11, 0x23));
+    painter.fillRect(rect(), isDown() ? CLOSE_PRESSED : CLOSE_HOVER);
     ink = Qt::white;
   } else if(isDown()) {
-    painter.fillRect(rect(), QColor(0xC6, 0xC6, 0xC6));
+    painter.fillRect(rect(), PRESSED);
+    ink = HOVER_INK;
   } else if(m_is_hovered) {
-    painter.fillRect(rect(), QColor(0xD6, 0xD6, 0xD6));
+    ink = HOVER_INK;
   }
   painter.setRenderHint(QPainter::Antialiasing);
   painter.setPen(QPen(ink, 1));
