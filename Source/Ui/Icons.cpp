@@ -1024,7 +1024,8 @@ const QIcon& Rellu::get_kind_icon(NodeKind kind, bool is_reference) {
 }
 
 const QIcon& Rellu::get_visibility_icon(bool is_visible) {
-  static auto visible = make_icon(Glyph::EYE, Colors::ICON);
+  static auto visible =
+    make_icon(Glyph::EYE_CLOSED, QColor(0xB8, 0xBC, 0xC0));
   static auto hidden = make_icon(Glyph::EYE_CLOSED, Colors::SECONDARY_TEXT);
   if(is_visible) {
     return visible;

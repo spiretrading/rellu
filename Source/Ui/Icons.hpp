@@ -160,7 +160,9 @@ namespace Rellu {
   const QIcon& get_kind_icon(NodeKind kind, bool is_reference);
 
   /**
-   * Returns the icon showing whether a node is visible.
+   * Returns the icon of the layers panel's visibility button: a light
+   * crossed eye offering to hide a visible node, or the crossed eye of a
+   * hidden one.
    * @param is_visible Whether the node is visible.
    */
   const QIcon& get_visibility_icon(bool is_visible);

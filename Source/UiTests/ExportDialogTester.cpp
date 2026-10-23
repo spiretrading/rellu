@@ -1,4 +1,8 @@
+#include <QCoreApplication>
+#include <QFocusEvent>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QWidget>
 #include <doctest/doctest.h>
@@ -161,5 +165,35 @@ TEST_SUITE("ExportDialog") {
     auto typed = ExportDialog(options, "1/4x", QString(), false, 1, &window);
     REQUIRE(typed.get_scale_text() == "1/4x");
     REQUIRE(typed.get_options().m_scale == 0.25);
+  }
+
+  TEST_CASE("scale_field_keys") {
+    auto window = QWidget();
+    auto dialog = ExportDialog(ExportOptions(), "C:/out", false, 1, &window);
+    auto exports = 0;
+    dialog.set_export_handler([&] {
+      ++exports;
+    });
+    auto field = dialog.findChild<QLineEdit*>("export_size_field");
+    REQUIRE(field);
+    field->selectAll();
+    for(auto key : {Qt::Key_2, Qt::Key_Period, Qt::Key_5}) {
+      auto text = QString(QChar(static_cast<char16_t>(key)));
+      auto press = QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier, text);
+      QCoreApplication::sendEvent(field, &press);
+    }
+    auto enter = QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(field, &enter);
+    REQUIRE(exports == 0);
+    REQUIRE(dialog.get_options().m_scale == 2.5);
+    REQUIRE(dialog.get_scale_text() == "2.5x");
+    field->selectAll();
+    auto press = QKeyEvent(QEvent::KeyPress, Qt::Key_3, Qt::NoModifier, "3");
+    QCoreApplication::sendEvent(field, &press);
+    auto leave = QFocusEvent(QEvent::FocusOut, Qt::TabFocusReason);
+    QCoreApplication::sendEvent(field, &leave);
+    REQUIRE(dialog.get_options().m_scale == 3);
+    REQUIRE(dialog.get_scale_text().isEmpty());
+    REQUIRE(exports == 0);
   }
 }

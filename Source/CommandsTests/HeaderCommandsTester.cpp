@@ -329,8 +329,12 @@ TEST_SUITE("HeaderCommands") {
     auto registry = CommandRegistry();
     add_header_commands(registry, estimate_text_bounds);
     REQUIRE(!registry.make("object.align_to_pixel_grid", document,
-      std::vector{scene.m_loose}));
+      std::vector<NodeId>()));
     auto history = History(document);
+    auto aligned = registry.make("object.align_to_pixel_grid", document,
+      std::vector{scene.m_loose});
+    REQUIRE(aligned);
+    REQUIRE(!history.execute(std::move(aligned)));
     require_undoable(history, registry.make("object.align_to_pixel_grid",
       document, std::vector{scene.m_rectangle, scene.m_loose}));
     REQUIRE(history.get_undo_label() == "Align to Pixel Grid");

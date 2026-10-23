@@ -192,7 +192,8 @@ namespace Rellu {
    * @param document The document holding the nodes.
    * @param nodes The nodes to align.
    * @param measurer The function measuring text.
-   * @return The command, or <code>nullptr</code> if every node is aligned.
+   * @return The command, changing nothing if every node is aligned, or
+   *         <code>nullptr</code> if no node can be aligned.
    */
   std::unique_ptr<Command> make_pixel_grid_command(const Document& document,
     const std::vector<NodeId>& nodes,

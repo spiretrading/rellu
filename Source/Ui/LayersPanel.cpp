@@ -40,6 +40,11 @@ using namespace Rellu;
 
 namespace {
   constexpr auto INDICATOR_WIDTH = 24;
+  constexpr auto EXPORT_WIDTH = 33;
+  constexpr auto LOCK_WIDTH = 27;
+  constexpr auto VISIBILITY_WIDTH = 35;
+  constexpr auto VISIBILITY_ICON_CENTER = 13;
+  const auto HOVER_GLYPH = QColor(0xB8, 0xBC, 0xC0);
   constexpr auto ICON_MARGIN = 6;
   constexpr auto NAME_PADDING = 6;
   constexpr auto SEARCH_FIELD_HEIGHT = 30;
@@ -228,7 +233,7 @@ namespace {
           option->features &= ~QStyleOptionViewItem::HasDecoration;
         } else if(index.column() == LayersModel::LOCK &&
             !index.data(LayersModel::LOCKED_ROLE).toBool() && is_hovered) {
-          static auto unlocked = make_icon(Glyph::LOCK, Colors::DISABLED_TEXT);
+          static auto unlocked = make_icon(Glyph::LOCK, HOVER_GLYPH);
           option->icon = unlocked;
           option->features |= QStyleOptionViewItem::HasDecoration;
         } else if(index.column() == LayersModel::EXPORT &&
@@ -236,6 +241,32 @@ namespace {
             index.data(LayersModel::ID_ROLE).isValid()) {
           option->icon = get_export_mark_icon(false);
           option->features |= QStyleOptionViewItem::HasDecoration;
+        }
+      }
+
+      void paint(QPainter* painter, const QStyleOptionViewItem& option,
+          const QModelIndex& index) const override {
+        if(index.column() != LayersModel::VISIBILITY) {
+          QStyledItemDelegate::paint(painter, option, index);
+          return;
+        }
+        auto cell = option;
+        initStyleOption(&cell, index);
+        auto icon = cell.icon;
+        auto has_icon = static_cast<bool>(
+          cell.features & QStyleOptionViewItem::HasDecoration);
+        cell.icon = QIcon();
+        cell.features &= ~QStyleOptionViewItem::HasDecoration;
+        auto style =
+          cell.widget ? cell.widget->style() : QApplication::style();
+        style->drawControl(
+          QStyle::CE_ItemViewItem, &cell, painter, cell.widget);
+        if(has_icon) {
+          auto size = m_view->iconSize();
+          icon.paint(painter, QRect(QPoint(
+            option.rect.left() + VISIBILITY_ICON_CENTER - size.width() / 2,
+            option.rect.top() + (option.rect.height() - size.height()) / 2),
+            size));
         }
       }
 
@@ -484,12 +515,14 @@ LayersPanel::LayersPanel(QWidget* parent)
     header->setStretchLastSection(false);
     header->setMinimumSectionSize(INDICATOR_WIDTH);
     header->setSectionResizeMode(LayersModel::NAME, QHeaderView::Stretch);
-    for(auto column : {LayersModel::VISIBILITY, LayersModel::LOCK,
-        LayersModel::EXPORT}) {
+    for(auto [column, width] : std::to_array<std::pair<int, int>>({
+        {LayersModel::EXPORT, EXPORT_WIDTH}, {LayersModel::LOCK, LOCK_WIDTH},
+        {LayersModel::VISIBILITY, VISIBILITY_WIDTH}})) {
       header->setSectionResizeMode(column, QHeaderView::Fixed);
-      header->resizeSection(column, INDICATOR_WIDTH);
+      header->resizeSection(column, width);
     }
-    header->moveSection(LayersModel::EXPORT, LayersModel::VISIBILITY);
+    header->moveSection(header->visualIndex(LayersModel::EXPORT), 1);
+    header->moveSection(header->visualIndex(LayersModel::LOCK), 2);
     connect(view, &QTreeView::customContextMenuRequested, this,
       [this, view] (const QPoint& position) {
         show_context_menu(*view, position);

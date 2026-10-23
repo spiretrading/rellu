@@ -13,6 +13,7 @@
 #include <QListView>
 #include <QPainter>
 #include <QPainterPath>
+#include <QScreen>
 #include <QStyledItemDelegate>
 #include <QStylePainter>
 #include <QTimer>
@@ -32,8 +33,15 @@ namespace {
   constexpr auto ROW_SPACING = 16;
   constexpr auto HINT_LINE_HEIGHT = 13;
   constexpr auto UNDERLINED_WIDTH = 78;
-  constexpr auto CHEVRON_GAP = 25;
+  constexpr auto CHEVRON_GAP = 23;
   constexpr auto CHEVRON_SIZE = 12;
+  constexpr auto CHEVRON_WIDTH = 6.0;
+  constexpr auto CHEVRON_HEIGHT = 3.3;
+  constexpr auto POPUP_PADDING = 46;
+  constexpr auto RADIO_SIZE = 16;
+  constexpr auto RADIO_GAP = 12;
+  constexpr auto DESTINATION_OFFSET = 22;
+  constexpr auto DIALOG_RISE = 36;
   constexpr auto ITEM_HEIGHT = 41;
   constexpr auto PATH_WIDTH = 187;
   constexpr auto HINT_WIDTH = 298;
@@ -46,9 +54,15 @@ namespace {
   const auto UNDERLINE = QColor(0xE4, 0xE4, 0xE4);
   const auto ACCENT = QColor(0x14, 0x92, 0xE6);
   const auto HOVER = QColor(0xF4, 0xF4, 0xF4);
+  const auto RADIO = QColor(0x66, 0x66, 0x66);
+  const auto HINT = QColor(0x8E, 0x8E, 0x8E);
+  constexpr auto HINT_FONT_SIZE = 11;
+  constexpr auto HINT_TOP = 4;
+  constexpr auto HINT_BOTTOM = 3;
   const auto STYLE = QString(R"(
 QFrame#export_panel {
   background: #F5F5F5;
+  border-radius: 4px;
 }
 QLabel#export_title {
   color: #3F3F3F;
@@ -61,14 +75,10 @@ QFrame#export_rule {
 }
 QLabel#export_label {
   color: #8E8E8E;
-  font-size: 12px;
+  font-size: 11px;
 }
 QLabel#export_label:disabled {
   color: #C8C8C8;
-}
-QLabel#export_hint {
-  color: #8E8E8E;
-  font-size: 11px;
 }
 QLabel#export_path, QLabel#export_footer {
   color: #3F3F3F;
@@ -76,33 +86,22 @@ QLabel#export_path, QLabel#export_footer {
 }
 QComboBox#export_choice {
   color: #3F3F3F;
-  font-size: 13px;
+  font-size: 12px;
 }
 QComboBox#export_choice::drop-down {
   border: none;
   width: 14px;
 }
-QLineEdit#export_size_field {
-  background: transparent;
-  border: none;
-  color: #3F3F3F;
-  font-size: 13px;
-  padding: 0px;
-  selection-background-color: #2680EB;
-}
-QLineEdit#export_size_field:disabled {
-  color: #B8B8B8;
-}
 QListView#export_choices {
   background: #FFFFFF;
   border: 1px solid #DADADA;
   color: #3F3F3F;
-  font-size: 13px;
+  font-size: 12px;
   outline: 0;
 }
 QRadioButton#export_option, QCheckBox#export_option {
   color: #3F3F3F;
-  font-size: 13px;
+  font-size: 12px;
   spacing: 12px;
 }
 QRadioButton#export_option:disabled, QCheckBox#export_option:disabled {
@@ -214,8 +213,8 @@ QProgressBar#export_progress::chunk {
       QSize sizeHint(const QStyleOptionViewItem& option,
           const QModelIndex& index) const override {
         auto metrics = QFontMetrics(option.font);
-        return QSize(metrics.horizontalAdvance(index.data().toString()) + 72,
-          ITEM_HEIGHT);
+        return QSize(metrics.horizontalAdvance(index.data().toString()) +
+          POPUP_PADDING, ITEM_HEIGHT);
       }
 
       void paint(QPainter* painter, const QStyleOptionViewItem& option,
@@ -282,6 +281,32 @@ QProgressBar#export_progress::chunk {
         return sizeHint();
       }
 
+      void showPopup() override {
+        auto metrics = view()->fontMetrics();
+        auto width = 0;
+        for(auto i = 0; i != count(); ++i) {
+          width = std::max(width, metrics.horizontalAdvance(itemText(i)));
+        }
+        setMaxVisibleItems(count());
+        view()->setMinimumWidth(width + POPUP_PADDING);
+        QComboBox::showPopup();
+        auto popup = view()->window();
+        if(!popup || popup == window()) {
+          return;
+        }
+        auto current = std::max(currentIndex(), 0);
+        auto position = mapToGlobal(QPoint(-1,
+          height() / 2 - ITEM_HEIGHT / 2 - current * ITEM_HEIGHT - 1));
+        if(auto screen = this->screen()) {
+          auto area = screen->availableGeometry();
+          position.setY(std::clamp(position.y(), area.top(),
+            std::max(area.top(), area.bottom() - popup->height())));
+          position.setX(std::clamp(position.x(), area.left(),
+            std::max(area.left(), area.right() - popup->width())));
+        }
+        popup->move(position);
+      }
+
     protected:
       void paintEvent(QPaintEvent*) override {
         auto painter = QPainter(this);
@@ -292,16 +317,17 @@ QProgressBar#export_progress::chunk {
           painter.drawText(rect().adjusted(0, 0, -CHEVRON_SIZE, 0),
             Qt::AlignVCenter | Qt::AlignLeft, currentText());
         }
-        auto x = width() - CHEVRON_SIZE + 1.0;
+        auto x = width() - CHEVRON_WIDTH - 1;
         if(!m_is_underlined) {
           x = fontMetrics().horizontalAdvance(currentText()) + CHEVRON_GAP;
         }
         auto y = height() / 2.0;
         auto chevron = QPainterPath();
-        chevron.moveTo(x, y - 2.5);
-        chevron.lineTo(x + 4.5, y + 2);
-        chevron.lineTo(x + 9, y - 2.5);
-        painter.setPen(QPen(isEnabled() ? CHEVRON : DISABLED, 1.4));
+        chevron.moveTo(x, y - CHEVRON_HEIGHT / 2);
+        chevron.lineTo(x + CHEVRON_WIDTH / 2, y + CHEVRON_HEIGHT / 2);
+        chevron.lineTo(x + CHEVRON_WIDTH, y - CHEVRON_HEIGHT / 2);
+        painter.setPen(QPen(isEnabled() ? CHEVRON : DISABLED, 1.1));
+        painter.setBrush(Qt::NoBrush);
         painter.drawPath(chevron);
         if(m_is_underlined) {
           painter.fillRect(QRectF(0, height() - 1, width(), 1), UNDERLINE);
@@ -310,6 +336,94 @@ QProgressBar#export_progress::chunk {
 
     private:
       bool m_is_underlined;
+  };
+
+  class OptionRadio : public QRadioButton {
+    public:
+      explicit OptionRadio(const QString& text)
+        : QRadioButton(text) {}
+
+      QSize sizeHint() const override {
+        return QSize(RADIO_SIZE + RADIO_GAP +
+          fontMetrics().horizontalAdvance(text()) + 2, ROW_HEIGHT);
+      }
+
+      QSize minimumSizeHint() const override {
+        return sizeHint();
+      }
+
+    protected:
+      bool hitButton(const QPoint& position) const override {
+        return rect().contains(position);
+      }
+
+      void paintEvent(QPaintEvent*) override {
+        auto painter = QPainter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        auto color = isEnabled() ? RADIO : DISABLED;
+        auto circle =
+          QRectF(1, (height() - RADIO_SIZE) / 2.0 + 1, RADIO_SIZE - 2,
+            RADIO_SIZE - 2);
+        if(isChecked()) {
+          painter.setPen(Qt::NoPen);
+          painter.setBrush(color);
+          painter.drawEllipse(circle.adjusted(-1, -1, 1, 1));
+          painter.setBrush(QColor(0xFF, 0xFF, 0xFF));
+          painter.drawEllipse(circle.center(), 2.4, 2.4);
+        } else {
+          painter.setPen(QPen(color, 2));
+          painter.setBrush(Qt::NoBrush);
+          painter.drawEllipse(circle);
+        }
+        painter.setPen(isEnabled() ? TEXT : DISABLED);
+        painter.setFont(font());
+        painter.drawText(rect().adjusted(RADIO_SIZE + RADIO_GAP, 0, 0, 0),
+          Qt::AlignLeft | Qt::AlignVCenter, text());
+      }
+  };
+
+  class HintLabel : public QWidget {
+    public:
+      void set_text(const QString& text) {
+        m_lines.clear();
+        auto metrics = fontMetrics();
+        auto line = QString();
+        for(auto& word : text.split(' ', Qt::SkipEmptyParts)) {
+          auto candidate = line.isEmpty() ? word : line + ' ' + word;
+          if(!line.isEmpty() &&
+              metrics.horizontalAdvance(candidate) > HINT_WIDTH) {
+            m_lines.push_back(line);
+            line = word;
+          } else {
+            line = candidate;
+          }
+        }
+        if(!line.isEmpty()) {
+          m_lines.push_back(line);
+        }
+        setFixedSize(HINT_WIDTH, m_lines.empty() ? 0 : HINT_TOP +
+          HINT_LINE_HEIGHT * static_cast<int>(m_lines.size()) + HINT_BOTTOM);
+        update();
+      }
+
+      int get_line_count() const {
+        return static_cast<int>(m_lines.size());
+      }
+
+    protected:
+      void paintEvent(QPaintEvent*) override {
+        auto painter = QPainter(this);
+        painter.setPen(HINT);
+        painter.setFont(font());
+        for(auto i = 0; i != static_cast<int>(m_lines.size()); ++i) {
+          painter.drawText(QRect(0, HINT_TOP + i * HINT_LINE_HEIGHT,
+            width(), HINT_LINE_HEIGHT), Qt::AlignLeft | Qt::AlignVCenter,
+            m_lines[i]);
+        }
+      }
+
+    private:
+      std::vector<QString> m_lines;
   };
 
   class FolderIcon : public QWidget {
@@ -400,7 +514,8 @@ ExportDialog::ExportDialog(const ExportOptions& options,
       m_asset_count(asset_count),
       m_is_exporting(false),
       m_is_cancel_requested(false),
-      m_is_updating(false) {
+      m_is_updating(false),
+      m_is_scale_edited(false) {
   setObjectName("export_dialog");
   setAttribute(Qt::WA_TranslucentBackground);
   setModal(true);
@@ -410,6 +525,7 @@ ExportDialog::ExportDialog(const ExportOptions& options,
   };
   auto outer = new QVBoxLayout(this);
   outer->setAlignment(Qt::AlignCenter);
+  outer->setContentsMargins(0, 0, 0, DIALOG_RISE);
   m_panel = new QFrame();
   m_panel->setObjectName("export_panel");
   m_panel->setFixedWidth(PANEL_WIDTH);
@@ -452,9 +568,18 @@ ExportDialog::ExportDialog(const ExportOptions& options,
   m_size->setCompleter(nullptr);
   m_size->lineEdit()->setObjectName("export_size_field");
   m_size->lineEdit()->installEventFilter(this);
-  connect(m_size->lineEdit(), &QLineEdit::returnPressed, this, [this] {
-    set_scale_text(m_size->lineEdit()->text());
-    m_export->setFocus();
+  m_size->lineEdit()->setAutoFillBackground(false);
+  auto field_palette = m_size->lineEdit()->palette();
+  field_palette.setColor(QPalette::Base, Qt::transparent);
+  field_palette.setColor(QPalette::Window, Qt::transparent);
+  m_size->lineEdit()->setPalette(field_palette);
+  m_size->lineEdit()->setFrame(false);
+  m_size->lineEdit()->setStyleSheet(
+    "QLineEdit { background: transparent; border: none; color: #3F3F3F; "
+    "font-size: 12px; padding: 0px; selection-background-color: #2680EB; }"
+    "QLineEdit:disabled { color: #B8B8B8; }");
+  connect(m_size->lineEdit(), &QLineEdit::textEdited, this, [this] {
+    m_is_scale_edited = true;
   });
   for(auto scale : SCALES) {
     m_size->addItem(to_scale_text(scale));
@@ -463,19 +588,18 @@ ExportDialog::ExportDialog(const ExportOptions& options,
       ExportPreset::ANDROID}) {
     m_size->addItem(get_preset_text(preset));
   }
-  m_hint = new QLabel();
-  m_hint->setObjectName("export_hint");
-  m_hint->setWordWrap(true);
-  m_hint->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-  m_hint->setContentsMargins(0, 4, 0, 0);
-  m_hint->setFixedWidth(HINT_WIDTH);
+  auto hint = new HintLabel();
+  auto hint_font = hint->font();
+  hint_font.setPixelSize(HINT_FONT_SIZE);
+  hint->setFont(hint_font);
+  m_hint = hint;
   m_size_row = make_row(translate("export", "Export size:"), m_size, m_hint);
   m_styling = new ChoiceBox(false);
   m_styling->addItems({translate("export", "Presentation Attributes"),
     translate("export", "Internal CSS")});
   m_styling_row = make_row(translate("export", "Styling:"), m_styling);
-  m_embed = new QRadioButton(translate("export", "Embed"));
-  m_link = new QRadioButton(translate("export", "Link"));
+  m_embed = new OptionRadio(translate("export", "Embed"));
+  m_link = new OptionRadio(translate("export", "Link"));
   wrap_option(m_embed);
   wrap_option(m_link);
   m_images_row =
@@ -486,8 +610,8 @@ ExportDialog::ExportDialog(const ExportOptions& options,
   m_outline = new QCheckBox(translate("export", "Outline Stroke"));
   wrap_option(m_outline);
   m_outline_row = make_row(translate("export", "Path Options:"), m_outline);
-  m_single = new QRadioButton(translate("export", "Single PDF file"));
-  m_multiple = new QRadioButton(translate("export", "Multiple PDF files"));
+  m_single = new OptionRadio(translate("export", "Single PDF file"));
+  m_multiple = new OptionRadio(translate("export", "Multiple PDF files"));
   wrap_option(m_single);
   wrap_option(m_multiple);
   m_pdf_row =
@@ -517,7 +641,7 @@ ExportDialog::ExportDialog(const ExportOptions& options,
   footer_rule->setObjectName("export_rule");
   footer_rule->setFixedHeight(1);
   footer->addWidget(footer_rule);
-  footer->addSpacing(18);
+  footer->addSpacing(16);
   auto notice_label = new QLabel(to_link_html(translate("export", "Colors of "
     "the exported objects may look slightly different when viewed on "
     "multiple surfaces. [Learn more about Color Management]")));
@@ -603,6 +727,7 @@ const QString& ExportDialog::get_scale_text() const {
 }
 
 bool ExportDialog::set_scale_text(const QString& text) {
+  m_is_scale_edited = false;
   auto scale = parse_export_scale(text);
   if(!scale) {
     update_controls();
@@ -755,8 +880,14 @@ bool ExportDialog::eventFilter(QObject* watched, QEvent* event) {
   if(watched == m_size->lineEdit()) {
     if(event->type() == QEvent::FocusIn) {
       QTimer::singleShot(0, m_size->lineEdit(), &QLineEdit::selectAll);
-    } else if(event->type() == QEvent::FocusOut &&
-        m_size->lineEdit()->isModified()) {
+    } else if(event->type() == QEvent::KeyPress) {
+      auto key = static_cast<QKeyEvent*>(event)->key();
+      if(key == Qt::Key_Return || key == Qt::Key_Enter) {
+        set_scale_text(m_size->lineEdit()->text());
+        m_export->setFocus(Qt::TabFocusReason);
+        return true;
+      }
+    } else if(event->type() == QEvent::FocusOut && m_is_scale_edited) {
       set_scale_text(m_size->lineEdit()->text());
     }
   }
@@ -827,18 +958,19 @@ void ExportDialog::update_controls() {
   m_single->setChecked(is_single);
   m_multiple->setChecked(!is_single);
   auto hint = get_hint();
-  m_hint->setText(hint);
+  static_cast<HintLabel*>(m_hint)->set_text(hint);
   m_hint->setVisible(!hint.isEmpty());
   if(m_folder.isEmpty()) {
-    m_path->hide();
+    m_path->clear();
     m_destination->setText(translate("export", "Choose Destination"));
   } else {
     m_path->setText(elide_start(QDir::toNativeSeparators(m_folder),
       m_path->fontMetrics(), PATH_WIDTH));
-    m_path->show();
+
     m_destination->setText(translate("export", "Change"));
   }
-  m_path->setFixedWidth(m_folder.isEmpty() ? 0 : PATH_WIDTH + 24);
+  m_path->setFixedWidth(
+    m_folder.isEmpty() ? DESTINATION_OFFSET : PATH_WIDTH + 24);
   for(auto widget : std::to_array<QWidget*>({m_format_row, m_quality_row,
       m_size_row, m_styling_row, m_images_row, m_minify_row, m_outline_row,
       m_folder_row})) {
@@ -874,7 +1006,7 @@ void ExportDialog::rebuild() {
   for(auto i = std::size_t(0); i != rows.size(); ++i) {
     if(i != 0 && rows[i - 1] == m_size_row) {
       m_body->addSpacing(get_hint().isEmpty() ? ROW_SPACING + 3 :
-        ROW_SPACING - 1);
+        ROW_SPACING - 4);
     } else if(i != 0 && (rows[i - 1] == m_pdf_row ||
         rows[i - 1] == m_outline_row) && rows[i] == m_folder_row) {
       m_body->addSpacing(ROW_SPACING - 2);
@@ -895,13 +1027,10 @@ void ExportDialog::rebuild() {
   }
   auto buttons_index = panel->indexOf(m_buttons);
   if(auto spacer = panel->itemAt(buttons_index - 1)->spacerItem()) {
-    spacer->changeSize(0, has_footer ? 51 : 66);
+    spacer->changeSize(0, has_footer ? 47 : 66);
   } else {
-    panel->insertSpacing(buttons_index, has_footer ? 51 : 66);
+    panel->insertSpacing(buttons_index, has_footer ? 47 : 66);
   }
-  m_hint->setFixedHeight(!get_hint().isEmpty() ?
-    4 + HINT_LINE_HEIGHT * (m_options.m_preset == ExportPreset::ANDROID ?
-      2 : 1) : 0);
   panel->invalidate();
   m_panel->adjustSize();
 }

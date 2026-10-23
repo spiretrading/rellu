@@ -292,10 +292,12 @@ std::unique_ptr<Command> Rellu::make_pixel_grid_command(
     const Document& document, const std::vector<NodeId>& nodes,
     const TextMeasurer& measurer) {
   auto commands = std::vector<std::unique_ptr<Command>>();
+  auto has_target = false;
   for(auto& id : get_top_level(document, get_existing(document, nodes))) {
     if(document.get(id).m_parent.is_nil() && !document.is_on_canvas(id)) {
       continue;
     }
+    has_target = true;
     auto bounds =
       get_world_bounds(document, id, BoundsType::GEOMETRY, measurer);
     if(!bounds) {
@@ -323,7 +325,7 @@ std::unique_ptr<Command> Rellu::make_pixel_grid_command(
     commands.push_back(std::make_unique<TransformCommand>(std::vector{id},
       make_rect_mapping(*bounds, aligned), "Align to Pixel Grid"));
   }
-  if(commands.empty()) {
+  if(!has_target) {
     return nullptr;
   }
   return std::make_unique<CompositeCommand>(

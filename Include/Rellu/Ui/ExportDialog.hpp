@@ -164,6 +164,7 @@ namespace Rellu {
       bool m_is_exporting;
       bool m_is_cancel_requested;
       bool m_is_updating;
+      bool m_is_scale_edited;
       FolderChooser m_folder_chooser;
       ExportHandler m_export_handler;
       QFrame* m_panel;
@@ -174,7 +175,7 @@ namespace Rellu {
       QComboBox* m_quality;
       QWidget* m_size_row;
       QComboBox* m_size;
-      QLabel* m_hint;
+      QWidget* m_hint;
       QWidget* m_styling_row;
       QComboBox* m_styling;
       QWidget* m_images_row;

@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QFont>
 #include <QFontMetrics>
+#include <QHeaderView>
 #include <QHelpEvent>
 #include <QImage>
 #include <QItemSelectionModel>
@@ -719,5 +720,18 @@ TEST_SUITE("LayersPanel") {
     REQUIRE(view);
     REQUIRE(view->mapTo(&panel, QPoint(0, 0)).y() == 80);
     panel.hide();
+  }
+
+  TEST_CASE("indicator_order") {
+    auto panel = LayersPanel();
+    auto views = panel.findChildren<QTreeView*>();
+    REQUIRE(!views.empty());
+    for(auto view : views) {
+      auto header = view->header();
+      REQUIRE(header->visualIndex(LayersModel::NAME) == 0);
+      REQUIRE(header->visualIndex(LayersModel::EXPORT) == 1);
+      REQUIRE(header->visualIndex(LayersModel::LOCK) == 2);
+      REQUIRE(header->visualIndex(LayersModel::VISIBILITY) == 3);
+    }
   }
 }

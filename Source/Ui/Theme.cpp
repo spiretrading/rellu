@@ -148,7 +148,7 @@ QTreeView#layers::item:selected, QTreeView#layers::branch:selected {
 }
 QTreeView#layers::item:hover:!selected,
 QTreeView#layers::branch:hover:!selected {
-  background: #EBEBEB;
+  background: #EDF5FD;
 }
 QLabel#layers_heading {
   color: #8E8E8E;
