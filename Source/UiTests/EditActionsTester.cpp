@@ -1,3 +1,4 @@
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -5,8 +6,12 @@
 #include <vector>
 #include <doctest/doctest.h>
 #include <QClipboard>
+#include <QDir>
+#include <QFile>
 #include <QGuiApplication>
+#include <QImage>
 #include <QKeySequence>
+#include <QTemporaryDir>
 #include <QWidget>
 #include "Rellu/Commands/ArtboardCommands.hpp"
 #include "Rellu/Commands/CommandRegistry.hpp"
@@ -317,6 +322,150 @@ TEST_SUITE("EditActions") {
     REQUIRE(is_srgb());
     fixture.m_edit_actions->set_editor(nullptr);
     REQUIRE(!is_srgb());
+  }
+
+  TEST_CASE("color_profile_switch") {
+    auto fixture = Fixture();
+    auto& actions = fixture.m_actions;
+    auto document = Document();
+    build_test_document(document);
+    auto editor = Editor(document);
+    fixture.m_edit_actions->set_editor(&editor);
+    auto& profile = document.get_resources().m_color_profile;
+    REQUIRE(actions.trigger("edit.color_profile.unmanaged"));
+    REQUIRE(profile == ColorProfile::NONE);
+    REQUIRE(!editor.get_history().can_undo());
+    REQUIRE(actions.get("edit.color_profile.unmanaged").isChecked());
+    REQUIRE(actions.trigger("edit.color_profile.srgb"));
+    REQUIRE(profile == ColorProfile::SRGB);
+    REQUIRE(actions.get("edit.color_profile.srgb").isChecked());
+    REQUIRE(!actions.get("edit.color_profile.unmanaged").isChecked());
+    REQUIRE(actions.get("edit.undo").text() == "Undo sRGB");
+    REQUIRE(actions.trigger("edit.color_profile.srgb"));
+    REQUIRE(actions.get("edit.color_profile.srgb").isChecked());
+    REQUIRE(editor.get_history().get_undo_count() == 1);
+    REQUIRE(actions.trigger("edit.color_profile.unmanaged"));
+    REQUIRE(profile == ColorProfile::UNMANAGED);
+    REQUIRE(actions.get("edit.undo").text() == "Undo Unmanaged");
+    REQUIRE(actions.trigger("edit.undo"));
+    REQUIRE(profile == ColorProfile::SRGB);
+    REQUIRE(actions.get("edit.color_profile.srgb").isChecked());
+  }
+
+  TEST_CASE("import") {
+    auto fixture = Fixture();
+    auto& actions = fixture.m_actions;
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    fixture.m_edit_actions->set_editor(&editor);
+    REQUIRE(!fixture.is_enabled("file.import"));
+    auto temporary = QTemporaryDir();
+    REQUIRE(temporary.isValid());
+    auto photo = QDir(temporary.path()).filePath("Photo.png");
+    auto image = QImage(20, 10, QImage::Format_RGB32);
+    image.fill(Qt::blue);
+    REQUIRE(image.save(photo, "PNG"));
+    auto broken = QDir(temporary.path()).filePath("Broken.gif");
+    {
+      auto file = QFile(broken);
+      REQUIRE(file.open(QIODevice::WriteOnly));
+      file.write("GIF");
+    }
+    auto paths = std::vector<std::filesystem::path>();
+    fixture.m_edit_actions->set_file_chooser([&] { return paths; });
+    auto alerts = std::vector<XdAlertContent>();
+    fixture.m_edit_actions->set_alert_handler([&] (const auto& content) {
+      alerts.push_back(content);
+      return 0;
+    });
+    auto messages = std::vector<QString>();
+    fixture.m_edit_actions->set_notice_handler([&] (const auto& message) {
+      messages.push_back(message);
+    });
+    fixture.m_edit_actions->set_view_provider([] {
+      return std::optional(Rect(0, 0, 600, 600));
+    });
+    REQUIRE(fixture.is_enabled("file.import"));
+    REQUIRE(actions.trigger("file.import"));
+    REQUIRE(!editor.get_history().can_undo());
+    REQUIRE(alerts.empty());
+    paths = {std::filesystem::path(broken.toStdU16String())};
+    REQUIRE(actions.trigger("file.import"));
+    REQUIRE(!editor.get_history().can_undo());
+    REQUIRE(alerts.size() == 1);
+    REQUIRE(alerts.back().m_message ==
+      "There was a problem importing your asset.");
+    REQUIRE(messages.empty());
+    paths = {std::filesystem::path(photo.toStdU16String()),
+      std::filesystem::path(broken.toStdU16String())};
+    REQUIRE(actions.trigger("file.import"));
+    REQUIRE(alerts.size() == 2);
+    REQUIRE(actions.get("edit.undo").text() == "Undo Import");
+    auto& node = document.get(editor.get_selection().get_primary());
+    REQUIRE(node.m_header.m_name == "Photo");
+    REQUIRE(node.m_parent == ids.m_artboard);
+    REQUIRE(messages == std::vector{make_color_profile_message()});
+    REQUIRE(actions.trigger("edit.color_profile.srgb"));
+    paths = {std::filesystem::path(photo.toStdU16String())};
+    REQUIRE(actions.trigger("file.import"));
+    REQUIRE(alerts.size() == 2);
+    REQUIRE(messages.size() == 1);
+    fixture.m_edit_actions->set_workspace(Workspace::SHARE);
+    REQUIRE(!fixture.is_enabled("file.import"));
+    fixture.m_edit_actions->set_workspace(Workspace::PROTOTYPE);
+    REQUIRE(fixture.is_enabled("file.import"));
+    fixture.m_edit_actions->set_editor(nullptr);
+    REQUIRE(!fixture.is_enabled("file.import"));
+  }
+
+  TEST_CASE("import_filters") {
+    REQUIRE(make_import_filters() == QStringList({"*.svg", "*.gif", "*.jpg",
+      "*.jpeg", "*.png", "*.tiff", "*.tif", "*.bmp",
+      "All files (*.svg;*.gif;*.jpg;*.jpeg;*.png;*.tiff;*.tif;*.bmp)"}));
+  }
+
+  TEST_CASE("import_alert") {
+    auto at = [] (const char* name) {
+      return std::filesystem::path(name);
+    };
+    auto single =
+      make_import_alert({ImportFailure(at("C:/a/Bad.svg"),
+        ImportError::INVALID_SVG)});
+    REQUIRE(single.m_message == "There was a problem importing your SVG "
+      "asset because it contains invalid SVG markup.");
+    REQUIRE(single.m_explanation == "Bad.svg");
+    REQUIRE(single.m_link == "Please take a look at [this document|http://"
+      "adobe.com/go/xd_import_errors] for suggested ways to resolve this "
+      "issue.");
+    REQUIRE(single.m_buttons == std::vector<QString>{"OK"});
+    REQUIRE(make_import_alert({ImportFailure(at("x.svg"),
+      ImportError::SVG_CONVERSION)}).m_message ==
+        "There was a problem importing your SVG asset.");
+    auto same = make_import_alert({
+      ImportFailure(at("a.svg"), ImportError::SVG_CONVERSION),
+      ImportFailure(at("b%20c.svg"), ImportError::SVG_CONVERSION)});
+    REQUIRE(same.m_message ==
+      "There was a problem importing 2 of your SVG assets.");
+    REQUIRE(same.m_explanation == "a.svg\nb c.svg");
+    REQUIRE(make_import_alert({
+      ImportFailure(at("a.svg"), ImportError::INVALID_SVG),
+      ImportFailure(at("b.svg"), ImportError::INVALID_SVG)}).m_message ==
+        "There was a problem importing 2 of your SVG assets because they "
+        "contain invalid SVG markup.");
+    auto failures = std::vector<ImportFailure>();
+    for(auto name : {"1.png", "2.png", "3.png", "4.png", "5.png"}) {
+      failures.push_back(ImportFailure(at(name), ImportError::IMAGE));
+    }
+    auto five = make_import_alert(failures);
+    REQUIRE(five.m_message ==
+      "There was a problem importing 5 of your assets.");
+    REQUIRE(five.m_explanation == "1.png\n2.png\n3.png\n4.png\n5.png");
+    failures.push_back(ImportFailure(at("6.svg"), ImportError::INVALID_SVG));
+    auto mixed = make_import_alert(failures);
+    REQUIRE(mixed.m_message ==
+      "There was a problem importing 6 of your assets.");
+    REQUIRE(mixed.m_explanation.isEmpty());
   }
 
   TEST_CASE("color_profile_message") {

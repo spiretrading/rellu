@@ -113,6 +113,7 @@ void RenameCommand::apply(const Document& document, Transaction& transaction) {
   edit_headers(document, transaction, std::vector{m_id}, [&] (auto& header) {
     header.m_name = m_name;
     header.m_has_custom_name = true;
+    header.m_has_external_name = false;
   });
 }
 
@@ -123,4 +124,25 @@ bool RenameCommand::merge(const Command& command) {
   }
   m_name = rename->m_name;
   return true;
+}
+
+SetColorProfileCommand::SetColorProfileCommand(ColorProfile profile) noexcept
+  : m_profile(profile) {}
+
+std::string SetColorProfileCommand::get_label() const {
+  if(m_profile == ColorProfile::SRGB) {
+    return "sRGB";
+  }
+  return "Unmanaged";
+}
+
+void SetColorProfileCommand::apply(
+    const Document& document, Transaction& transaction) {
+  auto profile = document.get_resources().m_color_profile;
+  if(profile == ColorProfile::NONE) {
+    profile = ColorProfile::UNMANAGED;
+  }
+  if(profile != m_profile) {
+    transaction.set_color_profile(m_profile);
+  }
 }

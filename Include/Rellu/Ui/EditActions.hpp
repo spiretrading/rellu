@@ -1,5 +1,6 @@
 #ifndef RELLU_UI_EDIT_ACTIONS_HPP
 #define RELLU_UI_EDIT_ACTIONS_HPP
+#include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
@@ -7,12 +8,15 @@
 #include <QMetaObject>
 #include <QMimeData>
 #include <QString>
+#include <QStringList>
+#include <QWidget>
 #include "Rellu/Commands/CommandRegistry.hpp"
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Model/Subscription.hpp"
 #include "Rellu/Ui/ActionRegistry.hpp"
 #include "Rellu/Ui/AppBar.hpp"
 #include "Rellu/Ui/Clipboard.hpp"
+#include "Rellu/Ui/XdAlert.hpp"
 
 namespace Rellu {
 
@@ -33,13 +37,37 @@ namespace Rellu {
   QString make_color_profile_message();
 
   /**
+   * Makes the alert Adobe XD shows for files that failed to import: the
+   * reason, the names of the files unless there are more than five, and a
+   * link to help on resolving import errors.
+   * @param failures The files that failed, at least one.
+   * @return The alert's content.
+   */
+  XdAlertContent make_import_alert(const std::vector<ImportFailure>& failures);
+
+  /**
+   * Returns the file dialog filters of Adobe XD's Import: one per file type,
+   * then one for every type, which the dialog chooses by default.
+   */
+  QStringList make_import_filters();
+
+  /**
+   * Shows the file dialog of Adobe XD's Import, opening in the Documents
+   * folder, and waits for files to be chosen.
+   * @param parent The widget the dialog belongs to.
+   * @return The files chosen, empty if none.
+   */
+  std::vector<std::filesystem::path> choose_import_files(QWidget* parent);
+
+  /**
    * Handles the edit, object and arrange actions of an ActionRegistry,
    * applied to the selection of an editor: the clipboard, history and
-   * selection actions, and every action named after a command of a
+   * selection actions, Import, and every action named after a command of a
    * CommandRegistry. An action backed by a command is enabled only while
    * the command applies to the selection, Reset to Main State only while no
    * text is edited in place, as in Adobe XD. The Color Profile menu checks
-   * the document's profile, Unmanaged when it records none.
+   * the document's profile, Unmanaged when it records none, and its items
+   * switch the profile with a SetColorProfileCommand.
    */
   class EditActions {
     public:
@@ -89,6 +117,16 @@ namespace Rellu {
        * @param message The message, in Adobe XD's toast markup.
        */
       using NoticeHandler = std::function<void (const QString& message)>;
+
+      /** The type of function choosing the files Import imports. */
+      using FileChooser = std::function<std::vector<std::filesystem::path> ()>;
+
+      /**
+       * The type of function showing an alert modally.
+       * @param content The alert's content.
+       * @return The index of the button pressed.
+       */
+      using AlertHandler = std::function<int (const XdAlertContent& content)>;
 
       /**
        * Sets the handlers of the actions, which are disabled until an
@@ -187,6 +225,20 @@ namespace Rellu {
        */
       void set_notice_handler(NoticeHandler handler);
 
+      /**
+       * Sets the function choosing the files Import imports, none disabling
+       * Import.
+       * @param chooser The function.
+       */
+      void set_file_chooser(FileChooser chooser);
+
+      /**
+       * Sets the function showing the alert for files that failed to
+       * import.
+       * @param handler The function.
+       */
+      void set_alert_handler(AlertHandler handler);
+
       /** Updates the text and enabled state of every action. */
       void update();
 
@@ -198,6 +250,8 @@ namespace Rellu {
       ErrorHandler m_error_handler;
       PasteHandler m_paste_handler;
       NoticeHandler m_notice_handler;
+      FileChooser m_file_chooser;
+      AlertHandler m_alert_handler;
       ViewProvider m_view_provider;
       RevealHandler m_reveal_handler;
       Workspace m_workspace;
@@ -226,6 +280,8 @@ namespace Rellu {
       void paste();
       void paste_appearance();
       void duplicate();
+      void import_files();
+      PasteTarget make_target() const;
       std::optional<Rect> get_view() const;
       void reveal_artboards();
   };

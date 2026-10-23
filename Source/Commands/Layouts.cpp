@@ -733,6 +733,7 @@ namespace {
         !(source.get_text() && is_set(mask, ChangeMask::TEXT))) {
       header.m_name = from.m_name;
       header.m_has_custom_name = from.m_has_custom_name;
+      header.m_has_external_name = from.m_has_external_name;
       header.m_is_naming_disabled = from.m_is_naming_disabled;
     }
     if(is_set(mask, ChangeMask::VISIBILITY)) {

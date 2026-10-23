@@ -9,6 +9,8 @@
 #include "Rellu/Text/FontLibrary.hpp"
 #include "TestOptions.hpp"
 
+Q_IMPORT_PLUGIN(QGifPlugin)
+Q_IMPORT_PLUGIN(QJpegPlugin)
 Q_IMPORT_PLUGIN(QOffscreenIntegrationPlugin)
 
 int main(int argc, char** argv) {

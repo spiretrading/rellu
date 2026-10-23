@@ -18,6 +18,31 @@
 
 namespace Rellu {
 
+  /** Lists the reasons Adobe XD gives for failing to import a file. */
+  enum class ImportError : unsigned char {
+
+    /** The file holds invalid SVG markup. */
+    INVALID_SVG,
+
+    /** The file's SVG markup could not be converted. */
+    SVG_CONVERSION,
+
+    /** The file could not be read as an image. */
+    IMAGE
+  };
+
+  /** A file that failed to import. */
+  struct ImportFailure {
+
+    /** The file's path. */
+    std::filesystem::path m_path;
+
+    /** The reason. */
+    ImportError m_error;
+
+    bool operator ==(const ImportFailure&) const = default;
+  };
+
   /** Where a paste places what a Clipboard holds. */
   struct PasteTarget {
 
@@ -229,6 +254,29 @@ namespace Rellu {
        * @return The command, or <code>nullptr</code> if nothing is held.
        */
       std::unique_ptr<Command> make_paste_command(
+        const PasteTarget& target = {}) const;
+
+      /**
+       * Replaces what is held with the content of files as Adobe XD's Import
+       * reads them: SVG files as shapes, other files as image filled
+       * rectangles the size of their images, each named after its file and
+       * placed in sequence.
+       * @param paths The files, in order.
+       * @param measurer The function measuring text.
+       * @return The files that failed to import, in order.
+       */
+      std::vector<ImportFailure> load_files(
+        const std::vector<std::filesystem::path>& paths,
+        const TextMeasurer& measurer = estimate_text_bounds);
+
+      /**
+       * Makes a command labelled Import inserting what is held as
+       * make_paste_command does, into only the first artboard it would
+       * paste into, as Adobe XD's Import places what load_files reads.
+       * @param target Where to import.
+       * @return The command, or <code>nullptr</code> if nothing is held.
+       */
+      std::unique_ptr<Command> make_import_command(
         const PasteTarget& target = {}) const;
 
       /**

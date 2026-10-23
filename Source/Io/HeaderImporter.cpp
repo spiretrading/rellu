@@ -123,6 +123,9 @@ namespace {
     header.m_is_locked = ux.get_bool("locked"_L1, false);
     header.m_is_marked_for_export = ux.get_bool("markedForExport"_L1, false);
     header.m_is_naming_disabled = ux.get_bool("disableNaming"_L1, false);
+    header.m_has_external_name =
+      ux.get_bool("hasNameFromExternalSource"_L1, false) ||
+      ux.get_bool("hasNameFromFilePath"_L1, false);
     auto& constraints = header.m_constraints;
     constraints.m_is_enabled = !ux.get_bool("constraintsDisabled"_L1, false);
     constraints.m_is_custom = ux.get_bool("customConstraints"_L1, false);
@@ -141,7 +144,7 @@ namespace {
         lock.value("height"_L1).toDouble());
     }
     ux.ignore({"hasCustomName"_L1, "nameL10N"_L1,
-      "hasNameFromExternalSource"_L1, "isCustomNameInherited"_L1,
+      "isCustomNameInherited"_L1,
       "disableNaming"_L1, "aspectLock"_L1,
       "assetGroupData"_L1, "modTime"_L1, "listViewPosition"_L1,
       "pluginMetadata"_L1});

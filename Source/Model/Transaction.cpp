@@ -114,6 +114,7 @@ namespace {
     auto mask = ChangeMask::NONE;
     if(previous.m_name != current.m_name ||
         previous.m_has_custom_name != current.m_has_custom_name ||
+        previous.m_has_external_name != current.m_has_external_name ||
         previous.m_is_naming_disabled != current.m_is_naming_disabled) {
       mask |= ChangeMask::NAME;
     }
@@ -394,6 +395,10 @@ namespace {
     if(revision.m_asset_groups) {
       changes.m_is_asset_group_changed =
         *revision.m_asset_groups != resources.m_asset_groups;
+    }
+    if(revision.m_color_profile) {
+      changes.m_is_color_profile_changed =
+        *revision.m_color_profile != resources.m_color_profile;
     }
     auto& prototype = document.get_prototype();
     if(revision.m_interactions) {

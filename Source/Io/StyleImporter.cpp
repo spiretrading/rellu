@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -133,7 +134,9 @@ namespace {
     }
     fill.m_size = Size(pattern.get_number("width"_L1, 0),
       pattern.get_number("height"_L1, 0));
-    pattern.ignore({"href"_L1});
+    if(auto href = pattern.get_string("href"_L1)) {
+      fill.m_href = to_std_string(*href);
+    }
     auto& json = ux->get_json();
     auto behavior = json.value("scaleBehavior"_L1).toString();
     if(behavior == "fill"_L1) {
@@ -150,7 +153,8 @@ namespace {
     fill.m_vertical_scale = ux->get_number("scaleY"_L1, 1);
     fill.m_is_flipped_horizontally = ux->get_bool("flipX"_L1, false);
     fill.m_is_flipped_vertically = ux->get_bool("flipY"_L1, false);
-    ux->ignore({"hrefLastModifiedDate"_L1});
+    fill.m_href_modified = static_cast<std::int64_t>(
+      ux->get_number("hrefLastModifiedDate"_L1, 0));
     return fill;
   }
 

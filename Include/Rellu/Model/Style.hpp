@@ -1,6 +1,8 @@
 #ifndef RELLU_MODEL_STYLE_HPP
 #define RELLU_MODEL_STYLE_HPP
+#include <cstdint>
 #include <optional>
+#include <string>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -105,6 +107,15 @@ namespace Rellu {
 
     /** Whether the image is mirrored vertically. */
     bool m_is_flipped_vertically = false;
+
+    /** The path of the file the image was imported from, or empty. */
+    std::string m_href;
+
+    /**
+     * The time the file the image was imported from was last modified, in
+     * seconds since the epoch, or 0.
+     */
+    std::int64_t m_href_modified = 0;
 
     bool operator ==(const ImageFill& fill) const;
   };
@@ -273,7 +284,8 @@ namespace Rellu {
       equals(m_horizontal_scale, fill.m_horizontal_scale) &&
       equals(m_vertical_scale, fill.m_vertical_scale) &&
       m_is_flipped_horizontally == fill.m_is_flipped_horizontally &&
-      m_is_flipped_vertically == fill.m_is_flipped_vertically;
+      m_is_flipped_vertically == fill.m_is_flipped_vertically &&
+      m_href == fill.m_href && m_href_modified == fill.m_href_modified;
   }
 
   inline Fill disable_fill(const Fill& fill) {

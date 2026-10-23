@@ -143,6 +143,9 @@ namespace Rellu {
      */
     bool m_has_custom_name = false;
 
+    /** Whether the name was taken from the file the node was imported from. */
+    bool m_has_external_name = false;
+
     /**
      * Whether the node keeps its name rather than taking the one Adobe XD
      * derives for it, as from a text's content.
@@ -265,6 +268,7 @@ namespace Rellu {
   inline bool NodeHeader::operator ==(const NodeHeader& header) const {
     return m_id == header.m_id && m_name == header.m_name &&
       m_has_custom_name == header.m_has_custom_name &&
+      m_has_external_name == header.m_has_external_name &&
       m_is_naming_disabled == header.m_is_naming_disabled &&
       m_is_visible == header.m_is_visible &&
       m_is_locked == header.m_is_locked &&

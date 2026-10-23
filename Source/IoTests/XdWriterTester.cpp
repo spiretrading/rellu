@@ -631,6 +631,46 @@ TEST_SUITE("XdWriter") {
     REQUIRE(!imported.get(plain_id).m_header.m_is_naming_disabled);
   }
 
+  TEST_CASE("imported_image") {
+    auto document = Document();
+    auto transaction = Transaction(document);
+    auto image = transaction.add_image(
+      ImageResource(NodeId(), "image/png", Shared(make_png())));
+    auto fill = ImageFill();
+    fill.m_image = image;
+    fill.m_size = Size(16, 16);
+    fill.m_href = "C:\\Images\\Photo.png";
+    fill.m_href_modified = 1635257223;
+    auto shape = Shape();
+    shape.m_geometry = RectangleShape(Rect(0, 0, 16, 16));
+    shape.m_style.m_fill = fill;
+    auto header = make_header("Photo");
+    header.m_has_external_name = true;
+    auto id = transaction.append(NodeId(), header, shape);
+    auto plain_id = transaction.append(NodeId(), make_header("Plain"), shape);
+    transaction.commit();
+    auto bytes = write_xd(document);
+    auto package = XdPackage(bytes);
+    auto written = find_written(package, id);
+    auto ux = get_ux(written);
+    REQUIRE(ux.value("hasCustomName"_L1).toBool());
+    REQUIRE(ux.value("hasNameFromExternalSource"_L1).toBool());
+    REQUIRE(!get_ux(find_written(package, plain_id)).contains(
+      "hasNameFromExternalSource"_L1));
+    auto pattern = written.value("style"_L1).toObject().value(
+      "fill"_L1).toObject().value("pattern"_L1).toObject();
+    REQUIRE(pattern.value("href"_L1) == "C:\\Images\\Photo.png"_L1);
+    REQUIRE(get_ux(pattern).value("hrefLastModifiedDate"_L1).toDouble() ==
+      1635257223);
+    auto imported = Document();
+    auto report = import_package(bytes, imported);
+    REQUIRE(report.m_unconsumed.empty());
+    auto& node = imported.get(id);
+    REQUIRE(node.m_header.m_has_external_name);
+    REQUIRE(!imported.get(plain_id).m_header.m_has_external_name);
+    REQUIRE(std::get<ImageFill>(node.get_shape()->m_style.m_fill) == fill);
+  }
+
   TEST_CASE("repeat_grid_cells") {
     auto document = Document();
     auto built = build(document);
@@ -825,6 +865,18 @@ TEST_SUITE("XdWriter") {
         transaction.commit();
       }
       auto bytes = write_xd(document);
+      auto package = XdPackage(bytes);
+      auto ux = get_ux(package.read_json(
+        "resources/graphics/graphicContent.agc").value(
+          "resources"_L1).toObject());
+      if(profile == ColorProfile::NONE) {
+        REQUIRE(!ux.contains("colorProfile"_L1));
+      } else if(profile == ColorProfile::UNMANAGED) {
+        REQUIRE(ux.value("colorProfile"_L1) == "unmanaged"_L1);
+      } else {
+        REQUIRE(ux.value("colorProfile"_L1) == "srgb"_L1);
+      }
+      REQUIRE(!package.read_json("manifest").contains("colorProfile"_L1));
       auto imported = Document();
       import_package(bytes, imported);
       REQUIRE(imported.get_resources().m_color_profile == profile);

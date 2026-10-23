@@ -425,7 +425,7 @@ namespace {
       auto& pattern = json.set("pattern", XdValue::make_object());
       pattern.set("width", image->m_size.m_width);
       pattern.set("height", image->m_size.m_height);
-      pattern.set("href", "");
+      pattern.set("href", image->m_href);
       auto& ux = pattern.set("meta", XdValue::make_object()).set(
         "ux", XdValue::make_object());
       if(image->m_scale_behavior == ScaleBehavior::COVER) {
@@ -434,7 +434,8 @@ namespace {
         ux.set("scaleBehavior", "fill");
       }
       ux.set("uid", to_uid(image->m_image));
-      ux.set("hrefLastModifiedDate", 0);
+      ux.set("hrefLastModifiedDate",
+        static_cast<double>(image->m_href_modified));
       if(image->m_offset.m_x != 0) {
         ux.set("offsetX", image->m_offset.m_x);
       }
@@ -1461,6 +1462,9 @@ XdValue XdGenerator::make_ux(const Node& node) const {
   }
   if(header.m_is_naming_disabled) {
     ux.set("disableNaming", true);
+  }
+  if(header.m_has_external_name) {
+    ux.set("hasNameFromExternalSource", true);
   }
   if(!node.get_reference() && !node.get_artboard() &&
       header.m_rotation != 0) {

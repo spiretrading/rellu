@@ -1185,6 +1185,12 @@ void MainWindow::add_actions() {
   m_edit_actions->set_notice_handler([this] (const auto& message) {
     m_banners->show(message);
   });
+  m_edit_actions->set_file_chooser([this] {
+    return choose_import_files(this);
+  });
+  m_edit_actions->set_alert_handler([this] (const auto& content) {
+    return show_xd_alert(content, this);
+  });
   m_actions.set_handler("edit.rename", [this] {
     if(!m_session) {
       return;

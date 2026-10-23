@@ -4,12 +4,16 @@
 #include <utility>
 #include <vector>
 #include <QClipboard>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QKeySequence>
 #include <QMimeData>
+#include <QStandardPaths>
+#include <QUrl>
 #include "Rellu/Commands/CompositeCommand.hpp"
 #include "Rellu/Commands/Hierarchy.hpp"
+#include "Rellu/Commands/PropertyCommands.hpp"
 #include "Rellu/Commands/StructureCommands.hpp"
 #include "Rellu/Prototype/InteractionCommands.hpp"
 #include "Rellu/Ui/EditActions.hpp"
@@ -89,6 +93,86 @@ QString Rellu::make_color_profile_message() {
     "www.adobe.com/go/xd_color_management]");
 }
 
+XdAlertContent Rellu::make_import_alert(
+    const std::vector<ImportFailure>& failures) {
+  constexpr auto MAXIMUM_LISTED = std::size_t(5);
+  auto get_message = [] (ImportError error, bool is_single) {
+    if(error == ImportError::INVALID_SVG) {
+      if(is_single) {
+        return translate("import", "There was a problem importing your SVG "
+          "asset because it contains invalid SVG markup.");
+      }
+      return translate("import", "There was a problem importing %1 of your "
+        "SVG assets because they contain invalid SVG markup.");
+    } else if(error == ImportError::SVG_CONVERSION) {
+      if(is_single) {
+        return translate(
+          "import", "There was a problem importing your SVG asset.");
+      }
+      return translate(
+        "import", "There was a problem importing %1 of your SVG assets.");
+    } else if(is_single) {
+      return translate("import", "There was a problem importing your asset.");
+    }
+    return translate(
+      "import", "There was a problem importing %1 of your assets.");
+  };
+  auto content = XdAlertContent();
+  auto error = failures.front().m_error;
+  if(failures.size() == 1) {
+    content.m_message = get_message(error, true);
+  } else if(std::ranges::all_of(failures, [&] (const auto& failure) {
+      return failure.m_error == error;
+    })) {
+    content.m_message = get_message(error, false).arg(failures.size());
+  } else {
+    content.m_message = translate("import",
+      "There was a problem importing %1 of your assets.").arg(
+        failures.size());
+  }
+  if(failures.size() <= MAXIMUM_LISTED) {
+    auto names = QStringList();
+    for(auto& failure : failures) {
+      names.append(QUrl::fromPercentEncoding(QString::fromStdU16String(
+        failure.m_path.filename().u16string()).toUtf8()));
+    }
+    content.m_explanation = names.join(u'\n');
+  }
+  content.m_link = translate("import", "Please take a look at [this "
+    "document|http://adobe.com/go/xd_import_errors] for suggested ways to "
+    "resolve this issue.");
+  content.m_buttons.push_back(translate("import", "OK"));
+  return content;
+}
+
+QStringList Rellu::make_import_filters() {
+  auto patterns = QStringList({"*.svg", "*.gif", "*.jpg", "*.jpeg", "*.png",
+    "*.tiff", "*.tif", "*.bmp"});
+  auto filters = patterns;
+  filters.append(QStringLiteral("All files (%1)").arg(patterns.join(u';')));
+  return filters;
+}
+
+std::vector<std::filesystem::path> Rellu::choose_import_files(
+    QWidget* parent) {
+  auto dialog = QFileDialog(parent);
+  dialog.setFileMode(QFileDialog::ExistingFiles);
+  dialog.setDirectory(
+    QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
+  auto filters = make_import_filters();
+  dialog.setNameFilters(filters);
+  dialog.selectNameFilter(filters.back());
+  dialog.setLabelText(QFileDialog::Accept, translate("import", "Import"));
+  auto paths = std::vector<std::filesystem::path>();
+  if(dialog.exec() != QDialog::Accepted) {
+    return paths;
+  }
+  for(auto& file : dialog.selectedFiles()) {
+    paths.push_back(std::filesystem::path(file.toStdU16String()));
+  }
+  return paths;
+}
+
 EditActions::EditActions(
     ActionRegistry& actions, const CommandRegistry& commands)
     : m_actions(&actions),
@@ -112,6 +196,19 @@ EditActions::EditActions(
   });
   set_action("edit.deselect_all", [this] {
     run([&] { m_editor->get_selection().clear(); });
+  });
+  set_action("file.import", [this] { import_files(); });
+  set_action("edit.color_profile.srgb", [this] {
+    run([&] {
+      m_editor->execute(
+        std::make_unique<SetColorProfileCommand>(ColorProfile::SRGB));
+    });
+  });
+  set_action("edit.color_profile.unmanaged", [this] {
+    run([&] {
+      m_editor->execute(
+        std::make_unique<SetColorProfileCommand>(ColorProfile::UNMANAGED));
+    });
   });
   for(auto& name : m_actions->get_names()) {
     if(!m_commands->contains(name)) {
@@ -198,6 +295,7 @@ void EditActions::set_reveal_handler(RevealHandler handler) {
 
 void EditActions::set_workspace(Workspace workspace) {
   m_workspace = workspace;
+  update();
 }
 
 void EditActions::set_text_measurer(TextMeasurer measurer) {
@@ -227,6 +325,15 @@ void EditActions::set_paste_handler(PasteHandler handler) {
 
 void EditActions::set_notice_handler(NoticeHandler handler) {
   m_notice_handler = std::move(handler);
+}
+
+void EditActions::set_file_chooser(FileChooser chooser) {
+  m_file_chooser = std::move(chooser);
+  update();
+}
+
+void EditActions::set_alert_handler(AlertHandler handler) {
+  m_alert_handler = std::move(handler);
 }
 
 void EditActions::update() {
@@ -266,6 +373,10 @@ void EditActions::update() {
       return node && node->get_shape() && node->get_shape()->m_video;
     }));
   m_actions->set_enabled("edit.select_all", true);
+  m_actions->set_enabled("edit.color_profile.srgb", true);
+  m_actions->set_enabled("edit.color_profile.unmanaged", true);
+  m_actions->set_enabled("file.import",
+    m_file_chooser && m_workspace != Workspace::SHARE);
   m_actions->set_enabled(
     "edit.deselect_all", !m_editor->get_selection().is_empty());
   for(auto& name : m_command_actions) {
@@ -422,15 +533,7 @@ void EditActions::paste() {
       }
       m_clipboard.load(*data, m_measurer);
     }
-    auto target = PasteTarget();
-    target.m_selection = m_editor->get_selection().get_nodes();
-    target.m_focus = m_editor->get_context().get_artboard();
-    target.m_container = m_editor->get_context().get_container();
-    target.m_view = get_view();
-    target.m_is_prototyping = m_workspace == Workspace::PROTOTYPE;
-    if(m_source_provider) {
-      target.m_document = m_source_provider().m_id;
-    }
+    auto target = make_target();
     if(auto command = m_clipboard.make_paste_command(target);
         command && m_editor->execute(std::move(command))) {
       reveal_artboards();
@@ -488,6 +591,43 @@ void EditActions::duplicate() {
       reveal_artboards();
     }
   });
+}
+
+void EditActions::import_files() {
+  run([&] {
+    if(!m_file_chooser) {
+      return;
+    }
+    auto paths = m_file_chooser();
+    if(paths.empty()) {
+      return;
+    }
+    auto clipboard = Clipboard(std::filesystem::path());
+    auto failures = clipboard.load_files(paths, m_measurer);
+    if(!failures.empty() && m_alert_handler) {
+      m_alert_handler(make_import_alert(failures));
+    }
+    if(auto command = clipboard.make_import_command(make_target());
+        command && m_editor->execute(std::move(command))) {
+      auto profile = m_editor->get_document().get_resources().m_color_profile;
+      if(m_notice_handler && profile != ColorProfile::SRGB) {
+        m_notice_handler(make_color_profile_message());
+      }
+    }
+  });
+}
+
+PasteTarget EditActions::make_target() const {
+  auto target = PasteTarget();
+  target.m_selection = m_editor->get_selection().get_nodes();
+  target.m_focus = m_editor->get_context().get_artboard();
+  target.m_container = m_editor->get_context().get_container();
+  target.m_view = get_view();
+  target.m_is_prototyping = m_workspace == Workspace::PROTOTYPE;
+  if(m_source_provider) {
+    target.m_document = m_source_provider().m_id;
+  }
+  return target;
 }
 
 std::optional<Rect> EditActions::get_view() const {

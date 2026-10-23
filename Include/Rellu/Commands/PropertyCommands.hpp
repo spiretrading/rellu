@@ -4,6 +4,7 @@
 #include <vector>
 #include "Rellu/Commands/Command.hpp"
 #include "Rellu/Geometry/BlendMode.hpp"
+#include "Rellu/Model/Resources.hpp"
 
 namespace Rellu {
 
@@ -111,6 +112,27 @@ namespace Rellu {
     private:
       NodeId m_id;
       std::string m_name;
+  };
+
+  /**
+   * Sets the color profile of the document, labelled sRGB or Unmanaged,
+   * changing nothing when the document already has it, one recording none
+   * having the unmanaged profile.
+   */
+  class SetColorProfileCommand : public Command {
+    public:
+
+      /**
+       * Constructs a SetColorProfileCommand.
+       * @param profile The profile, SRGB or UNMANAGED.
+       */
+      explicit SetColorProfileCommand(ColorProfile profile) noexcept;
+
+      std::string get_label() const override;
+      void apply(const Document& document, Transaction& transaction) override;
+
+    private:
+      ColorProfile m_profile;
   };
 }
 

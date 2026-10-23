@@ -138,6 +138,9 @@ namespace Rellu {
     /** Whether the groups of assets changed. */
     bool m_is_asset_group_changed = false;
 
+    /** Whether the color profile changed. */
+    bool m_is_color_profile_changed = false;
+
     /** Returns <code>true</code> iff nothing changed. */
     bool is_empty() const;
 
@@ -149,7 +152,7 @@ namespace Rellu {
       m_modified.empty() && m_components.empty() && m_images.empty() &&
       m_swatches.empty() && m_character_styles.empty() &&
       m_interactions.empty() && !m_is_flow_changed &&
-      !m_is_asset_group_changed;
+      !m_is_asset_group_changed && !m_is_color_profile_changed;
   }
 }
 

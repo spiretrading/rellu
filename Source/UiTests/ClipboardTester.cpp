@@ -7,10 +7,15 @@
 #include <numbers>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
 #include <doctest/doctest.h>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QMimeData>
 #include <QTemporaryDir>
@@ -1109,6 +1114,7 @@ TEST_SUITE("Clipboard") {
     REQUIRE(document.is_on_canvas(picture.get_id()));
     REQUIRE(*get_world_bounds(document, picture.get_id()) ==
       Rect(2275, 2280, 50, 40));
+    REQUIRE(picture.m_header.m_aspect_lock == Size(50, 40));
   }
 
   TEST_CASE("image_appearance") {
@@ -1275,6 +1281,221 @@ TEST_SUITE("Clipboard") {
     REQUIRE(data->data(formats[0]) == QByteArray("\x01\x00\x00\x00", 4));
     REQUIRE(data->data(formats[1]) == QByteArray("<svg/>\r\n", 9));
     REQUIRE(Clipboard::make_svg_code(Document(), {}).empty());
+  }
+
+  TEST_CASE("import_files") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto temporary = QTemporaryDir();
+    REQUIRE(temporary.isValid());
+    auto directory = QDir(temporary.path());
+    auto write = [&] (const QString& name, const QByteArray& bytes) {
+      auto file = QFile(directory.filePath(name));
+      REQUIRE(file.open(QIODevice::WriteOnly));
+      file.write(bytes);
+      return std::filesystem::path(file.fileName().toStdU16String());
+    };
+    auto save = [&] (const QString& name, const char* format, QSize size) {
+      auto image = QImage(size, QImage::Format_RGB32);
+      image.fill(QColor(255, 128, 0));
+      auto path = directory.filePath(name);
+      REQUIRE(image.save(path, format));
+      return std::filesystem::path(path.toStdU16String());
+    };
+    auto photo = save("Photo.png", "PNG", QSize(50, 40));
+    auto broken = write("Broken.png", "nope");
+    auto logo = write("Logo.svg", R"svg(<svg
+      xmlns="http://www.w3.org/2000/svg"><rect width="40" height="20"/>
+      <circle cx="5" cy="5" r="5"/></svg>)svg");
+    auto invalid = write("Bad.svg", "<html/>");
+    auto mark = write("Mark.svg", R"svg(<svg
+      xmlns="http://www.w3.org/2000/svg"><path id="Mark" d="M0 0L5 5"/>
+      </svg>)svg");
+    auto dot = write("dot.svg", R"svg(<svg
+      xmlns="http://www.w3.org/2000/svg"><circle r="3"/></svg>)svg");
+    auto strip = save("Strip.bmp", "BMP", QSize(10, 4));
+    auto clipboard = Clipboard(std::filesystem::path());
+    REQUIRE(clipboard.load_files({photo, broken, logo, invalid, mark, dot,
+      strip}) == std::vector{ImportFailure(broken, ImportError::IMAGE),
+        ImportFailure(invalid, ImportError::INVALID_SVG)});
+    auto target = make_target({}, Rect(0, 0, 600, 600));
+    target.m_focus = ids.m_artboard;
+    auto count = document.get(ids.m_artboard).m_children.size();
+    auto command = clipboard.make_import_command(target);
+    REQUIRE(command->get_label() == "Import");
+    REQUIRE(editor.execute(std::move(command)));
+    auto& nodes = editor.get_selection().get_nodes();
+    REQUIRE(nodes.size() == 5);
+    auto& picture = document.get(nodes[0]);
+    REQUIRE(picture.m_parent == ids.m_artboard);
+    REQUIRE(picture.m_header.m_name == "Photo");
+    REQUIRE(picture.m_header.m_has_custom_name);
+    REQUIRE(picture.m_header.m_has_external_name);
+    REQUIRE(picture.m_header.m_aspect_lock == Size(50, 40));
+    REQUIRE(*get_world_bounds(document, nodes[0]) == Rect(263, 305, 50, 40));
+    auto& fill = std::get<ImageFill>(picture.get_shape()->m_style.m_fill);
+    REQUIRE(fill.m_size == Size(50, 40));
+    auto photo_path = QString::fromStdU16String(photo.u16string());
+    REQUIRE(fill.m_href ==
+      QDir::toNativeSeparators(photo_path).toStdString());
+    REQUIRE(fill.m_href_modified ==
+      QFileInfo(photo_path).lastModified().toSecsSinceEpoch());
+    auto& resource = document.get_resources().m_images.at(fill.m_image);
+    REQUIRE(resource.m_media_type == "image/png");
+    auto& group = document.get(nodes[1]);
+    REQUIRE(group.get_group());
+    REQUIRE(group.m_header.m_name == "Logo");
+    REQUIRE(group.m_header.m_has_external_name);
+    REQUIRE(document.get(group.m_children.front()).m_header.m_name ==
+      "Rectangle 1");
+    REQUIRE(get_world_bounds(document, nodes[1])->get_top_left() ==
+      Point(323, 305));
+    auto& path = document.get(nodes[2]);
+    REQUIRE(path.m_header.m_name == "Mark");
+    REQUIRE(!path.m_header.m_has_external_name);
+    auto& circle = document.get(nodes[3]);
+    REQUIRE(circle.m_header.m_name == "dot");
+    REQUIRE(circle.m_header.m_has_external_name);
+    auto& bitmap = document.get(nodes[4]);
+    REQUIRE(bitmap.m_header.m_name == "Strip");
+    auto& strip_fill =
+      std::get<ImageFill>(bitmap.get_shape()->m_style.m_fill);
+    auto& converted =
+      document.get_resources().m_images.at(strip_fill.m_image);
+    REQUIRE(converted.m_media_type == "image/png");
+    REQUIRE(QImage::fromData(QByteArray(
+      reinterpret_cast<const char*>(converted.m_data->data()),
+      static_cast<qsizetype>(converted.m_data->size())), "PNG").size() ==
+        QSize(10, 4));
+    REQUIRE(editor.undo());
+    REQUIRE(document.get(ids.m_artboard).m_children.size() == count);
+  }
+
+  TEST_CASE("import_resources") {
+    auto document = Document();
+    build_test_document(document);
+    auto editor = Editor(document);
+    auto temporary = QTemporaryDir();
+    REQUIRE(temporary.isValid());
+    auto directory = QDir(temporary.path());
+    auto save = [&] (const QString& name, const char* format) {
+      auto image = QImage(QSize(30, 20), QImage::Format_RGB32);
+      image.fill(QColor(0, 128, 255));
+      auto path = directory.filePath(name);
+      REQUIRE(image.save(path, format));
+      return path;
+    };
+    auto read = [] (const QString& path) {
+      auto file = QFile(path);
+      REQUIRE(file.open(QIODevice::ReadOnly));
+      return file.readAll();
+    };
+    auto photo = save("Photo.png", "PNG");
+    auto picture = save("Picture.jpg", "JPEG");
+    auto animation = directory.filePath("Animation.gif");
+    {
+      auto file = QFile(animation);
+      REQUIRE(file.open(QIODevice::WriteOnly));
+      file.write(QByteArray::fromHex("474946383961010001008000"
+        "00ffffff00000021f90401000000002c00000000010001000002024401003b"));
+    }
+    auto truncated = directory.filePath("Truncated.png");
+    {
+      auto file = QFile(truncated);
+      REQUIRE(file.open(QIODevice::WriteOnly));
+      file.write(read(photo).left(40));
+    }
+    auto paths = std::vector<std::filesystem::path>();
+    for(auto& path : {photo, photo, picture, animation, truncated}) {
+      paths.push_back(std::filesystem::path(path.toStdU16String()));
+    }
+    auto clipboard = Clipboard(std::filesystem::path());
+    REQUIRE(clipboard.load_files(paths).empty());
+    auto images = document.get_resources().m_images.size();
+    REQUIRE(editor.execute(clipboard.make_import_command(
+      make_target({}, Rect(0, 0, 600, 600)))));
+    REQUIRE(document.get_resources().m_images.size() == images + 4);
+    auto& nodes = editor.get_selection().get_nodes();
+    REQUIRE(nodes.size() == 5);
+    auto get_fill = [&] (std::size_t index) -> const ImageFill& {
+      return std::get<ImageFill>(
+        document.get(nodes[index]).get_shape()->m_style.m_fill);
+    };
+    REQUIRE(get_fill(0).m_image == get_fill(1).m_image);
+    auto expected = std::vector<std::tuple<QString, std::string, Size>>({
+      {photo, "image/png", Size(30, 20)}, {photo, "image/png", Size(30, 20)},
+      {picture, "image/jpeg", Size(30, 20)},
+      {animation, "image/gif", Size(1, 1)},
+      {truncated, "image/png", Size(30, 20)}});
+    for(auto i = std::size_t(0); i != expected.size(); ++i) {
+      auto& [path, media_type, size] = expected[i];
+      auto& fill = get_fill(i);
+      REQUIRE(fill.m_size == size);
+      auto bytes = read(path);
+      REQUIRE(to_uid(fill.m_image) == QCryptographicHash::hash(
+        bytes, QCryptographicHash::Md5).toHex().toStdString());
+      auto& resource = document.get_resources().m_images.at(fill.m_image);
+      REQUIRE(resource.m_media_type == media_type);
+      REQUIRE(QByteArray(
+        reinterpret_cast<const char*>(resource.m_data->data()),
+        static_cast<qsizetype>(resource.m_data->size())) == bytes);
+    }
+  }
+
+  TEST_CASE("import_empty_svg") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto editor = Editor(document);
+    auto temporary = QTemporaryDir();
+    REQUIRE(temporary.isValid());
+    auto path = QDir(temporary.path()).filePath("Defs.svg");
+    {
+      auto file = QFile(path);
+      REQUIRE(file.open(QIODevice::WriteOnly));
+      file.write(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><defs><rect
+        id="r" width="1" height="1"/></defs></svg>)svg");
+    }
+    auto clipboard = Clipboard(std::filesystem::path());
+    REQUIRE(clipboard.load_files(
+      {std::filesystem::path(path.toStdU16String())}).empty());
+    auto target = make_target({}, Rect(0, 0, 600, 600));
+    target.m_focus = ids.m_artboard;
+    REQUIRE(editor.execute(clipboard.make_import_command(target)));
+    auto& group = document.get(editor.get_selection().get_primary());
+    REQUIRE(group.get_group());
+    REQUIRE(group.m_children.empty());
+    REQUIRE(group.m_parent == ids.m_artboard);
+    REQUIRE(group.m_header.m_name == "Group 1");
+    REQUIRE(!group.m_header.m_has_custom_name);
+    REQUIRE(!group.m_header.m_has_external_name);
+    REQUIRE(group.m_header.m_transform == make_translation(188, 275));
+  }
+
+  TEST_CASE("import_target") {
+    auto document = Document();
+    auto ids = build_test_document(document);
+    auto other = add_artboard(document, "B", Rect(500, 50, 375, 812));
+    auto editor = Editor(document);
+    auto temporary = QTemporaryDir();
+    REQUIRE(temporary.isValid());
+    auto path = QDir(temporary.path()).filePath("Photo.png");
+    auto image = QImage(20, 10, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    REQUIRE(image.save(path, "PNG"));
+    auto clipboard = Clipboard(std::filesystem::path());
+    REQUIRE(clipboard.load_files(
+      {std::filesystem::path(path.toStdU16String())}).empty());
+    auto target = make_target({other, ids.m_artboard}, Rect(0, 0, 1000, 1000));
+    auto before = document.get(ids.m_artboard).m_children.size();
+    REQUIRE(editor.execute(clipboard.make_import_command(target)));
+    auto& nodes = editor.get_selection().get_nodes();
+    REQUIRE(nodes.size() == 1);
+    REQUIRE(document.get(nodes.front()).m_parent == other);
+    REQUIRE(document.get(ids.m_artboard).m_children.size() == before);
+    REQUIRE(clipboard.load_files({}).empty());
+    REQUIRE(clipboard.is_empty());
+    REQUIRE(!clipboard.make_import_command(target));
   }
 
   TEST_CASE("bitmap") {

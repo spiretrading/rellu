@@ -1,8 +1,11 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -13,8 +16,12 @@
 #include <utility>
 #include <variant>
 #include <QBuffer>
+#include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QImage>
+#include <QImageReader>
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QUuid>
@@ -918,6 +925,155 @@ struct Clipboard::Content {
     return content;
   }
 
+  static std::string get_import_name(const QString& path) {
+    auto name = QFileInfo(path).fileName();
+    if(auto dot = name.lastIndexOf(u'.'); dot != -1) {
+      name.truncate(dot);
+    }
+    return name.toStdString();
+  }
+
+  static void name_import(NodeHeader& header, const QString& path) {
+    header.m_name = get_import_name(path);
+    header.m_has_custom_name = true;
+    header.m_has_external_name = true;
+  }
+
+  static std::shared_ptr<Content> read_svg_file(const QString& path,
+      const QByteArray& bytes, const TextMeasurer& measurer,
+      std::optional<ImportError>& error) {
+    auto scratch = Document();
+    auto anchored = std::vector<NodeId>();
+    try {
+      anchored = read_svg(QString::fromUtf8(bytes), scratch,
+        SvgMeasurer(&measure_font, &measure_width));
+    } catch(const std::invalid_argument&) {
+      error = ImportError::INVALID_SVG;
+      return nullptr;
+    } catch(const std::exception&) {
+      error = ImportError::SVG_CONVERSION;
+      return nullptr;
+    }
+    resolve_fonts(scratch);
+    auto& canvas = scratch.get_canvas();
+    if(canvas.empty()) {
+      return make_node(NodeHeader(), Group(), std::string());
+    }
+    auto& root = scratch.get(canvas.front());
+    if(!root.m_header.m_has_custom_name) {
+      auto header = root.m_header;
+      name_import(header, path);
+      auto transaction = Transaction(scratch);
+      transaction.replace_header(std::move(header));
+      transaction.commit();
+    }
+    auto content = make(scratch, canvas, measurer);
+    content->m_anchored.insert(anchored.begin(), anchored.end());
+    return content;
+  }
+
+  static ImageId make_image_id(const QByteArray& bytes) {
+    auto digest = QCryptographicHash::hash(bytes, QCryptographicHash::Md5);
+    auto id = std::array<std::uint8_t, NodeId::SIZE>();
+    std::memcpy(id.data(), digest.constData(), id.size());
+    return ImageId(id);
+  }
+
+  static QSize read_png_size(const QByteArray& bytes) {
+    constexpr auto HEADER_SIZE = qsizetype(24);
+    if(bytes.size() < HEADER_SIZE ||
+        !bytes.startsWith(QByteArray::fromHex("89504e470d0a1a0a")) ||
+        bytes.mid(12, 4) != "IHDR") {
+      return QSize();
+    }
+    auto read = [&] (qsizetype offset) {
+      auto value = 0;
+      for(auto i = offset; i != offset + 4; ++i) {
+        value = (value << 8) | static_cast<unsigned char>(bytes[i]);
+      }
+      return value;
+    };
+    return QSize(read(16), read(20));
+  }
+
+  static std::shared_ptr<Content> read_image_file(const QString& path,
+      const QByteArray& bytes, std::optional<ImportError>& error) {
+    auto buffer = QBuffer();
+    buffer.setData(bytes);
+    buffer.open(QIODevice::ReadOnly);
+    auto reader = QImageReader(&buffer);
+    auto format = QByteArray("png");
+    auto dimensions = read_png_size(bytes);
+    auto image = QImage();
+    if(dimensions.isEmpty()) {
+      format = reader.format();
+      dimensions = reader.size();
+    }
+    if(dimensions.isEmpty()) {
+      image = reader.read();
+      dimensions = image.size();
+    }
+    if(dimensions.isEmpty()) {
+      error = ImportError::IMAGE;
+      return nullptr;
+    }
+    auto resource = ImageResource();
+    auto encoded = bytes;
+    if(format == "png" || format == "jpeg" || format == "gif") {
+      resource.m_media_type = "image/" + format.toStdString();
+    } else {
+      if(image.isNull()) {
+        image = reader.read();
+      }
+      if(image.isNull()) {
+        image = QImage(dimensions, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+      }
+      encoded.clear();
+      auto output = QBuffer(&encoded);
+      output.open(QIODevice::WriteOnly);
+      image.save(&output, "PNG");
+      resource.m_media_type = "image/png";
+    }
+    resource.m_id = make_image_id(encoded);
+    auto raw =
+      std::vector<std::byte>(static_cast<std::size_t>(encoded.size()));
+    std::memcpy(raw.data(), encoded.constData(), raw.size());
+    resource.m_data = Shared(std::move(raw));
+    auto size = Size(dimensions.width(), dimensions.height());
+    auto info = QFileInfo(path);
+    auto fill = ImageFill();
+    fill.m_image = resource.m_id;
+    fill.m_size = size;
+    fill.m_href =
+      QDir::toNativeSeparators(info.absoluteFilePath()).toStdString();
+    fill.m_href_modified = info.lastModified().toSecsSinceEpoch();
+    auto shape = Shape();
+    shape.m_geometry = RectangleShape(Rect(0, 0, size.m_width, size.m_height));
+    shape.m_style.m_fill = fill;
+    auto header = NodeHeader();
+    name_import(header, path);
+    header.m_aspect_lock = size;
+    auto content = make_node(std::move(header), shape, std::string());
+    content->m_images.push_back(std::move(resource));
+    return content;
+  }
+
+  static std::shared_ptr<Content> read_file(const std::filesystem::path& path,
+      const TextMeasurer& measurer, std::optional<ImportError>& error) {
+    auto name = QString::fromStdU16String(path.u16string());
+    auto file = QFile(name);
+    if(!file.open(QIODevice::ReadOnly)) {
+      error = ImportError::IMAGE;
+      return nullptr;
+    }
+    auto bytes = file.readAll();
+    if(name.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive)) {
+      return read_svg_file(name, bytes, measurer, error);
+    }
+    return read_image_file(name, bytes, error);
+  }
+
   std::optional<Rect> get_bounds() const {
     auto bounds = std::optional<Rect>();
     for(auto& tree : m_trees) {
@@ -942,11 +1098,15 @@ struct Clipboard::Content {
 class Clipboard::PasteCommand : public Command {
   public:
     PasteCommand(std::shared_ptr<const Content> content,
-        PasteTarget target) noexcept
+        PasteTarget target, bool is_import) noexcept
       : m_content(std::move(content)),
-        m_target(std::move(target)) {}
+        m_target(std::move(target)),
+        m_is_import(is_import) {}
 
     std::string get_label() const override {
+      if(m_is_import) {
+        return "Import";
+      }
       return "Paste";
     }
 
@@ -972,6 +1132,9 @@ class Clipboard::PasteCommand : public Command {
       }
       for(auto& artboard : find_targets(document)) {
         paste_artwork(document, transaction, artboard);
+        if(m_is_import) {
+          break;
+        }
       }
     }
 
@@ -989,6 +1152,7 @@ class Clipboard::PasteCommand : public Command {
 
     std::shared_ptr<const Content> m_content;
     PasteTarget m_target;
+    bool m_is_import;
     std::vector<NodeId> m_copies;
     Mapping m_localization;
 
@@ -2065,7 +2229,9 @@ bool Clipboard::load(const QMimeData& data, const TextMeasurer& measurer) {
       shape.m_geometry =
         RectangleShape(Rect(0, 0, size.m_width, size.m_height));
       shape.m_style.m_fill = fill;
-      auto content = Content::make_node(NodeHeader(), shape,
+      auto header = NodeHeader();
+      header.m_aspect_lock = size;
+      auto content = Content::make_node(std::move(header), shape,
         std::string(localize("name", "Image")) + ' ');
       content->m_images.push_back(std::move(resource));
       content->m_is_image = true;
@@ -2099,7 +2265,53 @@ std::unique_ptr<Command> Clipboard::make_paste_command(
   if(!m_content) {
     return nullptr;
   }
-  return std::make_unique<PasteCommand>(m_content, target);
+  return std::make_unique<PasteCommand>(m_content, target, false);
+}
+
+std::vector<ImportFailure> Clipboard::load_files(
+    const std::vector<std::filesystem::path>& paths,
+    const TextMeasurer& measurer) {
+  auto failures = std::vector<ImportFailure>();
+  auto contents = std::vector<std::shared_ptr<Content>>();
+  for(auto& path : paths) {
+    auto error = std::optional<ImportError>();
+    if(auto content = Content::read_file(path, measurer, error)) {
+      contents.push_back(std::move(content));
+    } else if(error) {
+      failures.push_back(ImportFailure(path, *error));
+    }
+  }
+  if(contents.empty()) {
+    m_content = nullptr;
+    return failures;
+  }
+  auto content = std::make_shared<Content>();
+  for(auto& file : contents) {
+    std::move(file->m_trees.begin(), file->m_trees.end(),
+      std::back_inserter(content->m_trees));
+    for(auto& image : file->m_images) {
+      if(std::ranges::none_of(content->m_images, [&] (const auto& held) {
+          return held.m_id == image.m_id;
+        })) {
+        content->m_images.push_back(std::move(image));
+      }
+    }
+    content->m_anchored.insert(
+      file->m_anchored.begin(), file->m_anchored.end());
+  }
+  content->m_is_sequenced = true;
+  content->m_is_foreign = true;
+  content->m_mark = QUuid::createUuid().toByteArray();
+  m_content = std::move(content);
+  return failures;
+}
+
+std::unique_ptr<Command> Clipboard::make_import_command(
+    const PasteTarget& target) const {
+  if(!m_content) {
+    return nullptr;
+  }
+  return std::make_unique<PasteCommand>(m_content, target, true);
 }
 
 bool Clipboard::is_from_other_document(const std::string& document) const {

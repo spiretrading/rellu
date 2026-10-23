@@ -93,4 +93,29 @@ TEST_SUITE("PropertyCommands") {
     REQUIRE(history.undo());
     REQUIRE(document.get(scene.m_rectangle).m_header.m_name == "Rectangle");
   }
+
+  TEST_CASE("color_profile") {
+    auto document = Document();
+    build_scene(document);
+    auto history = History(document);
+    auto& resources = document.get_resources();
+    REQUIRE(!history.execute(
+      std::make_unique<SetColorProfileCommand>(ColorProfile::UNMANAGED)));
+    REQUIRE(resources.m_color_profile == ColorProfile::NONE);
+    require_undoable(history,
+      std::make_unique<SetColorProfileCommand>(ColorProfile::SRGB));
+    REQUIRE(history.get_undo_label() == "sRGB");
+    REQUIRE(resources.m_color_profile == ColorProfile::SRGB);
+    REQUIRE(history.is_dirty());
+    REQUIRE(!history.execute(
+      std::make_unique<SetColorProfileCommand>(ColorProfile::SRGB)));
+    require_undoable(history,
+      std::make_unique<SetColorProfileCommand>(ColorProfile::UNMANAGED));
+    REQUIRE(history.get_undo_label() == "Unmanaged");
+    REQUIRE(resources.m_color_profile == ColorProfile::UNMANAGED);
+    REQUIRE(history.undo());
+    REQUIRE(history.undo());
+    REQUIRE(resources.m_color_profile == ColorProfile::NONE);
+    REQUIRE(!history.is_dirty());
+  }
 }
