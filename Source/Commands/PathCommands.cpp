@@ -153,6 +153,22 @@ namespace {
     return std::string(localize("name", "Path"));
   }
 
+  Shape make_outline(const Path& path, const Style& style) {
+    auto& stroke = *style.m_stroke;
+    auto geometry = StrokeGeometry(stroke.m_width, stroke.m_alignment,
+      stroke.m_cap, stroke.m_join, stroke.m_miter_limit, stroke.m_dashes,
+      stroke.m_dash_offset);
+    auto polygons = outline_stroke(path, geometry, OUTLINE_TOLERANCE);
+    auto outline = Shape();
+    outline.m_geometry = PathShape(Shared(fit_curves(
+      flatten(polygons, OUTLINE_TOLERANCE), FIT_TOLERANCE)),
+      FillRule::NON_ZERO);
+    outline.m_style = style;
+    outline.m_style.m_fill = SolidFill(stroke.m_color);
+    outline.m_style.m_stroke->m_is_enabled = false;
+    return outline;
+  }
+
   void hide_effects(Style& style) {
     for(auto& effect : style.m_effects) {
       std::visit([] (auto& effect) {
@@ -406,22 +422,6 @@ void SetCompoundOperationCommand::apply(
   }
 }
 
-Shape Rellu::make_stroke_outline(const Path& path, const Style& style) {
-  auto& stroke = *style.m_stroke;
-  auto geometry = StrokeGeometry(stroke.m_width, stroke.m_alignment,
-    stroke.m_cap, stroke.m_join, stroke.m_miter_limit, stroke.m_dashes,
-    stroke.m_dash_offset);
-  auto polygons = outline_stroke(path, geometry, OUTLINE_TOLERANCE);
-  auto outline = Shape();
-  outline.m_geometry = PathShape(Shared(fit_curves(
-    flatten(polygons, OUTLINE_TOLERANCE), FIT_TOLERANCE)),
-    FillRule::NON_ZERO);
-  outline.m_style = style;
-  outline.m_style.m_fill = SolidFill(stroke.m_color);
-  outline.m_style.m_stroke->m_is_enabled = false;
-  return outline;
-}
-
 bool Rellu::is_outline_strokable(const Document& document, const NodeId& id) {
   auto node = document.find(id);
   if(!node || is_operand(document, *node)) {
@@ -489,7 +489,7 @@ void OutlineStrokeCommand::outline(const Document& document,
     shape = *node.get_shape();
   }
   auto& style = text ? text->m_style : shape->m_style;
-  auto outlined = make_stroke_outline(
+  auto outlined = make_outline(
     text ? m_outliner(*text) : to_path(shape->m_geometry), style);
   hide_effects(outlined.m_style);
   auto header = node.m_header;

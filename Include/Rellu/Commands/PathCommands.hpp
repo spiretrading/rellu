@@ -180,16 +180,6 @@ namespace Rellu {
   bool is_outline_strokable(const Document& document, const NodeId& id);
 
   /**
-   * Makes the shape Outline Stroke turns a border into: a path of curves
-   * around the area the border paints, filled with the border's color, whose
-   * border is disabled.
-   * @param path The outline the border follows.
-   * @param style The style holding the border.
-   * @return The shape.
-   */
-  Shape make_stroke_outline(const Path& path, const Style& style);
-
-  /**
    * Turns the borders of shapes, compound shapes and text into filled paths
    * of curves as Adobe XD's Outline Stroke does, labelled Outline Stroke,
    * acting on the nodes within groups and mask groups. A node without a
