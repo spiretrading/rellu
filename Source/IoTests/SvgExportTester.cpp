@@ -277,11 +277,13 @@ TEST_SUITE("SvgExport") {
     auto path = std::filesystem::path(
       directory.path().toStdU16String()) / "Child.svg";
     write_svg_export(document, child, path, make_options());
-    auto file = std::ifstream(path, std::ios::binary);
-    REQUIRE(std::string(std::istreambuf_iterator<char>(file), {}) == join({
+    auto expected = join({
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="180" )svg"
         R"svg(height="120" viewBox="0 0 180 120">)svg",
       R"svg(  <rect id="Child" width="180" height="120" fill="#3080e0"/>)svg",
-      R"svg(</svg>)svg"}));
+      R"svg(</svg>)svg"});
+    auto file = std::ifstream(path, std::ios::binary);
+    REQUIRE(std::string(std::istreambuf_iterator<char>(file), {}) == expected);
+    REQUIRE(make_svg_code(document, {child}) == expected);
   }
 }

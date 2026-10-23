@@ -1701,7 +1701,7 @@ std::string Rellu::make_svg_code(const Document& document,
   options.m_format = ExportFormat::SVG;
   options.m_svg_styling = SvgStyling::PRESENTATION_ATTRIBUTES;
   options.m_svg_images = SvgImages::EMBED;
-  return make_svg_export(document, nodes, options, "", services).m_markup;
+  return export_svg(document, nodes, options, "", services, true).m_markup;
 }
 
 void Rellu::write_svg_export(const Document& document, const NodeId& node,

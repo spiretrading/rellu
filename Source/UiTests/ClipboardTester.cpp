@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <utility>
@@ -1222,6 +1223,40 @@ TEST_SUITE("Clipboard") {
       REQUIRE(data->data(bitmap_format) == bitmap);
     }
     REQUIRE(renderings == 1);
+  }
+
+  TEST_CASE("detached_svg") {
+    auto document = Document();
+    auto child = NodeId();
+    {
+      auto transaction = Transaction(document);
+      auto header = make_header("Outer");
+      header.m_transform = make_rotation(std::numbers::pi / 6);
+      auto group = transaction.append(NodeId(), std::move(header), Group());
+      child = transaction.append(
+        group, make_header("Child"), make_rectangle_shape(180, 120));
+      transaction.commit();
+    }
+    auto expected = std::string(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"180\" "
+      "height=\"120\" viewBox=\"0 0 180 120\">\r\n"
+      "  <rect id=\"Child\" width=\"180\" height=\"120\" "
+      "fill=\"red\"/>\r\n"
+      "</svg>\r\n");
+    REQUIRE(Clipboard::make_svg_code(document, {child}) == expected);
+    auto clipboard = Clipboard();
+    REQUIRE(clipboard.copy(document, {child}, estimate_text_bounds));
+    auto data = clipboard.make_mime_data();
+    auto is_found = false;
+    for(auto& format : data->formats()) {
+      if(format.contains("Scalable Vector Graphics")) {
+        auto svg = QByteArray::fromStdString(expected);
+        svg.append('\0');
+        REQUIRE(data->data(format) == svg);
+        is_found = true;
+      }
+    }
+    REQUIRE(is_found);
   }
 
   TEST_CASE("svg_code_data") {

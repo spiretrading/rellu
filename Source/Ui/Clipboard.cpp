@@ -668,6 +668,7 @@ struct Clipboard::Content {
   struct Tree {
     NodeId m_artboard;
     Matrix m_transform;
+    Matrix m_local;
     std::optional<Point> m_offset;
     std::optional<Rect> m_bounds;
     std::vector<Entry> m_nodes;
@@ -716,7 +717,7 @@ struct Clipboard::Content {
     }
   }
 
-  std::shared_ptr<Snapshot> make_snapshot() const {
+  std::shared_ptr<Snapshot> make_snapshot(bool is_detached) const {
     auto snapshot = std::make_shared<Snapshot>();
     auto transaction = Transaction(snapshot->m_document);
     for(auto& image : m_images) {
@@ -737,8 +738,9 @@ struct Clipboard::Content {
       }
       auto& root = tree.m_nodes.front();
       auto is_artboard = std::holds_alternative<Box<Artboard>>(root.m_payload);
-      insert_tree(transaction, tree.m_nodes, true,
-        is_artboard ? std::nullopt : std::optional(tree.m_transform));
+      insert_tree(transaction, tree.m_nodes, true, is_artboard ?
+        std::nullopt : std::optional(is_detached ? tree.m_local :
+          tree.m_transform));
       snapshot->m_roots.push_back(root.m_header.m_id);
     }
     transaction.commit();
@@ -828,6 +830,7 @@ struct Clipboard::Content {
       auto& node = document.get(root);
       auto tree = Tree();
       tree.m_transform = get_world_transform(document, root);
+      tree.m_local = get_transform(document, root);
       tree.m_bounds =
         get_world_bounds(document, root, BoundsType::GEOMETRY, measurer);
       if(!node.get_artboard()) {
@@ -1910,12 +1913,12 @@ std::unique_ptr<QMimeData> Clipboard::make_mime_data(
     auto snapshot = std::make_shared<std::shared_ptr<Content::Snapshot>>();
     auto get_snapshot = [content, snapshot] {
       if(!*snapshot) {
-        *snapshot = content->make_snapshot();
+        *snapshot = content->make_snapshot(false);
       }
       return *snapshot;
     };
-    data->defer(SVG_TYPE, [content, get_snapshot] {
-      auto copied = get_snapshot();
+    data->defer(SVG_TYPE, [content] {
+      auto copied = content->make_snapshot(true);
       return QVariant(to_svg_data(Rellu::make_svg_code(copied->m_document,
         copied->m_roots, SvgTextServices(content->m_layout,
           content->m_measurer))));
