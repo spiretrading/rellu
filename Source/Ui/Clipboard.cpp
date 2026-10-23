@@ -35,6 +35,7 @@
 #include "Rellu/Commands/TextCommands.hpp"
 #include "Rellu/Io/SvgExport.hpp"
 #include "Rellu/Io/SvgImport.hpp"
+#include "Rellu/Io/TiffDecoder.hpp"
 #include "Rellu/Io/XdClipboard.hpp"
 #include "Rellu/Localization/Localization.hpp"
 #include "Rellu/Model/Transaction.hpp"
@@ -1008,6 +1009,10 @@ struct Clipboard::Content {
     if(dimensions.isEmpty()) {
       format = reader.format();
       dimensions = reader.size();
+    }
+    if(dimensions.isEmpty() && is_tiff(bytes)) {
+      image = decode_tiff(bytes);
+      dimensions = image.size();
     }
     if(dimensions.isEmpty()) {
       image = reader.read();

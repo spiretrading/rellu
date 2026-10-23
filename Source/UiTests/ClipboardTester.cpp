@@ -1315,9 +1315,15 @@ TEST_SUITE("Clipboard") {
     auto dot = write("dot.svg", R"svg(<svg
       xmlns="http://www.w3.org/2000/svg"><circle r="3"/></svg>)svg");
     auto strip = save("Strip.bmp", "BMP", QSize(10, 4));
+    auto scan = write("Scan.tif", QByteArray::fromHex(
+      "49492a001a000000ff000000ff000000ff0a141e28323c46505a09000001030001"
+      "0000000300000001010300010000000200000002010300010000000800000003"
+      "0103000100000001000000060103000100000002000000110104000100000008"
+      "0000001501030001000000030000001601030001000000020000001701040001"
+      "0000001200000000000000"));
     auto clipboard = Clipboard(std::filesystem::path());
     REQUIRE(clipboard.load_files({photo, broken, logo, invalid, mark, dot,
-      strip}) == std::vector{ImportFailure(broken, ImportError::IMAGE),
+      strip, scan}) == std::vector{ImportFailure(broken, ImportError::IMAGE),
         ImportFailure(invalid, ImportError::INVALID_SVG)});
     auto target = make_target({}, Rect(0, 0, 600, 600));
     target.m_focus = ids.m_artboard;
@@ -1326,7 +1332,7 @@ TEST_SUITE("Clipboard") {
     REQUIRE(command->get_label() == "Import");
     REQUIRE(editor.execute(std::move(command)));
     auto& nodes = editor.get_selection().get_nodes();
-    REQUIRE(nodes.size() == 5);
+    REQUIRE(nodes.size() == 6);
     auto& picture = document.get(nodes[0]);
     REQUIRE(picture.m_parent == ids.m_artboard);
     REQUIRE(picture.m_header.m_name == "Photo");
@@ -1368,6 +1374,17 @@ TEST_SUITE("Clipboard") {
       reinterpret_cast<const char*>(converted.m_data->data()),
       static_cast<qsizetype>(converted.m_data->size())), "PNG").size() ==
         QSize(10, 4));
+    auto& tiff = document.get(nodes[5]);
+    REQUIRE(tiff.m_header.m_name == "Scan");
+    auto& tiff_fill = std::get<ImageFill>(tiff.get_shape()->m_style.m_fill);
+    REQUIRE(tiff_fill.m_size == Size(3, 2));
+    auto& encoded = document.get_resources().m_images.at(tiff_fill.m_image);
+    REQUIRE(encoded.m_media_type == "image/png");
+    auto decoded = QImage::fromData(QByteArray(
+      reinterpret_cast<const char*>(encoded.m_data->data()),
+      static_cast<qsizetype>(encoded.m_data->size())), "PNG");
+    REQUIRE(decoded.pixel(0, 0) == qRgb(255, 0, 0));
+    REQUIRE(decoded.pixel(2, 1) == qRgb(70, 80, 90));
     REQUIRE(editor.undo());
     REQUIRE(document.get(ids.m_artboard).m_children.size() == count);
   }
