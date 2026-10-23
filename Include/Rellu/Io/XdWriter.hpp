@@ -1,10 +1,12 @@
 #ifndef RELLU_IO_XD_WRITER_HPP
 #define RELLU_IO_XD_WRITER_HPP
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <QByteArray>
 #include <QDateTime>
 #include "Rellu/Io/XdGenerator.hpp"
+#include "Rellu/Io/XdPreview.hpp"
 #include "Rellu/Model/Document.hpp"
 
 namespace Rellu {
@@ -62,6 +64,13 @@ namespace Rellu {
      * new file.
      */
     std::string m_metadata;
+
+    /**
+     * The images the package keeps of its content, replacing its preview,
+     * thumbnail and renditions as Adobe XD's save does, or none to keep
+     * those the document was read with.
+     */
+    std::optional<XdPreviews> m_previews;
   };
 
   /**

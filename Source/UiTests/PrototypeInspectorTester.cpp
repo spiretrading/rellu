@@ -77,7 +77,10 @@ namespace {
 
   bool is_item_enabled(QComboBox& box, const QString& text) {
     auto model = qobject_cast<QStandardItemModel*>(box.model());
-    return model->item(box.findText(text))->isEnabled();
+    REQUIRE(model);
+    auto item = model->item(box.findText(text));
+    REQUIRE(item);
+    return item->isEnabled();
   }
 }
 

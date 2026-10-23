@@ -165,13 +165,17 @@ QByteArray Rellu::encode_jpg(const QImage& image, int quality) {
   return bytes;
 }
 
-void Rellu::write_png_export(
-    const QImage& image, const std::filesystem::path& path) {
+QByteArray Rellu::encode_png(const QImage& image) {
   if(image.isNull()) {
     throw std::runtime_error("The image is empty.");
   }
-  write_file(restructure_png(encode(
-    image.convertToFormat(QImage::Format_RGBA8888), "png", -1)), path);
+  return restructure_png(
+    encode(image.convertToFormat(QImage::Format_RGBA8888), "png", -1));
+}
+
+void Rellu::write_png_export(
+    const QImage& image, const std::filesystem::path& path) {
+  write_file(encode_png(image), path);
 }
 
 void Rellu::write_jpg_export(

@@ -6,11 +6,14 @@
 #include "Rellu/Commands/ArtboardPresets.hpp"
 #include "Rellu/Io/XdMetadata.hpp"
 #include "Rellu/Io/XdOpaque.hpp"
+#include "Rellu/Io/XdPreview.hpp"
 #include "Rellu/Io/XdValue.hpp"
 #include "Rellu/Io/XdWriter.hpp"
 #include "Rellu/Model/NodeId.hpp"
 #include "Rellu/Model/Transaction.hpp"
+#include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
+#include "Rellu/Ui/TextMeasurement.hpp"
 #include "Rellu/Ui/Translation.hpp"
 
 using namespace Rellu;
@@ -121,6 +124,8 @@ void DocumentSession::save(const QString& path, const QDateTime& time) {
       options.m_composite = to_string(generate_node_id());
     }
   }
+  options.m_previews = render_xd_previews(
+    *m_document, make_painted_text_measurer(get_default_font_library()));
   write_xd(*m_document, std::filesystem::path(path.toStdU16String()), options);
   m_metadata = save_xd_metadata(options.m_metadata, options.m_name,
     options.m_composite, options.m_instance, time);

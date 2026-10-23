@@ -14,6 +14,7 @@
 #include <QtZlib/zlib.h>
 #include "Rellu/Geometry/BooleanOperation.hpp"
 #include "Rellu/Geometry/Polyline.hpp"
+#include "Rellu/Io/BitmapExport.hpp"
 #include "Rellu/Io/XdError.hpp"
 #include "Rellu/Io/XdMetadata.hpp"
 #include "Rellu/Io/XdOpaque.hpp"
@@ -31,6 +32,9 @@ namespace {
     std::string_view("application/vnd.adobe.sparkler.project+dcxucf");
   const auto METADATA = std::string_view("META-INF/metadata.xml");
   const auto SHARING = std::string_view("sharing/sharing.json");
+  const auto PREVIEW = std::string_view("preview.png");
+  const auto THUMBNAIL = std::string_view("thumbnail.png");
+  const auto RENDITIONS = std::string_view("renditions/");
   const auto COMPOUND_TOLERANCE = 0.01;
 
   using Hook = std::function<void (std::size_t, std::string&)>;
@@ -325,6 +329,30 @@ namespace {
     return json;
   }
 
+  std::string get_rendition_path(QSize size) {
+    return std::format("renditions/image-{}-{}.png", size.width(),
+      size.height());
+  }
+
+  XdValue make_image_component(std::string_view rel, QSize size,
+      std::string_view name, std::string_view path) {
+    auto json = XdValue::make_object();
+    json.set("rel", rel);
+    json.set("height", size.height());
+    json.set("width", size.width());
+    json.set("type", "image/png");
+    json.set("state", "unmodified");
+    json.set("id", new_id());
+    if(rel == "rendition") {
+      json.set("name", name);
+      json.set("path", path);
+    } else {
+      json.set("path", path);
+      json.set("name", name);
+    }
+    return json;
+  }
+
   XdValue make_folder(std::string_view name) {
     auto json = XdValue::make_object();
     json.set("id", new_id());
@@ -439,6 +467,8 @@ namespace {
       std::string m_composite;
       bool m_is_new_composite;
       std::unordered_map<ImageId, std::string> m_image_names;
+      QSize m_preview_size;
+      QSize m_thumbnail_size;
 
       void write_node(const Node& node, std::string& out) const;
       void write_nodes(const std::vector<NodeId>& nodes,
@@ -448,6 +478,7 @@ namespace {
       std::string write_resources() const;
       std::string write_interactions() const;
       std::string write_manifest(const std::vector<Entry>& entries) const;
+      void update_previews(XdValue& components) const;
       std::string get_image_name(const ImageResource& image) const;
       std::string get_name() const;
   };
@@ -461,6 +492,11 @@ namespace {
         m_is_new_composite(false) {
     for(auto& name : m_data.m_image_names) {
       m_image_names.emplace(name.first, name.second);
+    }
+    if(options.m_previews && !options.m_previews->m_preview.isNull() &&
+        !options.m_previews->m_thumbnail.isNull()) {
+      m_preview_size = options.m_previews->m_preview.size();
+      m_thumbnail_size = options.m_previews->m_thumbnail.size();
     }
     if(!m_data.m_manifest.empty()) {
       if(auto manifest = parse_xd_value(m_data.m_manifest)) {
@@ -690,6 +726,7 @@ namespace {
     auto& components = manifest.find("components") ?
       *manifest.find("components") :
       manifest.set("components", XdValue::make_array());
+    update_previews(components);
     auto kept = std::vector<XdValue>();
     auto is_metadata_listed = false;
     for(auto& component : components.get_elements()) {
@@ -702,7 +739,12 @@ namespace {
       }
     }
     if(names.contains(METADATA) && !is_metadata_listed) {
-      kept.push_back(make_component(
+      auto rendition = std::find_if(kept.begin(), kept.end(),
+        [] (const auto& component) {
+          auto rel = component.find("rel");
+          return rel && rel->to_string() == "rendition";
+        });
+      kept.insert(rendition, make_component(
         "metadata", "application/rdf+xml", "xmp-metadata", METADATA));
     }
     components.get_elements() = std::move(kept);
@@ -825,6 +867,68 @@ namespace {
     return to_json(manifest);
   }
 
+  void Writer::update_previews(XdValue& components) const {
+    if(m_preview_size.isEmpty()) {
+      return;
+    }
+    auto has_thumbnail = false;
+    auto has_preview = false;
+    auto has_preview_rendition = false;
+    auto has_thumbnail_rendition = m_thumbnail_size == m_preview_size;
+    auto kept = std::vector<XdValue>();
+    for(auto& component : components.get_elements()) {
+      auto rel = component.find("rel");
+      auto name = component.find("name");
+      auto rel_text = rel ? rel->to_string() : std::string_view();
+      auto name_text = name ? name->to_string() : std::string_view();
+      if(rel_text == "thumbnail" || rel_text == "preview") {
+        auto is_thumbnail = rel_text == "thumbnail";
+        auto& flag = is_thumbnail ? has_thumbnail : has_preview;
+        if(flag) {
+          continue;
+        }
+        flag = true;
+        auto size = is_thumbnail ? m_thumbnail_size : m_preview_size;
+        component.set("height", size.height());
+        component.set("width", size.width());
+        component.set("path", is_thumbnail ? THUMBNAIL : PREVIEW);
+      } else if(rel_text == "rendition") {
+        auto is_thumbnail = name_text == "thumbnail";
+        auto& flag =
+          is_thumbnail ? has_thumbnail_rendition : has_preview_rendition;
+        if(flag || (name_text != "thumbnail" && name_text != "preview")) {
+          continue;
+        }
+        flag = true;
+        auto size = is_thumbnail ? m_thumbnail_size : m_preview_size;
+        component.set("height", size.height());
+        component.set("width", size.width());
+        component.set("path", get_rendition_path(size));
+      }
+      kept.push_back(std::move(component));
+    }
+    auto front = std::vector<XdValue>();
+    if(!has_thumbnail) {
+      front.push_back(make_image_component(
+        "thumbnail", m_thumbnail_size, "thumbnail", THUMBNAIL));
+    }
+    if(!has_preview) {
+      front.push_back(make_image_component(
+        "preview", m_preview_size, "preview", PREVIEW));
+    }
+    kept.insert(kept.begin(), std::make_move_iterator(front.begin()),
+      std::make_move_iterator(front.end()));
+    if(!has_thumbnail_rendition) {
+      kept.push_back(make_image_component("rendition", m_thumbnail_size,
+        "thumbnail", get_rendition_path(m_thumbnail_size)));
+    }
+    if(!has_preview_rendition) {
+      kept.push_back(make_image_component("rendition", m_preview_size,
+        "preview", get_rendition_path(m_preview_size)));
+    }
+    components.get_elements() = std::move(kept);
+  }
+
   QByteArray Writer::write() {
     auto& artboards = m_generator.get_artboards();
     auto parts = std::vector<Entry>(artboards.size() + 3);
@@ -858,7 +962,23 @@ namespace {
       available.emplace(name, Entry(name, std::string(
         reinterpret_cast<const char*>(bytes.data()), bytes.size())));
     }
+    if(!m_preview_size.isEmpty()) {
+      auto preview = encode_png(m_options->m_previews->m_preview);
+      auto thumbnail = m_thumbnail_size == m_preview_size ? preview :
+        encode_png(m_options->m_previews->m_thumbnail);
+      auto add_image = [&] (const std::string& name, const QByteArray& bytes) {
+        available.emplace(name, Entry(name, bytes.toStdString()));
+      };
+      add_image(std::string(PREVIEW), preview);
+      add_image(std::string(THUMBNAIL), thumbnail);
+      add_image(get_rendition_path(m_preview_size), preview);
+      add_image(get_rendition_path(m_thumbnail_size), thumbnail);
+    }
     for(auto& part : m_data.m_parts) {
+      if(!m_preview_size.isEmpty() && (part.first == PREVIEW ||
+          part.first == THUMBNAIL || starts_with(part.first, RENDITIONS))) {
+        continue;
+      }
       available.try_emplace(part.first, Entry(part.first, part.second));
     }
     if(!available.contains("mimetype")) {

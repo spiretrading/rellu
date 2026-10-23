@@ -31,6 +31,16 @@ using namespace Rellu;
 using namespace Rellu::Tests;
 
 namespace {
+  struct LanguageScope {
+    explicit LanguageScope(Language language) {
+      set_language(language);
+    }
+
+    ~LanguageScope() {
+      set_language(Language::ENGLISH);
+    }
+  };
+
   void click(QTreeView& view, const QModelIndex& index, bool is_icon) {
     auto rect = view.visualRect(index);
     auto point = QPointF(is_icon ? rect.left() + 4 : rect.center().x(),
@@ -230,7 +240,7 @@ TEST_SUITE("LayersPanel") {
   }
 
   TEST_CASE("pasteboard") {
-    set_language(Language::GERMAN);
+    auto scope = LanguageScope(Language::GERMAN);
     auto document = Document();
     auto ids = build_test_document(document);
     auto editor = Editor(document);

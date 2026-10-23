@@ -8,6 +8,7 @@
 #include <QDate>
 #include <QDateTime>
 #include <QFileInfo>
+#include <QImage>
 #include <QJsonArray>
 #include <QTemporaryDir>
 #include <QTime>
@@ -23,6 +24,7 @@
 #include "Rellu/Io/XdMetadata.hpp"
 #include "Rellu/Io/XdOpaque.hpp"
 #include "Rellu/Io/XdPackage.hpp"
+#include "Rellu/Io/XdPreview.hpp"
 #include "Rellu/Io/XdWriter.hpp"
 #include "Rellu/Model/DocumentComparison.hpp"
 #include "Rellu/Model/NodeId.hpp"
@@ -214,6 +216,13 @@ TEST_SUITE("DocumentSession") {
     auto reopened = Document();
     import_xd(to_path(path), reopened);
     REQUIRE(reopened.get_canvas().empty());
+    auto package = XdPackage(to_path(path));
+    auto preview = QImage::fromData(package.read("preview.png"));
+    REQUIRE(preview.size() == QSize(512, 512));
+    REQUIRE(preview.pixelColor(0, 0) == QColor(0xFF, 0xFF, 0xFF));
+    REQUIRE(package.read("thumbnail.png") == package.read("preview.png"));
+    REQUIRE(package.read("renditions/image-512-512.png") ==
+      package.read("preview.png"));
   }
 
   TEST_CASE("made_document") {
@@ -544,6 +553,13 @@ TEST_SUITE("DocumentSession") {
     session.save(target);
     REQUIRE(!session.is_dirty());
     REQUIRE(session.get_path() == target);
+    auto source_region = get_xd_preview_source(document);
+    REQUIRE(source_region);
+    auto saved = XdPackage(to_path(target));
+    REQUIRE(QImage::fromData(saved.read("preview.png")).size() ==
+      get_xd_preview_size(source_region->m_bounds, XD_PREVIEW_SIZE));
+    REQUIRE(QImage::fromData(saved.read("thumbnail.png")).size() ==
+      get_xd_preview_size(source_region->m_bounds, XD_THUMBNAIL_SIZE));
     auto reopened = Document();
     import_xd(to_path(target), reopened);
     REQUIRE(reopened.get_nodes().get_size() == document.get_nodes().get_size());

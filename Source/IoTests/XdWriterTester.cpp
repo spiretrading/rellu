@@ -3,12 +3,15 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
 #include <doctest/doctest.h>
+#include <QColor>
+#include <QImage>
 #include <QJsonArray>
 #include <QTemporaryDir>
 #include "Rellu/Geometry/Shapes.hpp"
@@ -468,6 +471,75 @@ TEST_SUITE("XdWriter") {
     REQUIRE(bounds.value("height"_L1).toDouble() == 812);
     auto pasteboard = package.read_pasteboard();
     REQUIRE(pasteboard.value("children"_L1).toArray().size() == 1);
+  }
+
+  TEST_CASE("previews") {
+    auto document = Document();
+    build(document);
+    auto image = [] (int width, int height, Qt::GlobalColor color) {
+      auto result = QImage(width, height, QImage::Format_ARGB32);
+      result.fill(color);
+      return result;
+    };
+    auto components = [] (const XdPackage& package) {
+      auto result = std::vector<std::string>();
+      for(auto value : package.get_manifest().value("components"_L1).
+          toArray()) {
+        auto component = value.toObject();
+        result.push_back(std::format("{} {} {} {}x{}",
+          component.value("rel"_L1).toString().toStdString(),
+          component.value("name"_L1).toString().toStdString(),
+          component.value("path"_L1).toString().toStdString(),
+          component.value("width"_L1).toInt(),
+          component.value("height"_L1).toInt()));
+      }
+      return result;
+    };
+    auto options = XdWriteOptions();
+    options.m_previews =
+      XdPreviews(image(40, 80, Qt::red), image(10, 20, Qt::blue));
+    auto bytes = write_xd(document, options);
+    auto package = XdPackage(bytes);
+    REQUIRE(QImage::fromData(package.read("preview.png")).size() ==
+      QSize(40, 80));
+    REQUIRE(QImage::fromData(package.read("thumbnail.png")).pixelColor(0, 0) ==
+      QColor(Qt::blue));
+    REQUIRE(package.read("renditions/image-40-80.png") ==
+      package.read("preview.png"));
+    REQUIRE(package.read("renditions/image-10-20.png") ==
+      package.read("thumbnail.png"));
+    REQUIRE(components(package) == std::vector<std::string>{
+      "thumbnail thumbnail thumbnail.png 10x20",
+      "preview preview preview.png 40x80",
+      "metadata xmp-metadata META-INF/metadata.xml 0x0",
+      "rendition thumbnail renditions/image-10-20.png 10x20",
+      "rendition preview renditions/image-40-80.png 40x80"});
+    auto ids = std::vector<QString>();
+    for(auto value : package.get_manifest().value("components"_L1).
+        toArray()) {
+      ids.push_back(value.toObject().value("id"_L1).toString());
+    }
+    auto imported = Document();
+    import_package(bytes, imported);
+    REQUIRE(XdPackage(write_xd(imported)).read("preview.png") ==
+      package.read("preview.png"));
+    auto square = XdWriteOptions();
+    square.m_previews =
+      XdPreviews(image(30, 30, Qt::green), image(30, 30, Qt::green));
+    auto rewritten = XdPackage(write_xd(imported, square));
+    REQUIRE(!rewritten.contains("renditions/image-40-80.png"));
+    REQUIRE(!rewritten.contains("renditions/image-10-20.png"));
+    REQUIRE(rewritten.read("renditions/image-30-30.png") ==
+      rewritten.read("thumbnail.png"));
+    REQUIRE(components(rewritten) == std::vector<std::string>{
+      "thumbnail thumbnail thumbnail.png 30x30",
+      "preview preview preview.png 30x30",
+      "metadata xmp-metadata META-INF/metadata.xml 0x0",
+      "rendition preview renditions/image-30-30.png 30x30"});
+    auto kept = rewritten.get_manifest().value("components"_L1).toArray();
+    REQUIRE(kept.at(0).toObject().value("id"_L1).toString() == ids[0]);
+    REQUIRE(kept.at(1).toObject().value("id"_L1).toString() == ids[1]);
+    REQUIRE(kept.at(3).toObject().value("id"_L1).toString() == ids[4]);
   }
 
   TEST_CASE("shapes") {
