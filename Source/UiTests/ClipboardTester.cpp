@@ -27,6 +27,11 @@ using namespace Rellu;
 using namespace Rellu::Tests;
 
 namespace {
+  QByteArray make_foreign(QByteArray xd) {
+    xd.insert(2, QByteArray(" \0", 2));
+    return xd;
+  }
+
   NodeId add_artboard(Document& document, std::string name, Rect frame) {
     auto artboard = Artboard();
     artboard.m_frame = frame;
@@ -446,7 +451,7 @@ TEST_SUITE("Clipboard") {
     auto xd = QMimeData();
     for(auto& format : data->formats()) {
       if(format.contains("com.adobe.xd")) {
-        xd.setData(format, data->data(format));
+        xd.setData(format, make_foreign(data->data(format)));
       }
     }
     auto foreign = Clipboard();
@@ -516,7 +521,7 @@ TEST_SUITE("Clipboard") {
     auto xd = QMimeData();
     for(auto& format : data->formats()) {
       if(format.contains("com.adobe.xd")) {
-        xd.setData(format, data->data(format));
+        xd.setData(format, make_foreign(data->data(format)));
       }
     }
     auto foreign = Clipboard();
@@ -550,11 +555,14 @@ TEST_SUITE("Clipboard") {
     REQUIRE(Clipboard::is_loadable(*data));
     auto receiver = Clipboard();
     REQUIRE(receiver.load(*data));
+    auto xd_format = data->formats()[1];
+    REQUIRE(receiver.make_mime_data()->data(xd_format) ==
+      data->data(xd_format));
     auto get_xd = [] (const QMimeData& data) {
       auto xd = std::make_unique<QMimeData>();
       for(auto& format : data.formats()) {
         if(format.contains("com.adobe.xd")) {
-          xd->setData(format, data.data(format));
+          xd->setData(format, make_foreign(data.data(format)));
         }
       }
       return xd;
@@ -715,7 +723,7 @@ TEST_SUITE("Clipboard") {
     auto xd = std::make_unique<QMimeData>();
     for(auto& format : data->formats()) {
       if(format.contains("com.adobe.xd")) {
-        xd->setData(format, data->data(format));
+        xd->setData(format, make_foreign(data->data(format)));
       }
     }
     auto foreign = Clipboard();
@@ -1178,7 +1186,7 @@ TEST_SUITE("Clipboard") {
     };
     auto svg = Clipboard::make_svg_code(document, {id});
     auto bounds = *Clipboard::get_bitmap_bounds(document, {id});
-    auto bitmap = Clipboard::make_bitmap(render(document, {id}, bounds));
+    auto image = render(document, {id}, bounds);
     auto measurements = 0;
     auto measurer = [&] (const Text& text) {
       ++measurements;
@@ -1203,25 +1211,20 @@ TEST_SUITE("Clipboard") {
     }
     auto expected = QByteArray::fromStdString(svg);
     expected.append('\0');
-    auto svg_format = QString();
-    auto bitmap_format = QString();
-    for(auto& format : data->formats()) {
-      if(format.contains("Scalable Vector Graphics")) {
-        svg_format = format;
-      } else if(format.contains("x-rellu-dib")) {
-        bitmap_format = format;
-      }
-    }
-    REQUIRE(!svg_format.isEmpty());
-    REQUIRE(data->data(svg_format) == expected);
+    auto formats = data->formats();
+    REQUIRE(formats.size() == 4);
+    REQUIRE(formats[0] ==
+      "application/x-qt-windows-mime;value=\"Preferred DropEffect\"");
+    REQUIRE(formats[1] ==
+      "application/x-qt-windows-mime;value=\"com.adobe.xd\"");
+    REQUIRE(formats[2] ==
+      "application/x-qt-windows-mime;value=\"Scalable Vector Graphics\"");
+    REQUIRE(formats[3] == "application/x-qt-image");
+    REQUIRE(data->data(formats[0]) == QByteArray("\x01\x00\x00\x00", 4));
+    REQUIRE(data->data(formats[2]) == expected);
     REQUIRE(measurements > copied);
     REQUIRE(renderings == 0);
-    if(bitmap_format.isEmpty()) {
-      REQUIRE(Clipboard::make_bitmap(
-        qvariant_cast<QImage>(data->imageData())) == bitmap);
-    } else {
-      REQUIRE(data->data(bitmap_format) == bitmap);
-    }
+    REQUIRE(qvariant_cast<QImage>(data->imageData()) == image);
     REQUIRE(renderings == 1);
   }
 
@@ -1262,14 +1265,15 @@ TEST_SUITE("Clipboard") {
   TEST_CASE("svg_code_data") {
     auto data = Clipboard::make_svg_mime_data("<svg/>\r\n");
     REQUIRE(data->text() == "<svg/>\r\n");
-    auto is_found = false;
-    for(auto& format : data->formats()) {
-      if(format.contains("Scalable Vector Graphics")) {
-        REQUIRE(data->data(format) == QByteArray("<svg/>\r\n", 9));
-        is_found = true;
-      }
-    }
-    REQUIRE(is_found);
+    auto formats = data->formats();
+    REQUIRE(formats.size() == 3);
+    REQUIRE(formats[0] ==
+      "application/x-qt-windows-mime;value=\"Preferred DropEffect\"");
+    REQUIRE(formats[1] ==
+      "application/x-qt-windows-mime;value=\"Scalable Vector Graphics\"");
+    REQUIRE(formats[2] == "text/plain");
+    REQUIRE(data->data(formats[0]) == QByteArray("\x01\x00\x00\x00", 4));
+    REQUIRE(data->data(formats[1]) == QByteArray("<svg/>\r\n", 9));
     REQUIRE(Clipboard::make_svg_code(Document(), {}).empty());
   }
 

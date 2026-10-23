@@ -157,7 +157,8 @@ namespace Rellu {
 
       /**
        * Makes the data Adobe XD's Copy SVG Code puts on the system clipboard:
-       * the markup as Scalable Vector Graphics and as text.
+       * its preferred drop effect and the markup as Scalable Vector Graphics
+       * and as text.
        * @param svg The UTF-8 markup.
        * @return The data.
        */
@@ -189,9 +190,9 @@ namespace Rellu {
 
       /**
        * Makes the data offered to other applications and windows for what is
-       * held: Adobe XD's clipboard format, a mark identifying what is held
-       * within this application, and the SVG markup and image Adobe XD
-       * offers, which are made from what is held only once requested.
+       * held, as Adobe XD offers it: its preferred drop effect, its clipboard
+       * format, and the SVG markup and image, which are made from what is
+       * held only once requested.
        * @param renderer The function rendering the image, or none to offer
        *        no image.
        * @return The data, or <code>nullptr</code> if nothing is held.
@@ -207,7 +208,7 @@ namespace Rellu {
 
       /**
        * Replaces what is held with the content of system clipboard data,
-       * unless the data marks what is held: Adobe XD's clipboard format, SVG
+       * unless the data offers what is held: Adobe XD's clipboard format, SVG
        * markup as shapes, an image as an image filled rectangle, or text as
        * a text object, as Adobe XD pastes them.
        * @param data The clipboard data.

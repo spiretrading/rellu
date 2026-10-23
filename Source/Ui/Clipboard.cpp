@@ -33,21 +33,23 @@
 #include "Rellu/Model/Transaction.hpp"
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Ui/Clipboard.hpp"
-#include "BitmapFormat.hpp"
+#include "NativeFormats.hpp"
 
 using namespace Rellu;
 
 namespace {
   using Mapping = std::unordered_map<NodeId, NodeId>;
 
-  const auto MARK_TYPE = QStringLiteral("application/x-rellu-clipboard");
+  const auto DROP_EFFECT_TYPE = QStringLiteral(
+    "application/x-qt-windows-mime;value=\"Preferred DropEffect\"");
   const auto XD_TYPE = QStringLiteral(
     "application/x-qt-windows-mime;value=\"%1\"").arg(QString::fromLatin1(
       XD_CLIPBOARD_FORMAT.data(),
       static_cast<qsizetype>(XD_CLIPBOARD_FORMAT.size())));
   const auto SVG_TYPE = QStringLiteral(
     "application/x-qt-windows-mime;value=\"Scalable Vector Graphics\"");
-  const auto BITMAP_TYPE = QStringLiteral("application/x-rellu-dib");
+  const auto TEXT_TYPE = QStringLiteral("text/plain");
+  const auto IMAGE_TYPE = QStringLiteral("application/x-qt-image");
   const auto IMAGE_DIRECTORY = QStringLiteral("Rellu Clipboard");
   constexpr auto TEXT_FRAME_SIZE = 300.0;
   constexpr auto SEQUENCE_PADDING = 10.0;
@@ -233,6 +235,10 @@ namespace {
     return QString();
   }
 
+  QByteArray make_drop_effect() {
+    return QByteArray("\x01\x00\x00\x00", 4);
+  }
+
   QByteArray to_svg_data(const std::string& svg) {
     auto data = QByteArray::fromStdString(svg);
     data.append('\0');
@@ -244,7 +250,13 @@ namespace {
       using Producer = std::function<QVariant ()>;
 
       void defer(QString type, Producer producer) {
-        m_entries.push_back(Entry(std::move(type), std::move(producer)));
+        m_entries.push_back(
+          Entry(std::move(type), std::move(producer), false));
+      }
+
+      void defer_native(QString type, Producer producer) {
+        m_entries.push_back(
+          Entry(std::move(type), std::move(producer), true));
       }
 
       QStringList formats() const override {
@@ -258,7 +270,10 @@ namespace {
       }
 
       bool hasFormat(const QString& type) const override {
-        return QMimeData::hasFormat(type) || find(type);
+        if(auto entry = find(type)) {
+          return !entry->m_is_native;
+        }
+        return QMimeData::hasFormat(type);
       }
 
     protected:
@@ -281,6 +296,7 @@ namespace {
       struct Entry {
         QString m_type;
         Producer m_producer;
+        bool m_is_native;
         std::optional<QVariant> m_value;
       };
       mutable std::vector<Entry> m_entries;
@@ -1807,9 +1823,17 @@ std::string Clipboard::make_svg_code(const Document& document,
 
 std::unique_ptr<QMimeData> Clipboard::make_svg_mime_data(
     const std::string& svg) {
-  auto data = std::make_unique<QMimeData>();
+  auto data = std::make_unique<DeferredMimeData>();
+  data->setData(DROP_EFFECT_TYPE, make_drop_effect());
   data->setData(SVG_TYPE, to_svg_data(svg));
-  data->setText(QString::fromUtf8(svg));
+  auto text = QString::fromUtf8(svg);
+  if(register_native_formats()) {
+    data->defer_native(TEXT_TYPE, [text] {
+      return QVariant(text);
+    });
+  } else {
+    data->setText(text);
+  }
   return data;
 }
 
@@ -1875,11 +1899,19 @@ void Clipboard::remove_stale_images(
   auto error = std::error_code();
   auto current = std::filesystem::path();
   auto time = std::optional<std::filesystem::file_time_type>();
-  if(data && data->hasFormat(MARK_TYPE)) {
-    current = directory / to_folder_name(data->data(MARK_TYPE));
-    if(auto modified = std::filesystem::last_write_time(current, error);
-        !error) {
-      time = modified;
+  if(data && data->hasFormat(XD_TYPE)) {
+    auto xd = decode_text(data->data(XD_TYPE));
+    for(auto& entry :
+        std::filesystem::directory_iterator(directory, error)) {
+      if(xd.contains(QString::fromStdU16String(
+          entry.path().filename().u16string()))) {
+        current = entry.path();
+        if(auto modified = std::filesystem::last_write_time(current, error);
+            !error) {
+          time = modified;
+        }
+        break;
+      }
     }
   }
   auto stale = std::vector<std::filesystem::path>();
@@ -1904,7 +1936,7 @@ std::unique_ptr<QMimeData> Clipboard::make_mime_data(
     return nullptr;
   }
   auto data = std::make_unique<DeferredMimeData>();
-  data->setData(MARK_TYPE, m_content->m_mark);
+  data->setData(DROP_EFFECT_TYPE, make_drop_effect());
   if(!m_content->m_xd.isEmpty()) {
     data->setData(XD_TYPE, m_content->m_xd);
   }
@@ -1933,8 +1965,8 @@ std::unique_ptr<QMimeData> Clipboard::make_mime_data(
         }
         return renderer(copied->m_document, copied->m_roots, *bounds);
       };
-      if(register_bitmap_format(BITMAP_TYPE)) {
-        data->defer(BITMAP_TYPE, [render] {
+      if(register_native_formats()) {
+        data->defer_native(get_native_bitmap_type(), [render] {
           auto image = render();
           if(image.isNull()) {
             return QVariant(QByteArray());
@@ -1942,7 +1974,7 @@ std::unique_ptr<QMimeData> Clipboard::make_mime_data(
           return QVariant(make_bitmap(image));
         });
       } else {
-        data->defer(QStringLiteral("application/x-qt-image"), [render] {
+        data->defer(IMAGE_TYPE, [render] {
           return QVariant(render());
         });
       }
@@ -1952,25 +1984,26 @@ std::unique_ptr<QMimeData> Clipboard::make_mime_data(
 }
 
 bool Clipboard::is_loadable(const QMimeData& data) {
-  return data.hasFormat(MARK_TYPE) || data.hasFormat(XD_TYPE) ||
-    data.hasImage() || data.hasText() || !find_svg(data).isEmpty();
+  return data.hasFormat(XD_TYPE) || data.hasImage() || data.hasText() ||
+    !find_svg(data).isEmpty();
 }
 
 bool Clipboard::load(const QMimeData& data, const TextMeasurer& measurer) {
-  if(data.hasFormat(MARK_TYPE)) {
-    auto mark = data.data(MARK_TYPE);
-    if(m_content && m_content->m_mark == mark) {
+  if(data.hasFormat(XD_TYPE)) {
+    auto xd = data.data(XD_TYPE);
+    auto is_held = [&] (const std::shared_ptr<const Content>& content) {
+      return content && !content->m_xd.isEmpty() &&
+        xd.startsWith(content->m_xd);
+    };
+    if(is_held(m_content)) {
       return true;
-    } else if(auto& published = get_published();
-        published && published->m_mark == mark) {
+    } else if(auto& published = get_published(); is_held(published)) {
       m_content = published;
       return true;
     }
-  }
-  if(data.hasFormat(XD_TYPE)) {
     auto scratch = Document();
     try {
-      auto read = read_xd_clipboard(data.data(XD_TYPE), scratch);
+      auto read = read_xd_clipboard(xd, scratch);
       auto& canvas = scratch.get_canvas();
       if(!canvas.empty()) {
         auto content = Content::make(scratch, canvas, measurer);
