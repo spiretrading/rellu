@@ -117,7 +117,12 @@ bool Rellu::handle_frame_event(QWidget& window, void* message,
     QAbstractButton* maximize) {
   auto native = static_cast<MSG*>(message);
   auto is_maximize = maximize && native->wParam == HTMAXBUTTON;
-  if(native->message == WM_NCMOUSEMOVE) {
+  if(native->message == WM_SHOWWINDOW) {
+    if(hovered && hovered->window() == &window) {
+      hover(nullptr);
+    }
+    return false;
+  } else if(native->message == WM_NCMOUSEMOVE) {
     if(is_maximize) {
       auto tracking = TRACKMOUSEEVENT();
       tracking.cbSize = sizeof(tracking);

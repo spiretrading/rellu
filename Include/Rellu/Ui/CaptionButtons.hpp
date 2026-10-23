@@ -1,5 +1,5 @@
-#ifndef RELLU_CAPTION_BUTTONS_HPP
-#define RELLU_CAPTION_BUTTONS_HPP
+#ifndef RELLU_UI_CAPTION_BUTTONS_HPP
+#define RELLU_UI_CAPTION_BUTTONS_HPP
 #include <vector>
 #include <QAbstractButton>
 #include <QString>
@@ -37,14 +37,21 @@ namespace Rellu {
        */
       CaptionButton(CaptionKind kind, const QString& tip);
 
+      /** Returns <code>true</code> iff the pointer is over the button. */
+      bool is_hovered() const;
+
     protected:
       void enterEvent(QEnterEvent* event) override;
       void leaveEvent(QEvent* event) override;
+      void showEvent(QShowEvent* event) override;
+      void hideEvent(QHideEvent* event) override;
       void paintEvent(QPaintEvent* event) override;
 
     private:
       CaptionKind m_kind;
       bool m_is_hovered;
+
+      void reset();
   };
 
   /**

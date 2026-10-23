@@ -54,6 +54,7 @@
 #include "Rellu/Text/FontLibrary.hpp"
 #include "Rellu/Tools/ViewFit.hpp"
 #include "Rellu/Ui/CanvasFrame.hpp"
+#include "Rellu/Ui/CaptionButtons.hpp"
 #include "Rellu/Ui/ClipboardRenderer.hpp"
 #include "Rellu/Ui/ComponentPropertyEditors.hpp"
 #include "Rellu/Ui/ContextMenus.hpp"
@@ -67,7 +68,6 @@
 #include "Rellu/Ui/Translation.hpp"
 #include "Rellu/Ui/XdAlert.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
-#include "CaptionButtons.hpp"
 #include "MainWindow.hpp"
 #include "NativeFrame.hpp"
 

@@ -3,8 +3,8 @@
 #include <QGuiApplication>
 #include <QResizeEvent>
 #include <QScreen>
+#include "Rellu/Ui/CaptionButtons.hpp"
 #include "Rellu/Ui/DocumentWindows.hpp"
-#include "CaptionButtons.hpp"
 #include "NativeFrame.hpp"
 
 using namespace Rellu;

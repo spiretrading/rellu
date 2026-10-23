@@ -1,11 +1,12 @@
-#include "CaptionButtons.hpp"
-#include <array>
 #include <QColor>
 #include <QEnterEvent>
+#include <QHideEvent>
 #include <QList>
 #include <QPainter>
 #include <QPointF>
 #include <QRectF>
+#include <QShowEvent>
+#include "Rellu/Ui/CaptionButtons.hpp"
 #include "Rellu/Ui/Translation.hpp"
 
 using namespace Rellu;
@@ -21,6 +22,10 @@ CaptionButton::CaptionButton(CaptionKind kind, const QString& tip)
   setAttribute(Qt::WA_Hover);
 }
 
+bool CaptionButton::is_hovered() const {
+  return m_is_hovered;
+}
+
 void CaptionButton::enterEvent(QEnterEvent* event) {
   m_is_hovered = true;
   update();
@@ -31,6 +36,22 @@ void CaptionButton::leaveEvent(QEvent* event) {
   m_is_hovered = false;
   update();
   QAbstractButton::leaveEvent(event);
+}
+
+void CaptionButton::showEvent(QShowEvent* event) {
+  reset();
+  QAbstractButton::showEvent(event);
+}
+
+void CaptionButton::hideEvent(QHideEvent* event) {
+  reset();
+  QAbstractButton::hideEvent(event);
+}
+
+void CaptionButton::reset() {
+  m_is_hovered = false;
+  setDown(false);
+  update();
 }
 
 void CaptionButton::paintEvent(QPaintEvent*) {
