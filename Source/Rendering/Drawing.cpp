@@ -628,15 +628,24 @@ Rect Drawing::query(
   if(area.is_empty() || !(scale > 0)) {
     return area;
   }
+  auto passes = std::size_t(2);
+  for(auto& entry : m_entries) {
+    passes += entry->m_readers.size();
+  }
   auto is_grown = true;
-  while(is_grown) {
+  while(is_grown && passes != 0) {
+    --passes;
     is_grown = false;
     for(auto& entry : m_entries) {
       for(auto reader : entry->m_readers) {
         auto& item = entry->m_items[reader];
         auto bounds = grow(item.m_bounds, item.m_margin / scale);
-        if(bounds.intersects(area) && !area.contains(bounds)) {
-          area = unite(area, bounds);
+        if(!bounds.intersects(area)) {
+          continue;
+        }
+        auto united = unite(area, bounds);
+        if(united != area) {
+          area = united;
           is_grown = true;
         }
       }

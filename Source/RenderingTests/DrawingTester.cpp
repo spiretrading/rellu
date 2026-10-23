@@ -74,6 +74,22 @@ TEST_SUITE("Drawing") {
     REQUIRE(commands == DrawSequence({&(*list)[0], &(*list)[2]}));
   }
 
+  TEST_CASE("backdrop_rounding") {
+    auto list = make_list({make_fill(Rect(0, 0, 1000, 100)),
+      BackdropBlurCommand(share(make_rectangle(
+        Rect(93.31238252043201, 0, 8.85411955930974, 10))), Matrix(), 2, 0,
+        std::nullopt)});
+    auto drawing = Drawing();
+    drawing.set_lists({list});
+    auto commands = DrawSequence();
+    auto area = drawing.query(
+      Rect(-476.3902220238647, 0, 32.29432526689901, 10), 0.136183395,
+      commands);
+    REQUIRE(area.get_right() > 651.55);
+    REQUIRE(area.get_left() == -476.3902220238647);
+    REQUIRE(commands == DrawSequence({&(*list)[0], &(*list)[1]}));
+  }
+
   TEST_CASE("readers") {
     auto blur = [] (const Rect& rect) {
       return BackdropBlurCommand(share(make_rectangle(rect)), Matrix(), 2, 0,
