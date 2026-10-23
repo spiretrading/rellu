@@ -34,7 +34,9 @@ namespace {
   constexpr auto RASTER_SCALE = 4.0;
   constexpr auto SHADOW_SCALE = 2.0;
   constexpr auto BLUR_SCALE = 1.0;
-  constexpr auto LARGE_SHADOW_BLUR = 16.0;
+  constexpr auto LARGE_SHADOW_BLUR = 18.0;
+  constexpr auto SHARP_SHADOW_LEAD = 0.04;
+  constexpr auto SHARP_SHADOW_SPAN = 3.0;
   constexpr auto BACKDROP_SCALE = 0.5;
   constexpr auto TOLERANCE = 0.01;
   constexpr auto EQUIVALENT_Y_OFFSET = 0.015;
@@ -1146,10 +1148,26 @@ namespace {
         }
         auto blur = 2 * shadow.m_radius;
         auto scale = blur >= LARGE_SHADOW_BLUR ? BLUR_SCALE : SHADOW_SCALE;
-        auto shift = 1 - blur / 2;
-        auto region = inflate(Rect(bounds->m_x + shadow.m_offset.m_x + shift,
-          bounds->m_y + shadow.m_offset.m_y + shift, bounds->m_width,
-          bounds->m_height), 3 * blur + 1);
+        auto cast = Rect(bounds->m_x + shadow.m_offset.m_x,
+          bounds->m_y + shadow.m_offset.m_y, bounds->m_width,
+          bounds->m_height);
+        auto region = Rect(0, 0, 0, 0);
+        if(blur > 0) {
+          auto shift = 1 - blur / 2;
+          region = inflate(Rect(cast.m_x + shift, cast.m_y + shift,
+            cast.m_width, cast.m_height), 3 * blur + 1);
+        } else {
+          auto both = Rellu::unite(*bounds, cast);
+          region = Rect(both.m_x - SHARP_SHADOW_LEAD,
+            both.m_y - SHARP_SHADOW_LEAD, both.m_width + SHARP_SHADOW_SPAN,
+            both.m_height + SHARP_SHADOW_SPAN);
+        }
+        if(clip) {
+          region = intersect(region, inflate(*clip, blur + 2));
+          if(region.is_empty()) {
+            return;
+          }
+        }
         auto source = Rect(region.m_x - shadow.m_offset.m_x,
           region.m_y - shadow.m_offset.m_y, region.m_width, region.m_height);
         auto image = colorize(render(blur_slice(begin, end, shadow.m_radius),

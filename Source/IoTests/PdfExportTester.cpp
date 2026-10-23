@@ -393,17 +393,19 @@ TEST_SUITE("PdfExport") {
     auto transaction = Transaction(document);
     auto artboard = transaction.append(
       NodeId(), make_header(), make_artboard(Rect(0, 0, 800, 600)));
-    auto add = [&] (double x, double blur, Point offset) {
+    auto add = [&] (double x, double y, double blur, Point offset) {
       auto shape = make_shape(Rect(0, 0, 60, 60), make_color(48, 128, 224));
       shape.m_style.m_effects.push_back(
         DropShadow(offset, blur, make_color(0, 0, 0, 0.16)));
       transaction.append(
-        artboard, make_header(make_translation(x, 60)), shape);
+        artboard, make_header(make_translation(x, y)), shape);
     };
-    add(100.5, 0.5, Point(0, 0));
-    add(300, 3, Point(0, 0));
-    add(520, 10, Point(0, 0));
-    add(660, 3, Point(5, -7));
+    add(100.5, 60, 0.5, Point(0, 0));
+    add(300, 60, 3, Point(0, 0));
+    add(520, 60, 10, Point(0, 0));
+    add(660, 60, 3, Point(5, -7));
+    add(20, 60, 0, Point(0, 3));
+    add(520, 520, 8, Point(0, 3));
     transaction.commit();
     auto pdf = parse(write_pdf(document, {artboard}));
     auto contents = pdf.get_contents(0);
@@ -414,6 +416,10 @@ TEST_SUITE("PdfExport") {
     REQUIRE(contains(contents, "q\n4 0 0 4 1800 -40 cm\n"));
     REQUIRE(contains(contents, " scn\n/G3 gs\n0 0 182 182 re\nf\nQ\n"));
     REQUIRE(contains(contents, "q\n2 0 0 2 2576 128 cm\n"));
+    REQUIRE(contains(contents, "q\n2 0 0 2 79.839996 239.84"));
+    REQUIRE(contains(contents, " gs\n0 0 126 132 re\nf\nQ\n"));
+    REQUIRE(contains(contents, "q\n2 0 0 2 1856 1868 cm\n"));
+    REQUIRE(contains(contents, " gs\n0 0 316 302 re\nf\nQ\n"));
     REQUIRE(contents.find("2 0 0 2 1116 156 cm") <
       contents.find("4 0 0 4 1200 240 cm"));
     REQUIRE(!pdf.find("/ColorSpace /DeviceGray").empty());
