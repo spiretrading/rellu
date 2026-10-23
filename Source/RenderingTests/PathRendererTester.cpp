@@ -891,8 +891,10 @@ TEST_SUITE("PathRenderer") {
       if(y >= 8 && y < 12) {
         expected = Pixel({0, 0, 0, 1});
       } else if(y >= 12 && y < 68) {
-        auto shadow = get_box_coverage(y, 28, 3);
-        expected = Pixel({1 - shadow, 1 - shadow, 1 - shadow, 1});
+        auto shadow =
+          (get_box_coverage(y, 28, 3) + get_box_coverage(y, 29, 3)) / 2;
+        auto light = (y == 12 ? 0.5 : 1) * (1 - shadow);
+        expected = Pixel({light, light, light, 1});
       }
       require_pixel(image, 16, y, expected, 3);
       require_pixel(image, 4, y, Pixel({0, 0, 0, 0}), 0);
@@ -909,7 +911,7 @@ TEST_SUITE("PathRenderer") {
       fill(make_rectangle(Rect(8.5, 0, 16, 16)), make_color(255, 255, 255)));
     renderer.m_list.push_back(EndLayerCommand());
     auto image = render(renderer, QSize(32, 16));
-    require_pixel(image, 8, 8, Pixel({0.375, 0.375, 0.375, 0.625}), 3);
+    require_pixel(image, 8, 8, Pixel({0.4375, 0.4375, 0.4375, 0.5625}), 3);
     require_pixel(image, 16, 8, Pixel({1, 1, 1, 1}), 1);
   }
 

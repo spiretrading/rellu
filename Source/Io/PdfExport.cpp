@@ -6,6 +6,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -34,9 +35,11 @@ namespace {
   constexpr auto RASTER_SCALE = 4.0;
   constexpr auto SHADOW_SCALE = 2.0;
   constexpr auto BLUR_SCALE = 1.0;
-  constexpr auto LARGE_SHADOW_BLUR = 18.0;
+  constexpr auto LARGE_SHADOW_BLUR = 19.0;
   constexpr auto SHARP_SHADOW_LEAD = 0.04;
   constexpr auto SHARP_SHADOW_SPAN = 3.0;
+  constexpr auto INNER_SHADOW_SPREAD = 0.5;
+  constexpr auto INNER_SHADOW_SPAN = 2.0;
   constexpr auto BACKDROP_SCALE = 0.5;
   constexpr auto TOLERANCE = 0.01;
   constexpr auto EQUIVALENT_Y_OFFSET = 0.015;
@@ -255,6 +258,101 @@ namespace {
       return image->m_opacity <= 0;
     }
     return false;
+  }
+
+  int to_inner_shadow_offset(double offset) {
+    auto lead = 0.0;
+    if(offset > 0) {
+      lead = offset + INNER_SHADOW_SPREAD;
+    } else if(offset < 0) {
+      lead = offset - INNER_SHADOW_SPREAD;
+    }
+    return static_cast<int>(std::floor(lead * SHADOW_SCALE + 0.5));
+  }
+
+  std::vector<double> get_alpha(const QImage& image) {
+    auto width = image.width();
+    auto alpha = std::vector<double>(
+      static_cast<std::size_t>(width) * image.height());
+    for(auto y = 0; y != image.height(); ++y) {
+      auto line = image.constScanLine(y);
+      for(auto x = 0; x != width; ++x) {
+        alpha[static_cast<std::size_t>(y) * width + x] =
+          line[4 * x + 3] / 255.0;
+      }
+    }
+    return alpha;
+  }
+
+  std::vector<double> dilate(
+      const std::vector<double>& alpha, int width, int height, double spread) {
+    auto at = [&] (int x, int y) {
+      x = std::clamp(x, 0, width - 1);
+      y = std::clamp(y, 0, height - 1);
+      return alpha[static_cast<std::size_t>(y) * width + x];
+    };
+    auto result = alpha;
+    for(auto y = 0; y != height; ++y) {
+      for(auto x = 0; x != width; ++x) {
+        auto value = at(x, y);
+        auto dx = std::max(std::max(at(x + 1, y), at(x - 1, y)) - value, 0.0);
+        auto dy = std::max(std::max(at(x, y + 1), at(x, y - 1)) - value, 0.0);
+        auto grow = spread * std::sqrt(dx * dx + dy * dy);
+        if(grow <= 0) {
+          auto corner = std::max({at(x + 1, y + 1), at(x - 1, y - 1),
+            at(x + 1, y - 1), at(x - 1, y + 1)});
+          grow = spread * spread * std::max(corner - value, 0.0);
+        }
+        result[static_cast<std::size_t>(y) * width + x] =
+          std::min(1.0, value + grow);
+      }
+    }
+    return result;
+  }
+
+  void blur_box(std::vector<double>& alpha, int width, int height, int low,
+      int high, bool is_horizontal) {
+    auto length = is_horizontal ? width : height;
+    auto count = is_horizontal ? height : width;
+    auto stride = is_horizontal ? 1 : width;
+    auto step = is_horizontal ? width : 1;
+    auto sums = std::vector<double>(static_cast<std::size_t>(length) + 1);
+    auto size = static_cast<double>(high - low + 1);
+    for(auto line = 0; line != count; ++line) {
+      auto start = static_cast<std::size_t>(line) * step;
+      for(auto i = 0; i != length; ++i) {
+        sums[i + 1] =
+          sums[i] + alpha[start + static_cast<std::size_t>(i) * stride];
+      }
+      for(auto i = 0; i != length; ++i) {
+        auto first = std::clamp(i + low, 0, length);
+        auto last = std::clamp(i + high + 1, 0, length);
+        alpha[start + static_cast<std::size_t>(i) * stride] =
+          (sums[last] - sums[first]) / size;
+      }
+    }
+  }
+
+  void blur_boxes(
+      std::vector<double>& alpha, int width, int height, double sigma) {
+    auto size = static_cast<int>(std::floor(
+      sigma * 3 * std::sqrt(2 * std::numbers::pi) / 4 + 0.5));
+    if(size <= 1) {
+      return;
+    }
+    auto half = size / 2;
+    auto windows = std::array<std::pair<int, int>, 3>({
+      std::pair(-half, half), std::pair(-half, half), std::pair(-half, half)});
+    if(size % 2 == 0) {
+      windows[0] = std::pair(-half, half - 1);
+      windows[1] = std::pair(-half + 1, half);
+    }
+    for(auto is_horizontal : {true, false}) {
+      for(auto& window : windows) {
+        blur_box(alpha, width, height, window.first, window.second,
+          is_horizontal);
+      }
+    }
   }
 
   QImage to_straight(const QImage& image) {
@@ -1163,7 +1261,9 @@ namespace {
             both.m_height + SHARP_SHADOW_SPAN);
         }
         if(clip) {
-          region = intersect(region, inflate(*clip, blur + 2));
+          region = intersect(region, inflate(Rect(clip->m_x + 1 - blur / 2,
+            clip->m_y + 1 - blur / 2, clip->m_width, clip->m_height),
+            1.5 * blur + 1));
           if(region.is_empty()) {
             return;
           }
@@ -1185,25 +1285,45 @@ namespace {
         if(!bounds || shadow.m_color.m_alpha <= 0) {
           return;
         }
-        auto region = Rellu::unite(*bounds, Rect(
-          bounds->m_x + shadow.m_offset.m_x, bounds->m_y + shadow.m_offset.m_y,
-          bounds->m_width, bounds->m_height));
-        auto content = render(slice(begin, end), region, SHADOW_SCALE);
-        auto source = Rect(region.m_x - shadow.m_offset.m_x,
-          region.m_y - shadow.m_offset.m_y, region.m_width, region.m_height);
-        auto margin = std::ceil(3 * shadow.m_radius + 1);
-        auto padding = static_cast<int>(std::lround(margin * SHADOW_SCALE));
-        auto blurred = render(blur_slice(begin, end, shadow.m_radius),
-          inflate(source, margin), SHADOW_SCALE);
-        for(auto y = 0; y != content.height(); ++y) {
-          auto inside = content.scanLine(y);
-          auto outside = blurred.constScanLine(y + padding) + 4 * padding;
-          for(auto x = 0; x != content.width(); ++x) {
-            inside[4 * x + 3] = static_cast<uchar>(std::lround(
-              inside[4 * x + 3] * (255 - outside[4 * x + 3]) / 255.0));
+        auto region = Rect(bounds->m_x, bounds->m_y,
+          bounds->m_width + INNER_SHADOW_SPAN,
+          bounds->m_height + INNER_SHADOW_SPAN);
+        auto offset_x = to_inner_shadow_offset(shadow.m_offset.m_x);
+        auto offset_y = to_inner_shadow_offset(shadow.m_offset.m_y);
+        auto sigma = shadow.m_radius * SHADOW_SCALE;
+        auto padding = static_cast<int>(std::ceil(3 * sigma)) +
+          std::max(std::abs(offset_x), std::abs(offset_y)) + 2;
+        auto content = render(slice(begin, end),
+          inflate(region, padding / SHADOW_SCALE), SHADOW_SCALE);
+        auto width = content.width();
+        auto height = content.height();
+        auto hole = dilate(get_alpha(content), width, height,
+          INNER_SHADOW_SPREAD * SHADOW_SCALE);
+        auto blurred = hole;
+        blur_boxes(blurred, width, height, sigma);
+        auto image = QImage(std::max(1, width - 2 * padding),
+          std::max(1, height - 2 * padding), QImage::Format_RGBA8888);
+        auto red = static_cast<uchar>(std::lround(shadow.m_color.m_red * 255));
+        auto green =
+          static_cast<uchar>(std::lround(shadow.m_color.m_green * 255));
+        auto blue =
+          static_cast<uchar>(std::lround(shadow.m_color.m_blue * 255));
+        for(auto y = 0; y != image.height(); ++y) {
+          auto output = image.scanLine(y);
+          auto row = static_cast<std::size_t>(y + padding) * width;
+          auto source = static_cast<std::size_t>(
+            std::clamp(y + padding - offset_y, 0, height - 1)) * width;
+          for(auto x = 0; x != image.width(); ++x) {
+            auto column = std::clamp(x + padding - offset_x, 0, width - 1);
+            auto alpha = hole[row + x + padding] *
+              (1 - blurred[source + column]) * shadow.m_color.m_alpha;
+            output[4 * x] = red;
+            output[4 * x + 1] = green;
+            output[4 * x + 2] = blue;
+            output[4 * x + 3] = static_cast<uchar>(
+              std::lround(255 * std::clamp(alpha, 0.0, 1.0)));
           }
         }
-        auto image = colorize(content, shadow.m_color);
         if(!is_visible(image)) {
           return;
         }

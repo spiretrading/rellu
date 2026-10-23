@@ -1,3 +1,4 @@
+#include <array>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -406,6 +407,7 @@ TEST_SUITE("PdfExport") {
     add(660, 60, 3, Point(5, -7));
     add(20, 60, 0, Point(0, 3));
     add(520, 520, 8, Point(0, 3));
+    add(40, 40, 9, Point(0, 3));
     transaction.commit();
     auto pdf = parse(write_pdf(document, {artboard}));
     auto contents = pdf.get_contents(0);
@@ -419,6 +421,8 @@ TEST_SUITE("PdfExport") {
     REQUIRE(contains(contents, "q\n2 0 0 2 79.839996 239.84"));
     REQUIRE(contains(contents, " gs\n0 0 126 132 re\nf\nQ\n"));
     REQUIRE(contains(contents, "q\n2 0 0 2 1856 1868 cm\n"));
+    REQUIRE(contains(contents, "q\n2 0 0 2 -92 -80 cm\n"));
+    REQUIRE(contains(contents, " gs\n0 0 340 340 re\nf\nQ\n"));
     REQUIRE(contains(contents, " gs\n0 0 316 302 re\nf\nQ\n"));
     REQUIRE(contents.find("2 0 0 2 1116 156 cm") <
       contents.find("4 0 0 4 1200 240 cm"));
@@ -447,27 +451,44 @@ TEST_SUITE("PdfExport") {
     auto transaction = Transaction(document);
     auto artboard = transaction.append(
       NodeId(), make_header(), make_artboard(Rect(0, 0, 800, 600)));
-    auto shape = make_shape(Rect(0, 0, 80, 80), make_color(240, 192, 64));
-    shape.m_style.m_effects.push_back(
-      InnerShadow(Point(2, 2), 2, make_color(0, 0, 0, 0.5)));
-    transaction.append(artboard, make_header(make_translation(580, 220)),
-      shape);
+    auto add = [&] (Point position, Color color, Point offset) {
+      auto shape = make_shape(Rect(0, 0, 80, 80), color);
+      shape.m_style.m_effects.push_back(
+        InnerShadow(offset, 2, make_color(0, 0, 0)));
+      transaction.append(artboard,
+        make_header(make_translation(position.m_x, position.m_y)), shape);
+    };
+    add(Point(580, 220), make_color(240, 192, 64), Point(2, 2));
+    add(Point(100, 220), make_color(255, 255, 255), Point(-3, 1));
     transaction.commit();
     auto pdf = parse(write_pdf(document, {artboard}));
     auto contents = pdf.get_contents(0);
     REQUIRE(contains(contents, "q\n4 0 0 4 2320 880 cm\n"
       ".9412 .7529 .251 RG .9412 .7529 .251 rg\n/G3 gs\n0 0 80 80 re\nf\n"
       "Q\nQ\nq\n2320 880 320 320 re\nW* n\nq\n2 0 0 2 2320 880 cm\n"));
+    REQUIRE(contains(contents, "q\n2 0 0 2 400 880 cm\n"));
     REQUIRE(contains(contents, " scn\n/G3 gs\n0 0 164 164 re\nf\nQ\nQ\n"));
     auto masks = pdf.find("/Width 164\n/Height 164\n/ColorSpace /DeviceGray");
-    REQUIRE(masks.size() == 1);
-    auto& alpha = pdf.m_objects.at(masks.front()).m_stream;
-    auto at = [&] (int x, int y) {
+    REQUIRE(masks.size() == 2);
+    auto at = [&] (std::size_t mask, int x, int y) {
+      auto& alpha = pdf.m_objects.at(masks[mask]).m_stream;
       return static_cast<int>(static_cast<unsigned char>(alpha[164 * y + x]));
     };
-    REQUIRE(at(159, 80) > 0);
-    REQUIRE(std::abs(at(159, 80) - at(8, 80)) <= 2);
-    REQUIRE(std::abs(at(80, 159) - at(80, 8)) <= 2);
+    auto near = std::array<int, 6>({202, 183, 162, 139, 116, 93});
+    for(auto x = 0; x != 6; ++x) {
+      REQUIRE(std::abs(at(0, x, 80) - near[x]) <= 1);
+      REQUIRE(std::abs(at(0, 80, x) - near[x]) <= 1);
+    }
+    auto far = std::array<int, 6>({0, 2, 4, 9, 15, 25});
+    for(auto x = 0; x != 6; ++x) {
+      REQUIRE(std::abs(at(0, 155 + x, 80) - far[x]) <= 1);
+      REQUIRE(std::abs(at(0, 80, 155 + x) - far[x]) <= 1);
+    }
+    REQUIRE(std::abs(at(1, 0, 80) - 4) <= 1);
+    REQUIRE(std::abs(at(1, 157, 80) - 202) <= 1);
+    REQUIRE(std::abs(at(1, 159, 80) - 230) <= 1);
+    REQUIRE(std::abs(at(1, 80, 0) - 162) <= 1);
+    REQUIRE(std::abs(at(1, 80, 159) - 37) <= 1);
   }
 
   TEST_CASE("rect_mask") {

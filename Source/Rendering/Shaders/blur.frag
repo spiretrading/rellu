@@ -41,7 +41,26 @@ void main() {
   vec4 color = vec4(0.0);
   float kernel = floor(blur.w / KERNEL_STRIDE);
   float taps = blur.w - kernel * KERNEL_STRIDE;
-  if(kernel > 1.5) {
+  if(kernel > 2.5) {
+    float alpha = fetch(coordinates).a;
+    vec2 horizontal = vec2(blur.x, 0.0);
+    vec2 vertical = vec2(0.0, blur.y);
+    float dx = max(max(fetch(coordinates + horizontal).a,
+      fetch(coordinates - horizontal).a) - alpha, 0.0);
+    float dy = max(max(fetch(coordinates + vertical).a,
+      fetch(coordinates - vertical).a) - alpha, 0.0);
+    float grow = blur.z * length(vec2(dx, dy));
+    if(grow <= 0.0) {
+      vec2 diagonal = vec2(blur.x, blur.y);
+      vec2 antidiagonal = vec2(blur.x, -blur.y);
+      float corner = max(
+        max(fetch(coordinates + diagonal).a, fetch(coordinates - diagonal).a),
+        max(fetch(coordinates + antidiagonal).a,
+          fetch(coordinates - antidiagonal).a));
+      grow = blur.z * blur.z * max(corner - alpha, 0.0);
+    }
+    color = vec4(0.0, 0.0, 0.0, min(1.0, alpha + grow));
+  } else if(kernel > 1.5) {
     float total = 0.0;
     for(int i = -MAXIMUM_TAPS; i <= MAXIMUM_TAPS; ++i) {
       float tap = float(i);

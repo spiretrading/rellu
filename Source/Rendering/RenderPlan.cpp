@@ -23,6 +23,9 @@ namespace {
   constexpr auto INNER_SHADOW_MODE = 16.0f;
   constexpr auto EXACT_BOX_KERNEL = 100.0f;
   constexpr auto SPLINE_BOX_KERNEL = 200.0f;
+  constexpr auto DILATION_KERNEL = 300.0f;
+  constexpr auto MAXIMUM_DILATIONS = 4;
+  constexpr auto INNER_SHADOW_SPREAD = 0.5;
   constexpr auto ATLAS_SIZE = 2048;
   constexpr auto MAXIMUM_CELL = 1024;
   constexpr auto MAXIMUM_PIECES = std::size_t(16);
@@ -164,6 +167,21 @@ namespace {
       matrix.m_b * vector.m_x + matrix.m_d * vector.m_y);
   }
 
+  double get_inner_shadow_lead(double offset) {
+    if(offset > 0) {
+      return offset + INNER_SHADOW_SPREAD;
+    } else if(offset < 0) {
+      return offset - INNER_SHADOW_SPREAD;
+    }
+    return 0;
+  }
+
+  Point get_inner_shadow_offset(const Matrix& view, Point offset) {
+    auto vector = map_vector(view, Point(get_inner_shadow_lead(offset.m_x),
+      get_inner_shadow_lead(offset.m_y)));
+    return Point(std::floor(vector.m_x + 0.5), std::floor(vector.m_y + 0.5));
+  }
+
   int get_box_size(double radius) {
     return static_cast<int>(std::floor(
       radius * 3 * std::sqrt(2 * std::numbers::pi) / 4 + 0.5));
@@ -289,6 +307,8 @@ namespace {
       bool is_batchable(std::size_t surface) const;
       void prepare_batch(std::size_t surface, std::size_t start,
         std::vector<Target>& atlases);
+      Target dilate(
+        const Target& source, const QRect& region, double spread);
       Target blur(const Target& source, const QRect& region, double radius,
         bool is_inverted, double brightness);
       void blur(std::vector<BlurTask>& tasks, std::vector<Target>& atlases);
@@ -640,9 +660,10 @@ namespace {
       region |= bounds.adjusted(-margin, -margin, margin, margin);
     }
     for(auto& shadow : layer.m_inner_shadows) {
-      auto offset = map_vector(m_view, shadow.m_offset);
+      auto offset = get_inner_shadow_offset(m_view, shadow.m_offset);
       auto margin = get_margin(shadow.m_radius * m_scale) + to_coordinate(
-        std::ceil(std::abs(offset.m_x) + std::abs(offset.m_y)));
+        std::ceil(std::abs(offset.m_x) + std::abs(offset.m_y) +
+          INNER_SHADOW_SPREAD * m_scale));
       region |= bounds.adjusted(-margin, -margin, margin, margin);
     }
     if(layer.m_blur * m_scale >= MINIMUM_RADIUS) {
@@ -1099,13 +1120,17 @@ namespace {
     auto target = allocate(region.size(), region.topLeft(), 1);
     emit_content(index, target, PlanClear::CLEAR);
     for(auto& shadow : layer.m_inner_shadows) {
-      auto blurred =
-        blur(target, region, shadow.m_radius * m_scale, true, 0);
+      auto hole = dilate(target, region, INNER_SHADOW_SPREAD * m_scale);
+      auto blurred = blur(hole, region, shadow.m_radius * m_scale, true, 0);
+      if(hole.m_texture != target.m_texture) {
+        release(hole);
+      }
       auto backdrop = allocate(region.size(), region.topLeft(), 1);
       add_copy(target, region, backdrop);
       auto slot = add_paint();
-      set_texture_paint(slot, blurred, map_vector(m_view, shadow.m_offset),
-        PaintKind::TEXTURE, &backdrop, INNER_SHADOW_MODE);
+      set_texture_paint(slot, blurred,
+        get_inner_shadow_offset(m_view, shadow.m_offset), PaintKind::TEXTURE,
+        &backdrop, INNER_SHADOW_MODE);
       auto span = add_span(region, to_premultiplied(shadow.m_color), slot);
       auto pass = add_pass(target, PlanClear::KEEP);
       draw(pass, PlanPipeline::BLEND, span, 1,
@@ -1327,6 +1352,31 @@ namespace {
     for(auto i = std::size_t(0); i != layers.size(); ++i) {
       m_prepared[layers[i]].front().m_target = targets[i];
     }
+  }
+
+  Target Planner::dilate(
+      const Target& source, const QRect& region, double spread) {
+    if(!(spread > 0)) {
+      return source;
+    }
+    auto count = std::clamp(
+      to_coordinate(std::ceil(spread)), 1, MAXIMUM_DILATIONS);
+    auto current = source;
+    for(auto i = 0; i != count; ++i) {
+      auto destination = allocate(region.size(), region.topLeft(), 1);
+      auto pass = add_pass(destination, PlanClear::CLEAR);
+      add_blur_draw(pass, -1, current, region.size(), destination,
+        Point(1.0 / current.m_size.width(), 1.0 / current.m_size.height()), 0,
+        false, 0);
+      auto& uniforms = m_plan->m_uniforms[get_pass(pass).m_uniforms];
+      uniforms[26] = static_cast<float>(spread / count);
+      uniforms[27] = DILATION_KERNEL;
+      if(current.m_texture != source.m_texture) {
+        release(current);
+      }
+      current = destination;
+    }
+    return current;
   }
 
   Target Planner::blur(const Target& source, const QRect& region,
