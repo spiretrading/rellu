@@ -21,6 +21,8 @@ namespace {
   constexpr auto SOLID_RUN = 256u;
   constexpr auto MAXIMUM_COORDINATE = 1 << 24;
   constexpr auto INNER_SHADOW_MODE = 16.0f;
+  constexpr auto EXACT_BOX_KERNEL = 100.0f;
+  constexpr auto SPLINE_BOX_KERNEL = 200.0f;
   constexpr auto ATLAS_SIZE = 2048;
   constexpr auto MAXIMUM_CELL = 1024;
   constexpr auto MAXIMUM_PIECES = std::size_t(16);
@@ -292,6 +294,7 @@ namespace {
       void blur(std::vector<BlurTask>& tasks, std::vector<Target>& atlases);
       Target blur_boxes(
         const Target& source, const QRect& region, double radius);
+      void set_blur_kernel(int block, double radius, int level);
       void add_blur_pass(const Target& source, QSize texels,
         const Target& destination, Point step, double radius,
         bool is_inverted, double brightness);
@@ -1352,22 +1355,19 @@ namespace {
       current = destination;
       is_first = false;
     }
-    auto deviation = radius / level;
-    if(level > 1) {
-      deviation = std::sqrt(
-        std::max(0.0, deviation * deviation - 1.0 / 12 - 1.0 / 6));
-    }
     auto horizontal = allocate(get_size(level), region.topLeft(), level);
-    add_blur_pass(current, get_size(level), horizontal,
-      Point(1.0 / current.m_size.width(), 0), deviation,
-      is_first && is_inverted, 0);
+    auto pass = add_pass(horizontal, PlanClear::CLEAR);
+    add_blur_draw(pass, -1, current, get_size(level), horizontal,
+      Point(1.0 / current.m_size.width(), 0), 0, is_first && is_inverted, 0);
+    set_blur_kernel(get_pass(pass).m_uniforms, radius, level);
     if(current.m_texture != source.m_texture) {
       release(current);
     }
     auto vertical = allocate(get_size(level), region.topLeft(), level);
-    add_blur_pass(horizontal, get_size(level), vertical,
-      Point(0, 1.0 / horizontal.m_size.height()), deviation, false,
-      brightness);
+    pass = add_pass(vertical, PlanClear::CLEAR);
+    add_blur_draw(pass, -1, horizontal, get_size(level), vertical,
+      Point(0, 1.0 / horizontal.m_size.height()), 0, false, brightness);
+    set_blur_kernel(get_pass(pass).m_uniforms, radius, level);
     release(horizontal);
     return vertical;
   }
@@ -1414,22 +1414,15 @@ namespace {
         intermediate = atlas;
         current = std::move(destinations);
       }
-      auto deviations = std::vector<double>();
-      for(auto i : group) {
-        auto deviation = tasks[i].m_radius / level;
-        if(level > 1) {
-          deviation = std::sqrt(
-            std::max(0.0, deviation * deviation - 1.0 / 12 - 1.0 / 6));
-        }
-        deviations.push_back(deviation);
-      }
       auto horizontals = std::vector<Target>();
       auto horizontal = allocate_cells(regions, level, horizontals);
       auto pass = add_pass(horizontal, PlanClear::CLEAR);
       for(auto k = std::size_t(0); k != group.size(); ++k) {
-        add_blur_draw(pass, add_uniforms(horizontals[k]), current[k],
+        auto uniforms = add_uniforms(horizontals[k]);
+        add_blur_draw(pass, uniforms, current[k],
           get_size(regions[k], level), horizontals[k],
-          Point(1.0 / current[k].m_size.width(), 0), deviations[k], false, 0);
+          Point(1.0 / current[k].m_size.width(), 0), 0, false, 0);
+        set_blur_kernel(uniforms, tasks[group[k]].m_radius, level);
       }
       if(intermediate) {
         release(*intermediate);
@@ -1438,14 +1431,38 @@ namespace {
       atlases.push_back(allocate_cells(regions, level, verticals));
       pass = add_pass(atlases.back(), PlanClear::CLEAR);
       for(auto k = std::size_t(0); k != group.size(); ++k) {
-        add_blur_draw(pass, add_uniforms(verticals[k]), horizontals[k],
+        auto uniforms = add_uniforms(verticals[k]);
+        add_blur_draw(pass, uniforms, horizontals[k],
           get_size(regions[k], level), verticals[k],
-          Point(0, 1.0 / horizontals[k].m_size.height()), deviations[k],
-          false, 0);
+          Point(0, 1.0 / horizontals[k].m_size.height()), 0, false, 0);
+        set_blur_kernel(uniforms, tasks[group[k]].m_radius, level);
         tasks[group[k]].m_result = verticals[k];
       }
       release(horizontal);
     }
+  }
+
+  void Planner::set_blur_kernel(int block, double radius, int level) {
+    auto& uniforms = m_plan->m_uniforms[block];
+    auto size = std::max(1, get_box_size(radius));
+    auto half = size / 2;
+    if(level == 1) {
+      uniforms[26] = static_cast<float>(size);
+      uniforms[27] = EXACT_BOX_KERNEL +
+        static_cast<float>(std::min(MAXIMUM_TAPS, 3 * half));
+      return;
+    }
+    auto square = static_cast<double>(size) * size;
+    auto variance = 3 * (square - 1) / 12;
+    if(size % 2 == 0) {
+      variance = (2 * (square - 1) + (square + 2 * size)) / 12;
+    }
+    variance =
+      std::max(0.01, variance - (static_cast<double>(level) * level - 1) / 6);
+    auto width = 2 * std::sqrt(variance) / level;
+    uniforms[26] = static_cast<float>(width);
+    uniforms[27] = SPLINE_BOX_KERNEL + static_cast<float>(
+      std::min(MAXIMUM_TAPS, to_coordinate(std::ceil(1.5 * width))));
   }
 
   Target Planner::blur_boxes(
@@ -1663,7 +1680,10 @@ double Rellu::get_radial_offset(const RadialGradient& gradient, Point point) {
 
 int Rellu::get_blur_downsampling(double radius) {
   auto factor = 1;
-  while(factor < MAXIMUM_DOWNSAMPLING && radius / (2 * factor) >= 2) {
+  for(auto threshold : {3.0, 12.0, 28.0, 64.0, 160.0}) {
+    if(radius < threshold) {
+      break;
+    }
     factor *= 2;
   }
   return factor;

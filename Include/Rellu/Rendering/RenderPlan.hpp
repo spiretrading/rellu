@@ -295,8 +295,8 @@ namespace Rellu {
   double get_radial_offset(const RadialGradient& gradient, Point point);
 
   /**
-   * Returns the factor by which a Gaussian blur of a standard deviation in
-   * pixels is downsampled, a power of two.
+   * Returns the factor by which a blur of a standard deviation in pixels is
+   * downsampled, a power of two.
    * @param radius The standard deviation in pixels.
    */
   int get_blur_downsampling(double radius);

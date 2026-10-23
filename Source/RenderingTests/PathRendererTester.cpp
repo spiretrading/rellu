@@ -315,8 +315,37 @@ namespace {
     return result;
   }
 
-  double get_normal_cdf(double x) {
-    return 0.5 * std::erfc(-x / std::numbers::sqrt2);
+  double get_box_coverage(int pixel, int edge, double radius) {
+    auto size = std::max(1, static_cast<int>(std::floor(
+      radius * 3 * std::sqrt(2 * std::numbers::pi) / 4 + 0.5)));
+    auto half = size / 2;
+    auto windows = std::array<std::pair<int, int>, 3>();
+    if(size % 2 == 1) {
+      windows.fill(std::pair(-half, half));
+    } else {
+      windows = std::array<std::pair<int, int>, 3>({std::pair(-half, half - 1),
+        std::pair(-half + 1, half), std::pair(-half, half)});
+    }
+    auto weights = std::vector<double>({1});
+    auto first = 0;
+    for(auto& window : windows) {
+      auto width = window.second - window.first + 1;
+      auto next = std::vector<double>(weights.size() + width - 1, 0);
+      for(auto i = std::size_t(0); i != weights.size(); ++i) {
+        for(auto j = 0; j != width; ++j) {
+          next[i + j] += weights[i] / width;
+        }
+      }
+      weights = std::move(next);
+      first += window.first;
+    }
+    auto coverage = 0.0;
+    for(auto i = std::size_t(0); i != weights.size(); ++i) {
+      if(pixel + first + static_cast<int>(i) >= edge) {
+        coverage += weights[i];
+      }
+    }
+    return coverage;
   }
 
   auto begin_layer(double opacity = 1, BlendMode mode = BlendMode::NORMAL) {
@@ -838,8 +867,8 @@ TEST_SUITE("PathRenderer") {
       auto size = static_cast<int>(64 * scale);
       auto image = offscreen.render(QSize(size + size / 2, 4), scale);
       for(auto x = 0; x != size; ++x) {
-        auto distance = (x + 0.5) / scale - 60;
-        auto alpha = 0.5 * get_normal_cdf(distance / radius);
+        auto alpha = 0.5 * get_box_coverage(
+          x, static_cast<int>(60 * scale), radius * scale);
         require_pixel(image, x, 1, Pixel({0, 0, alpha, alpha}), 3);
       }
     }
@@ -862,7 +891,7 @@ TEST_SUITE("PathRenderer") {
       if(y >= 8 && y < 12) {
         expected = Pixel({0, 0, 0, 1});
       } else if(y >= 12 && y < 68) {
-        auto shadow = get_normal_cdf((y + 0.5 - 28) / 3);
+        auto shadow = get_box_coverage(y, 28, 3);
         expected = Pixel({1 - shadow, 1 - shadow, 1 - shadow, 1});
       }
       require_pixel(image, 16, y, expected, 3);
@@ -894,8 +923,32 @@ TEST_SUITE("PathRenderer") {
     renderer.m_list.push_back(EndLayerCommand());
     auto image = render(renderer, QSize(64, 4));
     for(auto x = 0; x != 64; ++x) {
-      auto alpha = get_normal_cdf((x + 0.5 - 32) / 5);
+      auto alpha = get_box_coverage(x, 32, 5);
       require_pixel(image, x, 1, Pixel({0, alpha, 0, alpha}), 3);
+    }
+  }
+
+  TEST_CASE("blur_kernel") {
+    auto samples = std::array<std::pair<double, std::vector<double>>, 2>({
+      std::pair(1.0, std::vector<double>({0.084, 0.335, 0.665, 0.916})),
+      std::pair(2.0, std::vector<double>({0.01, 0.052, 0.126, 0.251, 0.414,
+        0.586, 0.749, 0.874, 0.948, 0.99}))});
+    for(auto& sample : samples) {
+      CAPTURE(sample.first);
+      auto renderer = TestRenderer();
+      auto layer = begin_layer();
+      layer.m_blur = sample.first;
+      renderer.m_list.push_back(layer);
+      renderer.m_list.push_back(
+        fill(make_rectangle(Rect(32, -50, 100, 100)), make_color(0, 255, 0)));
+      renderer.m_list.push_back(EndLayerCommand());
+      auto image = render(renderer, QSize(64, 4));
+      auto start = 32 - static_cast<int>(sample.second.size()) / 2;
+      for(auto i = std::size_t(0); i != sample.second.size(); ++i) {
+        auto alpha = sample.second[i];
+        require_pixel(image, start + static_cast<int>(i), 1,
+          Pixel({0, alpha, 0, alpha}), 2);
+      }
     }
   }
 

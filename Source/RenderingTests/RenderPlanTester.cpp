@@ -181,9 +181,10 @@ TEST_SUITE("RenderPlan") {
 
   TEST_CASE("blur_downsampling") {
     REQUIRE(get_blur_downsampling(0) == 1);
-    REQUIRE(get_blur_downsampling(3.9) == 1);
-    REQUIRE(get_blur_downsampling(4) == 2);
-    REQUIRE(get_blur_downsampling(16) == 8);
+    REQUIRE(get_blur_downsampling(2.9) == 1);
+    REQUIRE(get_blur_downsampling(3) == 2);
+    REQUIRE(get_blur_downsampling(12) == 4);
+    REQUIRE(get_blur_downsampling(30) == 8);
     REQUIRE(get_blur_downsampling(1000) == 32);
   }
 }
