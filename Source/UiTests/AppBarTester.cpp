@@ -104,6 +104,21 @@ TEST_SUITE("AppBar") {
     REQUIRE(workspaces == std::vector<Workspace>({Workspace::PROTOTYPE}));
   }
 
+  TEST_CASE("home") {
+    auto bar = AppBar();
+    auto& home = bar.get_home_button();
+    REQUIRE(!home.isEnabled());
+    auto presses = 0;
+    bar.set_home_handler([&] {
+      ++presses;
+    });
+    REQUIRE(home.isEnabled());
+    home.click();
+    REQUIRE(presses == 1);
+    bar.set_home_handler({});
+    REQUIRE(!home.isEnabled());
+  }
+
   TEST_CASE("title") {
     auto bar = AppBar();
     bar.set_title("shapes", false);

@@ -162,6 +162,7 @@ AppBar::AppBar(QWidget* parent)
     : QWidget(parent),
       m_workspace(Workspace::DESIGN),
       m_zoom(1),
+      m_home(make_icon_button(Glyph::HOME, "Home")),
       m_design(make_workspace_button("Design")),
       m_prototype(make_workspace_button("Prototype")),
       m_share(make_workspace_button("Share")),
@@ -183,9 +184,13 @@ AppBar::AppBar(QWidget* parent)
   auto left_layout = new QHBoxLayout(left);
   left_layout->setContentsMargins(0, 0, 0, 0);
   left_layout->setSpacing(0);
-  auto home = make_icon_button(Glyph::HOME, "Home");
-  home->setEnabled(false);
-  left_layout->addWidget(home);
+  m_home->setEnabled(false);
+  connect(m_home, &QToolButton::clicked, this, [this] {
+    if(m_home_handler) {
+      m_home_handler();
+    }
+  });
+  left_layout->addWidget(m_home);
   left_layout->addSpacing(
     WORKSPACE_LEFT - APP_BAR_MARGIN - ICON_BUTTON_SIZE);
   for(auto button : {m_design, m_prototype, m_share}) {
@@ -344,6 +349,15 @@ void AppBar::set_zoom_handler(ZoomHandler handler) {
 
 void AppBar::set_release_handler(ReleaseHandler handler) {
   m_release_handler = std::move(handler);
+}
+
+void AppBar::set_home_handler(HomeHandler handler) {
+  m_home_handler = std::move(handler);
+  m_home->setEnabled(static_cast<bool>(m_home_handler));
+}
+
+QToolButton& AppBar::get_home_button() {
+  return *m_home;
 }
 
 QLineEdit& AppBar::get_zoom_field() {

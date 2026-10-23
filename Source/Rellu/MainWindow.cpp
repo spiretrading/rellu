@@ -499,6 +499,10 @@ void MainWindow::set_document(
   }
 }
 
+void MainWindow::set_home_handler(std::function<void ()> handler) {
+  m_app_bar->set_home_handler(std::move(handler));
+}
+
 bool MainWindow::open(const QString& path) {
   return m_windows->open(path);
 }
@@ -1997,7 +2001,8 @@ void MainWindow::update_zoom() {
 }
 
 std::unique_ptr<MainWindow> Rellu::make_main_window(DocumentWindows& windows,
-    const QString& path, std::unique_ptr<Document> document) {
+    const QString& path, std::unique_ptr<Document> document,
+    QWidget* origin) {
   QApplication::setOverrideCursor(Qt::WaitCursor);
   if(!document) {
     document = std::make_unique<Document>();
@@ -2005,9 +2010,7 @@ std::unique_ptr<MainWindow> Rellu::make_main_window(DocumentWindows& windows,
       import_xd(std::filesystem::path(path.toStdU16String()), *document);
     } catch(const std::exception& error) {
       QApplication::restoreOverrideCursor();
-      auto active = windows.get_active();
-      show_xd_alert(make_load_failure_alert(path),
-        active ? &active->get_widget() : nullptr);
+      show_xd_alert(make_load_failure_alert(path), origin);
       return nullptr;
     }
   }

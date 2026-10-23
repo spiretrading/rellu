@@ -1,4 +1,3 @@
-#include <functional>
 #include <memory>
 #include <utility>
 #include <QApplication>
@@ -7,7 +6,6 @@
 #include <QEvent>
 #include <QFileInfo>
 #include <QList>
-#include <QMetaObject>
 #include <QSettings>
 #include <QStringList>
 #include <QVariant>
@@ -18,6 +16,8 @@
 #include "Rellu/Ui/DocumentWindows.hpp"
 #include "Rellu/Ui/FeatureCards.hpp"
 #include "Rellu/Ui/GreyscaleText.hpp"
+#include "Rellu/Ui/HomeScreen.hpp"
+#include "Rellu/Ui/HomeWindow.hpp"
 #include "Rellu/Ui/PixelHitFilter.hpp"
 #include "Rellu/Ui/SingleInstance.hpp"
 #include "Rellu/Ui/Theme.hpp"
@@ -36,6 +36,7 @@ using namespace Rellu;
 namespace {
   const auto RECENT_FILES_KEY = QString("recent_files");
   const auto RECENT_IDENTITIES_KEY = QString("recent_file_identities");
+  const auto GEOMETRY_KEY = QString("main_window/geometry");
 
   QList<QByteArray> load_identities(const QSettings& settings) {
     auto identities = QList<QByteArray>();
@@ -101,33 +102,51 @@ int main(int argc, char** argv) {
     }
   });
   windows.locate_recent_files();
+  auto home = HomeWindow(windows);
+  {
+    auto settings = QSettings();
+    home.get_screen().set_selections(load_home_selections(settings));
+  }
+  home.get_screen().set_selections_handler([] (const auto& selections) {
+    auto settings = QSettings();
+    save_home_selections(settings, selections);
+  });
   windows.set_factory([&] (const QString& path, auto document) {
-    return std::unique_ptr<DocumentWindow>(
-      make_main_window(windows, path, std::move(document)));
+    auto origin = static_cast<QWidget*>(nullptr);
+    if(auto active = windows.get_active()) {
+      origin = &active->get_widget();
+    } else if(home.is_shown()) {
+      origin = &home.get_screen();
+    }
+    auto window = make_main_window(windows, path, std::move(document), origin);
+    if(window) {
+      window->set_home_handler([&home, widget = window.get()] {
+        home.show_over(*widget);
+      });
+    }
+    return std::unique_ptr<DocumentWindow>(std::move(window));
   });
-  auto empty_handler = std::function<void ()>([] {
-    QCoreApplication::quit();
-  });
-  windows.set_empty_handler(empty_handler);
   instance.listen([&] (const QStringList& paths) {
     if(paths.isEmpty()) {
       if(auto window = windows.get_active()) {
         windows.activate(*window);
+      } else {
+        home.activate();
       }
     }
     for(auto& path : paths) {
-      windows.open(path);
+      home.open(path);
     }
   });
+  auto show_home = [&] {
+    home.show(QSettings().value(GEOMETRY_KEY).toByteArray());
+    return true;
+  };
   if(!open_launched_document(QApplication::arguments(),
       [&] (const QString& path) {
         return windows.open(path);
-      },
-      [&] {
-        return windows.make_new();
-      }) && windows.get_windows().empty()) {
-    QMetaObject::invokeMethod(
-      &application, empty_handler, Qt::QueuedConnection);
+      }, show_home)) {
+    show_home();
   }
   auto result = application.exec();
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);

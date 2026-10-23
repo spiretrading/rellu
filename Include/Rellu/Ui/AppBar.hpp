@@ -54,6 +54,9 @@ namespace Rellu {
        */
       using ReleaseHandler = std::function<void ()>;
 
+      /** The type of function called when the user presses the Home button. */
+      using HomeHandler = std::function<void ()>;
+
       /** The height of the bar in device independent pixels. */
       static constexpr auto HEIGHT = 42;
 
@@ -115,6 +118,16 @@ namespace Rellu {
        */
       void set_release_handler(ReleaseHandler handler);
 
+      /**
+       * Sets the function called when the user presses the Home button,
+       * which is enabled only while it has one.
+       * @param handler The function to call, or empty for none.
+       */
+      void set_home_handler(HomeHandler handler);
+
+      /** Returns the Home button. */
+      QToolButton& get_home_button();
+
       /** Returns the zoom field. */
       QLineEdit& get_zoom_field();
 
@@ -134,6 +147,8 @@ namespace Rellu {
       WorkspaceHandler m_workspace_handler;
       ZoomHandler m_zoom_handler;
       ReleaseHandler m_release_handler;
+      HomeHandler m_home_handler;
+      QToolButton* m_home;
       QToolButton* m_design;
       QToolButton* m_prototype;
       QToolButton* m_share;

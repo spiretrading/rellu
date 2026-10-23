@@ -94,6 +94,12 @@ namespace Rellu {
         const QString& path);
 
       /**
+       * Sets the function called when the app bar's Home button is pressed.
+       * @param handler The function to call.
+       */
+      void set_home_handler(std::function<void ()> handler);
+
+      /**
        * Opens an Adobe XD file in a new window, or activates the window it
        * is open in, reporting any failure to the user.
        * @param path The path of the file to open.
@@ -256,16 +262,19 @@ namespace Rellu {
 
   /**
    * Makes the main window of a document, reading it from its file unless
-   * it is new and reporting a failure to read it over the active window.
+   * it is new and reporting a failure to read it.
    * @param windows The application's document windows.
    * @param path The path of the file to open, or empty for a new document.
    * @param document The new document, or <code>nullptr</code> to read the
    *        file.
+   * @param origin The window a failure is reported over, or
+   *        <code>nullptr</code> for none.
    * @return The window, or <code>nullptr</code> if the file could not be
    *         read.
    */
   std::unique_ptr<MainWindow> make_main_window(DocumentWindows& windows,
-    const QString& path, std::unique_ptr<Document> document);
+    const QString& path, std::unique_ptr<Document> document,
+    QWidget* origin);
 }
 
 #endif
