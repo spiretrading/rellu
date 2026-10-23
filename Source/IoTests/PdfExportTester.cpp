@@ -312,6 +312,20 @@ TEST_SUITE("PdfExport") {
     REQUIRE(contains(pdf.m_objects.at(images.front()).m_dictionary,
       "/Width 40\n/Height 20\n/ColorSpace /DeviceRGB\n/BitsPerComponent 8\n"
       "/Filter /DCTDecode\n/ColorTransform 0\n"));
+    auto& jpeg = pdf.m_objects.at(images.front()).m_stream;
+    REQUIRE(contains(jpeg, std::string_view(
+      "\xFF\xC0\0\x11\x08\0\x14\0\x28\x03\x01\x22\0\x02\x11\x01\x03\x11\x01",
+      19)));
+    REQUIRE(!contains(jpeg, "\xFF\xE2"));
+    auto decoded = QImage::fromData(QByteArray(jpeg.data(),
+      static_cast<qsizetype>(jpeg.size())), "JPG");
+    REQUIRE(decoded.size() == QSize(40, 20));
+    for(auto point : {QPoint(0, 0), QPoint(39, 19), QPoint(20, 10)}) {
+      auto color = decoded.pixelColor(point);
+      REQUIRE(color.red() <= 2);
+      REQUIRE(color.green() <= 2);
+      REQUIRE(color.blue() >= 253);
+    }
     auto patterns = pdf.find("/PatternType 1");
     REQUIRE(patterns.size() == 1);
     auto& pattern = pdf.m_objects.at(patterns.front());

@@ -135,21 +135,6 @@ namespace {
     return true;
   }
 
-  QByteArray encode_jpg(const QImage& image, int quality) {
-    auto buffer = static_cast<unsigned char*>(nullptr);
-    auto size = 0ul;
-    auto is_compressed = compress(image, quality, &buffer, &size);
-    auto bytes = QByteArray();
-    if(is_compressed) {
-      bytes = QByteArray(reinterpret_cast<const char*>(buffer),
-        static_cast<qsizetype>(size));
-    }
-    std::free(buffer);
-    if(!is_compressed) {
-      throw std::runtime_error("The JPG encoding failed.");
-    }
-    return bytes;
-  }
   QByteArray encode(const QImage& image, const char* format, int quality) {
     auto bytes = QByteArray();
     auto buffer = QBuffer(&bytes);
@@ -161,6 +146,23 @@ namespace {
     }
     return bytes;
   }
+}
+
+QByteArray Rellu::encode_jpg(const QImage& image, int quality) {
+  auto source = image.convertToFormat(QImage::Format_RGB888);
+  auto buffer = static_cast<unsigned char*>(nullptr);
+  auto size = 0ul;
+  auto is_compressed = compress(source, quality, &buffer, &size);
+  auto bytes = QByteArray();
+  if(is_compressed) {
+    bytes = QByteArray(reinterpret_cast<const char*>(buffer),
+      static_cast<qsizetype>(size));
+  }
+  std::free(buffer);
+  if(!is_compressed) {
+    throw std::runtime_error("The JPG encoding failed.");
+  }
+  return bytes;
 }
 
 void Rellu::write_png_export(
@@ -182,6 +184,5 @@ void Rellu::write_jpg_export(
   auto painter = QPainter(&opaque);
   painter.drawImage(0, 0, image);
   painter.end();
-  write_file(encode_jpg(opaque.convertToFormat(QImage::Format_RGB888),
-    std::clamp(quality, 0, 100)), path);
+  write_file(encode_jpg(opaque, std::clamp(quality, 0, 100)), path);
 }

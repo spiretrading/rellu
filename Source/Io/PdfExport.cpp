@@ -15,11 +15,10 @@
 #include <utility>
 #include <variant>
 #include <vector>
-#include <QBuffer>
 #include <QImage>
-#include <QImageWriter>
 #include "Rellu/Commands/Bounds.hpp"
 #include "Rellu/Geometry/Shapes.hpp"
+#include "Rellu/Io/BitmapExport.hpp"
 #include "Rellu/Io/PdfExport.hpp"
 #include "Rellu/Rendering/CanvasRenderer.hpp"
 #include "Rellu/Rendering/OffscreenRenderer.hpp"
@@ -1468,26 +1467,19 @@ namespace {
         }
         auto id = m_file.reserve();
         if(is_opaque) {
-          auto bytes = QByteArray();
-          auto buffer = QBuffer(&bytes);
-          buffer.open(QIODevice::WriteOnly);
-          auto writer = QImageWriter(&buffer, "jpeg");
-          writer.setQuality(100);
-          if(writer.write(image.convertToFormat(QImage::Format_RGB888))) {
-            auto dictionary = PdfDictionary("XObject");
-            dictionary.add("Subtype", "/Image");
-            dictionary.add("Width", std::to_string(width));
-            dictionary.add("Height", std::to_string(height));
-            dictionary.add("ColorSpace", "/DeviceRGB");
-            dictionary.add("BitsPerComponent", "8");
-            dictionary.add("Filter", "/DCTDecode");
-            dictionary.add("ColorTransform", "0");
-            m_file.write_raw_stream(id, std::move(dictionary),
-              std::string_view(bytes.constData(),
-                static_cast<std::size_t>(bytes.size())));
-            m_images.emplace(key, id);
-            return id;
-          }
+          auto dictionary = PdfDictionary("XObject");
+          dictionary.add("Subtype", "/Image");
+          dictionary.add("Width", std::to_string(width));
+          dictionary.add("Height", std::to_string(height));
+          dictionary.add("ColorSpace", "/DeviceRGB");
+          dictionary.add("BitsPerComponent", "8");
+          dictionary.add("Filter", "/DCTDecode");
+          dictionary.add("ColorTransform", "0");
+          auto bytes = encode_jpg(image, 100);
+          m_file.write_raw_stream(id, std::move(dictionary), std::string_view(
+            bytes.constData(), static_cast<std::size_t>(bytes.size())));
+          m_images.emplace(key, id);
+          return id;
         }
         auto colors = std::string();
         colors.reserve(static_cast<std::size_t>(3 * width * height));

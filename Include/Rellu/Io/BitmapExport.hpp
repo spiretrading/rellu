@@ -1,9 +1,19 @@
 #ifndef RELLU_IO_BITMAP_EXPORT_HPP
 #define RELLU_IO_BITMAP_EXPORT_HPP
 #include <filesystem>
+#include <QByteArray>
 #include <QImage>
 
 namespace Rellu {
+
+  /**
+   * Encodes an opaque image as a JPG as Adobe XD encodes it. Throws
+   * std::runtime_error if the encoding fails.
+   * @param image The image.
+   * @param quality The quality in percent.
+   * @return The JPG's bytes.
+   */
+  QByteArray encode_jpg(const QImage& image, int quality);
 
   /**
    * Writes an image as a PNG file as Adobe XD exports it: 8-bit RGBA keeping
