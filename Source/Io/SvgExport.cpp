@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <fstream>
 #include <map>
@@ -12,7 +13,10 @@
 #include <QByteArray>
 #include <QCryptographicHash>
 #include <QString>
-#include "Rellu/Commands/PathCommands.hpp"
+#include "Rellu/Geometry/BooleanOperation.hpp"
+#include "Rellu/Geometry/Polyline.hpp"
+#include "Rellu/Geometry/Stroke.hpp"
+#include "Rellu/Geometry/SvgPath.hpp"
 #include "Rellu/Io/SvgExport.hpp"
 #include "Rellu/Io/SvgWriter.hpp"
 #include "Rellu/Io/XdWriter.hpp"
@@ -227,6 +231,197 @@ namespace {
       static_cast<qsizetype>(text.size())).toStdString();
   }
 
+  constexpr auto COLLINEAR_TOLERANCE = 1e-5;
+  constexpr auto EXACT_TOLERANCE = 1e-7;
+  constexpr auto STROKE_TOLERANCE = 0.01;
+  constexpr auto STROKE_FIT_TOLERANCE = 0.03;
+
+  std::string to_single_text(double value) {
+    auto single = static_cast<double>(static_cast<float>(value));
+    if(single == 0) {
+      return "0";
+    }
+    char buffer[32];
+    auto result = std::to_chars(buffer, buffer + sizeof(buffer), single,
+      std::chars_format::general, 16);
+    return std::string(buffer, result.ptr);
+  }
+
+  std::string to_ux_path(const Path& path) {
+    auto text = std::string();
+    auto start = Point(0, 0);
+    auto current = Point(0, 0);
+    auto is_closed = false;
+    auto append = [&] (char command, std::initializer_list<Point> points) {
+      if(!text.empty()) {
+        text += ' ';
+      }
+      text += command;
+      for(auto& point : points) {
+        text += ' ' + to_single_text(point.m_x) + ' ' +
+          to_single_text(point.m_y);
+      }
+    };
+    for(auto& segment : path.get_segments()) {
+      auto& points = segment.m_points;
+      if(segment.m_type == SegmentType::MOVE) {
+        append('M', {points[0]});
+        start = points[0];
+        is_closed = false;
+      } else if(segment.m_type == SegmentType::LINE) {
+        append('L', {points[0]});
+        is_closed = false;
+      } else if(segment.m_type == SegmentType::QUADRATIC) {
+        append('Q', {points[0], points[1]});
+        is_closed = false;
+      } else if(segment.m_type == SegmentType::CUBIC) {
+        append('C', {points[0], points[1], points[2]});
+        is_closed = false;
+      } else {
+        if(current != start) {
+          append('L', {start});
+        }
+        is_closed = true;
+      }
+      if(segment.m_type == SegmentType::QUADRATIC) {
+        current = points[1];
+      } else if(segment.m_type == SegmentType::CUBIC) {
+        current = points[2];
+      } else if(segment.m_type == SegmentType::CLOSE) {
+        current = start;
+      } else {
+        current = points[0];
+      }
+    }
+    if(is_closed) {
+      text += " Z";
+    }
+    return text;
+  }
+
+  bool is_polygonal(const Path& path, const Stroke& stroke) {
+    if(stroke.m_join == StrokeJoin::ROUND || stroke.m_cap == StrokeCap::ROUND) {
+      return false;
+    }
+    return std::all_of(path.get_segments().begin(), path.get_segments().end(),
+      [] (const auto& segment) {
+        return segment.m_type != SegmentType::QUADRATIC &&
+          segment.m_type != SegmentType::CUBIC;
+      });
+  }
+
+  double get_area(const std::vector<Point>& points) {
+    auto area = 0.0;
+    for(auto i = std::size_t(0); i != points.size(); ++i) {
+      auto& next = points[(i + 1) % points.size()];
+      area += points[i].m_x * next.m_y - next.m_x * points[i].m_y;
+    }
+    return area;
+  }
+
+  std::vector<Point> remove_collinear(const std::vector<Point>& points) {
+    auto result = std::vector<Point>();
+    for(auto i = std::size_t(0); i != points.size(); ++i) {
+      auto& previous = points[(i + points.size() - 1) % points.size()];
+      auto& point = points[i];
+      auto& next = points[(i + 1) % points.size()];
+      auto direction = next - previous;
+      auto length = std::hypot(direction.m_x, direction.m_y);
+      auto offset = point - previous;
+      auto cross = direction.m_x * offset.m_y - direction.m_y * offset.m_x;
+      auto dot = direction.m_x * offset.m_x + direction.m_y * offset.m_y;
+      if(points.size() <= 3 || length == 0 ||
+          std::abs(cross) > COLLINEAR_TOLERANCE * length || dot <= 0 ||
+          dot >= length * length) {
+        result.push_back(point);
+      }
+    }
+    return result;
+  }
+
+  bool is_before(const Point& left, const Point& right, bool is_stroke) {
+    if(is_stroke) {
+      return left.m_y < right.m_y ||
+        left.m_y == right.m_y && left.m_x < right.m_x;
+    }
+    return left.m_y > right.m_y ||
+      left.m_y == right.m_y && left.m_x > right.m_x;
+  }
+
+  Path arrange(const Path& path, bool is_stroke) {
+    auto polylines = flatten(path, EXACT_TOLERANCE);
+    if(is_stroke) {
+      std::stable_partition(polylines.begin(), polylines.end(),
+        [] (const auto& polyline) {
+          return get_area(polyline.m_points) < 0;
+        });
+    }
+    auto result = Path(path.get_fill_rule());
+    for(auto& polyline : polylines) {
+      auto points = is_stroke && polyline.m_is_closed ?
+        remove_collinear(polyline.m_points) : polyline.m_points;
+      if(points.empty()) {
+        continue;
+      }
+      auto first = std::size_t(0);
+      if(polyline.m_is_closed) {
+        for(auto i = std::size_t(1); i != points.size(); ++i) {
+          if(is_before(points[i], points[first], is_stroke)) {
+            first = i;
+          }
+        }
+      }
+      result.move_to(points[first]);
+      for(auto i = std::size_t(1); i != points.size(); ++i) {
+        result.line_to(points[(first + i) % points.size()]);
+      }
+      if(polyline.m_is_closed) {
+        result.close();
+      }
+    }
+    return result;
+  }
+
+  Path outline_region(const Path& path, const Stroke& stroke,
+      StrokeAlignment alignment, double tolerance) {
+    auto geometry = StrokeGeometry(stroke.m_width, alignment, stroke.m_cap,
+      stroke.m_join, stroke.m_miter_limit, stroke.m_dashes,
+      stroke.m_dash_offset);
+    return outline_stroke(path, geometry, tolerance);
+  }
+
+  std::string to_region_path(
+      const Path& region, bool is_exact, bool is_stroke) {
+    if(is_exact) {
+      return to_ux_path(arrange(region, is_stroke));
+    }
+    return to_ux_path(fit_curves(flatten(region, STROKE_TOLERANCE),
+      STROKE_FIT_TOLERANCE));
+  }
+
+  std::string make_stroke_path(const Path& path, const Stroke& stroke) {
+    auto is_exact = is_polygonal(path, stroke);
+    return to_region_path(outline_region(path, stroke, stroke.m_alignment,
+      is_exact ? EXACT_TOLERANCE : STROKE_TOLERANCE), is_exact, true);
+  }
+
+  void add_stroke_paths(XdValue& out, const Path& path, const Stroke& stroke) {
+    if(!stroke.m_is_enabled || stroke.m_width <= 0 ||
+        stroke.m_alignment == StrokeAlignment::CENTER) {
+      return;
+    }
+    auto is_exact = is_polygonal(path, stroke);
+    auto tolerance = is_exact ? EXACT_TOLERANCE : STROKE_TOLERANCE;
+    auto offset = combine(path,
+      outline_region(path, stroke, StrokeAlignment::CENTER, tolerance),
+      stroke.m_alignment == StrokeAlignment::INSIDE ?
+        BooleanOperation::SUBTRACT : BooleanOperation::ADD, tolerance);
+    auto& ux = out.set("meta", XdValue::make_object()).set(
+      "ux", XdValue::make_object());
+    ux.set("strokePath", make_stroke_path(path, stroke));
+    ux.set("offsetPath", to_region_path(offset, is_exact, false));
+  }
+
   XdValue* get_children(XdValue& node) {
     for(auto key : {"artboard", "group", "shape"}) {
       if(auto container = node.find(key); container &&
@@ -260,16 +455,22 @@ namespace {
         }
       }
 
-      XdValue build(const std::vector<NodeId>& nodes) {
+      XdValue build(const std::vector<NodeId>& nodes, bool is_detached) {
         auto roots = std::vector<NodeId>();
         auto bounds = std::optional<Rect>();
+        auto get_placement = [&] (const NodeId& id) {
+          if(is_detached) {
+            return get_transform(*m_document, id);
+          }
+          return get_world_transform(*m_document, id);
+        };
         for(auto& id : nodes) {
           if(!m_document->find(id)) {
             continue;
           }
           roots.push_back(id);
-          if(auto drawn = get_world_bounds(*m_document, id, BoundsType::DRAW,
-              m_services->m_measurer)) {
+          if(auto drawn = get_bounds(*m_document, id, get_placement(id),
+              BoundsType::DRAW, m_services->m_measurer)) {
             bounds = bounds ? unite(*bounds, *drawn) : *drawn;
           }
         }
@@ -287,7 +488,7 @@ namespace {
             }
             continue;
           }
-          auto transform = m_origin * get_world_transform(*m_document, id);
+          auto transform = m_origin * get_placement(id);
           if(get_string(json.find("type")) == "syncRef") {
             auto expanded = expand(json);
             if(!expanded) {
@@ -566,8 +767,6 @@ namespace {
           nodes.push_back(std::move(*node));
           return nodes;
         }
-        auto outlined = make_stroke_outline(
-          to_path(shape->m_geometry), shape->m_style);
         auto is_filled =
           !std::holds_alternative<NoFill>(shape->m_style.m_fill) &&
           !std::holds_alternative<LineShape>(shape->m_geometry);
@@ -610,9 +809,8 @@ namespace {
         path.set("type", "shape");
         auto& geometry = path.set("shape", XdValue::make_object());
         geometry.set("type", "path");
-        if(auto outline_path = std::get_if<PathShape>(&outlined.m_geometry)) {
-          geometry.set("path", to_svg_path(*outline_path->m_path));
-        }
+        geometry.set("path", make_stroke_path(
+          to_path(shape->m_geometry), *shape->m_style.m_stroke));
         if(!is_filled) {
           nodes.push_back(std::move(path));
           return nodes;
@@ -623,6 +821,7 @@ namespace {
           }
           hide_filters(*source);
         }
+        node->erase("meta");
         if(!is_grouped) {
           nodes.push_back(std::move(*node));
           nodes.push_back(std::move(path));
@@ -1390,6 +1589,22 @@ namespace {
             out.set("style", std::move(style));
           }
           add_visual_bounds(out, id, placement);
+          if(model && model->m_style.m_stroke && !is_mask &&
+              (shape_type == "polygon" || shape_type == "path" ||
+                shape_type == "compound")) {
+            auto path = std::optional<Path>();
+            if(shape_type == "polygon") {
+              path = to_path(model->m_geometry);
+            } else {
+              path = parse_svg_path(get_string(geometry.find("path")));
+              if(path && get_string(geometry.find("winding")) == "evenodd") {
+                path->set_fill_rule(FillRule::EVEN_ODD);
+              }
+            }
+            if(path) {
+              add_stroke_paths(out, *path, *model->m_style.m_stroke);
+            }
+          }
           out.set("type", "shape");
           out.set("shape", std::move(geometry));
           return out;
@@ -1450,7 +1665,19 @@ namespace {
         SvgWriterStyling::ATTRIBUTE : SvgWriterStyling::CLASS;
     writer.m_is_minified = options.m_is_svg_minified;
     writer.m_has_carriage_returns = true;
+    writer.m_has_drop_shadow_only = true;
     return writer;
+  }
+
+  SvgExport export_svg(const Document& document,
+      const std::vector<NodeId>& nodes, const ExportOptions& options,
+      std::string_view name, const SvgTextServices& services,
+      bool is_detached) {
+    auto result = SvgExport();
+    auto json = Builder(document, options, name, services,
+      &result.m_images).build(nodes, is_detached);
+    result.m_markup = write_svg(std::move(json), make_writer_options(options));
+    return result;
   }
 }
 
@@ -1458,17 +1685,14 @@ XdValue Rellu::make_svg_document(const Document& document,
     const std::vector<NodeId>& nodes, const ExportOptions& options,
     std::string_view name, const SvgTextServices& services,
     std::vector<SvgLinkedImage>* linked) {
-  return Builder(document, options, name, services, linked).build(nodes);
+  return Builder(document, options, name, services, linked).build(
+    nodes, false);
 }
 
 SvgExport Rellu::make_svg_export(const Document& document,
     const std::vector<NodeId>& nodes, const ExportOptions& options,
     std::string_view name, const SvgTextServices& services) {
-  auto result = SvgExport();
-  auto json = make_svg_document(
-    document, nodes, options, name, services, &result.m_images);
-  result.m_markup = write_svg(std::move(json), make_writer_options(options));
-  return result;
+  return export_svg(document, nodes, options, name, services, false);
 }
 
 std::string Rellu::make_svg_code(const Document& document,
@@ -1488,7 +1712,7 @@ void Rellu::write_svg_export(const Document& document, const NodeId& node,
   if(name.size() >= 4 && name.substr(name.size() - 4) == ".svg") {
     name.resize(name.size() - 4);
   }
-  auto result = make_svg_export(document, {node}, options, name, services);
+  auto result = export_svg(document, {node}, options, name, services, true);
   auto write = [] (const std::filesystem::path& target, const char* data,
       std::size_t size) {
     auto file = std::ofstream(target, std::ios::binary | std::ios::trunc);
