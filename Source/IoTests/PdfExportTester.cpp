@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -446,11 +447,21 @@ TEST_SUITE("PdfExport") {
     transaction.append(artboard, make_header(make_translation(580, 220)),
       shape);
     transaction.commit();
-    auto contents = pdf_contents(document, artboard);
+    auto pdf = parse(write_pdf(document, {artboard}));
+    auto contents = pdf.get_contents(0);
     REQUIRE(contains(contents, "q\n4 0 0 4 2320 880 cm\n"
       ".9412 .7529 .251 RG .9412 .7529 .251 rg\n/G3 gs\n0 0 80 80 re\nf\n"
       "Q\nQ\nq\n2320 880 320 320 re\nW* n\nq\n2 0 0 2 2320 880 cm\n"));
     REQUIRE(contains(contents, " scn\n/G3 gs\n0 0 164 164 re\nf\nQ\nQ\n"));
+    auto masks = pdf.find("/Width 164\n/Height 164\n/ColorSpace /DeviceGray");
+    REQUIRE(masks.size() == 1);
+    auto& alpha = pdf.m_objects.at(masks.front()).m_stream;
+    auto at = [&] (int x, int y) {
+      return static_cast<int>(static_cast<unsigned char>(alpha[164 * y + x]));
+    };
+    REQUIRE(at(159, 80) > 0);
+    REQUIRE(std::abs(at(159, 80) - at(8, 80)) <= 2);
+    REQUIRE(std::abs(at(80, 159) - at(80, 8)) <= 2);
   }
 
   TEST_CASE("rect_mask") {

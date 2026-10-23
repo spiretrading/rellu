@@ -1173,11 +1173,13 @@ namespace {
         auto content = render(slice(begin, end), region, SHADOW_SCALE);
         auto source = Rect(region.m_x - shadow.m_offset.m_x,
           region.m_y - shadow.m_offset.m_y, region.m_width, region.m_height);
-        auto blurred = render(
-          blur_slice(begin, end, shadow.m_radius), source, SHADOW_SCALE);
+        auto margin = std::ceil(3 * shadow.m_radius + 1);
+        auto padding = static_cast<int>(std::lround(margin * SHADOW_SCALE));
+        auto blurred = render(blur_slice(begin, end, shadow.m_radius),
+          inflate(source, margin), SHADOW_SCALE);
         for(auto y = 0; y != content.height(); ++y) {
           auto inside = content.scanLine(y);
-          auto outside = blurred.constScanLine(y);
+          auto outside = blurred.constScanLine(y + padding) + 4 * padding;
           for(auto x = 0; x != content.width(); ++x) {
             inside[4 * x + 3] = static_cast<uchar>(std::lround(
               inside[4 * x + 3] * (255 - outside[4 * x + 3]) / 255.0));
