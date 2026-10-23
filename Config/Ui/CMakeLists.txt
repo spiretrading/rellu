@@ -5,5 +5,5 @@ add_library(RelluUi STATIC ${header_files} ${source_files})
 source_group("Header Files" FILES ${header_files})
 target_link_libraries(
   RelluUi PUBLIC RelluEditor RelluIo RelluPrototype RelluText)
-rellu_link_dependencies(RelluUi PUBLIC QT QT_PRIVATE)
+rellu_link_dependencies(RelluUi PUBLIC QT QT_NETWORK QT_PRIVATE)
 rellu_track_target(RelluUi)

@@ -78,6 +78,12 @@ namespace Rellu {
    * @param message The native message.
    */
   bool is_showing(void* message);
+
+  /**
+   * Lets another process bring its window to the front, as the running
+   * instance does when given a file to open.
+   */
+  void allow_foreground_activation();
 }
 
 #endif

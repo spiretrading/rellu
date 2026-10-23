@@ -244,6 +244,58 @@ TEST_SUITE("DocumentSession") {
     REQUIRE(session.get_editor().get_history().get_undo_count() == 0);
   }
 
+  TEST_CASE("preset_document") {
+    auto previous = get_last_used_preset();
+    auto preset = ArtboardPreset("iPad Pro 11\"", Size(834, 1194));
+    auto document = make_new_document(preset);
+    auto& canvas = document->get_canvas();
+    REQUIRE(canvas.size() == 1);
+    auto& node = document->get(canvas.front());
+    REQUIRE(node.m_header.m_name == "iPad Pro 11\" \xE2\x80\x93 1");
+    REQUIRE(node.get_artboard()->m_frame == Rect(0, 0, 834, 1194));
+    REQUIRE(get_last_used_preset().m_name == preset.m_name);
+    set_last_used_preset(previous);
+    auto empty = make_new_document(ArtboardPreset("Custom", Size(0, 0)));
+    REQUIRE(empty->get_canvas().empty());
+    REQUIRE(get_last_used_preset().m_name == previous.m_name);
+    auto session = DocumentSession(*document, QString(), XdTextLayout());
+    REQUIRE(session.get_editor().get_history().get_undo_count() == 0);
+  }
+
+  TEST_CASE("unsaved_alert") {
+    auto content = make_unsaved_alert("x1_b");
+    REQUIRE(content.m_message ==
+      "Do you want to save the changes made to the document \"x1_b\"?");
+    REQUIRE(content.m_explanation ==
+      "Your changes will be lost if you don't save them.");
+    REQUIRE(content.m_buttons ==
+      std::vector<QString>({"Save", "Don't Save", "Cancel"}));
+    REQUIRE(content.m_default == 0);
+    REQUIRE(content.m_escape == 2);
+    REQUIRE(content.m_sign == XdAlertSign::WARNING);
+    REQUIRE(content.m_is_fitted);
+  }
+
+  TEST_CASE("open_document_alert") {
+    auto content = make_open_document_alert("C:\\Designs\\x1_c.xd");
+    REQUIRE(content.m_message == "Could not save as \"x1_c.xd\" because "
+      "that document is currently open.");
+    REQUIRE(content.m_explanation ==
+      "Save using a different name, or close the document and try again.");
+    REQUIRE(content.m_buttons == std::vector<QString>({"OK"}));
+    REQUIRE(content.m_sign == XdAlertSign::CRITICAL);
+    REQUIRE(content.m_is_fitted);
+  }
+
+  TEST_CASE("load_failure_alert") {
+    auto content = make_load_failure_alert("C:\\Designs\\x1_a.xd");
+    REQUIRE(content.m_message ==
+      "There was an error opening the file x1_a.xd\n(Error code: 47)");
+    REQUIRE(content.m_explanation.isEmpty());
+    REQUIRE(content.m_buttons == std::vector<QString>({"OK"}));
+    REQUIRE(content.m_sign == XdAlertSign::CRITICAL);
+  }
+
   TEST_CASE("launched_document") {
     auto document = Document();
     auto session = std::unique_ptr<DocumentSession>();

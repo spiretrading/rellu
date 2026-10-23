@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <utility>
+#include <QFontMetrics>
 #include <QGraphicsDropShadowEffect>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -14,8 +16,10 @@ using namespace Rellu;
 namespace {
   constexpr auto PANEL_WIDTH = 544;
   constexpr auto ICON_SIZE = 36;
+  constexpr auto FITTED_MARGIN = 135;
   const auto BACKDROP = QColor(0, 0, 0, 140);
-  const auto WARNING = QColor(0xEC, 0x10, 0x14);
+  const auto CRITICAL = QColor(0xEC, 0x10, 0x14);
+  const auto WARNING = QColor(0xE9, 0x9D, 0x01);
   const auto STYLE = QString(R"(
 QFrame#xd_alert_panel {
   background: #F5F5F5;
@@ -51,9 +55,20 @@ QPushButton#xd_alert_button[primary="true"] {
     return result;
   }
 
+  int get_text_width(QLabel& label) {
+    label.ensurePolished();
+    auto metrics = QFontMetrics(label.font());
+    auto width = 0;
+    for(auto& line : label.text().split('\n')) {
+      width = std::max(width, metrics.horizontalAdvance(line));
+    }
+    return width;
+  }
+
   class WarningIcon : public QWidget {
     public:
-      WarningIcon() {
+      explicit WarningIcon(QColor color)
+          : m_color(color) {
         setFixedSize(ICON_SIZE, ICON_SIZE);
       }
 
@@ -66,9 +81,9 @@ QPushButton#xd_alert_button[primary="true"] {
         triangle.lineTo(ICON_SIZE - 3, ICON_SIZE - 5);
         triangle.lineTo(3, ICON_SIZE - 5);
         triangle.closeSubpath();
-        painter.setPen(QPen(WARNING, 3, Qt::SolidLine, Qt::RoundCap,
+        painter.setPen(QPen(m_color, 3, Qt::SolidLine, Qt::RoundCap,
           Qt::RoundJoin));
-        painter.setBrush(WARNING);
+        painter.setBrush(m_color);
         painter.drawPath(triangle);
         painter.setPen(Qt::NoPen);
         painter.setBrush(Qt::white);
@@ -76,12 +91,16 @@ QPushButton#xd_alert_button[primary="true"] {
           1.5, 1.5);
         painter.drawEllipse(QPointF(ICON_SIZE / 2.0, 27), 2, 2);
       }
+
+    private:
+      QColor m_color;
   };
 }
 
 XdAlert::XdAlert(XdAlertContent content, QWidget* parent)
     : QDialog(parent, Qt::FramelessWindowHint | Qt::Dialog),
       m_content(std::move(content)),
+      m_panel(nullptr),
       m_choice(m_content.m_default) {
   setObjectName("xd_alert");
   setAttribute(Qt::WA_TranslucentBackground);
@@ -101,7 +120,8 @@ XdAlert::XdAlert(XdAlertContent content, QWidget* parent)
   auto columns = new QHBoxLayout(panel);
   columns->setContentsMargins(34, 34, 27, 24);
   columns->setSpacing(29);
-  auto icon = new WarningIcon();
+  auto icon = new WarningIcon(
+    m_content.m_sign == XdAlertSign::WARNING ? WARNING : CRITICAL);
   columns->addWidget(icon, 0, Qt::AlignTop);
   auto rows = new QVBoxLayout();
   rows->setSpacing(10);
@@ -122,6 +142,7 @@ XdAlert::XdAlert(XdAlertContent content, QWidget* parent)
     link->setWordWrap(true);
     rows->addWidget(link);
   }
+  m_panel = panel;
   rows->addSpacing(16);
   auto buttons = new QHBoxLayout();
   buttons->setSpacing(32);
@@ -140,6 +161,13 @@ XdAlert::XdAlert(XdAlertContent content, QWidget* parent)
     m_buttons.push_back(button);
   }
   rows->addLayout(buttons);
+  if(m_content.m_is_fitted) {
+    auto width = 0;
+    for(auto label : panel->findChildren<QLabel*>()) {
+      width = std::max(width, get_text_width(*label));
+    }
+    panel->setFixedWidth(width + FITTED_MARGIN);
+  }
 }
 
 const XdAlertContent& XdAlert::get_content() const {
@@ -154,7 +182,14 @@ int XdAlert::get_choice() const {
   return m_choice;
 }
 
+QWidget& XdAlert::get_panel() const {
+  return *m_panel;
+}
+
 void XdAlert::paintEvent(QPaintEvent* event) {
+  if(!parentWidget()) {
+    return;
+  }
   auto painter = QPainter(this);
   painter.fillRect(rect(), BACKDROP);
 }
@@ -168,8 +203,12 @@ void XdAlert::showEvent(QShowEvent* event) {
 }
 
 void XdAlert::keyPressEvent(QKeyEvent* event) {
-  if(event->key() == Qt::Key_Escape || event->key() == Qt::Key_Return ||
-      event->key() == Qt::Key_Enter) {
+  if(event->key() == Qt::Key_Escape && m_content.m_escape >= 0) {
+    m_choice = m_content.m_escape;
+    accept();
+    return;
+  } else if(event->key() == Qt::Key_Escape ||
+      event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
     m_choice = m_content.m_default;
     accept();
     return;

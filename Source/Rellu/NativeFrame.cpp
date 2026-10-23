@@ -319,6 +319,10 @@ QRect Rellu::get_work_area(const QRect& bounds) {
   }
   return to_rect(info.rcWork);
 }
+
+void Rellu::allow_foreground_activation() {
+  AllowSetForegroundWindow(ASFW_ANY);
+}
 #else
 bool Rellu::is_custom_frame_supported() {
   return false;
@@ -344,4 +348,6 @@ QRect Rellu::get_work_area(const QRect&) {
 bool Rellu::is_showing(void*) {
   return false;
 }
+
+void Rellu::allow_foreground_activation() {}
 #endif

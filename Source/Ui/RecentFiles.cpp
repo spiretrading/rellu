@@ -9,15 +9,6 @@ namespace {
   QString normalize(const QString& path) {
     return QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
   }
-
-  bool is_same_file(const QString& left, const QString& right) {
-    auto left_info = QFileInfo(left);
-    auto right_info = QFileInfo(right);
-    if(left_info.exists() && right_info.exists()) {
-      return left_info == right_info;
-    }
-    return normalize(left) == normalize(right);
-  }
 }
 
 RecentFiles::RecentFiles()
@@ -56,4 +47,13 @@ void RecentFiles::remove(const QString& path) {
 
 void RecentFiles::clear() {
   m_paths.clear();
+}
+
+bool Rellu::is_same_file(const QString& left, const QString& right) {
+  auto left_info = QFileInfo(left);
+  auto right_info = QFileInfo(right);
+  if(left_info.exists() && right_info.exists()) {
+    return left_info == right_info;
+  }
+  return normalize(left) == normalize(right);
 }

@@ -16,6 +16,8 @@
 using namespace Rellu;
 
 namespace {
+  constexpr auto LOAD_ERROR_CODE = 47;
+
   std::string read_manifest(const Document& document, std::string_view key) {
     auto data = decode_package_data(document.get_opaque().get_bytes());
     if(auto manifest = parse_xd_value(data.m_manifest)) {
@@ -142,9 +144,54 @@ bool Rellu::resolve_unsaved_changes(const DocumentSession& session,
   return choice == UnsavedChoice::DISCARD;
 }
 
+XdAlertContent Rellu::make_unsaved_alert(const QString& name) {
+  auto content = XdAlertContent();
+  content.m_message = translate("dialog",
+    "Do you want to save the changes made to the document \"%1\"?").arg(
+      name);
+  content.m_explanation = translate("dialog",
+    "Your changes will be lost if you don't save them.");
+  content.m_buttons = {translate("dialog", "Save"),
+    translate("dialog", "Don't Save"), translate("dialog", "Cancel")};
+  content.m_default = 0;
+  content.m_escape = 2;
+  content.m_sign = XdAlertSign::WARNING;
+  content.m_is_fitted = true;
+  return content;
+}
+
+XdAlertContent Rellu::make_open_document_alert(const QString& path) {
+  auto content = XdAlertContent();
+  content.m_message = translate("dialog",
+    "Could not save as \"%1\" because that document is currently open.").
+      arg(QFileInfo(path).fileName());
+  content.m_explanation = translate("dialog",
+    "Save using a different name, or close the document and try again.");
+  content.m_buttons = {translate("dialog", "OK")};
+  content.m_is_fitted = true;
+  return content;
+}
+
+XdAlertContent Rellu::make_load_failure_alert(const QString& path) {
+  auto content = XdAlertContent();
+  content.m_message = translate("dialog",
+    "There was an error opening the file %1\n(Error code: %2)").arg(
+      QFileInfo(path).fileName()).arg(LOAD_ERROR_CODE);
+  content.m_buttons = {translate("dialog", "OK")};
+  content.m_is_fitted = true;
+  return content;
+}
+
 std::unique_ptr<Document> Rellu::make_new_document() {
+  return make_new_document(ArtboardPreset("Web 1920", Size(1920, 1080)));
+}
+
+std::unique_ptr<Document> Rellu::make_new_document(
+    const ArtboardPreset& preset) {
   auto document = std::make_unique<Document>();
-  auto preset = ArtboardPreset("Web 1920", Size(1920, 1080));
+  if(preset.m_size.is_empty()) {
+    return document;
+  }
   {
     auto transaction = Transaction(*document);
     insert_preset_artboard(*document, transaction, preset, Point(0, 0));

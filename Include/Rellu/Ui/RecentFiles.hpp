@@ -50,6 +50,13 @@ namespace Rellu {
       int m_capacity;
       QStringList m_paths;
   };
+
+  /**
+   * Returns <code>true</code> iff two paths name the same file.
+   * @param left The first path.
+   * @param right The second path.
+   */
+  bool is_same_file(const QString& left, const QString& right);
 }
 
 #endif

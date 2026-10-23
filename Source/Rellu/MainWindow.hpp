@@ -27,6 +27,7 @@
 #include "Rellu/Ui/CanvasFrame.hpp"
 #include "Rellu/Ui/ComponentActions.hpp"
 #include "Rellu/Ui/DocumentSession.hpp"
+#include "Rellu/Ui/DocumentWindows.hpp"
 #include "Rellu/Ui/EditActions.hpp"
 #include "Rellu/Ui/ExportActions.hpp"
 #include "Rellu/Ui/GradientHandles.hpp"
@@ -40,7 +41,6 @@
 #include "Rellu/Ui/PreviewWindow.hpp"
 #include "Rellu/Ui/PropertyInspector.hpp"
 #include "Rellu/Ui/PrototypeInspector.hpp"
-#include "Rellu/Ui/RecentFiles.hpp"
 #include "Rellu/Ui/TextActions.hpp"
 #include "Rellu/Ui/Toolbar.hpp"
 #include "ComponentDrop.hpp"
@@ -61,33 +61,48 @@ namespace Rellu {
    * platform allows, the app bar, the toolbar, the left panel, the canvas
    * and the property inspector.
    */
-  class MainWindow : public QMainWindow {
+  class MainWindow : public QMainWindow, public DocumentWindow {
     public:
 
       /**
        * Constructs a MainWindow without a document, restoring the geometry
        * and panel saved when the last MainWindow closed.
+       * @param windows The application's document windows.
        * @param parent The parent widget.
        */
-      explicit MainWindow(QWidget* parent = nullptr);
+      explicit MainWindow(DocumentWindows& windows, QWidget* parent = nullptr);
 
       ~MainWindow() override;
 
       /** Returns the registry of the window's actions. */
       ActionRegistry& get_actions();
 
+      QWidget& get_widget() override;
+      QString get_path() const override;
+      QString get_name() const override;
+      void place(const QRect& bounds) override;
+      void place(const QWidget& host) override;
+
       /**
-       * Opens an Adobe XD file in place of the current document, asking
-       * first what to do with the current document's unsaved changes and
-       * reporting any failure to the user.
+       * Shows a document in place of the current one, selecting the first
+       * artboard of a new document.
+       * @param document The document.
+       * @param path The path of the file the document was read from, or
+       *        empty for a new document.
+       */
+      void set_document(std::unique_ptr<Document> document,
+        const QString& path);
+
+      /**
+       * Opens an Adobe XD file in a new window, or activates the window it
+       * is open in, reporting any failure to the user.
        * @param path The path of the file to open.
-       * @return <code>true</code> iff the file was opened.
+       * @return <code>true</code> iff the file is open.
        */
       bool open(const QString& path);
 
       /**
-       * Replaces the current document with a new, empty one, asking first
-       * what to do with its unsaved changes.
+       * Makes a new document in a new window, as File &gt; New does.
        * @return <code>true</code> iff the new document was made.
        */
       bool make_new();
@@ -123,6 +138,7 @@ namespace Rellu {
         const QByteArray& type, void* message, qintptr* result) override;
 
     private:
+      DocumentWindows* m_windows;
       DocumentView* m_view;
       QWidget* m_menu_row;
       QMenuBar* m_menu_bar;
@@ -150,7 +166,8 @@ namespace Rellu {
       ArtboardPresetsPanel* m_presets;
       PreviewWindow* m_preview;
       QWidget* m_inspector_frame;
-      RecentFiles m_recent_files;
+      int m_recent_count;
+      int m_window_count;
       TextMeasurer m_measurer;
       struct GradientTarget {
         GradientFill m_fill;
@@ -164,6 +181,7 @@ namespace Rellu {
       Subscription m_history_subscription;
       Subscription m_selection_subscription;
       Subscription m_tool_subscription;
+      Subscription m_windows_subscription;
       bool m_is_launching;
       bool m_is_restored_expanded;
       double m_left_panel_width;
@@ -193,6 +211,7 @@ namespace Rellu {
       void change_properties_id();
       void save_settings() const;
       void update_recent_files();
+      void update_window_actions();
       void prompt_open();
       bool save_to(const QString& path);
       bool confirm_close();
@@ -234,6 +253,19 @@ namespace Rellu {
       void load_export_settings();
       void store_export_settings() const;
   };
+
+  /**
+   * Makes the main window of a document, reading it from its file unless
+   * it is new and reporting a failure to read it over the active window.
+   * @param windows The application's document windows.
+   * @param path The path of the file to open, or empty for a new document.
+   * @param document The new document, or <code>nullptr</code> to read the
+   *        file.
+   * @return The window, or <code>nullptr</code> if the file could not be
+   *         read.
+   */
+  std::unique_ptr<MainWindow> make_main_window(DocumentWindows& windows,
+    const QString& path, std::unique_ptr<Document> document);
 }
 
 #endif

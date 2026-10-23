@@ -66,6 +66,7 @@
 #include "Rellu/Ui/TextPropertyEditors.hpp"
 #include "Rellu/Ui/Theme.hpp"
 #include "Rellu/Ui/Translation.hpp"
+#include "Rellu/Ui/XdAlert.hpp"
 #include "Rellu/Ui/XdMenus.hpp"
 #include "MainWindow.hpp"
 #include "NativeFrame.hpp"
@@ -74,7 +75,6 @@ using namespace Rellu;
 
 namespace {
   constexpr auto ZOOM_STEP = 2.0;
-  constexpr auto MAXIMUM_RECENT_FILES = 15;
   constexpr auto LEFT_PANEL_WIDTH = 1222.0 / 3;
   const auto LEFT_PANEL_WIDTH_KEY = QString("main_window/left_panel_width");
   constexpr auto MENU_ROW_HEIGHT = 32;
@@ -102,6 +102,10 @@ namespace {
 
   std::string get_recent_name(int index) {
     return "file.recent." + std::to_string(index);
+  }
+
+  std::string get_window_name(int index) {
+    return "window.document." + std::to_string(index);
   }
 
   std::string get_nudge_label(int key) {
@@ -296,8 +300,9 @@ Language Rellu::load_language() {
     toStdString()).value_or(Language::ENGLISH);
 }
 
-MainWindow::MainWindow(QWidget* parent)
+MainWindow::MainWindow(DocumentWindows& windows, QWidget* parent)
     : QMainWindow(parent),
+      m_windows(&windows),
       m_view(new DocumentView()),
       m_menu_row(nullptr),
       m_menu_bar(nullptr),
@@ -315,7 +320,8 @@ MainWindow::MainWindow(QWidget* parent)
       m_presets(new ArtboardPresetsPanel(m_inspector)),
       m_preview(nullptr),
       m_inspector_frame(new QWidget()),
-      m_recent_files(MAXIMUM_RECENT_FILES),
+      m_recent_count(0),
+      m_window_count(0),
       m_measurer(make_text_measurer(get_default_font_library())),
       m_highlight(nullptr),
       m_gradient_overlay(nullptr),
@@ -434,6 +440,11 @@ MainWindow::MainWindow(QWidget* parent)
   });
   m_actions.build(*bar);
   restore_settings();
+  m_windows_subscription = m_windows->subscribe([this] {
+    update_recent_files();
+    update_window_actions();
+  });
+  update_window_actions();
   update_title();
   update_selection_actions();
   update_zoom();
@@ -451,30 +462,45 @@ ActionRegistry& MainWindow::get_actions() {
   return m_actions;
 }
 
-bool MainWindow::open(const QString& path) {
-  if(!confirm_close()) {
-    return false;
-  }
-  QApplication::setOverrideCursor(Qt::WaitCursor);
-  auto document = std::make_unique<Document>();
-  try {
-    import_xd(std::filesystem::path(path.toStdU16String()), *document);
-  } catch(const std::exception& error) {
-    QApplication::restoreOverrideCursor();
-    QMessageBox::critical(this, "Rellu",
-      QString("Unable to open %1:\n%2").arg(path, error.what()));
-    if(!QFileInfo::exists(path)) {
-      m_recent_files.remove(path);
-      update_recent_files();
-    }
-    return false;
-  }
+QWidget& MainWindow::get_widget() {
+  return *this;
+}
+
+QString MainWindow::get_path() const {
+  return m_session ? m_session->get_path() : QString();
+}
+
+QString MainWindow::get_name() const {
+  return m_session ? m_session->get_name() : translate("Untitled");
+}
+
+void MainWindow::place(const QRect& bounds) {
+  m_restored_bounds.reset();
+  m_is_restored_expanded = false;
+  setWindowState(Qt::WindowNoState);
+  setGeometry(bounds);
+}
+
+void MainWindow::place(const QWidget& host) {
+  m_restored_bounds.reset();
+  restoreGeometry(host.saveGeometry());
+  m_is_restored_expanded = static_cast<bool>(
+    windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen));
+}
+
+void MainWindow::set_document(
+    std::unique_ptr<Document> document, const QString& path) {
   install(std::move(document), path);
-  QApplication::restoreOverrideCursor();
-  m_recent_files.add(path);
-  update_recent_files();
-  save_settings();
-  return true;
+  if(path.isEmpty()) {
+    auto& canvas = m_session->get_document().get_canvas();
+    if(!canvas.empty()) {
+      m_session->get_editor().get_selection().select(canvas.front());
+    }
+  }
+}
+
+bool MainWindow::open(const QString& path) {
+  return m_windows->open(path);
 }
 
 bool MainWindow::revert() {
@@ -512,15 +538,7 @@ bool MainWindow::revert() {
 }
 
 bool MainWindow::make_new() {
-  if(!confirm_close()) {
-    return false;
-  }
-  install(make_new_document(), QString());
-  auto& canvas = m_session->get_document().get_canvas();
-  if(!canvas.empty()) {
-    m_session->get_editor().get_selection().select(canvas.front());
-  }
-  return true;
+  return m_windows->make_new();
 }
 
 bool MainWindow::save() {
@@ -545,7 +563,12 @@ bool MainWindow::save_as() {
   if(path.isEmpty()) {
     return false;
   }
-  return save_to(to_xd_path(path));
+  path = to_xd_path(path);
+  if(auto window = m_windows->find(path); window && window != this) {
+    show_xd_alert(make_open_document_alert(path), this);
+    return false;
+  }
+  return save_to(path);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -556,10 +579,17 @@ void MainWindow::closeEvent(QCloseEvent* event) {
   store_properties();
   save_settings();
   QMainWindow::closeEvent(event);
+  m_windows->remove(*this);
 }
 
 void MainWindow::changeEvent(QEvent* event) {
   QMainWindow::changeEvent(event);
+  if(event->type() == QEvent::ActivationChange && isActiveWindow()) {
+    m_windows->locate_recent_files();
+    check_language(load_language());
+    m_assets->set_group_deletion_confirmed(
+      !QSettings().value(GROUP_DELETION_KEY, false).toBool());
+  }
   if(event->type() == QEvent::WindowStateChange) {
     update_launch();
   }
@@ -1226,14 +1256,6 @@ void MainWindow::add_actions() {
       }
     });
   }
-  auto& document = m_actions.add(ActionDefinition(
-    "window.document", translate("Untitled"), QKeySequence(), "window",
-    "documents", true));
-  document.setChecked(true);
-  m_actions.set_handler("window.document", [this] {
-    m_actions.get("window.document").setChecked(true);
-    activateWindow();
-  });
   m_actions.set_handler("window.preview", [this] { toggle_preview(); });
   for(auto language : LANGUAGES) {
     m_actions.set_handler(LANGUAGE_PREFIX + std::string(get_code(language)),
@@ -1417,7 +1439,6 @@ void MainWindow::toggle_preview() {
 
 void MainWindow::restore_settings() {
   auto settings = QSettings();
-  m_recent_files.set_paths(settings.value("recent_files").toStringList());
   update_recent_files();
   m_left_panel_width = std::max(settings.value(LEFT_PANEL_WIDTH_KEY,
     LEFT_PANEL_WIDTH).toDouble(), 0.0);
@@ -1643,7 +1664,6 @@ void MainWindow::store_grid_settings() const {
 
 void MainWindow::save_settings() const {
   auto settings = QSettings();
-  settings.setValue("recent_files", m_recent_files.get_paths());
   settings.setValue("main_window/geometry", saveGeometry());
   if(auto bounds = get_normal_bounds(*this); bounds.isValid()) {
     settings.setValue("main_window/bounds", bounds);
@@ -1653,12 +1673,13 @@ void MainWindow::save_settings() const {
 }
 
 void MainWindow::update_recent_files() {
-  for(auto i = 0; i != MAXIMUM_RECENT_FILES; ++i) {
+  for(auto i = 0; i != m_recent_count; ++i) {
     m_actions.remove(get_recent_name(i));
   }
   m_actions.remove("file.recent.clear");
-  auto& paths = m_recent_files.get_paths();
-  for(auto i = 0; i != static_cast<int>(paths.size()); ++i) {
+  auto& paths = m_windows->get_recent_files();
+  m_recent_count = static_cast<int>(paths.size());
+  for(auto i = 0; i != m_recent_count; ++i) {
     auto path = paths[i];
     auto name = get_recent_name(i);
     auto text = QFileInfo(path).fileName().replace("&", "&&");
@@ -1671,11 +1692,29 @@ void MainWindow::update_recent_files() {
   m_actions.add(ActionDefinition("file.recent.clear",
     translate("menu", "Clear Menu"), QKeySequence(), "file.recent", "clear"));
   m_actions.set_handler("file.recent.clear", [this] {
-    m_recent_files.clear();
-    update_recent_files();
-    save_settings();
+    m_windows->clear_recent_files();
   });
   m_actions.set_enabled("file.recent.clear", !paths.isEmpty());
+}
+
+void MainWindow::update_window_actions() {
+  for(auto i = 0; i != m_window_count; ++i) {
+    m_actions.remove(get_window_name(i));
+  }
+  auto windows = m_windows->get_menu_windows(*this);
+  m_window_count = static_cast<int>(windows.size());
+  for(auto i = 0; i != m_window_count; ++i) {
+    auto window = windows[i];
+    auto name = get_window_name(i);
+    auto& action = m_actions.add(ActionDefinition(name,
+      window->get_name().replace("&", "&&"), QKeySequence(), "window",
+      "documents", true));
+    action.setChecked(window == this);
+    m_actions.set_handler(name, [this, window, name] {
+      m_actions.get(name).setChecked(window == this);
+      m_windows->activate(*window);
+    });
+  }
 }
 
 void MainWindow::prompt_open() {
@@ -1698,10 +1737,10 @@ bool MainWindow::save_to(const QString& path) {
     return false;
   }
   QApplication::restoreOverrideCursor();
-  m_recent_files.add(path);
-  update_recent_files();
+  m_windows->add_recent_file(path);
   save_settings();
   update_title();
+  m_windows->update();
   if(m_session->get_id() == id) {
     store_properties();
   } else {
@@ -1725,21 +1764,10 @@ bool MainWindow::confirm_close() {
 }
 
 UnsavedChoice MainWindow::prompt_unsaved() {
-  auto box = QMessageBox(QMessageBox::Warning, "Rellu", translate("dialog",
-    "Do you want to save the changes made to the document \"%1\"?").arg(
-      m_session->get_name()),
-    QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, this);
-  box.setInformativeText(translate("dialog",
-    "Your changes will be lost if you don't save them."));
-  box.button(QMessageBox::Save)->setText(translate("dialog", "Save"));
-  box.button(QMessageBox::Discard)->setText(
-    translate("dialog", "Do&n't Save"));
-  box.button(QMessageBox::Cancel)->setText(translate("dialog", "Cancel"));
-  box.setDefaultButton(QMessageBox::Save);
-  auto result = box.exec();
-  if(result == QMessageBox::Save) {
+  auto choice = show_xd_alert(make_unsaved_alert(m_session->get_name()), this);
+  if(choice == 0) {
     return UnsavedChoice::SAVE;
-  } else if(result == QMessageBox::Discard) {
+  } else if(choice == 1) {
     return UnsavedChoice::DISCARD;
   }
   return UnsavedChoice::CANCEL;
@@ -1850,14 +1878,11 @@ void MainWindow::update_title() {
   auto has_session = static_cast<bool>(m_session);
   if(has_session) {
     auto name = m_session->get_name();
-    setWindowTitle(QString("%1 - Rellu").arg(name));
+    setWindowTitle(make_window_title(name));
     m_app_bar->set_title(name, m_session->is_dirty());
-    m_actions.get("window.document").setText(QString(name).replace("&",
-      "&&"));
   } else {
     setWindowTitle("Rellu");
     m_app_bar->set_title(QString(), false);
-    m_actions.get("window.document").setText(translate("Untitled"));
   }
   m_actions.set_enabled("file.save", has_session &&
     (m_session->is_dirty() || m_session->get_path().isEmpty()));
@@ -1865,7 +1890,6 @@ void MainWindow::update_title() {
   m_actions.set_enabled("file.revert", has_session &&
     m_session->is_dirty() && !m_session->get_path().isEmpty());
   m_actions.set_enabled("file.save_as_local", has_session);
-  m_actions.set_enabled("window.document", has_session);
 }
 
 void MainWindow::update_document_state() {
@@ -1970,4 +1994,25 @@ double MainWindow::get_zoom() const {
 
 void MainWindow::update_zoom() {
   m_app_bar->set_zoom(get_zoom());
+}
+
+std::unique_ptr<MainWindow> Rellu::make_main_window(DocumentWindows& windows,
+    const QString& path, std::unique_ptr<Document> document) {
+  QApplication::setOverrideCursor(Qt::WaitCursor);
+  if(!document) {
+    document = std::make_unique<Document>();
+    try {
+      import_xd(std::filesystem::path(path.toStdU16String()), *document);
+    } catch(const std::exception& error) {
+      QApplication::restoreOverrideCursor();
+      auto active = windows.get_active();
+      show_xd_alert(make_load_failure_alert(path),
+        active ? &active->get_widget() : nullptr);
+      return nullptr;
+    }
+  }
+  auto window = std::make_unique<MainWindow>(windows);
+  window->set_document(std::move(document), path);
+  QApplication::restoreOverrideCursor();
+  return window;
 }

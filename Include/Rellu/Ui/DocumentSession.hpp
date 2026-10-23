@@ -6,9 +6,11 @@
 #include <QDateTime>
 #include <QString>
 #include <QStringList>
+#include "Rellu/Commands/ArtboardPresets.hpp"
 #include "Rellu/Editor/Editor.hpp"
 #include "Rellu/Io/XdGenerator.hpp"
 #include "Rellu/Model/Document.hpp"
+#include "Rellu/Ui/XdAlert.hpp"
 
 namespace Rellu {
 
@@ -118,11 +120,40 @@ namespace Rellu {
     const std::function<bool ()>& save);
 
   /**
+   * Returns Adobe XD's alert asking what to do with a document's unsaved
+   * changes, its buttons Save, Don't Save and Cancel in the order of
+   * UnsavedChoice.
+   * @param name The name of the document.
+   */
+  XdAlertContent make_unsaved_alert(const QString& name);
+
+  /**
+   * Returns Adobe XD's alert refusing to save a document over a file open
+   * in another window.
+   * @param path The path of the file.
+   */
+  XdAlertContent make_open_document_alert(const QString& path);
+
+  /**
+   * Returns Adobe XD's alert reporting a file that could not be opened.
+   * @param path The path of the file.
+   */
+  XdAlertContent make_load_failure_alert(const QString& path);
+
+  /**
    * Makes the document Adobe XD's File &gt; New makes: a Web 1920 artboard at
    * the origin, as the Web 1920 preset makes one, which becomes the preset
    * last used, with nothing to undo.
    */
   std::unique_ptr<Document> make_new_document();
+
+  /**
+   * Makes a new document with one artboard of a preset at the origin, as
+   * the preset makes one, which becomes the preset last used, with nothing
+   * to undo; a preset without area makes a document without artboards.
+   * @param preset The preset of the artboard.
+   */
+  std::unique_ptr<Document> make_new_document(const ArtboardPreset& preset);
 
   /**
    * Opens the file the application is launched with, or makes a new,
